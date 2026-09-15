@@ -1,0 +1,309 @@
+{
+  "schemaVersion": 1,
+  "taskId": "AAA-12",
+  "program": "AAA-20260912",
+  "kind": "mutation-selection-frozen",
+  "createdAt": "2026-09-12",
+  "baselineCandidate": "70311445013852dcf65c8dcbf1534b266758406c79955ac3d9b7a4a4f3bc3238 (pinned C4)",
+  "productHashes": {
+    "packages/channel-gateway/src/errors.ts": "d428fa1da34d159471d03ebc87f103d4d751cfb2e09c74bbd92d59be43646d8d",
+    "packages/channel-gateway/src/effect-journal.ts": "9c423937d9cf2a58ac221948204e44ee38db4fb853575822db28b5788c68fef4",
+    "packages/channel-gateway/src/effect-journal-file.ts": "a3fac3c05419ae3fe2f3ae44a013046e52ea2f98839b6e22336cc9784e1fdabd",
+    "packages/channel-gateway/src/gateway.ts": "f638c5aacbda48bca01deddeb85cb56c52e330d51ac40c8a7110d03186fd5ec6",
+    "packages/channel-gateway/src/idempotency.ts": "53cd6354220771e2a32b7496512e3a64a44b6dd18c74f64159e3d1271104e4ce",
+    "packages/channel-gateway/src/index.ts": "d13bc8b401f41cec73ce675b994d4d200aa239f4e65239f21bf5f6cefc1f7541",
+    "packages/channel-gateway/src/adapters/evolution.ts": "78d6def08ee33969c7c348d9e7f4661ba585f7ad5ec9f613c57418d5ce5a0a10",
+    "packages/channel-gateway/src/adapters/chatwoot.ts": "def2d1def4f0cbe7ede46c9bb139865640713ce8d555cd29a5edc110fa4252fb"
+  },
+  "testHashes": {
+    "packages/channel-gateway/src/__tests__/channel-effect-race.test.ts": "5b1dce5d497e4b6721351112881ac9d338f57c769f8e5cf1665667a802170928",
+    "packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts": "1f914464d297ef7fde1e1db5101445906fe5ef322cff0c0c14a22e393d7a973b",
+    "packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts": "a351d7f2ea4b5a97c617763361e386d682753b1c919d624e2a1dc8d633d5e9da",
+    "packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts": "a6e9e599fe2bf0e97b5fae72d5a6206f2880fada620112b36002a1a82fc1bd02",
+    "packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts": "4369ed8acb909960f17a9e6364d00fd8c0783a8843e18214e503c41d0efab1e5",
+    "packages/channel-gateway/src/__tests__/channel-coverage-inbound-adapters.test.ts": "018b03a2ba586f39c9fc15d9bc7699de4b93433e106ecfaa34c55be4b2432c61",
+    "packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts": "c3277a178e988183a1a648ae457a0a4f8c4d3ed7b9ebba759d99e590caf31124",
+    "packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts": "50b0c47b1c0ee9b33d997c7d7ebb4ad4d490e1cb9b8199e431e54b792b9b9af9",
+    "packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts": "47b2abf01626af667b74e2983c6b5b329e1ff8c82d6ccb1274478fa2a54053bd"
+  },
+  "executionCommand": "npx vitest run packages/channel-gateway --no-file-parallelism --maxWorkers=1",
+  "isolation": {
+    "root": "/tmp/opencode/aaa12-mutation",
+    "base": "copy of current working tree bytes excluding node_modules/.git/coverage with node_modules symlinked read-only",
+    "perMutant": "fresh copy from base; single replacement applied; copy deleted after run",
+    "control": "base copy without mutation must pass (105 channel tests)"
+  },
+  "timeoutSeconds": 300,
+  "classification": {
+    "KILLED": "non-zero exit with at least one behavioral test failed (assertion)",
+    "SURVIVED": "exit 0",
+    "INVALID": "syntax/import/transform error",
+    "BLOCKED": "timeout or infrastructure failure"
+  },
+  "denominator": {
+    "selected": 16,
+    "families": 8
+  },
+  "mutations": [
+    {
+      "id": "M01",
+      "family": 1,
+      "guard": "#readRecord ausência-only",
+      "invariant": "Registro com hashVersion null explícito deve falhar fechado; só ausência é legado",
+      "file": "packages/channel-gateway/src/effect-journal-file.ts",
+      "line": 360,
+      "mutation": {
+        "old": "      if ((parsed as { hashVersion?: unknown }).hashVersion === undefined) {\n        parsed.hashVersion = LEGACY_HASH_VERSION\n      }",
+        "new": "      if (\n        (parsed as { hashVersion?: unknown }).hashVersion === undefined ||\n        (parsed as { hashVersion?: unknown }).hashVersion === null\n      ) {\n        parsed.hashVersion = LEGACY_HASH_VERSION\n      }"
+      },
+      "expectedKillers": [
+        "file adapter rejects malformed persisted versions without mutating bytes",
+        "all mutating methods fail closed on a malformed version without mutation"
+      ],
+      "implementationBoundary": "file"
+    },
+    {
+      "id": "M02",
+      "family": 1,
+      "guard": "resolvePersistedHashVersion",
+      "invariant": "null explícito não pode ser resolvido como legacy",
+      "file": "packages/channel-gateway/src/effect-journal.ts",
+      "line": 26,
+      "mutation": {
+        "old": "  if (raw === undefined) return LEGACY_HASH_VERSION",
+        "new": "  if (raw === undefined || raw === null) return LEGACY_HASH_VERSION"
+      },
+      "expectedKillers": [
+        "decideReserve treats only the absent property as legacy"
+      ],
+      "implementationBoundary": "memory"
+    },
+    {
+      "id": "M03",
+      "family": 1,
+      "guard": "guard de input de reserva",
+      "invariant": "Versão desconhecida solicitada não pode criar/reservar registro",
+      "file": "packages/channel-gateway/src/effect-journal.ts",
+      "line": 207,
+      "mutation": {
+        "old": "  if (!isSupportedHashVersion(input.hashVersion)) {\n    return { action: 'version_mismatch' }\n  }",
+        "new": "  if (false && !isSupportedHashVersion(input.hashVersion)) {\n    return { action: 'version_mismatch' }\n  }"
+      },
+      "expectedKillers": [
+        "rejects an unknown requested version without creating a record"
+      ],
+      "implementationBoundary": "memory"
+    },
+    {
+      "id": "M04",
+      "family": 2,
+      "guard": "comparação de payload",
+      "invariant": "Chave igual com payload diferente deve ser conflito",
+      "file": "packages/channel-gateway/src/effect-journal.ts",
+      "line": 218,
+      "mutation": {
+        "old": "  if (existing.payloadHash !== input.payloadHash) {\n    return { action: 'conflict', record: existing }\n  }",
+        "new": "  if (existing.payloadHash === input.payloadHash) {\n    return { action: 'conflict', record: existing }\n  }"
+      },
+      "expectedKillers": [
+        "8. the same key with a different payload is rejected as a conflict",
+        "detects a payload conflict on the file adapter without rewriting bytes"
+      ],
+      "implementationBoundary": "memory"
+    },
+    {
+      "id": "M05",
+      "family": 2,
+      "guard": "outcome conflict no arquivo",
+      "invariant": "Conflito do arquivo não pode virar replay",
+      "file": "packages/channel-gateway/src/effect-journal-file.ts",
+      "line": 105,
+      "mutation": {
+        "old": "      if (decision.action === 'conflict') {\n        return { outcome: 'conflict', record: cloneEffectRecord(record) }\n      }",
+        "new": "      if (decision.action === 'conflict') {\n        return { outcome: 'replay', record: cloneEffectRecord(record) }\n      }"
+      },
+      "expectedKillers": [
+        "detects a payload conflict on the file adapter without rewriting bytes"
+      ],
+      "implementationBoundary": "file"
+    },
+    {
+      "id": "M06",
+      "family": 3,
+      "guard": "decisão de reserva memory",
+      "invariant": "Reserva atômica antes do envio impede dois envios concorrentes",
+      "file": "packages/channel-gateway/src/effect-journal.ts",
+      "line": 319,
+      "mutation": {
+        "old": "    const decision = decideReserve(existing, input, now)",
+        "new": "    const decision = { action: 'create' } as ReturnType<typeof decideReserve>"
+      },
+      "expectedKillers": [
+        "1. two simultaneous dispatches with the same key produce one send",
+        "Promise.all of two identical dispatches produces exactly one provider send"
+      ],
+      "implementationBoundary": "memory"
+    },
+    {
+      "id": "M07",
+      "family": 3,
+      "guard": "criação exclusiva de arquivo",
+      "invariant": "Reserva de arquivo deve ser atômica entre instâncias",
+      "file": "packages/channel-gateway/src/effect-journal-file.ts",
+      "line": 329,
+      "mutation": {
+        "old": "      const handle = await open(this.#recordPath(key), 'wx')",
+        "new": "      const handle = await open(this.#recordPath(key), 'w')"
+      },
+      "expectedKillers": [
+        "2. two instances dispute one operation through a shared durable journal"
+      ],
+      "implementationBoundary": "file"
+    },
+    {
+      "id": "M08",
+      "family": 4,
+      "guard": "fencing owner memory",
+      "invariant": "Owner obsoleto não pode completar/renovar lease de outro",
+      "file": "packages/channel-gateway/src/effect-journal.ts",
+      "line": 582,
+      "mutation": {
+        "old": "    if (record.leaseOwner !== leaseOwner) return 'lease_lost'",
+        "new": "    if (record.leaseOwner === leaseOwner) return 'lease_lost'"
+      },
+      "expectedKillers": ["covers renew, release and the terminal guard"],
+      "implementationBoundary": "memory"
+    },
+    {
+      "id": "M09",
+      "family": 4,
+      "guard": "fencing owner arquivo",
+      "invariant": "Owner obsoleto não pode completar/falhar registro de outro",
+      "file": "packages/channel-gateway/src/effect-journal-file.ts",
+      "line": 321,
+      "mutation": {
+        "old": "      if (record.leaseOwner !== leaseOwner) return 'lease_lost'",
+        "new": "      if (record.leaseOwner === leaseOwner) return 'lease_lost'"
+      },
+      "expectedKillers": [
+        "fences stale owners and commits exactly one terminal result"
+      ],
+      "implementationBoundary": "file"
+    },
+    {
+      "id": "M10",
+      "family": 5,
+      "guard": "SENDING expirado",
+      "invariant": "Envio possivelmente iniciado não pode virar takeover/retry cego",
+      "file": "packages/channel-gateway/src/effect-journal.ts",
+      "line": 230,
+      "mutation": {
+        "old": "  if (existing.state === 'SENDING') {",
+        "new": "  if (false && existing.state === 'SENDING') {"
+      },
+      "expectedKillers": [
+        "7. expired lease with a late worker never produces a second send or false success",
+        "turns an expired SENDING lease into UNCERTAIN and allows safe takeover"
+      ],
+      "implementationBoundary": "memory"
+    },
+    {
+      "id": "M11",
+      "family": 5,
+      "guard": "UNCERTAIN",
+      "invariant": "Resultado incerto não pode virar takeover/retry cego",
+      "file": "packages/channel-gateway/src/effect-journal.ts",
+      "line": 224,
+      "mutation": {
+        "old": "  if (existing.state === 'UNCERTAIN') {\n    return { action: 'uncertain', record: existing }\n  }",
+        "new": "  if (false && existing.state === 'UNCERTAIN') {\n    return { action: 'uncertain', record: existing }\n  }"
+      },
+      "expectedKillers": [
+        "6. failure after the send marks the operation uncertain and blocks blind retry",
+        "reports conflicts, uncertain reserves and in-flight leases"
+      ],
+      "implementationBoundary": "memory"
+    },
+    {
+      "id": "M12",
+      "family": 6,
+      "guard": "replay terminal",
+      "invariant": "CONFIRMED não pode voltar a enviar",
+      "file": "packages/channel-gateway/src/effect-journal.ts",
+      "line": 221,
+      "mutation": {
+        "old": "  if (existing.state === 'CONFIRMED' || existing.state === 'FAILED') {\n    return { action: 'replay', record: existing }\n  }",
+        "new": "  if (false && (existing.state === 'CONFIRMED' || existing.state === 'FAILED')) {\n    return { action: 'replay', record: existing }\n  }"
+      },
+      "expectedKillers": [
+        "3. replay after success returns the durable result without a new send",
+        "gateway replays a new record after restart without a second send"
+      ],
+      "implementationBoundary": "memory"
+    },
+    {
+      "id": "M13",
+      "family": 6,
+      "guard": "FAILED terminal",
+      "invariant": "FAILED não pode voltar a ser retryável",
+      "file": "packages/channel-gateway/src/effect-journal.ts",
+      "line": 221,
+      "mutation": {
+        "old": "  if (existing.state === 'CONFIRMED' || existing.state === 'FAILED') {",
+        "new": "  if (existing.state === 'CONFIRMED') {"
+      },
+      "expectedKillers": [
+        "replays FAILED and UNCERTAIN records with stable codes and zero sends"
+      ],
+      "implementationBoundary": "memory"
+    },
+    {
+      "id": "M14",
+      "family": 7,
+      "guard": "tenant na identidade",
+      "invariant": "Mesma chave em tenants distintos não pode colidir",
+      "file": "packages/channel-gateway/src/effect-journal.ts",
+      "line": 142,
+      "mutation": {
+        "old": "  return [\n    identity.tenantId,\n    identity.channel,\n    identity.operationKind,\n    identity.idempotencyKey\n  ].join('\\u0000')",
+        "new": "  return [\n    identity.channel,\n    identity.operationKind,\n    identity.idempotencyKey\n  ].join('\\u0000')"
+      },
+      "expectedKillers": [
+        "9. distinct tenants with the same key do not interfere"
+      ],
+      "implementationBoundary": "memory"
+    },
+    {
+      "id": "M15",
+      "family": 7,
+      "guard": "canal na identidade",
+      "invariant": "Mesma chave em canais distintos não pode colidir",
+      "file": "packages/channel-gateway/src/effect-journal.ts",
+      "line": 142,
+      "mutation": {
+        "old": "  return [\n    identity.tenantId,\n    identity.channel,\n    identity.operationKind,\n    identity.idempotencyKey\n  ].join('\\u0000')",
+        "new": "  return [\n    identity.tenantId,\n    identity.operationKind,\n    identity.idempotencyKey\n  ].join('\\u0000')"
+      },
+      "expectedKillers": [
+        "(selecionado; se sobreviver, adicionar teste de isolamento entre canais)"
+      ],
+      "implementationBoundary": "memory"
+    },
+    {
+      "id": "M16",
+      "family": 8,
+      "guard": "transição de commit",
+      "invariant": "Gateway não pode reportar sucesso quando a confirmação é perdida",
+      "file": "packages/channel-gateway/src/gateway.ts",
+      "line": 294,
+      "mutation": {
+        "old": "    if (transition === 'committed') {",
+        "new": "    if (true) {"
+      },
+      "expectedKillers": [
+        "replays a record committed by another lease and emits replayed"
+      ],
+      "implementationBoundary": "gateway"
+    }
+  ]
+}

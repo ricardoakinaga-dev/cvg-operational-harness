@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "taskId": "AAA-16",
+  "program": "AAA-20260912",
+  "title": "Disponibilizar PostgreSQL descartável e fechar gate sem skips",
+  "owner": "agent-2",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "claim": "O gate PostgreSQL obrigatório foi executado em instância descartável e isolada, com 11 arquivos/84 testes PASS, 0 falhas, 0 skips e exit 0. Os cenários chaos PostgreSQL passaram pela primeira vez em execução real.",
+  "notClaimed": [
+    "task DONE (somente o lead promove VERIFIED -> DONE)",
+    "G_SPEC concedido",
+    "validação em banco compartilhado ou operacional",
+    "revisão independente (reviewer deve diferir do implementador)"
+  ],
+  "dependencies": {
+    "AAA-01": "READY (evidência em docs/04_audit/evidence/AAA/AAA-01/, candidato 512bc11e80fbf7c7b8baf6263aacc811ff829309)",
+    "AAA-03": "REVIEW (hash db75899f6b730fa04b642da8cdc6d65e747a7c7e62e22673bf038a52163d66f8)",
+    "AAA-05": "PROPOSTO nesta rodada (docs/02_spec/aaa_data_api_contract.md, sha256 8db1541f3f0428b64b47d5235c406cc4450b19ecc85eee75290837229dbf17e5)",
+    "AAA-14": "PENDING (agent-3)",
+    "AAA-04": "PENDING (agent-3); barra de qualidade ainda não congelada"
+  },
+  "environment": {
+    "scope": "disposable instance created exclusively for AAA-16",
+    "host": "127.0.0.1",
+    "port": 55432,
+    "dataDir": "/tmp/opencode/aaa-agent2-pg16/data",
+    "socketDir": "/tmp/opencode/aaa-agent2-pg16/run",
+    "log": "/tmp/opencode/aaa-agent2-pg16/log/postgres.log",
+    "database": "cvg_aaa16_test",
+    "serverVersion": "PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+    "owner": "ricardo (superusuário apenas do cluster descartável; nenhum dado operacional)",
+    "operationalBoundary": "porta 5432 (runtime cvg-his-v4) não foi acessada; DATABASE_URL operacional nunca foi usada; TEST_DATABASE_URL apontou somente para este cluster.",
+    "preRunState": "2 databases de sistema (postgres/template0/template1) + cvg_aaa16_test vazio; apenas roles nativas + ricardo; 0 tabelas de aplicação.",
+    "isolationEvidence": "docs/04_audit/evidence/AAA/AAA-16/environment.txt"
+  },
+  "commands": [
+    {
+      "command": "TEST_DATABASE_URL=postgres://ricardo@127.0.0.1:55432/cvg_aaa16_test npm run test:postgres",
+      "exitCode": 1,
+      "log": "docs/04_audit/evidence/AAA/AAA-16/test-postgres.log",
+      "result": "10 arquivos PASS, 1 falha (chaos-postgres CHAOS-04), 83 PASS / 1 FAIL, 0 skips",
+      "note": "primeira execução real do chaos; defeitos preexistentes de harness preservados: double-release do client e erros não tratados do pool"
+    },
+    {
+      "command": "TEST_DATABASE_URL=... npm run test:postgres (após reserva/testes de chaos parcialmente corrigidos)",
+      "exitCode": 1,
+      "log": "docs/04_audit/evidence/AAA/AAA-16/test-postgres-rerun.log",
+      "result": "11 arquivos/84 testes PASS, mas 2 unhandled errors no client verificado (holder) -> exit 1",
+      "note": "falha preservada; nenhum falso PASS aceito"
+    },
+    {
+      "command": "TEST_DATABASE_URL=... npm run test:postgres",
+      "exitCode": 0,
+      "log": "docs/04_audit/evidence/AAA/AAA-16/test-postgres-rerun2.log",
+      "result": "Test Files 11 passed (11); Tests 84 passed (84); 0 failed; 0 skipped"
+    },
+    {
+      "command": "TEST_DATABASE_URL=... npx vitest run <mesmos 11 arquivos> --reporter=verbose",
+      "exitCode": 0,
+      "log": "docs/04_audit/evidence/AAA/AAA-16/test-postgres-verbose.log",
+      "result": "enumeracao nominal dos 84 testes obrigatorios para evidência de aceite"
+    }
+  ],
+  "changedFiles": [
+    {
+      "path": "packages/chaos/src/__tests__/chaos-postgres.test.ts",
+      "sha256": "a122ae5179b6cabe18e99067beb60311c51ad8f19ee07aef14aa0cc5417c7418",
+      "change": "correcao minima do harness: handler de erro do pool, handler de erro do client verificado e release defensivo; nenhuma assercao de recuperacao foi removida ou afrouxada"
+    }
+  ],
+  "acceptanceMap": [
+    {
+      "criterion": "migrations aplicadas sobre estado anterior sintetico",
+      "evidence": "tenant-isolation.test.ts: 'quarantines legacy tenant mismatches before enabling RLS', 'runs the versioned migration set and records checksums without changing 0000'; outbox-durability.test.ts: 'backfills a legacy processed row while RLS is already forced'"
+    },
+    {
+      "criterion": "roles runtime e migration distintos",
+      "evidence": "postgres-persistence-mode.test.ts: 'validates tenant-scoped startup with separate migration and runtime roles', 'requires the migration role to be a separate non-privileged DDL owner', 'rejects a runtime role that inherits another PostgreSQL role'"
+    },
+    {
+      "criterion": "runtime sem bypass de RLS",
+      "evidence": "postgres-persistence-mode.test.ts: 'rejects a superuser runtime connection when RLS enforcement is requested'; tenant-isolation.test.ts: 'enforces cross-tenant isolation with a non-BYPASSRLS role and resets pooled context'"
+    },
+    {
+      "criterion": "FORCE RLS e isolamento entre tenants",
+      "evidence": "platform-approval-postgres.test.ts: 'enforces tenant visibility for the durable approval table under FORCE RLS'; tenant-isolation.test.ts: 'defines the database contract that hides null tenant rows and protects every legacy table'"
+    },
+    {
+      "criterion": "limpeza do contexto apos erro e reutilizacao da conexao",
+      "evidence": "tenant-isolation.test.ts: 'destroys a connection when context cleanup fails', 'keeps tenant context on one acquired connection and resets before release', 'restores and verifies the connection search_path before release'"
+    },
+    {
+      "criterion": "concorrencia com duas conexoes/processos",
+      "evidence": "outbox-durability.test.ts: 'claims once across two connections, journals at-least-once ack, retries and requeues in-place'; platform-approval-postgres.test.ts: 'persists bindings and consumes approvals atomically exactly once'; postgres-migration-smoke.test.ts: 'reconciles a concurrent task idempotency conflict by reading the winner'"
+    },
+    {
+      "criterion": "rollback e recuperacao",
+      "evidence": "postgres-persistence-mode.test.ts: 'commits and rolls back the tenant-scoped runtime finalizer atomically'; webhook-security.test.ts: 'recovers stale PostgreSQL replay leases and preserves committed replay retention'"
+    },
+    {
+      "criterion": "cenarios PostgreSQL/chaos obrigatorios sem skips",
+      "evidence": "chaos-postgres.test.ts: CHAOS-04 e CHAOS-05 PASS; Test Files 11 passed (11), Tests 84 passed (84), 0 skipped"
+    }
+  ],
+  "cleanup": [
+    "parar o cluster: LD_LIBRARY_PATH=/home/ricardo/.local/share/cvg-his-v4-runtime/root/usr/lib/x86_64-linux-gnu /home/ricardo/.local/share/cvg-his-v4-runtime/root/usr/lib/postgresql/16/bin/pg_ctl -D /tmp/opencode/aaa-agent2-pg16/data stop -m fast",
+    "remover o diretorio inteiro: rm -rf /tmp/opencode/aaa-agent2-pg16",
+    "nao reutilizar a porta 55432 para outro recurso sem nova identificacao; nao usar o cluster para dados reais",
+    "o runner usa TEST_DATABASE_URL somente com este cluster; encerrar o cluster quando a revisao independente nao precisar mais dele"
+  ],
+  "limitations": [
+    "A instancia permanece em execucao para a revisao independente; cluster e dados sao descartaveis e vivem em /tmp/opencode.",
+    "A prova vale para o ambiente local (PostgreSQL 16.15); nao substitui ambiente de homologacao externo P10-B01.",
+    "Cobertura de novos modulos ainda abaixo da barra proposta de 95% de branches em modulos criticos; decisao pertence a AAA-04.",
+    "O gate G_SPEC/AAA-04/AAA-14 segue pendente; AAA-16 nao pode ser promovido a DONE por autoavaliacao.",
+    "O cluster foi iniciado com fsync=off/synchronous_commit=off/full_page_writes=off para velocidade de teste: a evidência é funcional (RLS, papéis, migrações, duas conexões) e NÃO prova durabilidade física, crash de energia ou RPO/RTO.",
+    "O cluster vive em /tmp (tmpfs ou disco local temporário); reinício da máquina descarta a fixture."
+  ]
+}

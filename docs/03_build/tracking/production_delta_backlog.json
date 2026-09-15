@@ -1,0 +1,690 @@
+{
+  "program": "PROD-20260913",
+  "planningTask": "PLAN-PROD-20260913",
+  "authorization": "PLANNING_ONLY",
+  "sourceAudit": "docs/04_audit/0560_docs_implementation_audit_2026-09-13.md",
+  "canonicalExistingTasks": "docs/03_build/tracking/aaa_program_backlog.json",
+  "canonicalDeltaTasks": "this file",
+  "plan": "docs/PLANO_EXECUTIVO_PRODUCAO.md",
+  "roadmap": "docs/ROADMAP_PRODUCAO.md",
+  "taskStates": [
+    "PLANNED",
+    "READY",
+    "RUNNING",
+    "IMPLEMENTED",
+    "REVIEW",
+    "VERIFIED",
+    "DONE",
+    "REWORK",
+    "BLOCKED"
+  ],
+  "additionalExitPrerequisites": {
+    "AAA-18": [
+      "PROD-02",
+      "PROD-06"
+    ],
+    "AAA-19": [
+      "PROD-05"
+    ],
+    "AAA-21": [
+      "PROD-04"
+    ],
+    "AAA-28": [
+      "PROD-03",
+      "PROD-07",
+      "PROD-08",
+      "PROD-09"
+    ],
+    "AAA-30": [
+      "PROD-10",
+      "PROD-11"
+    ],
+    "AAA-36": [
+      "PROD-12"
+    ],
+    "AAA-37": [
+      "PROD-14"
+    ],
+    "AAA-42": [
+      "PROD-13"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "PROD-01",
+      "title": "Revalidar baseline e fechar mapa de requisitos/contratos",
+      "phase": "M0",
+      "priority": "P1",
+      "status": "VERIFIED",
+      "dependencies": [],
+      "origin": [
+        "D13-08",
+        "A01-A20"
+      ],
+      "ownedPaths": [
+        "docs/02_spec/",
+        "docs/04_audit/evidence/PROD-20260913/PROD-01/"
+      ],
+      "implementation": "Capturar fontes, config, lockfile e ambiente; reaproveitar evidência somente para bytes idênticos. Revisar todas linhas da matriz RF/RNF/UC/REM/plataforma e congelar SPEC específica das próximas correções. Corrigir alegações factuais do decision brief sobre composição já existente, preservando alternativas D01.",
+      "acceptance": [
+        "Cada requisito possui tarefa, teste de aceite e estado de evidência; nenhum gap sem owner. Snapshot e SPEC das tarefas PROD-02/03/05/06 disponíveis para revisão; nenhuma aprovação inventada."
+      ],
+      "validation": [
+        "git diff --check",
+        "Recomputar hashes dos inputs do relatório e confrontar arquivo atual",
+        "Reproduzir probes SQL/UI/readiness em ambiente sintético antes de corrigir"
+      ],
+      "ownerRole": "lead/arquitetura",
+      "gate": "G_PLAN",
+      "estimate": "M",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-01/manifest.json",
+      "nextAction": "Preparar artefato de decisão/revalidação sem alterar produto.",
+      "progressNotes": "Baseline revalidado: 2525/2531 arquivos idênticos à auditoria, 0 fontes de produto alteradas; negativos D13-01/D13-04 reproduzidos; mapa 80/80 critérios e 156/156 requisitos com owner e método; contrato M1 congelado por hash. Revisão independente pendente.",
+      "evidence": [
+        "docs/04_audit/evidence/PROD-20260913/PROD-01/manifest.json",
+        "docs/04_audit/evidence/PROD-20260913/PROD-01/baseline-drift.json",
+        "docs/04_audit/evidence/PROD-20260913/PROD-01/requirements-map.json"
+      ],
+      "lastUpdate": "2026-09-13T14:41:25.587Z",
+      "independentReview": {
+        "reviewer": "fresh independent verifier (execution-capable), 2026-09-13",
+        "verdict": "FUNCTIONAL_CLAIMS_CONFIRMED; F1 P1 fixed; REVALIDATED_PASS (F1-F6), 64/64 manifest hashes, test:postgres 18/151/0 skips, npm test 234/1625",
+        "references": [
+          "docs/04_audit/evidence/PROD-20260913/independent-review/REVIEW.md",
+          "docs/04_audit/evidence/PROD-20260913/independent-review/RESPONSE.md",
+          "docs/04_audit/evidence/PROD-20260913/independent-review/revalidation.md"
+        ]
+      }
+    },
+    {
+      "id": "PROD-02",
+      "title": "Tornar mutação SQL de jornada e auditoria atômicas",
+      "phase": "M1",
+      "priority": "P1",
+      "status": "VERIFIED",
+      "dependencies": [
+        "PROD-01",
+        "AAA-17"
+      ],
+      "origin": [
+        "D13-01",
+        "Q-A11-01"
+      ],
+      "ownedPaths": [
+        "packages/persistence/src/journeys-postgres.ts",
+        "packages/persistence/src/__tests__/journeys-postgres.test.ts",
+        "apps/api/src/__tests__/journeys-api-postgres.test.ts"
+      ],
+      "implementation": "Usar transação curta por mutação e audit na mesma conexão tenant-scoped; revisar tutor, paciente, vínculo, appointment, expiração e concorrência. Não incluir I/O externo na transação.",
+      "acceptance": [
+        "Falha audit deixa zero alteração parcial. Retry produz uma mutação e um audit. Concorrência, TTL, tenant e paridade HTTP preservados; confirmação real permanece bloqueada."
+      ],
+      "validation": [
+        "Probe preservado backend-pg-probe.ts adaptado a DB exclusivo",
+        "TEST_DATABASE_URL=<banco-descartavel> npm run test:postgres",
+        "Testes novos de rollback/replay pelo repositório e HTTP"
+      ],
+      "ownerRole": "persistência",
+      "gate": "G_SPEC",
+      "estimate": "M",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-02/manifest.json",
+      "nextAction": "Obter revisão em contexto inteiramente fresco sobre o candidato manifestado para fechar aceite M1; qualificação integrada Node22 concluída.",
+      "progressNotes": "Transação curta (withTenantTransaction) para mutações+audit; probe preservado passa de FAIL_PARTIAL_STATE para PASS_ATOMIC; regressões de rollback/replay/concorrência/contexto e HTTP verdes.",
+      "evidence": [
+        "docs/04_audit/evidence/PROD-20260913/PROD-02/manifest.json",
+        "docs/04_audit/evidence/PROD-20260913/PROD-02/tests.log"
+      ],
+      "lastUpdate": "2026-09-13T15:53:47.812Z",
+      "independentReview": {
+        "reviewer": "fresh round3 critic (new context, execution-capable), 2026-09-13",
+        "verdict": "PASS: no P0/P1/P2; fingerprint 648/648; full suite 1733/0 skips",
+        "references": [
+          "docs/04_audit/evidence/PROD-20260913/m1-fresh-review-round3/REVIEW.md",
+          "docs/04_audit/evidence/PROD-20260913/m1-fresh-review-round3/manifest.json"
+        ]
+      },
+      "history": [
+        {
+          "from": "VERIFIED",
+          "to": "REWORK",
+          "reason": "Reauditoria independente RA-M1-04 a RA-M1-08; contrato prod20260913_m1_reaudit_contract.md"
+        },
+        {
+          "from": "REWORK",
+          "to": "REVIEW",
+          "reason": "RA-M1 correções implementadas; qualificação Node22 PASS e revisão independente CONDITIONAL PASS (contexto não fresco)."
+        }
+      ],
+      "currentEvidence": "docs/04_audit/evidence/PROD-20260913/reaudit-round2/manifest.json"
+    },
+    {
+      "id": "PROD-03",
+      "title": "Impedir continuação UI de identidade/sessão obsoleta",
+      "phase": "M1",
+      "priority": "P1",
+      "status": "VERIFIED",
+      "dependencies": [
+        "PROD-01"
+      ],
+      "origin": [
+        "D13-02",
+        "Q-A17-02"
+      ],
+      "ownedPaths": [
+        "apps/web/src/features/journeys/index.tsx",
+        "apps/web/src/api/client.ts",
+        "apps/web/src/__tests__/",
+        "tests/e2e/"
+      ],
+      "implementation": "Vincular cada requisição/mutação da jornada a geração de tenant/ator/papel/sessão; invalidar resultados e erros atrasados, abortar transporte quando possível; limpar caches de identidade.",
+      "acceptance": [
+        "A→B, logout e troca de sessão com respostas sucesso/erro fora de ordem não repõem dados A, busy ou mensagens obsoletas. Não alterar autorização backend."
+      ],
+      "validation": [
+        "Converter ui/race.cjs da auditoria em regressão",
+        "E2E atraso/reordenação e troca de tenant/role/sessão"
+      ],
+      "ownerRole": "frontend",
+      "gate": "G_SPEC",
+      "estimate": "M",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-03/manifest.json",
+      "nextAction": "Obter revisão em contexto inteiramente fresco sobre o candidato manifestado para fechar aceite M1; qualificação integrada Node22 concluída.",
+      "progressNotes": "Geração de identidade + AbortController no painel; cliente aceita signal; teste unitário RED/GREEN e probe Chromium externo PASS_STALE_DISCARDED.",
+      "evidence": [
+        "docs/04_audit/evidence/PROD-20260913/PROD-03/manifest.json",
+        "docs/04_audit/evidence/PROD-20260913/PROD-03/ui-race-probe.json"
+      ],
+      "lastUpdate": "2026-09-13T15:53:47.812Z",
+      "independentReview": {
+        "reviewer": "fresh round3 critic (new context, execution-capable), 2026-09-13",
+        "verdict": "PASS: no P0/P1/P2; fingerprint 648/648; full suite 1733/0 skips",
+        "references": [
+          "docs/04_audit/evidence/PROD-20260913/m1-fresh-review-round3/REVIEW.md",
+          "docs/04_audit/evidence/PROD-20260913/m1-fresh-review-round3/manifest.json"
+        ]
+      },
+      "history": [
+        {
+          "at": "2026-09-13T14:54:52.563868+00:00",
+          "from": "VERIFIED",
+          "to": "REWORK",
+          "reason": "RA-M1-02/03 independent Node22 probes: session stale response and patientName survives identity transition"
+        },
+        {
+          "from": "REWORK",
+          "to": "REVIEW",
+          "reason": "RA-M1 correções implementadas; qualificação Node22 PASS e revisão independente CONDITIONAL PASS (contexto não fresco)."
+        }
+      ],
+      "currentEvidence": "docs/04_audit/evidence/PROD-20260913/reaudit-round2/manifest.json"
+    },
+    {
+      "id": "PROD-04",
+      "title": "Persistir ApprovalStore do runtime canônico",
+      "phase": "M2",
+      "priority": "P1",
+      "status": "VERIFIED",
+      "dependencies": [
+        "PROD-01",
+        "AAA-06",
+        "AAA-07",
+        "AAA-16"
+      ],
+      "origin": [
+        "D13-05",
+        "Q-A07-01",
+        "Q-A07-02",
+        "Q-A07-03"
+      ],
+      "ownedPaths": [
+        "packages/approval-engine/src/",
+        "packages/persistence/src/",
+        "packages/persistence/migrations/"
+      ],
+      "implementation": "Implementar a porta de aprovação escolhida por D01 com proposta imutável, CAS, fencing e operação vinculada ao journal. Reservar migration nova após ler catálogo atual; não reutilizar 0012/0013/0014 nem duplicar autoridade SQL da plataforma.",
+      "acceptance": [
+        "Restart de processo mantém aprovação/proposta/reserva; falha antes do efeito libera de modo seguro; efeito incerto não reexecuta; duas conexões e múltiplas gerações não reutilizam token."
+      ],
+      "validation": [
+        "Testes SQL + reinício real de processo + crash nas transições",
+        "Reexecutar F01–F05/F15/T-19 e cenário multigeração P2-8"
+      ],
+      "ownerRole": "runtime/persistência",
+      "gate": "G_SPEC",
+      "estimate": "L",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-04/manifest.json",
+      "nextAction": "Congelar contrato e conferir autoridade da task antes de BUILD.",
+      "progressNotes": "Implementado como PostgresApprovalAuthority (Rota A2) sobre migration 0015_runtime_approval_store; aceite verificado por crítico fresco: restart, duas conexões, fencing de geração, crash antes/depois do efeito, RLS, getByOperationKey/listPending. Gates: npm test 248/1775/0 skips; test:postgres 20/174/0.",
+      "evidence": [
+        "docs/02_spec/prod20260913_prod04_addendum.md",
+        "docs/04_audit/evidence/PROD-20260913/PROD-04/review/REVIEW.md"
+      ],
+      "lastUpdate": "2026-09-13T17:49:46.850Z",
+      "independentReview": {
+        "reviewer": "fresh independent critic (new context, execution-capable), 2026-09-13",
+        "verdict": "PASS: no P0/P1/material P2; acceptance a-h verified; tamper probes prove CAS necessity; fingerprint stable",
+        "references": [
+          "docs/04_audit/evidence/PROD-20260913/PROD-04/review/REVIEW.md",
+          "docs/04_audit/evidence/PROD-20260913/PROD-04/manifest.json"
+        ]
+      }
+    },
+    {
+      "id": "PROD-05",
+      "title": "Validar papel SQL e RLS no bootstrap do worker",
+      "phase": "M1",
+      "priority": "P1",
+      "status": "VERIFIED",
+      "dependencies": [
+        "PROD-01",
+        "AAA-16"
+      ],
+      "origin": [
+        "D13-06",
+        "Q-A06-03"
+      ],
+      "ownedPaths": [
+        "apps/worker/src/postgres-controlled.ts",
+        "apps/worker/src/worker.ts",
+        "apps/worker/src/__tests__/"
+      ],
+      "implementation": "Conferir papel efetivo, policies/RLS e privilégios antes do primeiro claim, alinhando contrato do bootstrap da API; flag não substitui consulta.",
+      "acceptance": [
+        "Superuser/BYPASSRLS/owner indevido/schema ausente impedem consumo; papel mínimo válido inicia; contexto é limpo após erro e reutilização do pool."
+      ],
+      "validation": [
+        "Bootstrap negativo com roles reais em DB descartável",
+        "Worker startup e continuous-worker-postgres.integration.test.ts"
+      ],
+      "ownerRole": "backend/segurança",
+      "gate": "G_SPEC",
+      "estimate": "M",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-05/manifest.json",
+      "nextAction": "Obter revisão em contexto inteiramente fresco sobre o candidato manifestado para fechar aceite M1; qualificação integrada Node22 concluída.",
+      "progressNotes": "Preflight real de papel/RLS/schema no bootstrap do worker; matriz negativa com roles reais (superuser/BYPASSRLS/membership/owner/DDL/schema ausente/privilégio amplo) e papel mínimo consumindo evento; test:postgres agora inclui continuous-worker e attendance (149 testes, 0 skips).",
+      "evidence": [
+        "docs/04_audit/evidence/PROD-20260913/PROD-05/manifest.json",
+        "docs/04_audit/evidence/PROD-20260913/PROD-05/tests.log",
+        "docs/04_audit/evidence/PROD-20260913/PROD-05/test-postgres.log"
+      ],
+      "lastUpdate": "2026-09-13T15:53:47.812Z",
+      "independentReview": {
+        "reviewer": "fresh round3 critic (new context, execution-capable), 2026-09-13",
+        "verdict": "PASS: no P0/P1/P2; fingerprint 648/648; full suite 1733/0 skips",
+        "references": [
+          "docs/04_audit/evidence/PROD-20260913/m1-fresh-review-round3/REVIEW.md",
+          "docs/04_audit/evidence/PROD-20260913/m1-fresh-review-round3/manifest.json"
+        ]
+      },
+      "history": [
+        {
+          "from": "VERIFIED",
+          "to": "REWORK",
+          "reason": "Reauditoria independente RA-M1-04 a RA-M1-08; contrato prod20260913_m1_reaudit_contract.md"
+        },
+        {
+          "from": "REWORK",
+          "to": "REVIEW",
+          "reason": "RA-M1 correções implementadas; qualificação Node22 PASS e revisão independente CONDITIONAL PASS (contexto não fresco)."
+        }
+      ],
+      "currentEvidence": "docs/04_audit/evidence/PROD-20260913/reaudit-round2/manifest.json"
+    },
+    {
+      "id": "PROD-06",
+      "title": "Preservar ator e correlação na auditoria da jornada",
+      "phase": "M1",
+      "priority": "P1",
+      "status": "VERIFIED",
+      "dependencies": [
+        "PROD-02"
+      ],
+      "origin": [
+        "D13-06",
+        "Q-A14-01"
+      ],
+      "ownedPaths": [
+        "packages/persistence/src/journeys.ts",
+        "packages/persistence/src/journeys-postgres.ts",
+        "apps/api/src/server.ts",
+        "apps/api/src/__tests__/journeys-api-postgres.test.ts"
+      ],
+      "implementation": "Propagar ator autenticado e correlationId pela porta; impedir autoridade do body. Eventos de sistema devem registrar causa/execução próprios, sem fingir ator humano.",
+      "acceptance": [
+        "Evento identifica ator autorizado, tenant e correlação originais; actor/body adulterado negado; auditoria continua atômica sob erro; timeline rastreia a chamada."
+      ],
+      "validation": [
+        "HTTP autenticado→SQL audit com contexto exato e negativos",
+        "Paridade memória/PostgreSQL"
+      ],
+      "ownerRole": "backend/persistência",
+      "gate": "G_SPEC",
+      "estimate": "M",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-06/manifest.json",
+      "nextAction": "Obter revisão em contexto inteiramente fresco sobre o candidato manifestado para fechar aceite M1; qualificação integrada Node22 concluída.",
+      "progressNotes": "Ator autenticado + correlationId propagados pela porta de jornada; body não tem autoridade; fallback explícito system.journey-repository; paridade memória/PostgreSQL e HTTP provadas.",
+      "evidence": [
+        "docs/04_audit/evidence/PROD-20260913/PROD-06/manifest.json",
+        "docs/04_audit/evidence/PROD-20260913/PROD-02/tests.log"
+      ],
+      "lastUpdate": "2026-09-13T15:53:47.812Z",
+      "independentReview": {
+        "reviewer": "fresh round3 critic (new context, execution-capable), 2026-09-13",
+        "verdict": "PASS: no P0/P1/P2; fingerprint 648/648; full suite 1733/0 skips",
+        "references": [
+          "docs/04_audit/evidence/PROD-20260913/m1-fresh-review-round3/REVIEW.md",
+          "docs/04_audit/evidence/PROD-20260913/m1-fresh-review-round3/manifest.json"
+        ]
+      },
+      "history": [
+        {
+          "from": "VERIFIED",
+          "to": "REWORK",
+          "reason": "Reauditoria independente RA-M1-04 a RA-M1-08; contrato prod20260913_m1_reaudit_contract.md"
+        },
+        {
+          "from": "REWORK",
+          "to": "REVIEW",
+          "reason": "RA-M1 correções implementadas; qualificação Node22 PASS e revisão independente CONDITIONAL PASS (contexto não fresco)."
+        }
+      ],
+      "currentEvidence": "docs/04_audit/evidence/PROD-20260913/reaudit-round2/manifest.json"
+    },
+    {
+      "id": "PROD-07",
+      "title": "Retomar drafts e resolver ambiguidade tutor/pet no console",
+      "phase": "M3",
+      "priority": "P1",
+      "status": "PLANNED",
+      "dependencies": [
+        "PROD-03",
+        "AAA-18",
+        "AAA-20"
+      ],
+      "origin": [
+        "D13-07",
+        "RF-R3-09",
+        "RF-024"
+      ],
+      "ownedPaths": [
+        "apps/web/src/features/journeys/",
+        "apps/web/src/api/client.ts",
+        "tests/e2e/"
+      ],
+      "implementation": "Conectar listagens persistentes à sessão selecionada; recuperar após reload; permitir escolha explícita de pet entre candidatos; apresentar expirado/conflito/vazio/loading/error/retry.",
+      "acceptance": [
+        "Reload retoma mesmo draft sem duplicar; outro tenant não vê resultados; pet ambíguo exige seleção; slot expirado não pode gerar confirmação real."
+      ],
+      "validation": [
+        "E2E API+PostgreSQL com reload, TTL, dois candidatos e corrida",
+        "Teclado e viewports375/768/1440"
+      ],
+      "ownerRole": "frontend",
+      "gate": "G_SPEC",
+      "estimate": "M",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-07/manifest.json",
+      "nextAction": "Congelar contrato e conferir autoridade da task antes de BUILD.",
+      "lastUpdate": "2026-09-13T16:45:07.579Z",
+      "progressNotes": "Dependências técnicas verificadas (PROD-03/AAA-18/AAA-20), porém a semântica de draft/campos/TTL depende de D02 (PENDING); roadmap M3 após a decisão."
+    },
+    {
+      "id": "PROD-08",
+      "title": "Exibir handoff completo e timeline investigável",
+      "phase": "M3",
+      "priority": "P1",
+      "status": "PLANNED",
+      "dependencies": [
+        "PROD-03",
+        "PROD-06",
+        "AAA-21"
+      ],
+      "origin": [
+        "D13-07",
+        "RF-050",
+        "RF-073",
+        "RF-084"
+      ],
+      "ownedPaths": [
+        "packages/workflows/src/handoff/",
+        "packages/agent-core/src/queries/",
+        "apps/api/src/server.ts",
+        "apps/web/src/features/conversations/",
+        "apps/web/src/features/journeys/"
+      ],
+      "implementation": "Compor resumo com tutor/pet, intenção, risco operacional, ações, tools, fontes e pendências; contrato retorna identificador do handoff; consumir timeline completa de mensagens/runs/tools/approvals/safety/handoff sem expor conteúdo indevido.",
+      "acceptance": [
+        "Operador recebe resumo rastreável após takeover; itens sensíveis mascarados por papel; ausência de dados explícita; IDs ligam origem→decisão→efeito; retomada não duplica handoff."
+      ],
+      "validation": [
+        "Fluxo UC07 via HTTP→SQL→web; conflito/takeover e histórico",
+        "Teste de contrato do resumo e UI por papel"
+      ],
+      "ownerRole": "produto/backend/frontend",
+      "gate": "G_SPEC",
+      "estimate": "L",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-08/manifest.json",
+      "nextAction": "Congelar contrato e conferir autoridade da task antes de BUILD."
+    },
+    {
+      "id": "PROD-09",
+      "title": "Paginar e atualizar filas operacionais",
+      "phase": "M3",
+      "priority": "P2",
+      "status": "PLANNED",
+      "dependencies": [
+        "PROD-03",
+        "AAA-20"
+      ],
+      "origin": [
+        "D13-07",
+        "RF-080"
+      ],
+      "ownedPaths": [
+        "apps/web/src/App.tsx",
+        "apps/web/src/features/conversations/",
+        "apps/web/src/api/client.ts",
+        "tests/e2e/"
+      ],
+      "implementation": "Consumir pageInfo e navegar todos lotes; refresh controlado com cancelamento de geração; preservar seleção e indicar total/limite sem apresentar lote como total; atualizar tarefas após criação.",
+      "acceptance": [
+        "26+ conversas são acessíveis; inserções e refresh não misturam tenants nem apagam contexto; loading/error/retry em todos lotes; tarefa nova aparece."
+      ],
+      "validation": [
+        "E2E com >25 conversas, atualização concorrente e troca de identidade"
+      ],
+      "ownerRole": "frontend",
+      "gate": "G_SPEC",
+      "estimate": "M",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-09/manifest.json",
+      "nextAction": "Congelar contrato e conferir autoridade da task antes de BUILD."
+    },
+    {
+      "id": "PROD-10",
+      "title": "Persistir justificativas e vínculos de decisões/tarefas",
+      "phase": "M3",
+      "priority": "P2",
+      "status": "PLANNED",
+      "dependencies": [
+        "PROD-06",
+        "AAA-21"
+      ],
+      "origin": [
+        "SPEC-0105",
+        "RF-052",
+        "RF-061",
+        "RF-062"
+      ],
+      "ownedPaths": [
+        "packages/shared/src/schemas/application.ts",
+        "packages/agent-core/src/commands/",
+        "packages/persistence/src/",
+        "apps/api/src/server.ts",
+        "apps/web/src/"
+      ],
+      "implementation": "Revisar contrato de rejeição e cancelamento com motivo obrigatório quando SPEC exige; preservar nota no audit e estado; relacionar tarefa a contato/conversa/sessão por vínculo validado ou relação explícita aprovada, com minimização.",
+      "acceptance": [
+        "Rejeição/cancelamento sem motivo exigido nega; motivo bounded persiste com ator/horário; relacionamento não permite contato de outro tenant; transições concorrentes têm um final."
+      ],
+      "validation": [
+        "Matriz de decisões e task status por HTTP+SQL+UI",
+        "Contratos/versionamento e testes de compatibilidade"
+      ],
+      "ownerRole": "backend/frontend",
+      "gate": "G_SPEC",
+      "estimate": "M",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-10/manifest.json",
+      "nextAction": "Congelar contrato e conferir autoridade da task antes de BUILD."
+    },
+    {
+      "id": "PROD-11",
+      "title": "Completar jornadas conversacionais e proposta de approval",
+      "phase": "M3",
+      "priority": "P1",
+      "status": "PLANNED",
+      "dependencies": [
+        "AAA-21",
+        "AAA-25",
+        "PROD-08",
+        "PROD-10"
+      ],
+      "origin": [
+        "RF-010",
+        "RF-012",
+        "RF-030",
+        "RF-033",
+        "RF-041",
+        "RF-043"
+      ],
+      "ownedPaths": [
+        "packages/workflows/src/",
+        "packages/agent-core/src/",
+        "packages/platform/src/",
+        "packages/agent-runtime/src/"
+      ],
+      "implementation": "Fechar coleta/estado multietapa, baixa confiança, emergência operacional e handoff; sugestão de slot gera proposta imutável e ApprovalRequest quando requerido. Usar runtime escolhido por D01, sem segundo caminho de autoridade.",
+      "acceptance": [
+        "UC01–09 demonstrados com mensagens reais do simulador, reload/restart, incompleto/ambíguo; approval liga o draft final; triagem não diagnostica/prescreve; nenhum agendamento real automático."
+      ],
+      "validation": [
+        "E2E conversacional através do entrypoint, não função de workflow isolada",
+        "Evals adversariais e logs por sessão/turno"
+      ],
+      "ownerRole": "runtime/produto",
+      "gate": "G_SPEC",
+      "estimate": "L",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-11/manifest.json",
+      "nextAction": "Congelar contrato e conferir autoridade da task antes de BUILD."
+    },
+    {
+      "id": "PROD-12",
+      "title": "Preparar artefato instalável e infraestrutura reproduzível",
+      "phase": "M4",
+      "priority": "P1",
+      "status": "PLANNED",
+      "dependencies": [
+        "AAA-14",
+        "AAA-20",
+        "AAA-23"
+      ],
+      "origin": [
+        "D13-08",
+        "Q-A18-01",
+        "Q-A18-03",
+        "Q-A20-01"
+      ],
+      "ownedPaths": [
+        "Dockerfile",
+        "deploy/",
+        ".github/workflows/",
+        "docs/08_runtime/"
+      ],
+      "implementation": "Build limpo Node22/lockfile; imagens API/web/worker por digest, non-root, secrets externos, TLS/rede/egress, persistência/backup e migração com papéis distintos; parâmetros por ambiente, probes corretos e runbook de instalação/atualização/rollback. Criar config de infra alvo após D03, sem deploy nesta task.",
+      "acceptance": [
+        "npm ci no alvo e smoke dos artefatos empacotados passam; restart mantém estado; imagem não contém segredos/tooling dev indevido; provisionamento reversível em ambiente descartável; versão anterior pode ser recuperada sem perda auditável."
+      ],
+      "validation": [
+        "Build imagem runtime/web/worker quando engine disponível; scan/SBOM/licenças",
+        "Smoke via imagem e restore/roll-forward de migração em staging sintético"
+      ],
+      "ownerRole": "infra/supply-chain",
+      "gate": "G_SPEC",
+      "estimate": "L",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-12/manifest.json",
+      "nextAction": "Congelar contrato e conferir autoridade da task antes de BUILD."
+    },
+    {
+      "id": "PROD-13",
+      "title": "Preparar liberação operacional e manutenção do candidato",
+      "phase": "M6",
+      "priority": "P1",
+      "status": "PLANNED",
+      "dependencies": [
+        "AAA-39",
+        "AAA-41",
+        "PROD-12",
+        "PROD-14"
+      ],
+      "origin": [
+        "Q-A20-01",
+        "Q-A20-02",
+        "Q-A20-03",
+        "Q-A20-04"
+      ],
+      "ownedPaths": [
+        "docs/08_runtime/",
+        "docs/04_audit/evidence/PROD-20260913/PROD-13/"
+      ],
+      "implementation": "Preparar checklist por digest/escopo, plantão e donos, runbooks, alertas e contingência. Ensaiar release/rollback supervisionados no ambiente autorizado, definir suporte, vulnerabilidades, backup/restore recorrente, regressão e requalificação após mudança.",
+      "acceptance": [
+        "Dossiê inclui evidência operacional no ambiente relevante e aceite humano datado com validade/escopo; nenhuma aprovação automática. Procedimento de deploy revisável separado da autorização de execução; recurso real só mediante autorização específica."
+      ],
+      "validation": [
+        "Drill de falha/rollback e restauração conforme D03 aprovado",
+        "Revisão humana do dossiê e checklist de release; rejeitar assinatura ausente ou candidato alterado"
+      ],
+      "ownerRole": "operação/release",
+      "gate": "G_EXTERNAL_HUMAN",
+      "estimate": "M",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-13/manifest.json",
+      "nextAction": "Preparar artefato de decisão/revalidação sem alterar produto."
+    },
+    {
+      "id": "PROD-14",
+      "title": "Registrar decisões e aprovações de produto/ambiente/dados",
+      "phase": "M0",
+      "priority": "P1",
+      "status": "REVIEW",
+      "dependencies": [
+        "PROD-01",
+        "AAA-02"
+      ],
+      "origin": [
+        "D01",
+        "D02",
+        "D03",
+        "D04",
+        "D05"
+      ],
+      "ownedPaths": [
+        "docs/01_prd/aaa_decision_brief.md",
+        "docs/02_spec/",
+        "docs/08_runtime/"
+      ],
+      "implementation": "Levar material concreto às autoridades: runtime/RF011; limite de draft; SLO/carga/custo/RPO/RTO; IdP/roles, endpoints, corpus e canais; retenção/dados/risco residual. Registrar opção, responsável, data, escopo, justificativa e validade; separar decisões independentes.",
+      "acceptance": [
+        "Cada decisão tem autoridade explícita ou permanece PENDING; D01 resolve contrato sem alegar cadeia já integrada; D04 separa fixtures, homologação e produção; decisões não concedem permissão irrestrita."
+      ],
+      "validation": [
+        "Conferência de decisão↔gate↔task↔candidato",
+        "Nenhum gate desbloqueado por silêncio, prazo ou nota"
+      ],
+      "ownerRole": "produto/arquitetura/operação",
+      "gate": "G_HUMAN",
+      "estimate": "L (espera externa não estimada)",
+      "expectedEvidence": "docs/04_audit/evidence/PROD-20260913/PROD-14/manifest.json",
+      "nextAction": "Registrar decisões humanas no pacote docs/02_spec/prod20260913_decision_packet.md; não desbloquear por silêncio.",
+      "lastUpdate": "2026-09-13T16:45:07.579Z",
+      "progressNotes": "D01 registrada (opção C); D02–D05 PENDING. Pacote revalidado; nenhuma decisão adicional foi inferida."
+    }
+  ]
+}

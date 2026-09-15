@@ -1,0 +1,190 @@
+{
+  "taskId": "AAA-14",
+  "remediation": "P2-6",
+  "program": "AAA-20260912",
+  "title": "licenses:check idempotente e não-mutante em re-run",
+  "status": "READY_FOR_REVIEW",
+  "owner": "builder agent (P2-6 remediation, controlled local scope)",
+  "observedAt": "2026-09-13T03:35:38Z",
+  "host": "Node v24.20.0, npm 11.19.0, linux",
+  "authority": "P1 independent review finding P2-6 (docs/04_audit/evidence/AAA/P1-independent-review/REVIEW.md); no commit/push/deploy; no npm install; no production; no real data",
+  "finding": "P2-6 — npm run licenses:check mutates the tracked certification/license-report.json on every run (fresh generatedAt), invalidating recorded artifact hashes",
+  "behavior": [
+    "scripts/check-licenses.mjs computes the report as before and compares the new stable content against the existing certification/license-report.json ignoring volatile top-level fields (generatedAt, timestamp).",
+    "If the stable content is equal, the file is not opened for writing (bytes preserved) and the script exits with the same classification exit codes as before.",
+    "If the file is missing, unreadable or invalid JSON, it is written (normal path).",
+    "If the stable content changed, it is written exactly as before (JSON.stringify report, 2-space indent, trailing newline).",
+    "Console event licenses.checked, its fields, and the exit-code rules are unchanged.",
+    "--self-test runs deterministic in-process checks in a temp dir and never writes inside the workspace; it is not wired into package.json."
+  ],
+  "changes": [
+    {
+      "path": "scripts/check-licenses.mjs",
+      "sha256Before": "not captured before edit (working tree); AAA-14 builder manifest recorded 8b6ee79aece754ccaaf82aa9aa5e619e7a6f8d3069261fe8b73c11674cba1e6f at build time",
+      "sha256After": "56970e8b56705ece458c6094c9a3322bac1e2d73db225abd412ee86e371f3d40",
+      "summary": "added stableReportContent/writeReportIfChanged (skip byte-identical stable report), added --self-test self-check; classification, output and exit codes untouched"
+    },
+    {
+      "path": "certification/license-report.json",
+      "sha256Before": "55787d37f7d42d1e0348c2d0df9db269838c7175a31f5bdec70473bb17f0dda9",
+      "sha256AfterRuns": "55787d37f7d42d1e0348c2d0df9db269838c7175a31f5bdec70473bb17f0dda9",
+      "summary": "unchanged byte-for-byte across both npm run licenses:check runs (file already matched the freshly computed stable content)"
+    },
+    {
+      "path": "package.json",
+      "sha256": "unchanged (no edits)",
+      "summary": "self-test intentionally not added to package.json"
+    },
+    {
+      "path": "product packages",
+      "sha256": "unchanged (no edits)",
+      "summary": "remediation is confined to scripts/check-licenses.mjs and this evidence directory"
+    }
+  ],
+  "doubleRunProof": {
+    "command": "npm run licenses:check",
+    "runs": [
+      {
+        "run": 1,
+        "exitCode": 0,
+        "reportSha256": "55787d37f7d42d1e0348c2d0df9db269838c7175a31f5bdec70473bb17f0dda9",
+        "wrote": false
+      },
+      {
+        "run": 2,
+        "exitCode": 0,
+        "reportSha256": "55787d37f7d42d1e0348c2d0df9db269838c7175a31f5bdec70473bb17f0dda9",
+        "wrote": false
+      }
+    ],
+    "hashBeforeAnyRun": "55787d37f7d42d1e0348c2d0df9db269838c7175a31f5bdec70473bb17f0dda9",
+    "stableAcrossSecondRun": true,
+    "artifact": "commands/hashes.txt"
+  },
+  "selfTest": {
+    "command": "node scripts/check-licenses.mjs --self-test",
+    "exitCode": 0,
+    "verdict": "PASS",
+    "checks": [
+      { "id": "first-run-writes", "result": "PASS" },
+      {
+        "id": "second-run-preserves-bytes",
+        "result": "PASS",
+        "note": "report differs only in generatedAt"
+      },
+      {
+        "id": "stable-key-order-preserves-bytes",
+        "result": "PASS",
+        "note": "same stable content with reordered keys is not rewritten"
+      },
+      { "id": "content-change-writes", "result": "PASS" },
+      { "id": "unreadable-repaired", "result": "PASS" },
+      { "id": "missing-writes", "result": "PASS" }
+    ],
+    "artifact": "commands/self-test.log"
+  },
+  "e2eFixtureProof": {
+    "description": "temp copy of scripts/check-licenses.mjs + package.json + package-lock.json (no workspace writes)",
+    "steps": [
+      {
+        "step": "run 1, report missing",
+        "exitCode": 0,
+        "reportSha256": "4076450576f4307db652880eca210342222869e496d3694dfeaec22062be0e7f",
+        "wrote": true
+      },
+      {
+        "step": "run 2, immediate re-run",
+        "exitCode": 0,
+        "reportSha256": "4076450576f4307db652880eca210342222869e496d3694dfeaec22062be0e7f",
+        "wrote": false
+      },
+      {
+        "step": "run 3, lockfile mutated (one license removed, unclassified=1)",
+        "exitCode": 1,
+        "reportSha256": "a210d7f313972494982bda27b7e8f4250eacf27a86cfb623af4c6455930a87f4",
+        "wrote": true
+      },
+      {
+        "step": "run 4, original lockfile restored",
+        "exitCode": 0,
+        "reportSha256": "dd18358b0f705224ecc2230245eb223bdf6f8e8f719d19ab80a6bfa4d8a56fb8",
+        "wrote": true
+      },
+      {
+        "step": "run 5, immediate re-run after write-back",
+        "exitCode": 0,
+        "reportSha256": "dd18358b0f705224ecc2230245eb223bdf6f8e8f719d19ab80a6bfa4d8a56fb8",
+        "wrote": false
+      }
+    ],
+    "note": "fixture hashes include different volatile generatedAt values per write; equality is checked on stable content only",
+    "artifact": "commands/e2e-idempotence.log"
+  },
+  "validation": [
+    {
+      "check": "node scripts/check-licenses.mjs --self-test",
+      "exitCode": 0,
+      "result": "PASS (6/6 checks)",
+      "artifact": "commands/self-test.log"
+    },
+    {
+      "check": "npm run licenses:check (run 1)",
+      "exitCode": 0,
+      "result": "{\"event\":\"licenses.checked\",\"total\":372,\"internal\":21,\"denied\":0,\"unclassified\":0,\"invalidExceptions\":0}",
+      "artifact": "commands/licenses-run1.log"
+    },
+    {
+      "check": "npm run licenses:check (run 2)",
+      "exitCode": 0,
+      "result": "same output; report sha256 stable",
+      "artifact": "commands/licenses-run2.log"
+    },
+    {
+      "check": "temp-fixture idempotence scenario",
+      "exitCode": "0/0/1/0/0",
+      "result": "writes only on missing/changed content; preserves bytes on re-run",
+      "artifact": "commands/e2e-idempotence.log"
+    },
+    {
+      "check": "npm run lint",
+      "exitCode": 0,
+      "result": "eslint clean",
+      "artifact": "commands/lint.log"
+    },
+    {
+      "check": "npm run typecheck",
+      "exitCode": 0,
+      "result": "tsc clean (does not cover scripts/**, see limitations)",
+      "artifact": "commands/typecheck.log"
+    },
+    {
+      "check": "npm test",
+      "exitCode": 0,
+      "result": "Test Files 196 passed | 4 skipped (200); Tests 1154 passed | 57 skipped (1211)",
+      "artifact": "commands/npm-test.log"
+    }
+  ],
+  "evidenceHashes": {
+    "commands/commands.txt": "5db44244094c3945ee0996fe8fb2dcc6a6eb9ffcc1857f669141a9f65cfd6713",
+    "commands/e2e-idempotence.log": "afb0bf784bafcba432b4c12da5b1cdd31e7ad9b66a47e437081a11d7d5e5b8d6",
+    "commands/exitcodes.txt": "e960f3428c0253029f83925fb3654a7e222a7fb21dead23c430a8e46e31049bf",
+    "commands/hashes.txt": "ff98194b4cd3e88890499d34d5e25868da141b0746eba8c80e455dc95292ba2b",
+    "commands/licenses-run1.log": "7e3642dbbe86533a97e0ed4f51590e809976c8cd3a6606e20fefa9f654962591",
+    "commands/licenses-run2.log": "7e3642dbbe86533a97e0ed4f51590e809976c8cd3a6606e20fefa9f654962591",
+    "commands/lint.log": "698dae4c32293ce3bc9c1fdd7f7ca0912b7dd7041c3a321551e5666692d8fe36",
+    "commands/npm-test.log": "62a47e9f1143942c317d9ba24fbcf34160cea410a03a291b1a76a5c67a8068ff",
+    "commands/self-test.log": "edb810a1d51062e70fb0189994443e0d639ddfc0ae5492dfa4020cc678bda79b",
+    "commands/typecheck.log": "8b0652334f8c18d7b8ab65ebb1c68eb5c3e9bfcdeee08c641f75418ba81efb8c"
+  },
+  "limitations": [
+    "Pre-remediation sha256 of the working-tree scripts/check-licenses.mjs was not captured before editing; only the AAA-14 builder-time recording (8b6ee79a…) is known. Behavior, not the delta, is what this evidence qualifies.",
+    "npm run typecheck (tsconfig.typecheck.json) does not include scripts/**; the gate script is validated by --self-test, the temp-fixture end-to-end run, eslint, prettier and direct execution.",
+    "Volatile-field comparison ignores only top-level generatedAt and timestamp (the only volatile fields in schema v2). Any future nested volatile field would count as a content change and trigger a rewrite.",
+    "Comparison is semantic (JSON parsed, keys sorted); a semantically-equal but reformatted/key-reordered existing file is preserved byte-for-byte rather than normalized. This is intentional (non-mutating) but means formatting drift in the report is not auto-corrected.",
+    "The temp-fixture run uses copies of package.json/package-lock.json; workspace link manifests are absent there, so its report hashes differ from the real repository hashes. The idempotence write/skip behavior is the same code path.",
+    "Self-test is invoked as `node scripts/check-licenses.mjs --self-test`; per task instruction it was not added to package.json.",
+    "Evidence generated on host Node v24.20.0 (same host as prior AAA-14 checks); target Node 22 was not re-run for this bounded fix.",
+    "No commit, push, deploy, npm install or production action was performed; other dirty working-tree changes from concurrent lanes were left untouched.",
+    "certification/license-report.json remains unmodified by this remediation (sha256 55787d37…) but stays listed as modified vs HEAD from before this task (pre-existing state)."
+  ]
+}

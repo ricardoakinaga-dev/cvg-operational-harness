@@ -1,0 +1,199 @@
+
+ RUN  v4.1.11 /home/ricardo/cvg-agent-secretary-v2
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-journal.test.ts (12 tests | 11 failed) 89ms
+     × denies a high-risk capability without an effect journal before the tool 25ms
+     × fails closed with journal_sweep_failed when the start-of-turn sweep throws 3ms
+     × calls the tool exactly once and replays the persisted digest and ref 4ms
+     × recovers as UNCERTAIN with zero re-execution and no false success 12ms
+     × produces at most one effect and denies the loser with operation_in_progress 15ms
+     × concludes the approval confirmation without repeating the effect 6ms
+     × denies idempotency_key_reuse with zero new effect 5ms
+     × preserves the op: key when a retry replays a confirmed effect 3ms
+     × returns an expired RESERVED attempt to APPROVED and never executes 3ms
+     × turns an expired EFFECT_STARTED attempt UNCERTAIN and never executes 3ms
+     × returns approval_confirm_failed with effectConfirmed true 4ms
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 11 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 fail-closed durability (F03 / artifact 3) > denies a high-risk capability without an effect journal before the tool
+AssertionError: expected 'executed' to be 'denied' // Object.is equality
+
+Expected: "denied"
+Received: "executed"
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-journal.test.ts:288:28
+    286|     const result = await harness.runtime.runTurn(turnInput({ approvalI…
+    287|
+    288|     expect(result.outcome).toBe('denied')
+       |                            ^
+    289|     expect(result.reason).toBe('durability_required')
+    290|     expect(harness.toolExecutor).not.toHaveBeenCalled()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/11]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 fail-closed durability (F03 / artifact 3) > fails closed with journal_sweep_failed when the start-of-turn sweep throws
+AssertionError: expected 'approval_required' to be 'denied' // Object.is equality
+
+Expected: "denied"
+Received: "approval_required"
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-journal.test.ts:320:28
+    318|     const result = await harness.runtime.runTurn(turnInput())
+    319|
+    320|     expect(result.outcome).toBe('denied')
+       |                            ^
+    321|     expect(result.reason).toBe('journal_sweep_failed')
+    322|     expect(harness.providerCalls()).toBe(0)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/11]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-07: outbox failure after a confirmed effect > calls the tool exactly once and replays the persisted digest and ref
+AssertionError: expected undefined to be defined
+ ❯ packages/agent-runtime/src/__tests__/runtime-journal.test.ts:350:32
+    348|     expect(first.outcome).toBe('executed')
+    349|     expect(first.outboxPending).toBe(true)
+    350|     expect(first.executionRef).toBeDefined()
+       |                                ^
+    351|     expect(first.resultDigest).toBe(digest)
+    352|     expect(harness.toolExecutor).toHaveBeenCalledTimes(1)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/11]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-06: crash after effect before ack > recovers as UNCERTAIN with zero re-execution and no false success
+AssertionError: expected 'already_reserved' to be 'operation_uncertain' // Object.is equality
+
+Expected: "operation_uncertain"
+Received: "already_reserved"
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-journal.test.ts:422:27
+    420|
+    421|     expect(result.outcome).toBe('denied')
+    422|     expect(result.reason).toBe('operation_uncertain')
+       |                           ^
+    423|     expect(result.replayed).toBeUndefined()
+    424|     expect(restarted.toolExecutor).not.toHaveBeenCalled()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/11]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-08: concurrent attempts on the same operationKey > produces at most one effect and denies the loser with operation_in_progress
+AssertionError: expected [ Array(2) ] to have a length of 1 but got 2
+
+- Expected
++ Received
+
+- 1
++ 2
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-journal.test.ts:472:22
+    470|     const executed = results.filter((result) => result.outcome === 'ex…
+    471|     const denied = results.filter((result) => result.outcome === 'deni…
+    472|     expect(executed).toHaveLength(1)
+       |                      ^
+    473|     expect(denied).toHaveLength(1)
+    474|     expect(denied[0]?.reason).toBe('operation_in_progress')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/11]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-14: restart between confirmEffect and approval.confirm > concludes the approval confirmation without repeating the effect
+AssertionError: expected 'denied' to be 'executed' // Object.is equality
+
+Expected: "executed"
+Received: "denied"
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-journal.test.ts:524:28
+    522|     const result = await restarted.runtime.runTurn(turnInput({ approva…
+    523|
+    524|     expect(result.outcome).toBe('executed')
+       |                            ^
+    525|     expect(result.replayed).toBe(true)
+    526|     expect(result.executionRef).toBe('exec_recovered_1')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/11]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-15: operationKey reuse with a different proposal > denies idempotency_key_reuse with zero new effect
+AssertionError: expected 'executed' to be 'denied' // Object.is equality
+
+Expected: "denied"
+Received: "executed"
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-journal.test.ts:565:28
+    563|     )
+    564|
+    565|     expect(second.outcome).toBe('denied')
+       |                            ^
+    566|     expect(second.reason).toBe('idempotency_key_reuse')
+    567|     expect(harness.toolExecutor).toHaveBeenCalledTimes(1)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/11]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-17: idempotencyKey equals operationKey across replay > preserves the op: key when a retry replays a confirmed effect
+AssertionError: expected 'denied' to be 'executed' // Object.is equality
+
+Expected: "executed"
+Received: "denied"
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-journal.test.ts:597:28
+    595|       turnInput({ approvalId, idempotencyKey: 'caller-op-7' })
+    596|     )
+    597|     expect(second.outcome).toBe('executed')
+       |                            ^
+    598|     expect(second.replayed).toBe(true)
+    599|     const expectedKey = expectedCallerOperationKey('caller-op-7')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/11]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-18: start-of-turn releaseExpired sweep > returns an expired RESERVED attempt to APPROVED and never executes
+AssertionError: expected 'EXECUTING' to be 'APPROVED' // Object.is equality
+
+Expected: "APPROVED"
+Received: "EXECUTING"
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-journal.test.ts:636:62
+    634|     expect(result.outcome).toBe('denied')
+    635|     expect(result.reason).toBe('tool_calls_exhausted')
+    636|     expect(harness.approvals.get(TENANT, approvalId).status).toBe('APP…
+       |                                                              ^
+    637|     await expect(journal.get(TENANT, operationKey)).resolves.toMatchOb…
+    638|       state: 'ABANDONED'
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/11]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-18: start-of-turn releaseExpired sweep > turns an expired EFFECT_STARTED attempt UNCERTAIN and never executes
+AssertionError: expected 'already_reserved' to be 'operation_uncertain' // Object.is equality
+
+Expected: "operation_uncertain"
+Received: "already_reserved"
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-journal.test.ts:673:27
+    671|
+    672|     expect(result.outcome).toBe('denied')
+    673|     expect(result.reason).toBe('operation_uncertain')
+       |                           ^
+    674|     expect(harness.approvals.get(TENANT, approvalId).status).toBe('UNC…
+    675|     await expect(journal.get(TENANT, operationKey)).resolves.toMatchOb…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/11]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 honesty: effect confirmed but approval confirmation failed > returns approval_confirm_failed with effectConfirmed true
+AssertionError: expected 'effect_confirmation_failed' to be 'approval_confirm_failed' // Object.is equality
+
+Expected: "approval_confirm_failed"
+Received: "effect_confirmation_failed"
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-journal.test.ts:700:27
+    698|
+    699|     expect(result.outcome).toBe('denied')
+    700|     expect(result.reason).toBe('approval_confirm_failed')
+       |                           ^
+    701|     expect(result.effectConfirmed).toBe(true)
+    702|     expect(harness.toolExecutor).toHaveBeenCalledTimes(1)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/11]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  11 failed | 1 passed (12)
+   Start at  22:56:15
+   Duration  1.17s (transform 254ms, setup 0ms, import 389ms, tests 89ms, environment 569ms)
+

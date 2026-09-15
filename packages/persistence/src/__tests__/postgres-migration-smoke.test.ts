@@ -142,6 +142,9 @@ describe('postgres migration smoke', () => {
             }
           ] as unknown as T[])
         }
+        if (text.includes('INSERT INTO tasks')) {
+          return result([{ id: 'task_fake' }] as unknown as T[])
+        }
         if (text.includes('FROM audit_events')) {
           return result([
             {
@@ -575,7 +578,8 @@ describe('postgres migration smoke', () => {
           )
         }
         if (text.includes('INSERT INTO tasks')) {
-          throw { code: '23505' }
+          // PostgreSQL reports no inserted row for ON CONFLICT DO NOTHING.
+          return result([] as T[])
         }
         return result([] as T[])
       }

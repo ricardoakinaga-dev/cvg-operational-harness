@@ -1,0 +1,126 @@
+{
+  "taskId": "AAA-08",
+  "program": "AAA-20260912",
+  "title": "Separar draft, confirmação e alteração sensível na policy",
+  "status": "REVIEW",
+  "observedAt": "2026-09-12T21:05:00+00:00",
+  "executor": "agent-1 (policy front)",
+  "authority": "user round-2 instruction 2026-09-12: execute authorized controlled corrections with negative regression and independent review; no production, no real actions",
+  "gate": {
+    "G_SPEC": "task contract aaa_execution_contract.md revision 2 sha256 9df1a05f... (author-reconciled; final agent-3 review requested); AAA-04 bar v1 reviewed by agent-1 with conditions scoped away from this task",
+    "BUILD": "CONTROLLED_LOCAL_ONLY; user-authorized; no production or external effects"
+  },
+  "candidateBinding": {
+    "head": "512bc11e80fbf7c7b8baf6263aacc811ff829309",
+    "changedByThisTask": [
+      "packages/policy-engine/src/capabilities.ts sha256 5fd6b67fa4d16503266c771b918b0c2321bde7e08051c6e44e0281f426efa51e",
+      "packages/policy-engine/src/engine.ts sha256 48825c5da1425dec53252ec2ed3bf32065e7311a8579f7ec8fb1598fa55dd61d",
+      "packages/policy-engine/src/__tests__/capability-scope.test.ts sha256 b60d38cc2098d5dcdc8383adc35c1a66e9ed78e62c84ed4a1b8803f56403e684 (new)",
+      "packages/policy-engine/src/__tests__/policy-engine.test.ts sha256 240987264f194e48be6bd694b26df9859f25c098d93ab989d31c64efee9b729a",
+      "docs/02_spec/aaa_execution_contract.md sha256 9df1a05f... (shared with AAA-03 revision 2)"
+    ],
+    "unchangedInspected": [
+      "packages/policy-engine/src/grants.ts sha256 bba4c243... (no grant added for confirm/reschedule)",
+      "packages/policy/src/policy-engine.ts sha256 8d9cd8b8... (legacy action-string engine already treats confirm/cancel as risky; no change needed)"
+    ],
+    "artifact": "docs/04_audit/evidence/AAA/AAA-08/changed-hashes.txt",
+    "limitation": "full-tree candidateId not recomputed while other fronts are writing; AAA-13 owns candidate binding for qualification"
+  },
+  "negativeReproduction": {
+    "auditScript": "docs/04_audit/evidence/AUD-20260912-001/reproduce.mjs",
+    "before": "modifyWithoutApproval: outcome executed, decision ALLOW, toolCalls 1 (audit baseline sha256 cdb6032a... in AAA-01)",
+    "after": {
+      "outcome": "denied",
+      "decision": "DENY",
+      "toolCalls": 0
+    },
+    "afterArtifact": "docs/04_audit/evidence/AAA/AAA-08/reproduce-post-fix.json sha256 fae6442c10285dd7170916048d92ff688d1452c944113a20544796d944f5dd4f",
+    "otherFindingsRemainOpen": [
+      "F01/F02/F03 still reproduce (approval binding, false EXECUTED, duplicate effect)",
+      "F05 maxSteps still reproduces (AAA-11 scope)",
+      "F04 channelRace sends now 1 (agent-2 AAA-12 lane, not reviewed here)"
+    ]
+  },
+  "implementation": {
+    "capabilities": "added appointment.confirm and appointment.reschedule (HIGH_RISK_WRITE, no grants); create/modify descriptions narrowed to draft semantics; CAPABILITY_RESOURCE_TYPES + capabilityResourceScope published",
+    "engine": "resource-type scope check after tenant mismatch and before grants/documents: missing -> resource_type_required, incompatible -> resource_type_not_allowed (fail closed)",
+    "matrix": {
+      "appointment.modify + appointment_draft": "ALLOW",
+      "appointment.modify + appointment (real)": "DENY resource_type_not_allowed",
+      "appointment.modify without resource": "DENY resource_type_required",
+      "appointment.confirm/reschedule (all profiles)": "DENY capability_not_granted",
+      "tenant policy ALLOW on confirm/reschedule": "does not expand; still DENY",
+      "appointment.cancel + appointment": "REQUIRE_APPROVAL",
+      "appointment.cancel without/wrong resource": "DENY",
+      "appointment.create + appointment|appointment_draft": "ALLOW"
+    }
+  },
+  "checks": [
+    {
+      "command": "npx vitest run packages/policy-engine/src/__tests__/capability-scope.test.ts (RED)",
+      "exitCode": 1,
+      "result": "6 failed | 3 passed, failure expected before fix",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-08/red-focused.log"
+    },
+    {
+      "command": "npx vitest run packages/policy-engine/src/__tests__/",
+      "exitCode": 0,
+      "result": "3 files | 29 tests PASS",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-08/green-focused.log"
+    },
+    {
+      "command": "npx vitest run packages/agent-runtime/src/__tests__/ packages/chaos/src/__tests__/chaos.test.ts",
+      "exitCode": 0,
+      "result": "2 files | 24 tests PASS (no cross-package regression)",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-08/cross-package-focused.log"
+    },
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "result": "176 files PASS | 4 skipped; 895 tests PASS | 27 skipped",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-08/full-unit.log"
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-08/typecheck.log"
+    },
+    {
+      "command": "npx vitest run packages/policy-engine/src/__tests__/ (after formatting)",
+      "exitCode": 0,
+      "result": "3 files | 29 tests PASS",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-08/green-focused-post-format.log"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "PASS on recheck after agent-3 fixed its in-flight scripts/phase10-verify.mjs; the earlier failure was external to AAA-08",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-08/lint-recheck.log"
+    },
+    {
+      "command": "node --import tsx docs/04_audit/evidence/AUD-20260912-001/reproduce.mjs",
+      "exitCode": 0,
+      "result": "F15 now denied with 0 tool calls",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-08/reproduce-post-fix.json"
+    }
+  ],
+  "review": {
+    "status": "PENDING",
+    "reviewerRequirement": "agent-2 or agent-3; implementer cannot self-approve",
+    "requestedChecks": [
+      "reproduce the F15 negative scenario and confirm DENY with zero tool calls",
+      "challenge resource precedence: tenant mismatch first, then resource scope, then grants/documents",
+      "verify confirm/reschedule cannot be granted by any profile or tenant policy",
+      "verify no regression in agent-runtime/chaos suites",
+      "confirm lint failure is external to AAA-08 and decide the gate treatment"
+    ]
+  },
+  "limitations": [
+    "Only the policy boundary is fixed; runtime/binding/limits remain open in AAA-09/10/11",
+    "appointment.create still accepts a real appointment shell by design; real adapters are denied by the composition rule (T-19/AAA-09)",
+    "format:check remains red on server.ts (AAA-15 window); lint is green on recheck",
+    "No independent review yet; no production or real action authorized"
+  ],
+  "nextAction": "Independent review of AAA-08 (agent-2/3); then continue AAA-07 when AAA-05 final is reviewed, and AAA-09 after AAA-07/08"
+}

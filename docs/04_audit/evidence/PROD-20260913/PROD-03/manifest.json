@@ -1,0 +1,98 @@
+{
+  "task": "PROD-03",
+  "title": "Impedir continuação UI de identidade/sessão obsoleta",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "origin": [
+    "D13-02",
+    "Q-A17-02"
+  ],
+  "contract": "docs/02_spec/prod20260913_m1_corrections_contract.md",
+  "negativeReproduced": {
+    "evidence": [
+      "docs/04_audit/evidence/AUD-20260913-DOCS/ui/race.cjs",
+      "docs/04_audit/evidence/AUD-20260913-DOCS/ui/race.log"
+    ],
+    "redDemonstration": "docs/04_audit/evidence/PROD-20260913/PROD-03/ui-race-probe.red.json",
+    "verdict": "FAIL_STALE_VISIBLE"
+  },
+  "positiveVerified": {
+    "probe": "docs/04_audit/evidence/PROD-20260913/PROD-03/ui-race-probe.cjs",
+    "verdict": "PASS_STALE_DISCARDED",
+    "observed": {
+      "tenant": "tenant_B",
+      "staleTenantCandidateVisible": false
+    },
+    "artifacts": [
+      "docs/04_audit/evidence/PROD-20260913/PROD-03/ui-race-probe.json",
+      "docs/04_audit/evidence/PROD-20260913/PROD-03/tenant-race.png"
+    ]
+  },
+  "source": [
+    "apps/web/src/features/journeys/index.tsx",
+    "apps/web/src/api/client.ts",
+    "apps/web/src/__tests__/journeys-identity-race.test.tsx"
+  ],
+  "evidence": [
+    "docs/04_audit/evidence/PROD-20260913/PROD-03/ui-race-probe.cjs",
+    "docs/04_audit/evidence/PROD-20260913/PROD-03/ui-race-probe.json",
+    "docs/04_audit/evidence/PROD-20260913/PROD-03/ui-race-probe.red.json",
+    "docs/04_audit/evidence/PROD-20260913/PROD-03/tenant-race.png",
+    "docs/04_audit/evidence/PROD-20260913/PROD-03/tenant-race.red.png",
+    "docs/04_audit/evidence/PROD-20260913/PROD-03/tests.log"
+  ],
+  "gates": [
+    {
+      "command": "npm run typecheck",
+      "result": "PASS",
+      "exitCode": 0,
+      "note": "re-run on the final bytes after the fake-pool test type fix; earlier P1 finding F1 resolved"
+    },
+    {
+      "command": "npx eslint (changed files)",
+      "result": "PASS",
+      "exitCode": 0
+    },
+    {
+      "command": "npm test",
+      "result": "PASS: Test Files 234 passed | 7 skipped (241); Tests 1625 passed | 83 skipped (1708)",
+      "exitCode": 0,
+      "note": "full suite executed during this session after the M1 changes"
+    },
+    {
+      "command": "npx vitest run apps/web/.../journeys-identity-race.test.tsx",
+      "result": "PASS: 1 file / 3 tests (RED without fix: 2 failed)",
+      "exitCode": 0,
+      "log": "docs/04_audit/evidence/PROD-20260913/PROD-03/tests.log"
+    },
+    {
+      "command": "playwright chromium ui-race-probe.cjs",
+      "result": "PASS_STALE_DISCARDED",
+      "exitCode": 0
+    },
+    {
+      "command": "npm run build:web",
+      "result": "PASS (build executed by npm test chain and session build)",
+      "exitCode": 0
+    }
+  ],
+  "limitations": [
+    "probe uses intercepted synthetic API responses; not a real tenant",
+    "backend authorization unchanged and not re-qualified here"
+  ],
+  "observedAt": "2026-09-13T14:41:17.820Z",
+  "contractSha256": "7cff313dae00a5aade0a8e5f5414ce397ff4fd08b8b60e25ca9da1a775956ab6",
+  "sourceSha256": {
+    "apps/web/src/features/journeys/index.tsx": "40178910ad38aca18d9d0c2a4f01088244ba3ace8b094abe231578e4f5b6501e",
+    "apps/web/src/api/client.ts": "5b230630cd1ca4f460420c30fd1f26c46ef6e0fc4dfac736303958a1cdca393e",
+    "apps/web/src/__tests__/journeys-identity-race.test.tsx": "61dbe2d9e1baa964c592e515f31fa00edff426eb24a8aff356e81413a9cd8b05"
+  },
+  "evidenceSha256": {
+    "docs/04_audit/evidence/PROD-20260913/PROD-03/ui-race-probe.cjs": "207daabb251d09f309935af2f215439bfef6a3d65c9101fad17bc498c6787537",
+    "docs/04_audit/evidence/PROD-20260913/PROD-03/ui-race-probe.json": "0793aa4c9da38aa49106090893f5392591bde6dc0a728f9d0e9e9328cd5465d5",
+    "docs/04_audit/evidence/PROD-20260913/PROD-03/ui-race-probe.red.json": "1d4997e437a60536e0bc24bcf556809a38a053548c0eeb65f600098f273e6fa5",
+    "docs/04_audit/evidence/PROD-20260913/PROD-03/tenant-race.png": "cb5599f8db5815fa6c289917a1b90243b101f8c009b19f5a3bcb95ff510dd51a",
+    "docs/04_audit/evidence/PROD-20260913/PROD-03/tenant-race.red.png": "80b84f61a3565319ee0e0e57743f3fe849bfa0c21e067d4c53fa797cb8357408",
+    "docs/04_audit/evidence/PROD-20260913/PROD-03/tests.log": "3eb72cafe1536bbf2038ba01271daa6deb5edc5655c916607d71a1eee4c75e5b"
+  },
+  "independence": "builder output; independent review required before VERIFIED/DONE"
+}

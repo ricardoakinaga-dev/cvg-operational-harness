@@ -1,0 +1,296 @@
+{
+  "schemaVersion": 1,
+  "kind": "aaa-task-builder-evidence",
+  "taskId": "AAA-19",
+  "title": "Entregar consumer contínuo e shutdown recuperável",
+  "program": "AAA-20260912",
+  "generatedAt": "2026-09-13T08:06:00Z",
+  "status": "IMPLEMENTED_PENDING_REVIEW",
+  "builder": "builder-lane",
+  "scope": {
+    "goal": "Supervised continuous consumer over the durable outbox with configurable poll/backoff, bounded concurrency, lease heartbeat, poison dead-letter, graceful SIGTERM/SIGINT drain-or-release shutdown, fail-closed startup, dependency-injected periodic sweeps (sweepExpiredApprovals + journal releaseExpired) and queue counters/lag metrics.",
+    "fixtures": "synthetic only; disposable PostgreSQL 127.0.0.1:55432/cvg_aaa16_test; operational port 5432 never used",
+    "handlers": "controlled/synthetic only (noop or deterministic published runtime); no external effects, no provider/channel",
+    "out_of_scope": "AAA-21/D01 runtime-choice composition; no durable ApprovalEngine/EffectJournalPort composition in the entrypoint (sweeps dependency-injected only)",
+    "safety": "production rejected; opt-in continuous mode; control plane and outbox are the only ports consumed"
+  },
+  "files_changed": [
+    {
+      "path": "apps/worker/src/continuous-worker.ts",
+      "added": true,
+      "sha256": "9ecfbf200c52f070d46c1db0b8069fc89d9ad31dff3a03a3d652fb8b200765bf",
+      "changes": [
+        "createContinuousWorker: single supervised pump with bounded concurrency (1..10), poll interval, exponential idle/error backoff",
+        "claims via adapter.claimNext(leaseMs) then dispatches through completeClaimedOutboxEvent (no double claim)",
+        "per-event heartbeat: renews through optional adapter.heartbeatClaim or verifies processing+leaseOwner and fails closed on lease loss",
+        "counters for claimed/processed/failed/deadLettered/handoffs/errors/claimFailures/leaseLost/heartbeats/idlePolls/released/lag",
+        "structured JSON logs (redacted) and metrics only with allowlisted attribute dimensions",
+        "stop({drainMs}) stops polling, stops injected sweeps, waits in-flight, then releases lease via adapter.fail; idempotent, non-restartable",
+        "parseContinuousWorkerSettings(env) with explicit CVG_WORKER_* validation"
+      ]
+    },
+    {
+      "path": "apps/worker/src/sweeps.ts",
+      "added": true,
+      "sha256": "80d75b8b955067144d218fb7d59860d6b723f47df73ea6062a1a54f74744f1e8",
+      "changes": [
+        "runSweepTick: effect journal releaseExpired(now, ttlMs) followed by agent-runtime sweepExpiredApprovals with fresh journal evidence",
+        "createPeriodicSweepRunner: non-overlapping timer ticks, error containment, stop() awaits in-flight tick, metrics/logs without PII",
+        "never touches outbox events, handlers or tool executors"
+      ]
+    },
+    {
+      "path": "apps/worker/src/worker-observability.ts",
+      "added": true,
+      "sha256": "395dde3c40c7f583bc43971d96e4b87456ce95a2fc9b4ae6a0ec758350cec07f",
+      "changes": [
+        "WorkerTelemetry port (log + metric)",
+        "createJsonWorkerTelemetry: one redacted JSON line per log/metric via @cvg/observability redactFields",
+        "createTelemetryWorkerSink bridge to @cvg/observability Telemetry"
+      ]
+    },
+    {
+      "path": "apps/worker/src/jobs/process-outbox-event.ts",
+      "sha256": "bf5be1097f3d6ee22073ee0637ace55cdff6ba866525e3b800b4887b49d8ab51",
+      "changes": [
+        "extracted completeClaimedOutboxEvent(input) with byte-identical claim/ack/fail semantics",
+        "processOutboxEvent now claims once and delegates; existing behavior and tests preserved",
+        "new exported ClaimedOutboxEventResult / CompleteClaimedOutboxEventInput types"
+      ]
+    },
+    {
+      "path": "apps/worker/src/controlled-worker.ts",
+      "sha256": "cbb4c55967f8f2fdcf66bbc26754b4478089b92205203e4b15fcbf325ddbc4fb",
+      "changes": [
+        "exported createControlledDispatch for reuse by the continuous worker (no behavior change)"
+      ]
+    },
+    {
+      "path": "apps/worker/src/postgres-controlled.ts",
+      "sha256": "1ae06676eec6335d23f7280e2a6a34129598a0303e26f583762dd40aa25aaa54",
+      "changes": [
+        "openPostgresControlledConnection: shared fail-closed validation + pool/adapter/platform/handlers (createPostgresControlledWorker behavior preserved)",
+        "createPostgresContinuousWorker: supervised worker with env/override tuning and tenant-scoped backlog probe",
+        "createPostgresOutboxBacklogProbe: read-only tenant-scoped count of pending + available failed events (no payload columns)"
+      ]
+    },
+    {
+      "path": "apps/worker/src/worker.ts",
+      "sha256": "2b5202a7031dd2a63e2ead0343d29f0b6d31795083c38cc87d5bc6cd742d8c6b",
+      "changes": [
+        "getWorkerStartupFailure: rejects unsupported run modes, requires durable PostgreSQL adapter for continuous mode, validates continuous settings",
+        "new codes worker_run_mode_unsupported, continuous_durable_adapter_required, continuous_settings_invalid; existing codes/order preserved"
+      ]
+    },
+    {
+      "path": "apps/worker/src/main.ts",
+      "sha256": "9f5466568bed6339ed1e9782a6b671fccafb5f3aea16b23907b7b37c54d097af",
+      "changes": [
+        "opt-in CVG_WORKER_RUN_MODE=continuous branch for postgres/postgres-controlled adapters",
+        "runPostgresContinuousWorker: JSON telemetry, injected sweeps slot (disabled pending AAA-21/D01), shutdown controller bounded by drainMs + 5s, graceful stop before pool.end",
+        "one-shot controlled worker path preserved"
+      ]
+    },
+    {
+      "path": "apps/worker/src/__tests__/continuous-worker.test.ts",
+      "added": true,
+      "sha256": "ab79b56e485dcfbb339635421db9f3753b83a468c433afc72ba4dbba88474aaf",
+      "tests": 23
+    },
+    {
+      "path": "apps/worker/src/__tests__/worker-sweeps.test.ts",
+      "added": true,
+      "sha256": "c12a6b54bf8aac92a81f666e62c9a8674b9b35a9be60af88a4970b2a1bd8311a",
+      "tests": 5
+    },
+    {
+      "path": "apps/worker/src/__tests__/worker-observability.test.ts",
+      "added": true,
+      "sha256": "7a349416bc81a34d2bbe9e71f54b50c54897f9716623c6cd9d3e7ccb572b2847",
+      "tests": 3
+    },
+    {
+      "path": "apps/worker/src/__tests__/continuous-worker-postgres.integration.test.ts",
+      "added": true,
+      "sha256": "91142cbc0f39864b90f407a9dd199ba9ced5ceab31798eab5ff7ad1689100500",
+      "tests": 2,
+      "note": "DB-conditional on TEST_DATABASE_URL; these are the only declared new skips without the URL"
+    }
+  ],
+  "not_modified": [
+    "package.json / package-lock.json",
+    "docs/03_build/tracking/**",
+    "docs/99_runtime_state.md, docs/20_master_execution_log.md, docs/30_backlog_master.md (lead integrator)",
+    "packages/agent-runtime, packages/approval-engine, packages/persistence, packages/channel-gateway product files (imports only)",
+    "packages/agent-runtime/src/__tests__/agent-runtime.test.ts and any pre-existing working-tree changes"
+  ],
+  "contract_refs": [
+    "docs/02_spec/aaa_execution_contract.md §4 (periodic releaseExpired sweep, never executes effect) and §7/§8 (outbox/journal relationship)",
+    "docs/02_spec/aaa_data_api_contract.md §5 (lease/heartbeat cadence: renew every leaseMs/3; slow worker must not overwrite third-party result)",
+    "docs/03_build/tracking/aaa_program_backlog.json AAA-19 acceptance"
+  ],
+  "test_counts": {
+    "new_suite_with_url": {
+      "files": 4,
+      "passed": 33,
+      "failed": 0,
+      "skipped": 0
+    },
+    "worker_folder_with_url": {
+      "files": 13,
+      "passed": 74,
+      "failed": 0,
+      "skipped": 0
+    },
+    "full_suite_without_url": {
+      "files": "233 passed | 6 skipped (239)",
+      "tests": "1616 passed | 67 skipped (1683)",
+      "failures": 0,
+      "baseline": "1585 passed | 65 skipped",
+      "delta": "+31 passed, +2 declared DB-conditional skips"
+    },
+    "full_suite_with_url": {
+      "files": 239,
+      "tests": 1683,
+      "failures": 0,
+      "skipped": 0,
+      "baseline": "1650 passed, 0 skipped",
+      "delta": "+33 passed"
+    },
+    "coverage_global": {
+      "statements": 96.44,
+      "branches": 92.93,
+      "functions": 97.25,
+      "lines": 97.08
+    }
+  },
+  "gates": [
+    {
+      "command": "TEST_DATABASE_URL=… npx vitest run <4 new test files> --no-file-parallelism --maxWorkers=2 --testTimeout=60000",
+      "exitCode": 0,
+      "result": "4 files / 33 passed / 0 failed / 0 skipped",
+      "log": "GREEN-focused.log",
+      "utc": "2026-09-13T07:53:08Z"
+    },
+    {
+      "command": "RED before implementation: same focused command",
+      "exitCode": 1,
+      "result": "4 files failed: missing modules (continuous-worker, worker-observability, sweeps) + createPostgresContinuousWorker not a function",
+      "log": "RED-focused.log",
+      "utc": "2026-09-13T07:21:06Z"
+    },
+    {
+      "command": "npm run test:worker:startup",
+      "exitCode": 0,
+      "result": "startup smoke passes (exit 1 + queue_adapter_missing without config); controlled memory smoke processed=1",
+      "log": "GREEN-startup.log",
+      "utc": "2026-09-13T07:53:09Z"
+    },
+    {
+      "command": "TEST_DATABASE_URL=… npx vitest run apps/worker --no-file-parallelism --maxWorkers=2 --testTimeout=60000",
+      "exitCode": 0,
+      "result": "13 files / 74 passed / 0 failed / 0 skipped",
+      "log": "GREEN-worker.log",
+      "utc": "2026-09-13T07:53:24Z"
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "no errors",
+      "log": "typecheck.log",
+      "utc": "2026-09-13T07:53:24Z"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "no errors (global)",
+      "log": "lint-global.log",
+      "utc": "2026-09-13T07:53:33Z"
+    },
+    {
+      "command": "npx eslint <task files>",
+      "exitCode": 0,
+      "result": "no errors (scoped)",
+      "log": "lint-scoped.log",
+      "utc": "2026-09-13T07:53:38Z"
+    },
+    {
+      "command": "npm test (no TEST_DATABASE_URL)",
+      "exitCode": 0,
+      "result": "233 passed | 6 skipped files; 1616 passed | 67 skipped tests; 0 failures",
+      "log": "GREEN-full-suite.log",
+      "utc": "2026-09-13T07:57:10Z"
+    },
+    {
+      "command": "TEST_DATABASE_URL=… npm test",
+      "exitCode": 0,
+      "result": "239 files / 1683 passed / 0 failed / 0 skipped",
+      "log": "GREEN-full-suite-with-url.log",
+      "utc": "2026-09-13T08:00:47Z"
+    },
+    {
+      "command": "TEST_DATABASE_URL=… npm run test:coverage",
+      "exitCode": 0,
+      "result": "global thresholds pass (96.44/92.93/97.25/97.08)",
+      "log": "coverage.log",
+      "utc": "2026-09-13T08:05:10Z"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "no whitespace errors",
+      "log": "diff-check.log",
+      "utc": "2026-09-13T07:53:39Z"
+    },
+    {
+      "command": "E2E: run continuous entrypoint over disposable PostgreSQL, SIGTERM, verify processed, drop schema",
+      "exitCode": 0,
+      "result": "2/2 events processed; process exit 0; worker.shutdown.completed code 0",
+      "log": "e2e-sigterm-pg-worker.log",
+      "utc": "2026-09-13T07:28:38Z"
+    }
+  ],
+  "acceptance_checklist": {
+    "startup_fail_closed": "getWorkerStartupFailure + spawn of the real entrypoint (exit 1, postgres_database_missing); npm run test:worker:startup",
+    "continuous_consumption": "events enqueued before and after restart consumed by distinct worker instances over the same outbox (memory + PostgreSQL)",
+    "bounded_concurrency": "max in-flight never exceeds configured concurrency (test 7)",
+    "idle_and_error_backoff": "5→10→20→40ms sequence asserted; claim-boundary failure backoff and recovery asserted",
+    "lease_heartbeat": "ownership verification each leaseMs/3; optional heartbeatClaim renewal seam; leaseLost on third-party takeover; late commit rejected (conflict)",
+    "poison_dead_letter": "unknown event type dead-lettered on first claim and queue continues; repeated handler failure retried then terminal by repository policy",
+    "sigterm_no_loss_no_dup": "graceful stop drains in-flight to processed (1 journal record); bounded stop releases lease and a later worker completes the same idempotency key (1 journal record, verified per-event in PostgreSQL)",
+    "sweeps_wired": "runSweepTick calls journal releaseExpired then sweepExpiredApprovals; periodic runner tested; started/stopped with worker lifecycle; never consumes outbox or runs handlers",
+    "observability": "worker_outbox_processed_total / failed_total / dead_lettered_total / lag / heartbeats_total / lease_lost_total / errors_total counters; structured JSON logs; redaction test proves no payload/PII",
+    "no_production_enablement": "NODE_ENV=production rejected; continuous mode explicit; controlled synthetic handlers only",
+    "no_forbidden_writes": "agent-runtime/approval/persistence/channel product files untouched; package.json/tracking untouched; git diff --check clean"
+  },
+  "evidence": {
+    "scenario_matrix": "SCENARIO_MATRIX.md",
+    "commands": "COMMANDS.md",
+    "limitations": "LIMITATIONS.md",
+    "logs": [
+      "RED-focused.log",
+      "GREEN-focused.log",
+      "GREEN-startup.log",
+      "GREEN-worker.log",
+      "GREEN-full-suite.log",
+      "GREEN-full-suite-with-url.log",
+      "coverage.log",
+      "typecheck.log",
+      "lint-global.log",
+      "lint-scoped.log",
+      "diff-check.log",
+      "e2e-sigterm-pg-worker.log"
+    ]
+  },
+  "limitations_ref": "LIMITATIONS.md",
+  "boundaries": {
+    "commit": false,
+    "push": false,
+    "deploy": false,
+    "npm_install": false,
+    "real_patient_data": false,
+    "external_effects": false,
+    "operational_database": false,
+    "production_enablement": false
+  }
+}

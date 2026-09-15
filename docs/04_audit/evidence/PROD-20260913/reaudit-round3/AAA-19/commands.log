@@ -1,0 +1,36 @@
+# AAA-19 reaudit-round3 — commands and exit codes
+
+Environment: Node v22.23.2 (`/home/ricardo/.nvm/versions/node/v22.23.2/bin`),
+PostgreSQL 16.15 at 127.0.0.1:55481 (user cvg_prod, trust),
+disposable database `lane19_r3_7444` via TEST_DATABASE_URL.
+Port 5432 never touched. Run from repo root /home/ricardo/cvg-agent-secretary-v2.
+
+TEST_DATABASE_URL=postgres://cvg_prod@127.0.0.1:55481/lane19_r3_7444
+
+| # | command | exit | log |
+|---|---------|------|-----|
+| 1 | `npx prettier --check <3 changed files>` | 0 | prettier-check.log |
+| 2 | `npm run typecheck` | 0 | typecheck.log |
+| 3 | `npx eslint apps/worker` | 0 | eslint.log |
+| 4 | `TEST_DATABASE_URL=… npx vitest run --no-file-parallelism --reporter=verbose apps/worker/src/__tests__/continuous-worker.test.ts apps/worker/src/__tests__/postgres-controlled-hardening.test.ts` | 0 | focused-unit.log (2 files / 33 tests) |
+| 5 | `TEST_DATABASE_URL=… npx vitest run --no-file-parallelism --testTimeout=90000 --reporter=verbose apps/worker/src/__tests__/continuous-worker-entrypoint.integration.test.ts` | 0 | focused-entrypoint.log (1 file / 2 tests) |
+| 6 | `TEST_DATABASE_URL=… npx vitest run --no-file-parallelism apps/worker` | 0 | worker-tests.log (15 files / 91 tests) |
+| 7 | `npm run test:worker:startup` | 0 | worker-startup.log |
+| 8 | `TEST_DATABASE_URL=… npm run test:postgres` | 0 | postgres-gate.log (19 files / 163 tests) |
+| 9 | `npx vitest run --no-file-parallelism apps/worker` (NO TEST_DATABASE_URL) | 0 | worker-tests-no-url.log (12 passed + 3 conditional-skip files; 74 passed + 17 skipped tests) |
+| 10 | Neutralization A: disable `assertPostgresWorkerPreflight` in `runPostgresContinuousWorker` (`if (false)`), run test "runs the role preflight before the first claim…" | 1 (test fails: entrypoint never exits) | neutralization-preflight.log |
+| 11 | Neutralization B: disable `shutdown.install(process)` in `runPostgresContinuousWorker` (`if (false)`), run test "…drains on a real SIGTERM…" | 1 (test fails: exit 143, expected 0) | neutralization-shutdown.log |
+| 12 | Restore `apps/worker/src/main.ts` from backup; sha256 = 9138a3d079aa2da3a20964a177faf335a6146019543c9b0f44bdf3b5c5c9c4f5 (matches frozen candidate manifest) and re-run entrypoint test | 0 | entrypoint-post-restore-green.log |
+
+Notes:
+- Run order matters for #2: an earlier typecheck attempt (13:00) failed with 28 errors, all in
+  untracked `apps/api/src/__tests__/identity-*.test.ts` files being written concurrently by the
+  AAA-20 lane (server.ts mid-edit: `createEffectiveOperatorIdentityResolver is not defined`).
+  None of the errors were in `apps/worker` or `packages`. After that lane finished, the same
+  command passed (log #2). The transient failure is recorded in worker-tests.log history and in
+  cross-lane-bridge-failure.log (a `postgres-outbox-bridge.integration.test.ts` transient failure
+  from the same mid-edit moment; the isolated re-run passed and the full suite later passed).
+- Neutralization #10/#11 were applied only to `apps/worker/src/main.ts` (task-owned path), then the
+  file was restored byte-identically; the restored hash is verified in #12 and against the frozen
+  candidate manifest (reaudit-round2/manifest.json).
+- No commit, no push, no npm install, no production/external effect, no real data.

@@ -1,0 +1,198 @@
+{
+  "task": "AAA-20",
+  "title": "Compor identidade confiável e rotação de credenciais",
+  "round": "PROD-20260913/reaudit-round3",
+  "lane": "lane20 (builder)",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "finding": "AUD-20260912-F08",
+  "authorization": {
+    "scope": "local reversible implementation, synthetic data only; no real IdP/audience/provider/secret/egress; no production",
+    "d04": "PENDING — contract and simulated/injectable implementation only",
+    "committed": false
+  },
+  "baseline": {
+    "head": "512bc11e80fbf7c7b8baf6263aacc811ff829309",
+    "workingTree": "dirty (preexisting changes preserved)",
+    "preBuildSha256": {
+      "apps/api/src/main.ts": "8ea9a2d607934fb75a3565165587a715ed55b4f9a62f3d2b28fe1783ddceae50",
+      "apps/api/src/operator-identity.ts": "85f1226d763f76564db582d00f760f920971f4c57443698535394df4a28037ee",
+      "apps/api/src/server.ts": "5804ef6e929208166c84c14caf12a1eb1693fb538e784914270698cb211636f8",
+      "packages/shared/src/auth.ts": "ef3d2083697510e8e2f5b3dd3030429972b17d0590d0746b18ef66c2ccfaa657"
+    }
+  },
+  "filesChanged": {
+    "apps/api/src/main.ts": "58350adf73e399dbd503db0f123bfe531c0b8aa1d69f3950597be2b41d0d1487",
+    "apps/api/src/operator-identity.ts": "6e8af7c746ff5016fa38462a69401e9afce5f7755b5a2eab11f01b0e902da829",
+    "apps/api/src/server.ts": "2280a49e29bf31663a21efcfc8bb469f4c52132423487035b66215e65eeb2a18",
+    "packages/shared/src/auth.ts": "6dec8799b7e82f181697a9b27ba09a6d62c77fe012548d4b99bef0fc1d945123",
+    "apps/api/src/__tests__/identity-trusted-resolver.test.ts": "87979527cf7b55436a76eccbcbe08fcb7eb9bca2fc3a267f1043f2b1230df0f3",
+    "apps/api/src/__tests__/identity-composition-wiring.test.ts": "f5518b767033166185c2469098ccd43fd9690ad66bb8782675710bf22dac401d",
+    "apps/api/src/__tests__/identity-key-ring-rotation.test.ts": "7dfba8f038b37f3cb853a7f4fb42adda77f62f04915698994537d191d40bdd09",
+    "packages/shared/src/__tests__/auth-identity-mode.test.ts": "b20d913b7993a0f3de213564ff3d87220aff58e96fa9bf3d8711a681a23232fa"
+  },
+  "noteOnServerTsDiff": "server.ts already carried preexisting lane changes (readiness/journeys) before this BUILD; this lane only added identity-mode composition, the effective-resolver wrapper, the authenticated-mutation tightening and the mech renames of options.operatorIdentityResolver to the local effective resolver.",
+  "acceptance": [
+    {
+      "id": 1,
+      "criterion": "Resolver injected in composition; production startup fails without resolver (no fake fallback)",
+      "result": "PASS",
+      "evidence": [
+        "identity-composition-wiring.test.ts > passes the injected trusted resolver to the built server",
+        "identity-composition-wiring.test.ts > fails production startup without an injected trusted resolver",
+        "identity-composition-wiring.test.ts > fails the real entrypoint closed in production without a configured resolver (spawns main.ts, exit 1)",
+        "apps/api/src/__tests__/build-server-from-env-boundary.test.ts (existing, green)",
+        "main.ts now composes createConfiguredOperatorIdentityResolver and passes it to buildServerFromEnv"
+      ]
+    },
+    {
+      "id": 2,
+      "criterion": "Trusted claims separated from simulation headers; spoofed role/tenant rejected; invalid identity never becomes fake",
+      "result": "PASS",
+      "evidence": [
+        "identity-trusted-resolver.test.ts > does not fall back to simulation headers when no trusted resolver is configured (401 even in NODE_ENV=test)",
+        "identity-trusted-resolver.test.ts > rejects spoofed role and tenant headers (403)",
+        "identity-trusted-resolver.test.ts > authorizes only through the trusted resolver (200 trusted claims / 401 headers-only)",
+        "identity-trusted-resolver.test.ts > rejects a trusted resolver identity that is not tenant-bound (401)",
+        "identity-trusted-resolver.test.ts > requires an identity for mutations in trusted mode even when the legacy flag is off",
+        "identity-trusted-resolver.test.ts > keeps the explicit simulation mode working for the controlled UI flow"
+      ]
+    },
+    {
+      "id": 3,
+      "criterion": "Audience/expiry/replay validation in the resolver contract, synthetic and injectable; production requires a real injected resolver",
+      "result": "PASS",
+      "evidence": [
+        "identity-composition-wiring.test.ts > rejects wrong-audience, expired and replayed tokens over HTTP (401)",
+        "apps/api/src/__tests__/trusted-operator-identity.test.ts (existing, green: audience/lifetime/replay/secret rotation)",
+        "buildServerFromEnv rejects production without injected resolver (existing + new coverage)",
+        "entrypoint spawn test: production + no key ring => exit 1, no fallback"
+      ]
+    },
+    {
+      "id": 4,
+      "criterion": "Rotation current/previous with revocation and bounded window (IdentityKeyRingPort + deterministic local implementation)",
+      "result": "PASS",
+      "evidence": [
+        "packages/shared/src/auth.ts exports IdentityKeyRingPort/IdentitySigningKey",
+        "apps/api/src/operator-identity.ts implements createLocalIdentityKeyRing (kid, current/previous, rotationWindowSeconds default 3600 / max 86400, revokedKeyIds)",
+        "identity-key-ring-rotation.test.ts > 8 tests: in-window accept, default window, boundary/expired reject, revoked previous/current reject, kid required, unknown kid/mismatched signature reject, invalid configuration reject, legacy static-secret path"
+      ]
+    },
+    {
+      "id": 5,
+      "criterion": "UI session compatible; transition documented",
+      "result": "PASS",
+      "evidence": [
+        "identity-trusted-resolver.test.ts > explicit simulation mode keeps header flow",
+        "apps/api/src/__tests__/secretary-bootstrap.test.ts (green: dev memory bootstrap + Admin headers)",
+        "apps/api/src/__tests__/operator-identity-rbac.test.ts, journey-routes-coverage.test.ts, server-boundary-envelope.test.ts (green)",
+        "contract-note.md and report.md document the transition (CVG_IDENTITY_MODE=trusted + resolver/key ring)"
+      ]
+    },
+    {
+      "id": 6,
+      "criterion": "No authorization change beyond necessary; journeys/RBAC remain green",
+      "result": "PASS",
+      "evidence": [
+        "api-shared-suite.log: 65 files / 383 tests passed, 18 conditional postgres tests skipped",
+        "postgres-api.log: 3 files / 51 tests passed on disposable lane database"
+      ]
+    }
+  ],
+  "negativeTestsAdded": [
+    "trusted mode without resolver rejects simulation headers (401, even NODE_ENV=test)",
+    "trusted mode rejects spoofed x-operator-role (admin route -> 403) and x-tenant-id mismatch (403)",
+    "trusted mode rejects a non-tenant-bound resolver identity (401)",
+    "trusted mode forces authenticated mutations when the legacy flag is false (401)",
+    "trusted resolver accepts claims and ignores simulation headers (200)",
+    "production startup rejects CVG_IDENTITY_MODE=simulation",
+    "unknown CVG_IDENTITY_MODE rejects composition",
+    "production startup rejects missing injected resolver",
+    "real entrypoint exits 1 in production without a configured resolver",
+    "wrong-audience, expired and replayed tokens over HTTP -> 401",
+    "key ring: previous key past window rejected; revoked previous/current key rejected; missing/unknown kid rejected; kid/signature mismatch rejected; invalid rotation window/duplicate ids/weak secret/rotatedAt invalid rejected",
+    "env key ring: simulation/no-key-material -> no resolver; invalid JSON sanitized without leaking content"
+  ],
+  "gates": [
+    {
+      "command": "npx vitest run <4 new files> --no-file-parallelism (RED before implementation)",
+      "result": "FAIL as intended: 4 files, 19 failed | 5 passed",
+      "log": "red-tests.log"
+    },
+    {
+      "command": "npm run typecheck",
+      "result": "PASS (exit 0)",
+      "log": "typecheck.log"
+    },
+    {
+      "command": "npx prettier --check <8 changed files>",
+      "result": "PASS (exit 0)",
+      "log": "prettier.log"
+    },
+    {
+      "command": "npx eslint <8 changed files>",
+      "result": "PASS (exit 0, no findings)",
+      "log": "eslint.log"
+    },
+    {
+      "command": "npx vitest run <new + trusted-operator-identity tests> --no-file-parallelism",
+      "result": "PASS: 5 files / 35 tests (exit 0)",
+      "log": "focused-green.log"
+    },
+    {
+      "command": "npx vitest run apps/api packages/shared --no-file-parallelism --maxWorkers=2",
+      "result": "PASS: 65 passed | 1 skipped (66); 383 passed | 18 skipped (401) (exit 0)",
+      "log": "api-shared-suite.log"
+    },
+    {
+      "command": "TEST_DATABASE_URL=... npx vitest run --testTimeout=60000 --no-file-parallelism <3 postgres API files>",
+      "result": "PASS: 3 files / 51 tests (exit 0)",
+      "log": "postgres-api.log",
+      "database": "lane20_r3_15793 at 127.0.0.1:55481"
+    }
+  ],
+  "compatibility": [
+    "buildServer() without identityMode keeps today's behavior: NODE_ENV=test => simulation headers; other environments => per-request 401 without a resolver. No existing test needed a new option.",
+    "buildServerFromEnv applies explicit option, then CVG_IDENTITY_MODE, then process env; production always composes trusted. Simulated-env tests under NODE_ENV=test keep working (secretary-bootstrap green).",
+    "requireAuthenticatedMutations is forced true only in trusted mode (previously test default could be false); no simulation-mode test changed.",
+    "Trusted-mode resolver identities must be tenant-bound; this is new behavior only in explicit/trusted mode.",
+    "OperatorIdentityResolver is now exported by @cvg/shared and re-exported by server.ts; the type is structurally identical.",
+    "createTrustedOperatorIdentityResolver.secret became optional only when keyRing is provided; existing calls and error messages preserved."
+  ],
+  "limitations": [
+    "No real IdP, protocol, audience mapping, provider, secret or egress; D04 remains PENDING and production remains NO-GO.",
+    "The resolver port is synchronous; a remote introspection adapter would need an async revision.",
+    "main.ts positive composition (with CVG_OPERATOR_IDENTITY_KEYRING) is not exercised against a live database; the negative startup path is exercised by spawning the real entrypoint.",
+    "Low-level buildServer in production without a resolver still fails per request (401) instead of throwing at construction, preserving existing production-boundary tests; the startup gate is in buildServerFromEnv/entrypoint.",
+    "Routes that resolve identity twice in one request (e.g. capability approvals) would trip the replay cache with real token resolvers; this is pre-existing behavior, unchanged by this lane, flagged for follow-up.",
+    "No independent review yet: builder output cannot claim VERIFIED."
+  ],
+  "evidence": [
+    "contract-note.md",
+    "commands.log",
+    "red-tests.log",
+    "focused-green.log",
+    "api-shared-suite.log",
+    "postgres-api.log",
+    "typecheck.log",
+    "prettier.log",
+    "eslint.log",
+    "postgres-db.txt",
+    "source-hashes.txt"
+  ],
+  "evidenceSha256": {
+    "contract-note.md": "2a8e91abc3e0ba0877afd391e4d25126cab64b27ce9fb2f4a2151a63ae82efeb",
+    "commands.log": "b6b8e7b384c8d6a02b3145b8261672f9bbf81ad1bf40bc7e74cc4985a02a11ff",
+    "red-tests.log": "f0d49742d8b4138f9eba18387d0a864e7168fc6b3d4fc975f942331a28b71672",
+    "focused-green.log": "73e5b22e8b86492532f403e9894cd626654a42f384aef139dc56f30a11da3a5b",
+    "api-shared-suite.log": "564d8362410d316367415aaaf760003d4a6356d5b2f78ed1d8c2a4ff4a068fca",
+    "postgres-api.log": "961e0b1e92f01d808634b97c94264db70be512bc5dc3a791ba66c714c85ed69c",
+    "typecheck.log": "8b0652334f8c18d7b8ab65ebb1c68eb5c3e9bfcdeee08c641f75418ba81efb8c",
+    "prettier.log": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20",
+    "eslint.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "postgres-db.txt": "07152bacddfaa9b3cf8840cc6154e2c6b57993f0ebc9aec7a158f294b3ea5251",
+    "source-hashes.txt": "f06c9468815ac15fa6708b345bcc32802759c80c07101e29654f1b8130d0201c"
+  },
+  "independence": "builder output; coordinator must obtain a fresh independent review before VERIFIED/DONE",
+  "observedAt": "2026-09-13T16:10:14Z"
+}

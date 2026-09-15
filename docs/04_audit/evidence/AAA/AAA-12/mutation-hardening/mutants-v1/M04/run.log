@@ -1,0 +1,510 @@
+
+ RUN  v4.1.11 /tmp/opencode/aaa12-mutation/work-M04
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts (6 tests | 2 failed) 450ms
+     × decideReserve treats only the absent property as legacy 12ms
+     × absent and explicit valid versions preserve the supported happy paths 5ms
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts (9 tests | 3 failed) 102ms
+     × release returns the operation to PENDING for a safe retry 8ms
+     × reconciliation to not_effected reopens the operation 10ms
+     × reports operation_in_progress when another worker does not finish in time 6ms
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts (12 tests | 2 failed) 147ms
+     × reports conflicts, uncertain reserves and in-flight leases 6ms
+     × fails, releases, marks uncertain and never rewrites an UNCERTAIN reserve 54ms
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts (15 tests | 3 failed) 93ms
+     × turns an expired SENDING lease into UNCERTAIN and allows safe takeover 13ms
+     × writes UNCERTAIN when an expired SENDING record is re-presented 10ms
+     × detects a payload conflict on the file adapter without rewriting bytes 5ms
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts (11 tests | 8 failed) 50ms
+     × 1. two simultaneous dispatches with the same key produce one send 8ms
+     × 2. two instances dispute one operation through a shared durable journal 6ms
+     × 3. replay after success returns the durable result without a new send 5ms
+     × 4. restart after reservation takes over the lease and sends exactly once 3ms
+     × 5. failure before the send releases the lease so a retry sends once 4ms
+     × 6. failure after the send marks the operation uncertain and blocks blind retry 11ms
+     × 7. expired lease with a late worker never produces a second send or false success 6ms
+     × 8. the same key with a different payload is rejected as a conflict 3ms
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts (10 tests | 3 failed) 66ms
+     × replays FAILED and UNCERTAIN records with stable codes and zero sends 15ms
+     × fails permanently and replays the recorded failure without a new send 2ms
+     × treats a plain error as an uncertain effect with zero retries 2ms
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts (9 tests | 2 failed) 49ms
+     × gateway replays a new record after restart without a second send 13ms
+     × legacy records remain usable under the legacy version 4ms
+ ❯ packages/channel-gateway/src/__tests__/channel-gateway.test.ts (14 tests | 2 failed) 52ms
+     × sends once and journals the effect so retries never duplicate it 13ms
+     × retries a failed send without duplicating the successful effect 3ms
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-race.test.ts (2 tests | 2 failed) 17ms
+     × Promise.all of two identical dispatches produces exactly one provider send 9ms
+     × rejects a reused idempotency key carrying a different payload 6ms
+
+ Test Files  9 failed | 2 passed (11)
+      Tests  27 failed | 78 passed (105)
+   Start at  21:06:51
+   Duration  12.72s (transform 351ms, setup 0ms, import 1.61s, tests 1.08s, environment 8.32s)
+
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 27 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts > gateway replay and uncertainty hardening > replays FAILED and UNCERTAIN records with stable codes and zero sends
+AssertionError: expected ChannelError: Idempotency key was reused … { …(3) } to match object { code: 'send_failed', …(1) }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+- {
+-   "code": "send_failed",
++ ChannelError {
++   "code": "idempotency_key_reuse",
+    "retryable": false,
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts:243:6
+    241|     await expect(
+    242|       gateway.dispatch(parsed, { takeoverActive: false })
+    243|     ).rejects.toMatchObject({ code: 'send_failed', retryable: false })
+       |      ^
+    244|     expect(adapter.sent).toHaveLength(0)
+    245|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts > gateway failure mapping hardening > fails permanently and replays the recorded failure without a new send
+AssertionError: expected ChannelError: Idempotency key was reused … { …(3) } to match object { code: 'provider_rejected' }
+(3 matching properties omitted from actual)
+
+- Expected
++ Received
+
+- {
+-   "code": "provider_rejected",
++ ChannelError {
++   "code": "idempotency_key_reuse",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts:377:6
+    375|     await expect(
+    376|       gateway.dispatch(parsed, { takeoverActive: false })
+    377|     ).rejects.toMatchObject({ code: 'provider_rejected' })
+       |      ^
+    378|     expect(adapter.sent).toHaveLength(0)
+    379|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts > gateway failure mapping hardening > treats a plain error as an uncertain effect with zero retries
+AssertionError: expected ChannelError: Idempotency key was reused … { …(3) } to match object { code: 'effect_uncertain' }
+(3 matching properties omitted from actual)
+
+- Expected
++ Received
+
+- {
+-   "code": "effect_uncertain",
++ ChannelError {
++   "code": "idempotency_key_reuse",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts:411:6
+    409|     await expect(
+    410|       gateway.dispatch(parsed, { takeoverActive: false })
+    411|     ).rejects.toMatchObject({ code: 'effect_uncertain' })
+       |      ^
+    412|     expect(adapter.sent).toHaveLength(0)
+    413|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts > in-memory journal unsafe-crash and takeover paths > turns an expired SENDING lease into UNCERTAIN and allows safe takeover
+AssertionError: expected 'conflict' to be 'uncertain' // Object.is equality
+
+Expected: "uncertain"
+Received: "conflict"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts:232:7
+    230|     expect(
+    231|       (await journal.reserve({ ...input, leaseOwner: 'owner-b' })).out…
+    232|     ).toBe('uncertain')
+       |       ^
+    233|     expect((await journal.find(identity))?.state).toBe('UNCERTAIN')
+    234|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts > file journal crash-write and storage-failure paths > writes UNCERTAIN when an expired SENDING record is re-presented
+AssertionError: expected 'conflict' to be 'uncertain' // Object.is equality
+
+Expected: "uncertain"
+Received: "conflict"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts:292:29
+    290|       leaseMs: 10_000
+    291|     })
+    292|     expect(outcome.outcome).toBe('uncertain')
+       |                             ^
+    293|     const after = await readFile(path, 'utf8')
+    294|     expect(after).not.toBe(before)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts > file journal crash-write and storage-failure paths > detects a payload conflict on the file adapter without rewriting bytes
+AssertionError: expected 'in_flight' to be 'conflict' // Object.is equality
+
+Expected: "conflict"
+Received: "in_flight"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts:335:30
+    333|       leaseMs: 10_000
+    334|     })
+    335|     expect(conflict.outcome).toBe('conflict')
+       |                              ^
+    336|     expect(await readFile(recordPath(directory, identity), 'utf8')).to…
+    337|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts > in-memory journal hardening > reports conflicts, uncertain reserves and in-flight leases
+AssertionError: expected 'in_flight' to be 'conflict' // Object.is equality
+
+Expected: "conflict"
+Received: "in_flight"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts:257:7
+    255|         })
+    256|       ).outcome
+    257|     ).toBe('conflict')
+       |       ^
+    258|     expect(
+    259|       (await journal.reserve({ ...base, leaseOwner: 'owner-b' })).outc…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts > file journal hardening > fails, releases, marks uncertain and never rewrites an UNCERTAIN reserve
+AssertionError: expected 'conflict' to be 'uncertain' // Object.is equality
+
+Expected: "uncertain"
+Received: "conflict"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts:308:29
+    306|       leaseMs: 10_000
+    307|     })
+    308|     expect(outcome.outcome).toBe('uncertain')
+       |                             ^
+    309|     expect(
+    310|       await readFile(recordPath(directory, uncertainIdentity), 'utf8')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > gateway replays a new record after restart without a second send
+ChannelError: Idempotency key was reused with a different payload
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:218:13
+    216|     }
+    217|     if (reservation.outcome === 'conflict') {
+    218|       throw new ChannelError(
+       |             ^
+    219|         'idempotency_key_reuse',
+    220|         'Idempotency key was reused with a different payload',
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:207:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > legacy records remain usable under the legacy version
+AssertionError: expected 'conflict' to be 'reserved' // Object.is equality
+
+Expected: "reserved"
+Received: "conflict"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:360:29
+    358|       leaseMs: 1_000
+    359|     })
+    360|     expect(outcome.outcome).toBe('reserved')
+       |                             ^
+    361|     if (outcome.outcome !== 'reserved') {
+    362|       throw new Error('expected reserved outcome')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts > channel effect journal edges > release returns the operation to PENDING for a safe retry
+ChannelError: Idempotency key was reused with a different payload
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:218:13
+    216|     }
+    217|     if (reservation.outcome === 'conflict') {
+    218|       throw new ChannelError(
+       |             ^
+    219|         'idempotency_key_reuse',
+    220|         'Idempotency key was reused with a different payload',
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts:170:24
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts > channel effect journal edges > reconciliation to not_effected reopens the operation
+ChannelError: Idempotency key was reused with a different payload
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:218:13
+    216|     }
+    217|     if (reservation.outcome === 'conflict') {
+    218|       throw new ChannelError(
+       |             ^
+    219|         'idempotency_key_reuse',
+    220|         'Idempotency key was reused with a different payload',
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts:206:24
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts > channel effect journal edges > reports operation_in_progress when another worker does not finish in time
+AssertionError: expected ChannelError: Idempotency key was reused … { …(3) } to match object { code: 'operation_in_progress', …(1) }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+- {
+-   "code": "operation_in_progress",
+-   "retryable": true,
++ ChannelError {
++   "code": "idempotency_key_reuse",
++   "retryable": false,
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts:310:6
+    308|     await expect(
+    309|       gatewayB.dispatch(parsed, { takeoverActive: false })
+    310|     ).rejects.toMatchObject({ code: 'operation_in_progress', retryable…
+       |      ^
+    311|     releaseGate()
+    312|     const finished = await stalled
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 1. two simultaneous dispatches with the same key produce one send
+ChannelError: Idempotency key was reused with a different payload
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:218:13
+    216|     }
+    217|     if (reservation.outcome === 'conflict') {
+    218|       throw new ChannelError(
+       |             ^
+    219|         'idempotency_key_reuse',
+    220|         'Idempotency key was reused with a different payload',
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:115:29
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 2. two instances dispute one operation through a shared durable journal
+ChannelError: Idempotency key was reused with a different payload
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:218:13
+    216|     }
+    217|     if (reservation.outcome === 'conflict') {
+    218|       throw new ChannelError(
+       |             ^
+    219|         'idempotency_key_reuse',
+    220|         'Idempotency key was reused with a different payload',
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:143:29
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 3. replay after success returns the durable result without a new send
+ChannelError: Idempotency key was reused with a different payload
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:218:13
+    216|     }
+    217|     if (reservation.outcome === 'conflict') {
+    218|       throw new ChannelError(
+       |             ^
+    219|         'idempotency_key_reuse',
+    220|         'Idempotency key was reused with a different payload',
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:164:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 4. restart after reservation takes over the lease and sends exactly once
+ChannelError: Idempotency key was reused with a different payload
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:218:13
+    216|     }
+    217|     if (reservation.outcome === 'conflict') {
+    218|       throw new ChannelError(
+       |             ^
+    219|         'idempotency_key_reuse',
+    220|         'Idempotency key was reused with a different payload',
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:207:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 5. failure before the send releases the lease so a retry sends once
+ChannelError: Idempotency key was reused with a different payload
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:218:13
+    216|     }
+    217|     if (reservation.outcome === 'conflict') {
+    218|       throw new ChannelError(
+       |             ^
+    219|         'idempotency_key_reuse',
+    220|         'Idempotency key was reused with a different payload',
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:227:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 6. failure after the send marks the operation uncertain and blocks blind retry
+AssertionError: expected ChannelError: Idempotency key was reused … { …(3) } to match object { code: 'effect_uncertain' }
+(3 matching properties omitted from actual)
+
+- Expected
++ Received
+
+- {
+-   "code": "effect_uncertain",
++ ChannelError {
++   "code": "idempotency_key_reuse",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:251:6
+    249|     await expect(
+    250|       gateway.dispatch(parsed, { takeoverActive: false })
+    251|     ).rejects.toMatchObject({ code: 'effect_uncertain' })
+       |      ^
+    252|     expect(adapter.sent).toHaveLength(1)
+    253|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 7. expired lease with a late worker never produces a second send or false success
+AssertionError: expected ChannelError: Idempotency key was reused … { …(3) } to match object { code: 'effect_uncertain' }
+(3 matching properties omitted from actual)
+
+- Expected
++ Received
+
+- {
+-   "code": "effect_uncertain",
++ ChannelError {
++   "code": "idempotency_key_reuse",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:311:6
+    309|     await expect(
+    310|       gatewayB.dispatch(parsed, { takeoverActive: false })
+    311|     ).rejects.toMatchObject({ code: 'effect_uncertain' })
+       |      ^
+    312|     expect(adapterB.sent).toHaveLength(0)
+    313|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 8. the same key with a different payload is rejected as a conflict
+AssertionError: promise resolved "{ …(4) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "accepted": true,
++   "channel": "whatsapp",
++   "externalId": "scripted_msg_journal_1",
++   "sentAt": "2026-09-12T12:00:00.000Z",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:334:6
+    332|         { takeoverActive: false }
+    333|       )
+    334|     ).rejects.toMatchObject({ code: 'idempotency_key_reuse', retryable…
+       |      ^
+    335|     expect(adapter.sent).toHaveLength(1)
+    336|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts > AAA12-C4-F01 missing vs malformed hashVersion > decideReserve treats only the absent property as legacy
+AssertionError: PENDING absent/legacy: expected 'conflict' to be 'takeover' // Object.is equality
+
+Expected: "takeover"
+Received: "conflict"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts:186:9
+    184|         decideReserve(absent, input(identity, LEGACY_HASH_VERSION), 10…
+    185|         `${state} absent/legacy`
+    186|       ).toBe(expectedActionFor(state))
+       |         ^
+    187|       expect(
+    188|         decideReserve(absent, input(identity, SHARED_HASH_VERSION), 10…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[22/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts > AAA12-C4-F01 missing vs malformed hashVersion > absent and explicit valid versions preserve the supported happy paths
+AssertionError: expected 'conflict' to be 'reserved' // Object.is equality
+
+Expected: "reserved"
+Received: "conflict"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts:354:35
+    352|       leaseMs: 10_000
+    353|     })
+    354|     expect(legacyAttempt.outcome).toBe('reserved')
+       |                                   ^
+    355|     expect((await journal.find(identity))?.hashVersion).toBe(
+    356|       LEGACY_HASH_VERSION
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[23/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-race.test.ts > AUD-20260912-F04 regression: concurrent outbound dispatch > Promise.all of two identical dispatches produces exactly one provider send
+ChannelError: Idempotency key was reused with a different payload
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:218:13
+    216|     }
+    217|     if (reservation.outcome === 'conflict') {
+    218|       throw new ChannelError(
+       |             ^
+    219|         'idempotency_key_reuse',
+    220|         'Idempotency key was reused with a different payload',
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-race.test.ts:33:29
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[24/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-race.test.ts > AUD-20260912-F04 regression: concurrent outbound dispatch > rejects a reused idempotency key carrying a different payload
+AssertionError: promise resolved "{ externalId: 'fake_msg_race_1', …(3) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "accepted": true,
++   "channel": "whatsapp",
++   "externalId": "fake_msg_race_1",
++   "sentAt": "2026-09-12T12:00:00.000Z",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-race.test.ts:52:6
+     50|         { takeoverActive: false }
+     51|       )
+     52|     ).rejects.toMatchObject({ code: 'idempotency_key_reuse' })
+       |      ^
+     53|     expect(adapter.sent).toHaveLength(1)
+     54|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[25/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-gateway.test.ts > channel gateway outbound > sends once and journals the effect so retries never duplicate it
+ChannelError: Idempotency key was reused with a different payload
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:218:13
+    216|     }
+    217|     if (reservation.outcome === 'conflict') {
+    218|       throw new ChannelError(
+       |             ^
+    219|         'idempotency_key_reuse',
+    220|         'Idempotency key was reused with a different payload',
+ ❯ packages/channel-gateway/src/__tests__/channel-gateway.test.ts:123:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[26/27]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-gateway.test.ts > channel gateway outbound > retries a failed send without duplicating the successful effect
+ChannelError: Idempotency key was reused with a different payload
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:218:13
+    216|     }
+    217|     if (reservation.outcome === 'conflict') {
+    218|       throw new ChannelError(
+       |             ^
+    219|         'idempotency_key_reuse',
+    220|         'Idempotency key was reused with a different payload',
+ ❯ packages/channel-gateway/src/__tests__/channel-gateway.test.ts:144:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[27/27]⎯
+

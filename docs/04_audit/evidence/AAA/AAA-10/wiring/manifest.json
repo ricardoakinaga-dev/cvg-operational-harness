@@ -1,0 +1,139 @@
+{
+  "program": "AAA-20260912",
+  "task": "AAA-10",
+  "lane": "wiring",
+  "title": "Durable intent + idempotent effect wired into governed runtime",
+  "status": "IMPLEMENTED",
+  "productGateGranted": false,
+  "generatedAt": "2026-09-13T02:05:00Z",
+  "scope": "runtime.ts composition only: policy revalidation -> approvals.reserve -> journal.reserve -> markExecuting -> markEffectStarted -> tool -> journal.confirmEffect -> approvals.confirm -> outbox.enqueue; replay/in_progress/uncertain/conflict handling; releaseExpired sweep; durability fail-closed; operationKey; reservationTtlMs. Plus tests and harness updates.",
+  "contractRefs": [
+    "docs/02_spec/aaa_execution_contract.md sections 2, 4, 5, 6, 7, 8, 8.1",
+    "docs/02_spec/aaa_data_api_contract.md sections 3 and 3.1"
+  ],
+  "environment": {
+    "node": "v24.20.0 (local); target engines >=22 <23",
+    "syntheticDataOnly": true,
+    "noInstall": true,
+    "noCommitPushDeploy": true
+  },
+  "changedFiles": {
+    "packages/agent-runtime/src/runtime.ts": "33419c8a64bf145aa19921e36916c57d984add13e06697894b2dab516f230d7b",
+    "packages/agent-runtime/src/contracts.ts": "6a2fd10fd5f0e00d05fd185f41b6de814e9fe50c47bcc75d49555952669182b5",
+    "packages/agent-runtime/src/__tests__/runtime-journal.test.ts": "66eee0936d5001208e074b3de3140a3c621b4822446da733d6c1ecc1acf587dd",
+    "packages/agent-runtime/src/__tests__/runtime-binding.test.ts": "8bdf9e9bee5260665ff0b20082cd6e70dfa25f5e381ffb9e5b09c2e7bf94dc87",
+    "packages/agent-runtime/src/__tests__/agent-runtime.test.ts": "aec1646677bde6403355e6ecb5e63c824fa5ddc4c84d3c34246d58713d88e87b"
+  },
+  "unchangedByThisLane": [
+    "packages/agent-runtime/src/effect-journal.ts",
+    "packages/agent-runtime/src/proposal.ts",
+    "packages/agent-runtime/src/index.ts",
+    "packages/approval-engine/**",
+    "packages/persistence/**",
+    "packages/channel-gateway/**",
+    "package.json"
+  ],
+  "publicSurface": {
+    "GovernedAgentRuntimeOptions": {
+      "effectJournal": "optional EffectJournalPort imported from ./effect-journal.ts",
+      "reservationTtlMs": "optional, default 60000"
+    },
+    "GovernedTurnResult": {
+      "executionRef": "optional string",
+      "resultDigest": "optional string (sha256 canonical result)",
+      "replayed": "optional boolean",
+      "effectConfirmed": "optional boolean (honest denial after effect)"
+    }
+  },
+  "operationKey": {
+    "withCallerKey": "op:sha256(canonicalizeJson({tenantId, callerIdempotencyKey}))",
+    "withoutCallerKey": "op:sha256(canonicalizeJson({tenantId, capability, action, resource:{type,id?}, proposalHash}))",
+    "resourceNormalization": "tenantId excluded, matching computeExecutionProposalHash"
+  },
+  "failureSemantics": {
+    "replay": "executed with persisted executionRef/resultDigest, zero tool calls, outbox re-enqueued with operationKey",
+    "in_progress": "denied operation_in_progress; fresh approval reservation released when applicable",
+    "uncertain": "denied operation_uncertain; approval marked UNCERTAIN when reservable",
+    "conflict": "denied idempotency_key_reuse; fresh approval reservation released",
+    "preEffectFailure": "journal.failEffect + approvals.release -> APPROVED -> denied with tool code",
+    "ambiguousFailure": "journal.markUncertain + approvals.markUncertain -> denied effect_uncertain",
+    "approvalConfirmFailure": "denied approval_confirm_failed with effectConfirmed=true and journal CONFIRMED",
+    "outboxFailureAfterConfirmed": "executed with outboxPending=true, never denied",
+    "durabilityRequired": "HIGH_RISK_WRITE/ADMIN or real_authorized without journal -> denied before tool",
+    "journalSweepFailed": "denied journal_sweep_failed at start of runTurn",
+    "markEffectStartedFailure": "journal.failEffect + approval release + denied with journal code"
+  },
+  "commands": [
+    {
+      "command": "npx vitest run packages/agent-runtime/src/__tests__/runtime-journal.test.ts --no-file-parallelism --maxWorkers=2 (before implementation)",
+      "exitCode": 1,
+      "result": "1 file failed; 11 failed | 1 passed (12)",
+      "log": "red-focused.log"
+    },
+    {
+      "command": "npx vitest run packages/agent-runtime --no-file-parallelism --maxWorkers=2",
+      "exitCode": 0,
+      "result": "5 files passed; 82 passed",
+      "log": "green-focused.log"
+    },
+    {
+      "command": "npx tsc -p tsconfig.typecheck.json --noEmit",
+      "exitCode": 0,
+      "result": "clean",
+      "log": "typecheck.log"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "clean",
+      "log": "lint.log"
+    },
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "result": "194 files passed | 4 skipped (198); 1132 passed | 56 skipped (1188)",
+      "log": "full-npm-test.log"
+    }
+  ],
+  "baseline": {
+    "reference": "docs/04_audit/evidence/AAA/AAA-10/ports/manifest.json (lane ports)",
+    "referenceCounts": "192 files passed | 4 skipped; 1113 passed | 46 skipped",
+    "thisLaneDelta": "+1 test file (runtime-journal.test.ts, 12 tests)",
+    "concurrentLaneDelta": "remaining +7 passed and +10 skipped come from files created by other lanes during the same session; no failures"
+  },
+  "tests": {
+    "T-06": "packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-06: crash after effect before ack (PASS)",
+    "T-07": "packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-07: outbox failure after a confirmed effect (PASS)",
+    "T-08": "packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-08: concurrent attempts on the same operationKey (PASS)",
+    "T-14": "packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-14: restart between confirmEffect and approval.confirm (PASS)",
+    "T-15": "packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-15: operationKey reuse with a different proposal (PASS)",
+    "T-17": "packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-17: idempotencyKey equals operationKey across replay (PASS)",
+    "T-18": "packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 T-18: start-of-turn releaseExpired sweep (PASS)",
+    "durability_required": "packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 fail-closed durability (PASS)",
+    "journal_sweep_failed": "packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 fail-closed durability (PASS)",
+    "approval_confirm_failed": "packages/agent-runtime/src/__tests__/runtime-journal.test.ts > AAA-10 honesty (PASS)"
+  },
+  "harnessChanges": [
+    {
+      "file": "packages/agent-runtime/src/__tests__/runtime-binding.test.ts",
+      "change": "buildHarness injects InMemoryEffectJournal({clock}) by default so HIGH_RISK_WRITE controlled_fake flows exercise the now-required durable journal; assertions unchanged."
+    },
+    {
+      "file": "packages/agent-runtime/src/__tests__/agent-runtime.test.ts",
+      "change": "harness injects InMemoryEffectJournal; post-execution retry assertion updated from denied already_executed to executed idempotent_replay with tool called once (AAA-10 semantic), test renamed accordingly."
+    }
+  ],
+  "artifacts": {
+    "tMatrix": "T-matrix.md",
+    "crashMatrix": "crash-matrix.md",
+    "commands": "commands.log",
+    "hashes": "changed-hashes.txt",
+    "limitations": "limitations.md"
+  },
+  "notCoveredHere": [
+    "PostgreSQL cross-host adapter proof (AAA-16; adapter owned by Agent 2)",
+    "per-turn deadline/budget/cancel artifacts (AAA-11)",
+    "channel outbound idempotency composition (AAA-12)",
+    "commit, push, deploy or production/operational database changes"
+  ]
+}

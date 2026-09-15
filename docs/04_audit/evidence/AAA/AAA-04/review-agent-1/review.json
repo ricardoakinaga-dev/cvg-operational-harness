@@ -1,0 +1,123 @@
+{
+  "reviewId": "AAA-04-REVIEW-AGENT-1",
+  "taskId": "AAA-04",
+  "program": "AAA-20260912",
+  "verdict": "APPROVE_WITH_CONDITIONS",
+  "verdictScope": "bar v1 artifact set pinned by docs/02_spec/aaa_quality_contract.md sha256 9904c376a979a048d325d52c59eb4204055115c128b63802b6d15657e0ed746a and its five attachments; this is a technical review by agent-1, not human signoff, not freeze by the author and not BUILD/production authorization",
+  "reviewer": "agent-1 (lead/runtime front); did not author AAA-04",
+  "reviewedAt": "2026-09-12T21:15:00+00:00",
+  "artifactSet": [
+    {
+      "path": "docs/02_spec/aaa_quality_contract.md",
+      "sha256": "9904c376a979a048d325d52c59eb4204055115c128b63802b6d15657e0ed746a",
+      "match": true
+    },
+    {
+      "path": "docs/04_audit/evidence/AAA/AAA-04/quality-bar.json",
+      "sha256": "f8dd8c7d116f6ee139f8435b24c0771c56612e03a57223c48e9e2fd4cbde6ed8",
+      "match": true
+    },
+    {
+      "path": "docs/04_audit/evidence/AAA/AAA-04/comparator-protocol.json",
+      "sha256": "24e30981854f53d28cf1cbf221a93671249c7b932aedd1b3a23a8d485ea69af7",
+      "match": true
+    },
+    {
+      "path": "docs/04_audit/evidence/AAA/AAA-04/dataset-freeze.sha256",
+      "sha256": "6898cc84be860b609a4f4fc9ba22e74fd2028df1f01a902f676854e63ba82edc",
+      "match": true
+    },
+    {
+      "path": "docs/04_audit/evidence/AAA/AAA-04/generate-quality-bar.py",
+      "sha256": "eba85cf850689a6b22596ff8225f28de1f7ca914d68466133560f69d722f3625",
+      "match": true
+    },
+    {
+      "path": "docs/04_audit/evidence/AAA/AAA-04/validate-quality-bar.py",
+      "sha256": "efb220ec6528e2d251e2f349e309b7c0e3c21d14b930f832b9a0b8b18d53879a",
+      "match": true
+    }
+  ],
+  "criteria": [
+    {
+      "criterion": "20/20 áreas com critério BLOCKING/HIGH; 80 critérios únicos; campos obrigatórios e rejectedCase presentes",
+      "result": "PASS",
+      "evidence": "independent recompute: 80 criteria, 27 BLOCKING, 39 HIGH, 14 MEDIUM, 20 areas, zero missing fields; validator rerun exit 0"
+    },
+    {
+      "criterion": "Meta >=97 por área preservada e nenhum gate pode ser anulado por nota",
+      "result": "PASS",
+      "evidence": "contract §1 I1/I3 and §10; quality-bar targetPerArea 97"
+    },
+    {
+      "criterion": "Protocolo comparativo congelado antes do holdout, sem tuning pós-observação",
+      "result": "PASS",
+      "evidence": "comparator-protocol.json frozenAt, frozenBeforeHoldout true, holdout NOT_CREATED, rule and decisionRule frozen; accessControl declared"
+    },
+    {
+      "criterion": "Certificação separa histórico, candidato atual e autorização humana; N1-N9 especificados",
+      "result": "PASS",
+      "evidence": "contract §5 modes and §5.3 negative tests; N1 documentary challenge executed by reviewer with tampered copy"
+    },
+    {
+      "criterion": "Rastreabilidade F11/F12/F14 e alinhamento com AAA-03/0558",
+      "result": "PASS",
+      "evidence": "§3.1 table; Q-A07/Q-A08/Q-A09 criteria reference the same invariants as aaa_execution_contract"
+    },
+    {
+      "criterion": "Desafio documental: fonte alterada impede veredicto atual",
+      "result": "PASS",
+      "evidence": "review-agent-1/documentary-challenge-n1.txt: tampered copy hash differs from recorded artifact"
+    },
+    {
+      "criterion": "Tolerâncias numéricas de coverage/mutação do plano 0324 §5 congeladas",
+      "result": "CONDITIONAL",
+      "evidence": "quality-bar Q-A15-01 audits the denominator but freezes no numeric floor; vitest.config.mts thresholds are 80/80/80/80, below the proposed 90/85/95"
+    }
+  ],
+  "findings": [
+    {
+      "id": "AAA04-R1-F01",
+      "severity": "P2",
+      "criterionAffected": "tolerâncias congeladas (plan 0324 §5)",
+      "location": "docs/04_audit/evidence/AAA/AAA-04/quality-bar.json (Q-A15-01) / vitest.config.mts:30",
+      "reproduction": "grep thresholds vitest.config.mts; search 90/85 in quality-bar.json",
+      "observed": "bar audits the denominator and requires guard mutation detection, but freezes no numeric target; config floor is 80/80/80/80",
+      "impact": "qualification could satisfy the bar at 80 while the plan proposed >=90 statements/lines/functions, >=85 branches, >=95 critical branches; the bar must not silently fall below the plan",
+      "closeWith": "bar v2 freezing the numeric targets or a frozen justified alternative, with config alignment at qualification time",
+      "blocks": "coverage-based qualification tasks (AAA-34/36/41); does not block the AAA-08 policy-engine scope"
+    },
+    {
+      "id": "AAA04-R1-F02",
+      "severity": "P3",
+      "criterionAffected": "metas técnicas de performance propostas",
+      "location": "quality-bar.json Q-A20-04 / comparator-protocol.json latency_p95 target null",
+      "reproduction": "search 2s/10s/100k in quality-bar.json",
+      "observed": "p95 persistencia <=2s, ack <=10s and ramp 10k->100k from SPEC 0113/plan appear only as D03-dependent prose; no proposed-target field",
+      "impact": "D03 approval changes workload/hardware, but the technical bounds should remain visible as proposals; absence makes later measurement ad hoc",
+      "closeWith": "bar v2 recording the proposed technical bounds and their D03 dependency without claiming approval",
+      "blocks": "performance qualification only; not AAA-08"
+    },
+    {
+      "id": "AAA04-R1-F03",
+      "severity": "P3",
+      "criterionAffected": "alinhamento com contrato de execução",
+      "location": "quality-bar.json Q-A09-01 limitations",
+      "observed": "limitation states per-turn budget needs to be explicit in the execution contract",
+      "impact": "none after reconciliation",
+      "closeWith": "closed by AAA-03 revision 2 (per-turn budget semantics and reconciliation with AAA-05); no bar version bump required by this item"
+    }
+  ],
+  "documentaryChallenge": {
+    "N1_source_altered": "EXECUTED: temp tampered copy hash d9ce54b9... differs from recorded f8dd8c7d...; a current-candidate verdict would be denied",
+    "N6_skipped_required": "SPECIFIED (contract §5.3, I1): skip never satisfies; executable proof belongs to AAA-13",
+    "N8_stale_evidence": "SPECIFIED (contract §5.3): STALE_EVIDENCE denies; executable proof belongs to AAA-13"
+  },
+  "limitations": [
+    "Documentary/spec review only; no runtime behavior of the not-yet-existent graders was executed",
+    "N1-N9 execution proof is explicitly deferred to AAA-13 BUILD by the artifact itself",
+    "Not human signoff; does not freeze the bar or authorize production"
+  ],
+  "authorAction": "agent-3 versions the bar to v2 for F01/F02, renews the manifest hashes, and preserves v1 historically; AAA-08 may proceed under the reviewed v1 policy criteria with revalidation scheduled after v2",
+  "nextAction": "Lead publishes the review verdict, keeps AAA-04 in REVIEW (conditions) and proceeds with AAA-03 reconciliation and AAA-08 policy corrections"
+}

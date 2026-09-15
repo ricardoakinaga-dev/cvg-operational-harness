@@ -59,6 +59,15 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      '@cvg/harness-contracts': resolve(
+        workspaceRoot,
+        'packages/contracts/src/index.ts'
+      ),
+      '@cvg/harness-orchestrator': resolve(
+        workspaceRoot,
+        'packages/orchestrator/src/index.ts'
+      ),
+      '@cvg/harness': resolve(workspaceRoot, 'packages/harness/src/index.ts'),
       '@cvg/shared': resolve(workspaceRoot, 'packages/shared/src/index.ts'),
       '@cvg/persistence': resolve(
         workspaceRoot,

@@ -1,0 +1,212 @@
+--- docs/04_audit/evidence/AAA/AAA-12/rework-canonicalization/before/errors.ts	2026-09-12 18:49:53.582094097 -0300
++++ packages/channel-gateway/src/errors.ts	2026-09-12 18:50:27.110279653 -0300
+@@ -12,7 +12,8 @@
+   effect_uncertain: 'effect_uncertain',
+   lease_lost: 'lease_lost',
+   reconciliation_required: 'reconciliation_required',
+-  journal_unavailable: 'journal_unavailable'
++  journal_unavailable: 'journal_unavailable',
++  hash_algorithm_mismatch: 'hash_algorithm_mismatch'
+ } as const
+ 
+ export type ChannelErrorCode =
+--- docs/04_audit/evidence/AAA/AAA-12/rework-canonicalization/before/effect-journal.ts	2026-09-12 18:49:53.582171351 -0300
++++ packages/channel-gateway/src/effect-journal.ts	2026-09-12 18:50:55.467049720 -0300
+@@ -1,10 +1,19 @@
+ import { createHash } from 'node:crypto'
++import { canonicalizeJson } from '@cvg/shared'
+ import type { CanonicalOutboundMessage, OutboundResult } from './contracts.ts'
+ import { ChannelError, type ChannelErrorCode } from './errors.ts'
+ 
+ export const CHANNEL_OPERATION_KIND = 'outbound_message' as const
+ export type ChannelOperationKind = typeof CHANNEL_OPERATION_KIND
+ 
++export const LEGACY_HASH_VERSION = 'legacy-local-v1'
++export const SHARED_HASH_VERSION = 'shared-rfc8785-subset-v1'
++export const CURRENT_HASH_VERSION = SHARED_HASH_VERSION
++
++export function isSupportedHashVersion(version: string): boolean {
++  return version === LEGACY_HASH_VERSION || version === SHARED_HASH_VERSION
++}
++
+ export interface ChannelEffectIdentity {
+   tenantId: string
+   channel: string
+@@ -23,6 +32,7 @@
+ export interface ChannelEffectRecord {
+   identity: ChannelEffectIdentity
+   payloadHash: string
++  hashVersion: string
+   state: ChannelEffectState
+   attempt: number
+   leaseOwner: string | null
+@@ -39,10 +49,12 @@
+   | { outcome: 'in_flight'; record: ChannelEffectRecord }
+   | { outcome: 'conflict'; record: ChannelEffectRecord }
+   | { outcome: 'uncertain'; record: ChannelEffectRecord }
++  | { outcome: 'version_mismatch' }
+ 
+ export interface ChannelEffectReserveInput {
+   identity: ChannelEffectIdentity
+   payloadHash: string
++  hashVersion: string
+   leaseOwner: string
+   leaseMs: number
+ }
+@@ -132,6 +144,7 @@
+   return {
+     identity: { ...input.identity },
+     payloadHash: input.payloadHash,
++    hashVersion: input.hashVersion,
+     state: 'PENDING',
+     attempt: 1,
+     leaseOwner: input.leaseOwner,
+@@ -151,6 +164,7 @@
+     | 'in_flight'
+     | 'conflict'
+     | 'uncertain'
++    | 'version_mismatch'
+   record?: ChannelEffectRecord
+ }
+ 
+@@ -163,7 +177,17 @@
+   input: ChannelEffectReserveInput,
+   nowMs: number
+ ): ReserveDecision {
++  if (!isSupportedHashVersion(input.hashVersion)) {
++    return { action: 'version_mismatch' }
++  }
+   if (!existing) return { action: 'create' }
++  const existingHashVersion = existing.hashVersion ?? LEGACY_HASH_VERSION
++  if (
++    !isSupportedHashVersion(existingHashVersion) ||
++    existingHashVersion !== input.hashVersion
++  ) {
++    return { action: 'version_mismatch' }
++  }
+   if (existing.payloadHash !== input.payloadHash) {
+     return { action: 'conflict', record: existing }
+   }
+@@ -202,19 +226,13 @@
+   return { action: 'takeover', record: takeover }
+ }
+ 
++/**
++ * @deprecated Kept for API compatibility. The single canonical source is
++ * `canonicalizeJson` from `@cvg/shared`; this wrapper delegates to it so no
++ * caller keeps the legacy integer-like key ordering.
++ */
+ export function canonicalizePayload(value: unknown): string {
+-  return JSON.stringify(normalizePayload(value))
+-}
+-
+-function normalizePayload(value: unknown): unknown {
+-  if (value === null || typeof value !== 'object') return value
+-  if (Array.isArray(value)) return value.map((item) => normalizePayload(item))
+-  const entries = Object.entries(value as Record<string, unknown>)
+-    .filter(([, entry]) => entry !== undefined)
+-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+-  return Object.fromEntries(
+-    entries.map(([key, entry]) => [key, normalizePayload(entry)])
+-  )
++  return canonicalizeJson(value)
+ }
+ 
+ export type OutboundPayloadHashInput = Pick<
+@@ -233,7 +251,7 @@
+  * a different operation.
+  */
+ export function hashOutboundPayload(message: OutboundPayloadHashInput): string {
+-  const canonical = canonicalizePayload({
++  const canonical = canonicalizeJson({
+     conversationId: message.conversationId,
+     channel: message.channel,
+     recipient: message.recipient,
+@@ -272,6 +290,9 @@
+     const now = this.#clock()
+     const existing = this.#entries.get(key)
+     const decision = decideReserve(existing, input, now)
++    if (decision.action === 'version_mismatch') {
++      return { outcome: 'version_mismatch' }
++    }
+     if (decision.action === 'create') {
+       const created = createEffectRecord(input, now)
+       this.#entries.set(key, created)
+--- docs/04_audit/evidence/AAA/AAA-12/rework-canonicalization/before/effect-journal-file.ts	2026-09-12 18:49:53.582238607 -0300
++++ packages/channel-gateway/src/effect-journal-file.ts	2026-09-12 18:51:13.338904216 -0300
+@@ -12,12 +12,14 @@
+ import type { OutboundResult } from './contracts.ts'
+ import { ChannelError, type ChannelErrorCode } from './errors.ts'
+ import {
++  LEGACY_HASH_VERSION,
+   channelEffectHasActiveLease,
+   channelEffectKey,
+   cloneEffectRecord,
+   createEffectRecord,
+   decideReserve,
+   delay,
++  isSupportedHashVersion,
+   isTerminalForWaiter,
+   type ChannelEffectIdentity,
+   type ChannelEffectJournal,
+@@ -69,6 +71,9 @@
+   async reserve(
+     input: ChannelEffectReserveInput
+   ): Promise<ChannelEffectReserveOutcome> {
++    if (!isSupportedHashVersion(input.hashVersion)) {
++      return { outcome: 'version_mismatch' }
++    }
+     await mkdir(this.#directory, { recursive: true })
+     const key = channelEffectKey(input.identity)
+     const created = createEffectRecord(input, this.#clock())
+@@ -78,6 +83,9 @@
+     return this.#withLock(key, async () => {
+       const existing = await this.#readRecord(key)
+       const decision = decideReserve(existing, input, this.#clock())
++      if (decision.action === 'version_mismatch') {
++        return { outcome: 'version_mismatch' }
++      }
+       if (decision.action === 'create') {
+         const record = createEffectRecord(input, this.#clock())
+         await this.#writeRecord(key, record)
+@@ -340,6 +348,11 @@
+       ) {
+         throw new Error('invalid channel effect record')
+       }
++      // Legacy records persisted before hash versioning are read as the
++      // legacy algorithm. The file is never rewritten on read.
++      if (typeof parsed.hashVersion !== 'string' || parsed.hashVersion === '') {
++        parsed.hashVersion = LEGACY_HASH_VERSION
++      }
+       return parsed
+     } catch (error) {
+       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+--- docs/04_audit/evidence/AAA/AAA-12/rework-canonicalization/before/gateway.ts	2026-09-12 18:49:53.582301023 -0300
++++ packages/channel-gateway/src/gateway.ts	2026-09-12 18:51:25.098808233 -0300
+@@ -13,6 +13,7 @@
+ import { ChannelError } from './errors.ts'
+ import {
+   CHANNEL_OPERATION_KIND,
++  CURRENT_HASH_VERSION,
+   InMemoryChannelEffectJournal,
+   hashOutboundPayload,
+   type ChannelEffectIdentity,
+@@ -201,10 +202,18 @@
+     const reservation = await this.#effects.reserve({
+       identity,
+       payloadHash: hashOutboundPayload(outbound),
++      hashVersion: CURRENT_HASH_VERSION,
+       leaseOwner,
+       leaseMs: this.#leaseMs
+     })
+ 
++    if (reservation.outcome === 'version_mismatch') {
++      throw new ChannelError(
++        'hash_algorithm_mismatch',
++        'Channel operation was persisted with a different hash algorithm version',
++        false
++      )
++    }
+     if (reservation.outcome === 'conflict') {
+       throw new ChannelError(
+         'idempotency_key_reuse',

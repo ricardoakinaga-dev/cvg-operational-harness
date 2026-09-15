@@ -1,6 +1,9 @@
-# Documentacao de construcao — cvg-agent-secretary-v2
+# CVG Operational Harness — documentação operacional
 
-Este diretorio contem a documentacao operacional para construir a Esmeralda V2, a `cvg-agent-secretary-v2`.
+Este diretório contém a documentação operacional do `cvg-operational-harness`.
+O repositório é uma refoundation controlada originada em
+`cvg-agent-secretary-v2`; referências históricas preservam a proveniência e o
+produto legado, conforme `docs/refoundation/BROWNFIELD_ORIGIN.md`.
 
 A fonte de verdade inicial e `BRIEFING/Blueprint — cvg-agent-secretary-v2`. Os demais arquivos de `BRIEFING/00...08` definem o processo CVG usado para transformar o blueprint em Discovery, PRD, SPEC, Build, Audit, loop operacional, skills, regras de agente e runtime.
 

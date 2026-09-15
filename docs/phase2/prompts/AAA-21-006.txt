@@ -1,0 +1,1129 @@
+ABLE EXECUTION SPINE & CANONICAL RUNTIME COMPOSITION — AAA-21
+
+Trabalhe diretamente sobre o candidato atual do CVG Operational Harness.
+
+Use a auditoria anterior e os artefatos da Phase 0/1 como evidência histórica,
+não como verdade absoluta.
+
+Inspecione o código real antes de decidir.
+
+Preserve o trabalho brownfield válido.
+
+Não faça reset destrutivo.
+
+Não descarte mudanças existentes.
+
+Não modifique o repositório original cvg-agent-secretary-v2.
+
+Implemente somente dentro desta cópia destinada ao:
+
+CVG Operational Harness.
+
+---
+
+# 276. WORK EXECUTION STRATEGY
+
+Antes de implementar, produza internamente um plano de execução.
+
+Divida o trabalho em lanes não sobrepostas sempre que possível:
+
+LANE A — Architecture / Contracts
+LANE B — Persistence / Migrations
+LANE C — HTTP Ingestion
+LANE D — Worker / Claim / Lease
+LANE E — Runtime Composition
+LANE F — Effect Journal / Idempotency
+LANE G — Approval / Resume
+LANE H — Audit / Telemetry
+LANE I — Integration Tests / Fault Injection
+LANE J — Security / Critic / Evidence
+
+Não permita que múltiplos builders alterem os mesmos arquivos sem coordenação.
+
+Se utilizar subagentes:
+
+- defina ownership explícito;
+- defina arquivos permitidos;
+- exija relatório de mudanças;
+- integre somente após revisão.
+
+---
+
+# 277. SCOUT BEFORE BUILD
+
+Antes de alterar cada subsistema crítico, faça reconnaissance do código real.
+
+Especialmente:
+
+- persistence atual;
+- outbox atual;
+- worker atual;
+- Runtime V1;
+- approval engine;
+- effect journal;
+- audit;
+- telemetry;
+- Model Gateway;
+- API server;
+- existing migrations.
+
+Não reconstrua uma solução paralela quando já houver uma implementação
+adequada.
+
+Regra:
+
+REUSE
+→ ADAPT
+→ EXTRACT
+→ ONLY THEN CREATE NEW.
+
+---
+
+# 278. NO DUPLICATE SUBSYSTEMS
+
+Não termine a Phase com:
+
+old outbox + new outbox
+old execution state + new execution state
+old approval lifecycle + new approval lifecycle
+old effect journal + new effect journal
+
+sem uma decisão explícita.
+
+Se coexistência temporária for inevitável:
+
+declare:
+
+CANONICAL
+LEGACY
+DEPRECATED
+
+e adicione migration/removal plan.
+
+---
+
+# 279. CANONICAL AUTHORITY MAP
+
+Ao final deve existir apenas uma autoridade canônica para cada responsabilidade:
+
+Execution state
+→ one authority
+
+Queue/outbox
+→ one canonical mechanism
+
+Worker claim
+→ one mechanism
+
+Policy
+→ one authority
+
+Approval
+→ one authority
+
+Tool execution
+→ one governed path
+
+Model access
+→ one Model Gateway
+
+Audit
+→ one canonical evidence path.
+
+Evite arquitetura ambígua.
+
+---
+
+# 280. MIGRATION-FIRST DISCIPLINE
+
+Quando persistence mudar:
+
+1. definir schema;
+2. definir invariants;
+3. criar migration;
+4. testar migration;
+5. implementar repository;
+6. implementar service;
+7. integrar Worker;
+8. integrar HTTP.
+
+Não começar pela rota HTTP e improvisar persistence depois.
+
+---
+
+# 281. CONTRACT-FIRST DISCIPLINE
+
+Quando boundary pública mudar:
+
+1. definir contrato;
+2. validar compatibilidade;
+3. escrever teste;
+4. implementar;
+5. integrar.
+
+Evite espalhar objetos ad hoc entre layers.
+
+---
+
+# 282. FAILURE-FIRST DISCIPLINE
+
+Para cada novo fluxo crítico, desenhe primeiro:
+
+happy path
+failure before effect
+failure after effect
+duplicate
+restart
+concurrency.
+
+Só considerar o fluxo concluído depois desses casos.
+
+---
+
+# 283. CRASH BEFORE OPTIMIZATION
+
+Prioridade:
+
+correctness
+→ durability
+→ recoverability
+→ observability
+→ performance.
+
+Não sacrifique garantia de execução para reduzir alguns milissegundos nesta fase.
+
+---
+
+# 284. DATABASE CONSTRAINTS AS DEFENSE
+
+Sempre que uma invariância crítica puder ser reforçada corretamente no banco,
+considere fazê-lo.
+
+Exemplos:
+
+unique tenant/idempotency scope
+unique effect identity
+valid foreign keys
+version constraints.
+
+Aplicação + DB devem se complementar.
+
+---
+
+# 285. DO NOT HOLD DATABASE TRANSACTION ACROSS LLM
+
+Não mantenha uma transaction SQL aberta enquanto:
+
+Model Gateway aguarda provider
+
+ou:
+
+Tool externa aguarda rede
+
+salvo justificativa arquitetural extraordinária e documentada.
+
+Use state transitions + leases + journal.
+
+---
+
+# 286. EFFECT EXECUTION PROTOCOL
+
+Para side effect governado, modele explicitamente um protocolo seguro.
+
+Exemplo conceitual:
+
+1. validate tool invocation
+2. authorize
+3. bind approval if required
+4. create/claim effect journal entry
+5. execute with idempotency identity
+6. record external reference/result
+7. mark effect completed
+8. persist runtime outcome
+9. audit causal events.
+
+Considere falha em cada fronteira.
+
+---
+
+# 287. SIDE EFFECT AUTHORITY
+
+Somente o componente governado de Tool Execution pode iniciar side effect.
+
+Persistence não executa efeito.
+
+Worker não executa efeito.
+
+Orchestrator não executa efeito.
+
+Model não executa efeito.
+
+HTTP não executa efeito.
+
+---
+
+# 288. TOOL EXECUTOR CONTRACT
+
+Se necessário, formalize:
+
+ToolExecutor.execute(invocation)
+
+com:
+
+execution identity
+tenant
+tool identity/version
+validated payload
+authorization evidence
+idempotency identity
+deadline/abort context
+trace context.
+
+Não passe objeto gigante com dependências internas arbitrárias.
+
+---
+
+# 289. TOOL RESULT CONTRACT
+
+ToolResult deve distinguir, quando necessário:
+
+SUCCESS
+FAILED
+OUTCOME_UNKNOWN
+
+e fornecer:
+
+safe output
+external reference
+effect metadata.
+
+Não force Tool a fingir certeza que não possui.
+
+---
+
+# 290. EFFECT JOURNAL STATE MACHINE
+
+Formalize estados conceituais como:
+
+PREPARED
+IN_FLIGHT
+SUCCEEDED
+FAILED
+UNKNOWN
+
+ou equivalentes.
+
+Defina transições válidas.
+
+Teste:
+
+duplicate start
+duplicate completion
+unknown recovery
+terminal immutability.
+
+---
+
+# 291. IDEMPOTENCY LAYERS
+
+Documente as diferentes idempotências:
+
+REQUEST IDEMPOTENCY
+→ evita duplicar execution.
+
+EVENT IDEMPOTENCY
+→ evita processar mensagem durável duas vezes semanticamente.
+
+TOOL/EFFECT IDEMPOTENCY
+→ evita duplicar side effect.
+
+APPROVAL IDEMPOTENCY
+→ evita consumir aprovação repetidamente.
+
+Não trate uma única idempotency key como solução universal.
+
+---
+
+# 292. EXECUTION ATTEMPT IDENTITY
+
+Cada retry técnico deve poder ser distinguido.
+
+Considere:
+
+executionId
++
+attemptNumber
+
+ou:
+
+attemptId.
+
+Audit deve conseguir mostrar:
+
+Execution X
+Attempt 1 failed
+Attempt 2 succeeded.
+
+---
+
+# 293. CLAIM IDENTITY
+
+Claim deve possuir identidade suficiente para detectar Worker antigo.
+
+Exemplo:
+
+claimId
+workerId
+leaseVersion.
+
+Não confie apenas em:
+
+state = RUNNING.
+
+---
+
+# 294. WORKER IDENTITY
+
+Cada Worker process deve possuir identificador efêmero único.
+
+Use para:
+
+claims
+logs
+telemetry
+debugging.
+
+Não use hostname sozinho como garantia de unicidade.
+
+---
+
+# 295. WORKER PROCESS MODEL
+
+Documente se Worker:
+
+polls continuously
+processes one
+processes batch
+uses concurrency pool.
+
+Escolha modelo simples e previsível.
+
+---
+
+# 296. POLLING STRATEGY
+
+Se usar PostgreSQL polling:
+
+- bounded interval;
+- backoff quando vazio;
+- shutdown-aware;
+- não busy-loop.
+
+Se infraestrutura existente tiver mecanismo melhor, preserve.
+
+---
+
+# 297. QUEUE VISIBILITY
+
+Deve ser possível obter ao menos operacionalmente:
+
+queued count
+running count
+retryable count
+waiting approval count
+failed count.
+
+Não precisa criar UI.
+
+Query/metric é suficiente.
+
+---
+
+# 298. STUCK EXECUTION DETECTION
+
+Defina critério para detectar:
+
+RUNNING além do lease/deadline esperado.
+
+Não deixe "RUNNING para sempre" sem mecanismo de identificação.
+
+---
+
+# 299. STUCK EXECUTION RECOVERY
+
+Determine:
+
+reclaim
+fail
+quarantine
+
+dependendo de estado/effect uncertainty.
+
+Não requeue cegamente.
+
+---
+
+# 300. APPROVAL IS A DURABLE EVENT
+
+Approval não deve existir apenas em memória ou request context.
+
+Deve ser persistida com:
+
+approvalId
+tenant
+execution/proposal binding
+decision
+actor
+timestamp
+version/context
+consumed state.
+
+Reutilize engine existente.
+
+---
+
+# 301. APPROVAL CONSUMPTION ATOMICITY
+
+Dois Workers não podem consumir a mesma approval para efeitos independentes.
+
+Prove concorrência.
+
+---
+
+# 302. HUMAN DECISION AUDIT
+
+Registre:
+
+quem aprovou
+o que aprovou
+quando
+qual payload/hash
+qual policy
+qual execution.
+
+Não registrar apenas:
+
+approved=true.
+
+---
+
+# 303. POLICY DECISION SNAPSHOT
+
+Audit deve preservar decisão relevante:
+
+policyId
+policyVersion
+decision
+reason/code
+
+sem depender apenas da policy atual para explicar o passado.
+
+---
+
+# 304. MODEL DECISION IS NOT AUDIT AUTHORITY
+
+Não armazene raciocínio privado/chain-of-thought como requisito de auditoria.
+
+Audite:
+
+model selected
+structured proposal
+tool requested
+result metadata
+
+quando necessário.
+
+Não tente auditar "pensamentos internos".
+
+---
+
+# 305. STRUCTURED PROPOSAL
+
+Quando Model propuser ação:
+
+use estrutura validada.
+
+Exemplo conceitual:
+
+{
+  "type": "tool_request",
+  "tool": "...",
+  "arguments": {...}
+}
+
+Não extraia ação crítica apenas de texto livre via regex.
+
+---
+
+# 306. RESPONSE-ONLY PATH
+
+Runtime V1 também deve suportar execução que termina sem Tool.
+
+Exemplo sintético:
+
+input
+→ model
+→ response
+→ SUCCEEDED.
+
+Não obrigue toda execution a produzir efeito.
+
+---
+
+# 307. POLICY-ONLY PATH
+
+Teste execução negada antes de Model/Tool quando policy puder decidir cedo.
+
+Objetivo:
+
+não gastar Model call desnecessária.
+
+Mas preserve semântica existente.
+
+---
+
+# 308. APPROVAL-BEFORE-MODEL VS AFTER-MODEL
+
+Analise ordem real.
+
+Algumas approvals podem depender de proposal produzido pelo Model.
+
+Outras podem ser determinadas pela capability antes.
+
+Não force um único padrão inadequado.
+
+Documente pipeline real.
+
+---
+
+# 309. MODEL CALL IDEMPOTENCY
+
+Não é necessário que retry produza texto idêntico em providers reais.
+
+A durabilidade deve depender de:
+
+state
+tool/effect idempotency
+proposal binding
+
+e não de determinismo textual do LLM.
+
+---
+
+# 310. MODEL RESULT PERSISTENCE
+
+Avalie quanto do ModelResult precisa ser persistido para:
+
+resume
+audit
+debug
+cost.
+
+Não persista conteúdo excessivo sem necessidade.
+
+---
+
+# 311. TOOL RESULT PERSISTENCE
+
+Persistir o necessário para:
+
+runtime outcome
+audit
+reconciliation
+resume.
+
+Não transformar execution table em blob arbitrário.
+
+---
+
+# 312. LARGE PAYLOAD STRATEGY
+
+Se outputs puderem crescer futuramente:
+
+documente estratégia de references/blob storage.
+
+Não precisa implementar nesta Phase se fixtures forem pequenas.
+
+---
+
+# 313. DATABASE INDEX REVIEW
+
+Adicione índices apenas para caminhos reais:
+
+tenant + execution
+state + available_at
+lease expiration
+idempotency lookup
+effect lookup.
+
+Não indexe tudo indiscriminadamente.
+
+---
+
+# 314. QUERY PLAN SANITY
+
+Para queries críticas de claim/idempotency, faça sanity check quando PostgreSQL
+real estiver disponível.
+
+Não precisa micro-otimizar.
+
+Evite full table scan óbvio em queue crítica.
+
+---
+
+# 315. WORKER CLAIM ORDER
+
+Defina ordenação previsível:
+
+available_at
+created_at
+
+ou equivalente.
+
+Documente.
+
+---
+
+# 316. RETRY SCHEDULING
+
+FAILED_RETRYABLE deve possuir:
+
+nextAttemptAt
+
+ou mecanismo equivalente.
+
+Worker não deve retry imediatamente em loop apertado.
+
+---
+
+# 317. RETRY BACKOFF TEST
+
+Use clock control.
+
+Prove:
+
+failure
+→ not claimable before nextAttemptAt
+→ claimable after.
+
+---
+
+# 318. MAX ATTEMPTS TEST
+
+Prove:
+
+attempt N exceeds limit
+→ terminal/quarantine
+→ no further automatic claim.
+
+---
+
+# 319. TERMINAL ERROR PRESERVATION
+
+Preserve último erro seguro e classificação.
+
+Não sobrescreva causa original com erro secundário de cleanup sem necessidade.
+
+---
+
+# 320. MULTIPLE FAILURE CAUSALITY
+
+Quando:
+
+Tool fails
+e depois
+Audit also fails,
+
+preserve primary failure + secondary operational failure.
+
+Não perca causalidade.
+
+---
+
+# 321. CLEANUP FAILURE
+
+Cleanup failure não deve mascarar resultado principal.
+
+Registre separadamente.
+
+---
+
+# 322. AUDIT ORDER TEST
+
+Teste causalidade mínima:
+
+received < queued < claimed < started < ... < terminal
+
+usando sequence/timestamp confiável.
+
+Não dependa somente de timestamps com mesma resolução se já houver sequence.
+
+---
+
+# 323. HASH-CHAIN CONCURRENCY
+
+Se audit ledger hash-chain for compartilhado, avalie concorrência.
+
+Dois Workers escrevendo audit não podem quebrar chain silenciosamente.
+
+Se chain for por tenant/execution, documente.
+
+Teste quando relevante.
+
+---
+
+# 324. TELEMETRY CORRELATION
+
+Metrics não devem usar executionId como label.
+
+Traces/logs podem carregar executionId como atributo contextual quando seguro.
+
+---
+
+# 325. TRACE CONTINUITY ACROSS QUEUE
+
+Como HTTP e Worker são separados temporalmente:
+
+preserve correlação.
+
+Não é obrigatório manter exatamente o mesmo span aberto.
+
+Use trace linking/parent context quando suportado.
+
+Documente.
+
+---
+
+# 326. OPEN TELEMETRY READINESS
+
+Se observability atual já usa conceitos compatíveis com OTel, preserve.
+
+Não introduza SDK OTel completo se não necessário.
+
+Mas não crie formato que impeça futura adoção.
+
+---
+
+# 327. ERROR METRIC CARDINALITY
+
+Use códigos normalizados.
+
+Não use `error.message` como metric label.
+
+---
+
+# 328. AUDIT RETENTION VS TELEMETRY RETENTION
+
+Documente que são independentes.
+
+Audit pode exigir retenção longa.
+
+Telemetry geralmente não.
+
+---
+
+# 329. PRIVACY REVIEW
+
+Mesmo sendo infraestrutura interna, documente onde futuramente poderão entrar:
+
+dados pessoais
+dados clínicos
+mensagens.
+
+Defina redaction boundaries antes de produção.
+
+---
+
+# 330. LGPD READINESS
+
+Não declare conformidade LGPD completa.
+
+Apenas avalie architectural readiness:
+
+data minimization
+tenant isolation
+audit
+retention hooks
+access control
+redaction.
+
+Produza seção específica no Security Review.
+
+---
+
+# 331. TEST FOR SECRET LEAK
+
+Use fixture:
+
+"super-secret-test-value"
+
+em campo marcado sensível.
+
+Depois pesquise:
+
+logs
+audit
+telemetry
+test artifacts.
+
+Critério:
+
+não aparecer onde não deveria.
+
+---
+
+# 332. ARTIFACT SANITIZATION
+
+Evidence bundle não deve conter:
+
+credentials
+connection strings com password
+tokens
+real personal data.
+
+Adicione scanner simples quando útil.
+
+---
+
+# 333. DEPENDENCY SECURITY
+
+Execute:
+
+npm audit --audit-level=high
+
+ou gate existente.
+
+Classifique findings.
+
+Não faça upgrade massivo destrutivo apenas para zerar audit sem análise.
+
+---
+
+# 334. SBOM
+
+Se scripts existentes suportarem:
+
+gere SBOM do candidato Phase 2.
+
+Registre digest.
+
+Não é blocker central se tooling estiver indisponível, salvo política existente.
+
+---
+
+# 335. LICENSE CHECK
+
+Preserve gate existente.
+
+---
+
+# 336. BUILD REPRODUCIBILITY
+
+Execute build limpo quando possível.
+
+Verifique que não depende de arquivos locais não versionados de forma acidental.
+
+Como worktree está propositalmente dirty, diferencie:
+
+expected working candidate changes
+
+de:
+
+undeclared local dependency.
+
+---
+
+# 337. WORKSPACE EXPORTS
+
+Valide novamente exports públicos dos novos packages:
+
+@cvg/harness-contracts
+@cvg/harness-orchestrator
+@cvg/harness
+
+e packages Phase 2 relevantes.
+
+---
+
+# 338. PACKAGE CYCLE CHECK
+
+Detecte dependency cycles críticos.
+
+Especialmente:
+
+harness ↔ worker
+runtime ↔ product
+contracts ↔ implementation
+policy ↔ tool implementation.
+
+Corrija cycles arquiteturais.
+
+---
+
+# 339. PUBLIC API STABILITY
+
+Não exponha SQL models como API pública do Harness sem necessidade.
+
+Consumers devem depender de contratos conceituais.
+
+---
+
+# 340. INTERNAL API
+
+Use internal modules para detalhes:
+
+lease
+SQL row mapping
+outbox persistence.
+
+Não transforme tudo em export público.
+
+---
+
+# 341. DOCUMENTED EXTENSION POINTS
+
+Ao final documente apenas extension points realmente suportados:
+
+Model Provider Adapter
+Tool
+Policy Provider se aplicável
+Audit Sink
+Telemetry Sink
+Persistence implementation se realmente abstrata.
+
+Não prometa plugin architecture inexistente.
+
+---
+
+# 342. DEMO EXECUTION
+
+Crie um comando/script reproduzível para demonstração local.
+
+Exemplo conceitual:
+
+npm run demo:phase2
+
+Ele deve:
+
+- subir/usar ambiente de teste;
+- submeter execução sintética;
+- processar;
+- mostrar executionId;
+- mostrar terminal state;
+- mostrar effect count;
+- mostrar audit verification.
+
+Se exigir PostgreSQL, documente pré-requisito.
+
+---
+
+# 343. DEMO MUST USE PUBLIC PATH
+
+O demo não pode chamar Runtime diretamente.
+
+Deve usar a execution spine canônica.
+
+---
+
+# 344. ONE-COMMAND VERIFICATION
+
+Quando viável crie:
+
+npm run verify:phase2
+
+que execute os gates relevantes em ordem segura.
+
+Não esconda falhas baseline.
+
+O script deve produzir exit code não-zero em blocker Phase 2.
+
+---
+
+# 345. PHASE 2 CRITICAL TEST CATALOG
+
+Crie:
+
+docs/phase2/CRITICAL_TEST_CATALOG.md
+
+Liste cada teste crítico e o invariant protegido.
+
+Exemplo:
+
+P2-IDEMP-001
+Invariant:
+same tenant + idempotency key cannot create duplicate semantic execution.
+
+P2-LEASE-001
+Invariant:
+stale worker cannot commit after lease loss.
+
+P2-EFFECT-001
+Invariant:
+crash after side effect does not cause duplicate effect.
+
+---
+
+# 346. TEST NAMING
+
+Use IDs estáveis para cenários críticos.
+
+Isso facilitará certificação futura.
+
+---
+
+# 347. EVIDENCE GRAPH
+
+Crie um grafo simples:
+
+requirement
+→ implementation
+→ test
+→ evidence
+→ conclusion.
+
+Não precisa ferramenta sofisticada.
+
+JSON/Markdown é suficiente.
+
+Produza:
+
+docs/phase2/EVIDENCE_GRAPH.md
+docs/phase2/EVIDENCE_GRAPH.json
+
+---
+
+# 348. NO SELF-CERTIFICATION WITHOUT EVIDENCE
+
+Implementação concluída não significa certificação concluída.
+
+A Phase só termina após:
+
+implementation
+→ tests
+→ fault injection
+→ evidence
+→ independent critic
+→ repair if needed
+→ final sentinel.
+
+---
+
+# 349. INDEPENDENT CRITIC MUST SEE RAW RESULTS
+
+Não dê ao crítico apenas o Executive Summary.
+
+Forneça:
+
+test outputs
+evidence manifests
+critical source paths
+migration info
+failure results.
+
+Ele deve poder contestar conclusões.
+
+---
+
+# 350. FINAL CRITIC ADVERSARIAL CASES
+
+Além das perguntas anteriores, o crítico deve

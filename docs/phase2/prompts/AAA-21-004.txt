@@ -1,0 +1,1177 @@
+CONDITIONAL_PASS
++
+PRODUCTION_NO_GO
+
+se as evidências ainda não forem suficientes.
+
+Não trate isso como falha da Phase.
+
+---
+
+# 151. OPERATIONAL RUNBOOK
+
+Crie:
+
+docs/phase2/OPERATIONAL_RUNBOOK.md
+
+Inclua procedimentos para:
+
+- iniciar API;
+- iniciar Worker;
+- verificar readiness;
+- consultar queue;
+- consultar execução;
+- identificar stale claims;
+- identificar retry storm;
+- identificar approval backlog;
+- identificar execution stuck;
+- parar Worker com segurança;
+- reiniciar Worker;
+- recuperar job;
+- consultar audit;
+- investigar duplicate effect;
+- verificar migrations.
+
+Use comandos reais do projeto.
+
+Não invente comandos que não existam.
+
+---
+
+# 152. INCIDENT SCENARIOS
+
+Documente resposta operacional para:
+
+1. Worker não processa queue;
+2. DB indisponível;
+3. executions presas em RUNNING;
+4. stale leases crescendo;
+5. model provider indisponível;
+6. tool falhando repetidamente;
+7. audit indisponível;
+8. duplicate effect suspeito;
+9. approval não retoma;
+10. cross-tenant anomaly.
+
+Produza:
+
+docs/phase2/INCIDENT_SCENARIOS.md
+
+---
+
+# 153. ADMINISTRATIVE RECOVERY SAFETY
+
+Se criar comandos administrativos para:
+
+requeue
+cancel
+recover stale execution
+
+eles devem:
+
+- exigir identidade administrativa;
+- produzir audit;
+- respeitar tenant;
+- não executar side effect diretamente;
+- não apagar história.
+
+Se não houver necessidade nesta Phase, apenas documente o design.
+
+---
+
+# 154. MANUAL REQUEUE
+
+Se implementado:
+
+requeue(executionId)
+
+não deve simplesmente mudar qualquer estado para QUEUED.
+
+Valide:
+
+- estado atual;
+- retryability;
+- terminality;
+- effect uncertainty;
+- lease;
+- approval.
+
+Requeue de execução com effect outcome UNKNOWN deve ser especialmente
+restrito.
+
+---
+
+# 155. RECONCILIATION BEFORE RETRY
+
+Para:
+
+EFFECT_OUTCOME_UNKNOWN
+
+o Harness não deve automaticamente repetir side effect.
+
+Fluxo desejável:
+
+unknown
+→ reconcile
+→ determine executed/not executed
+→ continue safely
+
+ou:
+
+unknown
+→ human intervention.
+
+---
+
+# 156. AUDIT TAMPER EVIDENCE
+
+Se hash-chain já existir, preserve e teste:
+
+- append order;
+- verification;
+- detection of modified event;
+- tenant boundary.
+
+Não reimplemente criptografia customizada.
+
+---
+
+# 157. AUDIT CHECKPOINT
+
+Avalie se execution terminal state deve possuir referência a:
+
+audit checkpoint
+audit chain head
+evidence digest
+
+quando já houver infraestrutura correspondente.
+
+Isso ajuda futura certificação/replay.
+
+Não force se não houver benefício real.
+
+---
+
+# 158. EVIDENCE DIGEST
+
+Gere digest machine-readable do bundle Phase 2.
+
+Exemplo:
+
+docs/phase2/evidence/EVIDENCE_MANIFEST.json
+
+Cada entrada:
+
+artifact
+sha256
+scenario
+generatedAt
+command
+result
+
+Objetivo:
+
+evitar documentação afirmar resultados de artefatos posteriormente alterados.
+
+---
+
+# 159. TEST COMMAND EVIDENCE
+
+Para gates importantes registre:
+
+command
+exit code
+duration
+timestamp
+environment
+summary.
+
+Não basta escrever:
+
+"tests passed".
+
+---
+
+# 160. ENVIRONMENT MANIFEST
+
+Crie:
+
+docs/phase2/ENVIRONMENT_MANIFEST.md
+
+Inclua, quando disponível:
+
+OS
+Node version
+npm version
+PostgreSQL version
+CPU
+RAM
+container/runtime
+relevant environment flags.
+
+Não inclua secrets.
+
+---
+
+# 161. DATABASE EVIDENCE
+
+Quando PostgreSQL real for utilizado, registre evidência de:
+
+schema version
+migration success
+transaction behavior
+claim behavior
+idempotency
+effect journal
+restart recovery.
+
+Não inclua credentials.
+
+---
+
+# 162. PERFORMANCE EVIDENCE
+
+Todo número de performance deve indicar:
+
+hardware/environment
+dataset/workload
+concurrency
+sample size
+measurement method.
+
+Não generalize benchmark local para produção.
+
+---
+
+# 163. LOAD SAFETY
+
+Load smoke deve usar apenas:
+
+synthetic agent
+synthetic tool
+synthetic tenants.
+
+Não bombardear providers externos.
+
+---
+
+# 164. RESOURCE LEAK CHECK
+
+Após testes repetidos, verifique:
+
+open DB connections
+unhandled timers
+worker loops
+event listeners
+memory growth grosseiro
+unhandled promises.
+
+Corrija leaks claros.
+
+Não transforme em profiling completo.
+
+---
+
+# 165. UNHANDLED REJECTION / EXCEPTION
+
+Worker e API não devem depender de comportamento default silencioso para:
+
+unhandledRejection
+uncaughtException.
+
+Defina política de shutdown/fatal handling apropriada.
+
+Não tente continuar processo potencialmente corrompido após erro fatal sem
+justificativa.
+
+---
+
+# 166. SIGNAL HANDLING
+
+Teste/documente:
+
+SIGTERM
+SIGINT
+
+para:
+
+API
+Worker.
+
+Objetivo:
+
+orchestrated shutdown futuro em Docker/EasyPanel/systemd/Kubernetes-like
+environments.
+
+Não implementar Kubernetes.
+
+---
+
+# 167. CLOCK SKEW
+
+Se lease/deadline dependem de timestamps distribuídos, documente pressuposto
+de clock.
+
+Como Phase 2 provavelmente usa DB + Workers no mesmo ambiente, evite
+overengineering.
+
+Quando possível, use autoridade temporal consistente.
+
+---
+
+# 168. DATABASE AS LEASE CLOCK
+
+Considere utilizar tempo do banco para lease expiration se isso reduzir
+problemas de clock skew.
+
+Não force se arquitetura existente já resolver adequadamente.
+
+Documente decisão.
+
+---
+
+# 169. RETRY STORM PROTECTION
+
+Implemente ou documente proteção contra:
+
+provider down
+→ thousands of immediate retries.
+
+Use:
+
+backoff
+jitter quando apropriado
+max attempts
+queue scheduling.
+
+Testes devem ser determinísticos.
+
+---
+
+# 170. CIRCUIT BREAKER
+
+Avalie Model Gateway/Tool provider circuit breaker.
+
+Se já existir, integrar.
+
+Se não existir e implementação ampliar demais o escopo:
+
+documentar para fase futura.
+
+Não bloquear Phase 2 desnecessariamente.
+
+---
+
+# 171. RATE LIMITING
+
+Preserve rate limiting existente onde aplicável.
+
+Diferencie:
+
+HTTP client rate limit
+
+de:
+
+worker execution concurrency
+
+de:
+
+provider rate limit.
+
+Não trate todos como a mesma coisa.
+
+---
+
+# 172. FAIRNESS
+
+Avalie risco de um tenant monopolizar Workers.
+
+Não é obrigatório implementar scheduler sofisticado.
+
+Mas documente:
+
+FIFO global?
+tenant-aware?
+priority?
+
+Se houver risco material, crie backlog futuro.
+
+---
+
+# 173. PRIORITY
+
+Não introduza prioridade complexa sem requisito.
+
+Se campo de priority existir:
+
+defina semântica.
+
+Caso contrário, deixe para fase futura.
+
+---
+
+# 174. EXECUTION DEADLINE VS TOOL TIMEOUT
+
+Diferencie:
+
+execution deadline
+
+model timeout
+
+tool timeout
+
+worker lease.
+
+Eles não são equivalentes.
+
+Um Tool não deve continuar indefinidamente além do execution deadline sem
+controle.
+
+---
+
+# 175. ABORT SIGNAL
+
+Quando stack permitir, propague cancellation/deadline através de:
+
+Runtime
+→ Model Gateway
+→ Tool execution.
+
+Use AbortSignal ou mecanismo equivalente quando adequado.
+
+Não dependa apenas de "ignorar resultado depois".
+
+---
+
+# 176. EXTERNAL EFFECT CANCELLATION
+
+Documente que nem todo side effect externo é cancelável.
+
+Se chamada já saiu:
+
+AbortSignal não garante rollback.
+
+Preserve effect journal/idempotency.
+
+---
+
+# 177. RESPONSE CONTRACT
+
+GET execution deve diferenciar claramente:
+
+queued
+running
+waiting
+succeeded
+failed.
+
+Não retorne HTTP 500 simplesmente porque a execution terminou com
+business/policy failure.
+
+O endpoint pode funcionar corretamente enquanto a execution está FAILED.
+
+---
+
+# 178. API ERROR VS EXECUTION ERROR
+
+Diferencie:
+
+API transport error
+
+de:
+
+Execution outcome.
+
+Exemplo:
+
+POST inválido
+→ HTTP 400.
+
+Execution aceita e depois policy DENY
+→ POST 202;
+→ GET execution mostra POLICY_DENIED.
+
+Não misture.
+
+---
+
+# 179. APPROVAL API BOUNDARY
+
+Se approval endpoint existir, preserve:
+
+authentication
+authorization
+tenant
+proposal binding
+decision note
+idempotency
+audit.
+
+Não aceite:
+
+approve(executionId=true)
+
+sem verificar a proposta específica.
+
+---
+
+# 180. EXECUTION ACCESS CONTROL
+
+GET execution deve verificar:
+
+tenant
+operator permissions
+
+quando aplicável.
+
+Não confie apenas em UUID não adivinhável.
+
+---
+
+# 181. ENUMERATION RESISTANCE
+
+Evite endpoints que permitam enumerar execuções de outros tenants.
+
+Teste IDOR.
+
+---
+
+# 182. QUERY PAGINATION
+
+Se houver listagem de executions:
+
+use paginação bounded.
+
+Não retornar tabela inteira.
+
+Não é foco principal, mas preserve padrões existentes.
+
+---
+
+# 183. PAYLOAD SIZE LIMIT
+
+HTTP ingestion deve possuir limite razoável.
+
+Não permitir request arbitrariamente gigante consumir memória.
+
+Preserve/implemente boundary.
+
+---
+
+# 184. STRUCTURED VALIDATION
+
+Use schema validation na fronteira.
+
+Não deixe payload raw chegar ao Runtime.
+
+Preferir Zod/contratos já usados no projeto.
+
+---
+
+# 185. MODEL OUTPUT VALIDATION
+
+Structured output do modelo deve ser validado antes de virar Tool payload.
+
+INVALID_STRUCTURED_OUTPUT:
+
+não pode executar Tool.
+
+Teste.
+
+---
+
+# 186. TOOL INPUT VALIDATION
+
+Mesmo depois da validação do Model output:
+
+Tool deve possuir input schema próprio.
+
+Defesa em profundidade.
+
+---
+
+# 187. TOOL OUTPUT VALIDATION
+
+Quando útil, valide output estruturado da Tool antes de devolver ao Runtime.
+
+Não aceite retorno arbitrário quando contrato exige estrutura.
+
+---
+
+# 188. TRUST BOUNDARIES
+
+Trate como untrusted:
+
+HTTP input
+model output
+external tool response
+provider response
+future RAG content.
+
+Não assuma que output de LLM é confiável porque veio do Model Gateway.
+
+---
+
+# 189. PROMPT INJECTION SCOPE
+
+Phase 2 não precisa resolver Agentic RAG injection.
+
+Mas preserve princípio:
+
+model output cannot grant itself permissions.
+
+Policy authority permanece externa ao modelo.
+
+---
+
+# 190. AUTHORITY MODEL
+
+Documente claramente:
+
+LLM proposes.
+
+Orchestrator selects next logical step.
+
+Policy authorizes.
+
+Approval authorizes human-gated actions.
+
+Runtime enforces.
+
+Tool executes.
+
+Persistence records.
+
+Audit proves.
+
+Telemetry observes.
+
+Essa frase deve constar em:
+
+docs/architecture/AUTHORITY_MODEL.md
+
+---
+
+# 191. IMPORTANT ARCHITECTURAL INVARIANT
+
+A inteligência probabilística nunca deve ser a autoridade final de
+autorização.
+
+Ou seja:
+
+LLM:
+"quero executar tool X"
+
+não equivale a:
+
+Tool X pode executar.
+
+Sempre:
+
+proposal
+→ governance
+→ execution.
+
+---
+
+# 192. PHASE 2 SUCCESS PATH
+
+Ao final, deve ser possível demonstrar ao menos:
+
+Client
+  ↓
+POST /execution
+  ↓
+202 + executionId
+  ↓
+PostgreSQL
+  ↓
+durable queue
+  ↓
+Worker
+  ↓
+Harness public API
+  ↓
+Runtime V1
+  ↓
+Policy
+  ↓
+Model Gateway
+  ↓
+Synthetic Tool
+  ↓
+Effect Journal
+  ↓
+Audit
+  ↓
+Telemetry
+  ↓
+SUCCEEDED
+  ↓
+GET /execution
+  ↓
+durable result.
+
+---
+
+# 193. PHASE 2 FAILURE PATH
+
+Também demonstrar:
+
+Client
+ ↓
+submit
+ ↓
+worker
+ ↓
+runtime
+ ↓
+failure
+ ↓
+classification
+ ↓
+retry OR pause OR terminal
+ ↓
+durable state
+ ↓
+audit evidence.
+
+Falha é parte do produto.
+
+Não apenas happy path.
+
+---
+
+# 194. PHASE 2 CRASH PATH
+
+Demonstrar:
+
+submit
+ ↓
+persist
+ ↓
+worker
+ ↓
+effect
+ ↓
+CRASH
+ ↓
+restart
+ ↓
+recovery
+ ↓
+no duplicate semantic effect
+ ↓
+completion/reconciliation.
+
+Essa é uma das provas mais importantes da Phase.
+
+---
+
+# 195. PHASE 2 APPROVAL PATH
+
+Demonstrar:
+
+submit
+ ↓
+runtime
+ ↓
+approval required
+ ↓
+WAITING_APPROVAL
+ ↓
+all processes may stop
+ ↓
+approval later
+ ↓
+new worker
+ ↓
+resume
+ ↓
+effect
+ ↓
+SUCCEEDED.
+
+---
+
+# 196. MACHINE-READABLE CERTIFICATION
+
+Produza:
+
+docs/phase2/PHASE_2_RESULT.json
+
+Estrutura mínima:
+
+{
+  "phase": "2",
+  "candidate": {
+    "base_commit": "",
+    "head": "",
+    "worktree_dirty": true
+  },
+  "status": "PASS|CONDITIONAL_PASS|FAIL",
+  "production": "GO|NO_GO",
+  "durability_level": "D0|D1|D2|D3|D4|D5",
+  "canonical_path": {
+    "http": false,
+    "persistence": false,
+    "queue": false,
+    "worker": false,
+    "harness": false,
+    "runtime": false,
+    "policy": false,
+    "model_gateway": false,
+    "tool": false,
+    "effect_journal": false,
+    "audit": false,
+    "telemetry": false
+  },
+  "proofs": {
+    "happy_path": false,
+    "duplicate_request": false,
+    "concurrent_workers": false,
+    "worker_restart": false,
+    "approval_resume": false,
+    "policy_denied": false,
+    "tool_effect_crash": false,
+    "tenant_isolation": false
+  },
+  "new_regressions": [],
+  "baseline_debt": [],
+  "blockers": [],
+  "next_phase": ""
+}
+
+Valide o JSON.
+
+---
+
+# 197. SCORECARD
+
+Dê nota 0–10 para:
+
+Canonical Composition
+HTTP Boundary
+Durable Persistence
+Queue/Outbox
+Worker Architecture
+Claim Safety
+Lease/Fencing
+Idempotency
+Effect Safety
+Crash Recovery
+Approval Pause/Resume
+Policy Enforcement
+Runtime Integration
+Model Gateway Integration
+Tool Boundary
+Tenant Isolation
+Audit
+Telemetry
+Failure Semantics
+Operational Readiness
+Security
+Test Evidence
+Runtime V2 Readiness
+
+Cada nota deve incluir:
+
+score
+evidence
+remaining gap.
+
+---
+
+# 198. PASS CRITERIA
+
+Phase 2 só pode receber PASS se, no mínimo:
+
+- canonical HTTP path existe;
+- persistence durável existe;
+- Worker canônico existe;
+- Harness public composition é usada;
+- Runtime V1 é executado pelo Worker;
+- policy é aplicada;
+- Tool não pode bypassar governança;
+- idempotency é provada;
+- effect journal é provado;
+- approval pause/resume é provado;
+- audit é durável;
+- telemetry existe;
+- tenant isolation é provada;
+- worker restart é provado;
+- nenhuma regressão nova existe;
+- testes críticos são não-flaky;
+- PostgreSQL real participa das provas de durabilidade.
+
+Se alguns requisitos estruturais passarem mas a infraestrutura real não
+puder ser provada:
+
+CONDITIONAL_PASS.
+
+---
+
+# 199. FAIL CRITERIA
+
+Marque FAIL se ocorrer qualquer um:
+
+- efeito duplicado em cenário que deveria ser idempotente;
+- cross-tenant leakage;
+- approval bypass;
+- policy bypass;
+- lost durable work;
+- terminal state inconsistente;
+- Worker duplo produz efeito duplicado;
+- crash deixa corrupção não recuperável;
+- nova regressão crítica;
+- audit afirma evento que não ocorreu;
+- evidência fabricada/inconsistente.
+
+---
+
+# 200. PRODUCTION GO CRITERIA
+
+Não confunda Phase PASS com Production GO.
+
+Production GO exige evidência adicional de:
+
+real PostgreSQL
+backup/restore
+load
+performance
+operational runbook
+monitoring/alerting
+provider certification
+deployment certification
+security closure
+incident recovery.
+
+Se não provado:
+
+PRODUCTION = NO_GO.
+
+---
+
+# 201. INDEPENDENT CRITIC
+
+Após concluir implementação e evidências, execute revisão independente.
+
+O crítico NÃO deve ser o mesmo agente lógico responsável pela implementação,
+quando o ambiente de orchestration permitir separação.
+
+O crítico deve tentar REJEITAR o candidato.
+
+Avaliar:
+
+- evidence validity;
+- canonical path reality;
+- hidden bypasses;
+- race conditions;
+- idempotency;
+- effect uncertainty;
+- crash recovery;
+- approval resume;
+- tenant isolation;
+- false PASS claims;
+- architecture drift.
+
+Produza:
+
+docs/phase2/evidence/INDEPENDENT_CRITIC.md
+
+Resultado:
+
+APPROVE
+REJECT.
+
+---
+
+# 202. CRITIC QUESTIONS
+
+O crítico deve responder no mínimo:
+
+Q1. O HTTP realmente não executa o agente inline?
+
+Q2. O trabalho sobrevive a restart?
+
+Q3. Dois Workers podem executar o mesmo efeito?
+
+Q4. Duplicate HTTP request produz duplicate effect?
+
+Q5. Crash depois do side effect é seguro?
+
+Q6. Approval sobrevive a process restart?
+
+Q7. Policy pode ser bypassada?
+
+Q8. Tool execute vazou para Orchestrator?
+
+Q9. Model pode autorizar a própria ação?
+
+Q10. Tenant A consegue tocar estado de B?
+
+Q11. Audit corresponde à causalidade real?
+
+Q12. Existe alguma afirmação de durabilidade acima da evidência disponível?
+
+Todos devem ter:
+
+PASS
+FAIL
+NOT_PROVEN.
+
+NOT_PROVEN impede PASS final quando for requisito obrigatório.
+
+---
+
+# 203. POST-CRITIC REPAIR
+
+Se crítico retornar REJECT:
+
+não finalize.
+
+Crie:
+
+docs/phase2/evidence/CRITIC_REPAIR_PLAN.md
+
+Corrija blockers.
+
+Rode novamente:
+
+tests
+evidence generation
+critic.
+
+Não altere critérios para conseguir aprovação.
+
+---
+
+# 204. FINAL EVIDENCE SENTINEL
+
+Após aprovação do crítico:
+
+gere digest final dos artefatos críticos.
+
+Inclua:
+
+source HEAD
+test evidence
+migration evidence
+durability proof
+critic report
+PHASE_2_RESULT.json.
+
+Se qualquer artefato mudar após o digest:
+
+sentinel deve acusar mismatch.
+
+---
+
+# 205. PHASE 2 REPORT
+
+Produza:
+
+docs/phase2/PHASE_2_REPORT.md
+
+Estrutura:
+
+# Executive Summary
+
+## Candidate Identity
+
+## Baseline
+
+## Architecture Before
+
+## Architecture After
+
+## Canonical Execution Spine
+
+## HTTP Ingestion
+
+## Persistence
+
+## Queue / Outbox
+
+## Worker
+
+## Harness Composition
+
+## Runtime V1
+
+## Policy / Approval
+
+## Model Gateway
+
+## Tool Execution
+
+## Effect Journal
+
+## Idempotency
+
+## Crash Recovery
+
+## Approval Pause / Resume
+
+## Audit
+
+## Telemetry
+
+## Tenant Isolation
+
+## Security
+
+## Performance
+
+## Test Evidence
+
+## Baseline Debt
+
+## Independent Critic
+
+## Durability Certification
+
+## Scorecard
+
+## Production Readiness
+
+## Remaining Blockers
+
+## Final Decision
+
+## Recommended Phase 3
+
+---
+
+# 206. PHASE 3 RECOMMENDATION
+
+Se Phase 2 terminar adequadamente, a próxima fase NÃO deve adicionar mais
+infraestrutura aleatoriamente.
+
+A candidata natural será:
+
+PHASE 3 — RUNTIME V2 & ITERATIVE AGENT LOOP
+
+Objetivo futuro:
+
+observe
+ ↓
+understand
+ ↓
+plan
+ ↓
+govern
+ ↓
+act
+ ↓
+observe result
+ ↓
+evaluate
+ ↓
+continue / replan / stop.
+
+Mas NÃO implemente isso agora.
+
+---
+
+# 207. FUTURE RUNTIME V2 REQUIREMENT

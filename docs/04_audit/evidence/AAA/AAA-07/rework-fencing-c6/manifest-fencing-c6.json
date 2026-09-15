@@ -1,0 +1,141 @@
+{
+  "taskId": "AAA-07",
+  "rework": "AAA07-C6-F01/F02",
+  "program": "AAA-20260912",
+  "title": "Fencing entre gerações de reserva (ABA do sweep e reuso de token)",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "observedAt": "2026-09-12T23:10:00+00:00",
+  "executor": "agent-1 (approval front)",
+  "authority": "coordinator next-task 2026-09-12 (review-coordinator/next-task-agent-1.md); controlled local scope only; AAA-09 not started",
+  "findings": [
+    {
+      "id": "AAA07-C6-F01",
+      "severity": "P1",
+      "before": "releaseExpired captured reservation A, evidenceFor released A and created B; the sweep then mutated B (no_effect -> APPROVED released=1; unknown -> UNCERTAIN uncertain=1) because CAS only checked status",
+      "after": "CAS checks reservationId + reservationGeneration at the mutation point; stale snapshot is skipped with counters {0,0} and no events; B stays byte-equivalent"
+    },
+    {
+      "id": "AAA07-C6-F02",
+      "severity": "P1",
+      "before": "after release, reserve('old-token') reused the spent token and markExecuting accepted the old credential",
+      "after": "reserve with a spent token throws reservation_reused; each new reservation increments reservationGeneration and the old token fails every mutation with reservation_mismatch"
+    }
+  ],
+  "changedFiles": [
+    {
+      "path": "packages/approval-engine/src/contracts.ts",
+      "sha256": "fe043ae298de59675db285d7177fb4441213b98219e9e56c6d9931cf33194f99",
+      "change": "ApprovalReservation.generation; ApprovalRecord.reservationGeneration/usedReservationIds"
+    },
+    {
+      "path": "packages/approval-engine/src/engine.ts",
+      "sha256": "74b566bb0dcdbcdd6256c57c2005e3a4a8401dde80a917067633aae9e14fd537",
+      "change": "#casReservation identity+generation at mutation point; generation and usedReservationIds on reserve; reservation_reused; markExecuting reports token mismatch before invalid_state for EXECUTING records; sweep uses CAS in both branches"
+    },
+    {
+      "path": "packages/approval-engine/src/__tests__/approval-lifecycle-fencing.test.ts",
+      "sha256": "fce80a1814e737e91317b39b87747794702679f2fc11d336c2d022c079da687f",
+      "change": "new public-path fencing regression suite (6 cases)"
+    }
+  ],
+  "unchanged": [
+    "packages/approval-engine/src/store.ts sha256 c279bd43... (no store API change needed; CAS runs inside the existing compare-and-set callback)",
+    "packages/approval-engine/src/index.ts sha256 8a2c0b9a...",
+    "legacy verifyAndConsume and previous 42 tests",
+    "runtime.ts, persistence, migrations, worker, package/lockfile, frozen contracts, shared registries"
+  ],
+  "red": {
+    "coordinatorProbe": {
+      "command": "node --import tsx review-coordinator/fencing-probe.mjs",
+      "exitCode": 0,
+      "result": "counterexamples reproduced: stale no_effect -> released=1/APPROVED; stale unknown -> uncertain=1/UNCERTAIN; reused old-token -> EXECUTING",
+      "artifact": "probe-before.json"
+    },
+    "regressionSuite": {
+      "command": "npx vitest run approval-lifecycle-fencing.test.ts",
+      "exitCode": 1,
+      "result": "5 failed | 1 passed before the fix",
+      "artifact": "red-fencing.log"
+    }
+  },
+  "checks": [
+    {
+      "command": "npx vitest run packages/approval-engine/src/__tests__/",
+      "exitCode": 0,
+      "result": "5 files | 48 tests PASS (42 previous preserved + 6 fencing)",
+      "artifact": "green-focused.log"
+    },
+    {
+      "command": "node --import tsx rework-fencing-c6/fencing-acceptance.mjs",
+      "exitCode": 0,
+      "result": "stale sweeps {released:0,uncertain:0}, B RESERVED/new-token/generation 2 intact; reused token -> reservation_reused; fresh token -> EXECUTING",
+      "artifact": "fencing-acceptance.json"
+    },
+    {
+      "command": "npx vitest run agent-runtime + policy-engine + chaos",
+      "exitCode": 0,
+      "result": "6 files | 62 tests PASS",
+      "artifact": "cross-package-focused.log"
+    },
+    {
+      "command": "npm run test:coverage",
+      "exitCode": 0,
+      "result": "182 files PASS | 4 skipped; 954 tests PASS | 27 skipped; global 86.68/81.86/90.02/87.74 (thresholds PASS)",
+      "artifact": "coverage-global.log"
+    },
+    {
+      "command": "module coverage: approval-engine include",
+      "exitCode": 0,
+      "result": "93.44 statements / 86.68 branches / 95.31 functions / 94.25 lines (branches rose 85.30 -> 86.68; no floor lowered)",
+      "artifact": "coverage-module.log"
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "typecheck.log"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "lint.log"
+    },
+    {
+      "command": "prettier --check (changed files)",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "green-focused.log"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "diff-stat.txt"
+    }
+  ],
+  "guarantees": [
+    "sweep never mutates a newer reservation: CAS with reservationId + generation at mutation time; counters and events only after a successful CAS",
+    "B remains byte-equivalent to its creation snapshot (token, TTL, owner, generation) in both no_effect and unknown stale-sweep branches",
+    "spent tokens are rejected on reserve (reservation_reused); old credentials fail markExecuting/confirm/release/fail/markUncertain with reservation_mismatch",
+    "active-reservation replay (same token, same generation) is preserved; auto-generated tokens get a new generation",
+    "legacy API and previous 42 tests untouched"
+  ],
+  "limitations": [
+    "In-memory store proof; PostgreSQL durability/TTL remains AAA-16 and the durable journal AAA-10",
+    "AAA-09 integration still pending; runtime.ts keeps verifyAndConsume until then",
+    "approval-engine critical branches now 86.03% (engine.ts), still below the proposed 95% critical-module target; recorded without waiver",
+    "No effect, real action, SQL/migration, commit or deploy was executed"
+  ],
+  "review": {
+    "status": "PENDING",
+    "reviewerRequirement": "coordinator or another agent that did not implement this rework",
+    "requestedChecks": [
+      "rerun the coordinator fencing probe and the acceptance probe; confirm counters/events exact and B untouched",
+      "challenge the generation/history model: any path that reuses a spent token or resurrects an old credential?",
+      "verify markExecuting stale-token ordering and the sweep CAS in both branches",
+      "confirm previous 42 tests and consumers remain green and no shared registry/runtime/SQL was modified"
+    ]
+  },
+  "nextAction": "Independent review of the fencing rework; coordinator integrates status; AAA-09 remains unauthorized until then"
+}

@@ -1,4 +1,9 @@
-import { createDomainId, DomainError, redactSensitiveText } from '@cvg/shared'
+import {
+  CorrelationIdSchema,
+  createDomainId,
+  DomainError,
+  redactSensitiveText
+} from '@cvg/shared'
 import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import type { InMemoryDatabase } from './db.ts'
 import { AuditRepository } from './repositories/audit-repository.ts'
@@ -11,7 +16,7 @@ import type {
 } from './schema.ts'
 
 export const SYNTHETIC_SCHEDULE_VERSION = 'synthetic-schedule-v1'
-const DEFAULT_DRAFT_TTL_MS = 24 * 60 * 60 * 1000
+export const DEFAULT_DRAFT_TTL_MS = 24 * 60 * 60 * 1000
 
 export interface JourneyCandidate {
   id: string
@@ -31,6 +36,16 @@ export interface JourneyRepositoryOptions {
   draftTtlMs?: number
 }
 
+/**
+ * Actor and correlation carried by journey audit events. `System` is an
+ * explicit repository/execution identity, never a simulated human operator.
+ */
+export interface JourneyAuditContext {
+  actorType: 'Operator' | 'System'
+  actorId: string
+  correlationId?: string
+}
+
 export interface OwnerDraftInput {
   tenantId: TenantId
   phone?: string | null
@@ -38,6 +53,7 @@ export interface OwnerDraftInput {
   conversationId?: string | null
   sessionId?: string | null
   idempotencyKey: string
+  auditContext?: JourneyAuditContext
 }
 
 export interface PatientDraftInput {
@@ -49,6 +65,7 @@ export interface PatientDraftInput {
   conversationId?: string | null
   sessionId?: string | null
   idempotencyKey: string
+  auditContext?: JourneyAuditContext
 }
 
 export interface AppointmentDraftInput {
@@ -58,6 +75,82 @@ export interface AppointmentDraftInput {
   conversationId?: string | null
   sessionId?: string | null
   idempotencyKey: string
+  auditContext?: JourneyAuditContext
+}
+
+export interface SearchPatientInput {
+  tenantId: TenantId
+  ownerDraftId?: string | null
+  ownerCandidateId?: string | null
+  name?: unknown
+}
+
+export interface LinkPatientInput {
+  tenantId: TenantId
+  patientDraftId: string
+  candidateId: string
+  auditContext?: JourneyAuditContext
+}
+
+export type CreateJourneyTaskInput = {
+  tenantId: TenantId
+  sessionId: string
+  title: string
+  description: string
+  priority?: 'low' | 'medium' | 'high' | 'urgent'
+  idempotencyKey: string
+  auditContext?: JourneyAuditContext
+}
+
+export interface RecordHandoffInput {
+  tenantId: TenantId
+  conversationId?: string | null
+  sessionId?: string | null
+  intent: string
+  risk: string
+  pendingItems?: string[]
+  nextStep: string
+  auditContext?: JourneyAuditContext
+}
+
+export type MaybePromise<T> = T | Promise<T>
+
+/**
+ * Port shared by the in-memory and PostgreSQL journey repositories. The memory
+ * implementation answers synchronously; the PostgreSQL one answers with
+ * promises. Callers await either shape.
+ */
+export interface JourneyRepositoryPort {
+  searchOwnerByPhone(
+    rawTenantId: TenantId,
+    rawPhone: unknown
+  ): MaybePromise<JourneyCandidate[]>
+  createOwnerDraft(input: OwnerDraftInput): MaybePromise<OwnerDraftRecord>
+  listOwnerDrafts(rawTenantId: TenantId): MaybePromise<OwnerDraftRecord[]>
+  findOwnerDraft(
+    rawTenantId: TenantId,
+    id: string
+  ): MaybePromise<OwnerDraftRecord | null>
+  searchPatient(input: SearchPatientInput): MaybePromise<JourneyCandidate[]>
+  listPatientDrafts(rawTenantId: TenantId): MaybePromise<PatientDraftRecord[]>
+  findPatientDraft(
+    rawTenantId: TenantId,
+    id: string
+  ): MaybePromise<PatientDraftRecord | null>
+  createPatientDraft(input: PatientDraftInput): MaybePromise<PatientDraftRecord>
+  linkPatient(input: LinkPatientInput): MaybePromise<PatientDraftRecord>
+  findAvailableSlots(
+    rawTenantId: TenantId,
+    limit?: number
+  ): MaybePromise<JourneySlot[]>
+  createAppointmentDraft(
+    input: AppointmentDraftInput
+  ): MaybePromise<AppointmentDraftRecord>
+  listAppointmentDrafts(
+    rawTenantId: TenantId
+  ): MaybePromise<AppointmentDraftRecord[]>
+  createJourneyTask(input: CreateJourneyTaskInput): MaybePromise<TaskRecord>
+  recordHandoff(input: RecordHandoffInput): MaybePromise<void>
 }
 
 /**
@@ -67,7 +160,7 @@ export interface AppointmentDraftInput {
  * Test Lab and local development because it proves restart, ambiguity and
  * tenant boundaries without pretending to be a clinical or scheduling system.
  */
-export class JourneyRepository {
+export class JourneyRepository implements JourneyRepositoryPort {
   private readonly audit: AuditRepository
   private readonly tasks: TaskRepository
   private readonly clock: () => Date
@@ -152,7 +245,8 @@ export class JourneyRepository {
       'owner_draft_created',
       draft.id,
       draft.conversationId,
-      draft.sessionId
+      draft.sessionId,
+      input.auditContext
     )
     return cloneOwnerDraft(draft)
   }
@@ -173,12 +267,7 @@ export class JourneyRepository {
     return draft ? cloneOwnerDraft(this.expireOwnerDraft(draft)) : null
   }
 
-  searchPatient(input: {
-    tenantId: TenantId
-    ownerDraftId?: string | null
-    ownerCandidateId?: string | null
-    name?: unknown
-  }): JourneyCandidate[] {
+  searchPatient(input: SearchPatientInput): JourneyCandidate[] {
     const tenantId = this.tenant(input.tenantId)
     const ownerDraft = input.ownerDraftId
       ? this.requireOwnerDraft(tenantId, input.ownerDraftId)
@@ -296,16 +385,13 @@ export class JourneyRepository {
       'patient_draft_created',
       draft.id,
       draft.conversationId,
-      draft.sessionId
+      draft.sessionId,
+      input.auditContext
     )
     return clonePatientDraft(draft)
   }
 
-  linkPatient(input: {
-    tenantId: TenantId
-    patientDraftId: string
-    candidateId: string
-  }): PatientDraftRecord {
+  linkPatient(input: LinkPatientInput): PatientDraftRecord {
     const tenantId = this.tenant(input.tenantId)
     const draft = this.requirePatientDraft(tenantId, input.patientDraftId)
     if (draft.status !== 'draft') {
@@ -335,6 +421,7 @@ export class JourneyRepository {
       draft.id,
       draft.conversationId,
       draft.sessionId,
+      input.auditContext,
       {
         candidateId: input.candidateId
       }
@@ -343,34 +430,7 @@ export class JourneyRepository {
   }
 
   findAvailableSlots(rawTenantId: TenantId, limit = 2): JourneySlot[] {
-    const tenantId = this.tenant(rawTenantId)
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 8) {
-      throw new DomainError('validation_failed', 'Slot limit is invalid')
-    }
-    const now = this.now()
-    const scheduleDay = now.toISOString().slice(0, 10).replace(/\D/g, '')
-    return Array.from({ length: limit }, (_, index) => {
-      // Slots are generated from the UTC calendar day, not the instant, so
-      // two reads during one day return the same value for a selected slot.
-      const startsAt = new Date(
-        Date.UTC(
-          now.getUTCFullYear(),
-          now.getUTCMonth(),
-          now.getUTCDate() + index + 1,
-          10 + index * 4,
-          0,
-          0,
-          0
-        )
-      ).toISOString()
-      return {
-        // Include the generated start time so an old slot identifier cannot
-        // become valid again after the synthetic clock advances.
-        id: `slot_${tenantId.slice(-8)}_${scheduleDay}_${index + 1}`,
-        startsAt,
-        sourceVersion: SYNTHETIC_SCHEDULE_VERSION
-      }
-    })
+    return buildJourneySlots(this.tenant(rawTenantId), this.now(), limit)
   }
 
   createAppointmentDraft(input: AppointmentDraftInput): AppointmentDraftRecord {
@@ -431,7 +491,8 @@ export class JourneyRepository {
       'appointment_draft_created',
       draft.id,
       draft.conversationId,
-      draft.sessionId
+      draft.sessionId,
+      input.auditContext
     )
     return cloneAppointmentDraft(draft)
   }
@@ -444,16 +505,11 @@ export class JourneyRepository {
       .map(cloneAppointmentDraft)
   }
 
-  createJourneyTask(input: {
-    tenantId: TenantId
-    sessionId: string
-    title: string
-    description: string
-    priority?: 'low' | 'medium' | 'high' | 'urgent'
-    idempotencyKey: string
-  }): TaskRecord {
+  createJourneyTask(input: CreateJourneyTaskInput): TaskRecord {
     const tenantId = this.tenant(input.tenantId)
-    return this.tasks.create(
+    const previousTasks = this.db.state.tasks
+    const previousAudit = this.db.state.auditEvents
+    const task = this.tasks.create(
       {
         sessionId: input.sessionId,
         title: boundedText(input.title, 'title'),
@@ -464,17 +520,30 @@ export class JourneyRepository {
       },
       tenantId
     )
+    if (previousTasks.some((existing) => existing.id === task.id)) return task
+    try {
+      const context = this.resolveJourneyContext(
+        tenantId,
+        undefined,
+        input.sessionId
+      )
+      this.appendJourneyAudit(
+        tenantId,
+        'journey_task_created',
+        task.id,
+        context.conversationId,
+        context.sessionId,
+        input.auditContext
+      )
+    } catch (error) {
+      this.db.state.tasks = previousTasks
+      this.db.state.auditEvents = previousAudit
+      throw error
+    }
+    return task
   }
 
-  recordHandoff(input: {
-    tenantId: TenantId
-    conversationId?: string | null
-    sessionId?: string | null
-    intent: string
-    risk: string
-    pendingItems?: string[]
-    nextStep: string
-  }): void {
+  recordHandoff(input: RecordHandoffInput): void {
     const tenantId = this.tenant(input.tenantId)
     const context = this.resolveJourneyContext(
       tenantId,
@@ -487,6 +556,7 @@ export class JourneyRepository {
       context.conversationId ?? context.sessionId ?? createDomainId('handoff'),
       context.conversationId,
       context.sessionId,
+      input.auditContext,
       {
         intent: boundedText(input.intent, 'intent'),
         risk: boundedText(input.risk, 'risk'),
@@ -657,14 +727,16 @@ export class JourneyRepository {
     resourceId: string,
     conversationId: string | null,
     sessionId: string | null,
+    auditContext: JourneyAuditContext | undefined,
     extra: Record<string, unknown> = {}
   ): void {
+    const audit = normalizeJourneyAuditContext(auditContext, resourceId)
     this.audit.append(
       {
         type: 'integration_event',
-        actorType: 'System',
-        actorId: 'journey-r3',
-        correlationId: `corr_${resourceId.slice(-36).padStart(36, '0')}`,
+        actorType: audit.actorType,
+        actorId: audit.actorId,
+        correlationId: audit.correlationId,
         policyVersion: 'journey-r3',
         payload: {
           journey: action,
@@ -731,6 +803,76 @@ function normalizeOptionalReference(
     throw new DomainError('validation_failed', `${field} is invalid`)
   }
   return raw.trim()
+}
+
+export const SYSTEM_JOURNEY_ACTOR = 'system.journey-repository'
+
+/**
+ * Normalizes the caller-supplied audit context shared by the memory and
+ * PostgreSQL repositories. Missing context records an explicit system actor;
+ * it never fabricates a human operator.
+ */
+export function normalizeJourneyAuditContext(
+  raw: JourneyAuditContext | undefined,
+  resourceId: string
+): {
+  actorType: 'Operator' | 'System'
+  actorId: string
+  correlationId: string
+} {
+  if (!raw) {
+    return {
+      actorType: 'System',
+      actorId: SYSTEM_JOURNEY_ACTOR,
+      correlationId: `corr_${resourceId.slice(-36).padStart(36, '0')}`
+    }
+  }
+  if (raw.actorType !== 'Operator' && raw.actorType !== 'System') {
+    throw new DomainError('validation_failed', 'Audit actor type is invalid')
+  }
+  const actorId = boundedText(raw.actorId, 'actorId')
+  const correlationId =
+    raw.correlationId === undefined
+      ? `corr_${resourceId.slice(-36).padStart(36, '0')}`
+      : CorrelationIdSchema.parse(raw.correlationId)
+  return { actorType: raw.actorType, actorId, correlationId }
+}
+
+/**
+ * Deterministic synthetic slot generation shared by both repositories.
+ * Slots are generated from the UTC calendar day, not the instant, so two
+ * reads during one day return the same value for a selected slot.
+ */
+export function buildJourneySlots(
+  rawTenantId: TenantId,
+  now: Date,
+  limit = 2
+): JourneySlot[] {
+  const tenantId = TenantIdSchema.parse(rawTenantId)
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 8) {
+    throw new DomainError('validation_failed', 'Slot limit is invalid')
+  }
+  const scheduleDay = now.toISOString().slice(0, 10).replace(/\D/g, '')
+  return Array.from({ length: limit }, (_, index) => {
+    const startsAt = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() + index + 1,
+        10 + index * 4,
+        0,
+        0,
+        0
+      )
+    ).toISOString()
+    return {
+      // Include the generated start time so an old slot identifier cannot
+      // become valid again after the synthetic clock advances.
+      id: `slot_${tenantId.slice(-8)}_${scheduleDay}_${index + 1}`,
+      startsAt,
+      sourceVersion: SYNTHETIC_SCHEDULE_VERSION
+    }
+  })
 }
 
 function syntheticOwners(tenantId: TenantId): Array<{
@@ -837,4 +979,20 @@ function cloneAppointmentDraft(
     updatedAt: new Date(draft.updatedAt),
     expiresAt: new Date(draft.expiresAt)
   }
+}
+
+// Pure helpers shared with the PostgreSQL adapter so candidate search, input
+// bounds and clone semantics cannot drift between the two implementations.
+export {
+  boundedKey,
+  boundedOptionalText,
+  boundedText,
+  cloneAppointmentDraft,
+  cloneCandidate,
+  cloneOwnerDraft,
+  clonePatientDraft,
+  normalizeOptionalReference,
+  normalizePhone,
+  syntheticOwners,
+  syntheticPatients
 }

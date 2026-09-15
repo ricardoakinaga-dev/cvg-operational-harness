@@ -1,0 +1,622 @@
+--- /tmp/cvg-m1-round2-ixwtdmce/candidate/apps/api/src/server.ts	2026-09-13 12:03:02.258282792 -0300
++++ apps/api/src/server.ts	2026-09-13 13:06:51.214273478 -0300
+@@ -6,7 +6,9 @@
+   createCorrelationId,
+   DomainError,
+   fail,
++  IDENTITY_MODE_ENV,
+   ok,
++  parseIdentityMode,
+   parseOperatorIdentity,
+   redactSensitiveText,
+   roleHasPermission,
+@@ -15,7 +17,9 @@
+   TaskStatusSchema,
+   toSafeError,
+   type Channel,
++  type IdentityMode,
+   type OperatorIdentity,
++  type OperatorIdentityResolver,
+   type TaskStatus
+ } from '@cvg/shared'
+ import {
+@@ -160,9 +164,7 @@
+   errorCode?: string
+ }
+ 
+-export type OperatorIdentityResolver = (
+-  headers: Record<string, unknown>
+-) => OperatorIdentity
++export type { OperatorIdentityResolver } from '@cvg/shared'
+ 
+ export type WebhookVerification = boolean | WebhookVerificationLease | null
+ 
+@@ -219,6 +221,11 @@
+     | { kind: 'postgres-pool'; pool: PostgresPoolLike }
+   platform?: ControlPlaneStore
+   operatorIdentityResolver?: OperatorIdentityResolver
++  /**
++   * Explicit identity mode. Defaults to `simulation` only for `NODE_ENV=test`;
++   * every other environment defaults to `trusted` and must inject a resolver.
++   */
++  identityMode?: IdentityMode
+   webhookVerifier?: WebhookVerifier
+   inboundTenantResolver?: InboundTenantResolver
+   agentRuntime?: AgentRuntimeOptions
+@@ -258,6 +265,19 @@
+ }
+ 
+ export function buildServer(options: BuildServerOptions = {}) {
++  const identityMode =
++    options.identityMode === undefined
++      ? parseIdentityMode(process.env[IDENTITY_MODE_ENV], process.env.NODE_ENV)
++      : parseIdentityMode(options.identityMode, process.env.NODE_ENV)
++  if (process.env.NODE_ENV === 'production' && identityMode === 'simulation') {
++    throw new Error(
++      'Production requires trusted operator identity mode; simulation is forbidden'
++    )
++  }
++  const operatorIdentityResolver = createEffectiveOperatorIdentityResolver(
++    identityMode,
++    options.operatorIdentityResolver
++  )
+   if (
+     process.env.NODE_ENV !== 'test' &&
+     options.persistence?.kind === 'postgres'
+@@ -431,23 +451,14 @@
+   const requireIdentity = (
+     headers: Record<string, unknown>,
+     permission: string
+-  ) =>
+-    requireOperatorIdentity(
+-      headers,
+-      permission,
+-      options.operatorIdentityResolver
+-    )
++  ) => requireOperatorIdentity(headers, permission, operatorIdentityResolver)
+   const requireAnyIdentity = (
+     headers: Record<string, unknown>,
+     permissions: string[]
+   ) =>
+-    requireAnyOperatorPermission(
+-      headers,
+-      permissions,
+-      options.operatorIdentityResolver
+-    )
++    requireAnyOperatorPermission(headers, permissions, operatorIdentityResolver)
+   const requireAuthenticatedMutations =
+-    process.env.NODE_ENV === 'test'
++    process.env.NODE_ENV === 'test' && identityMode === 'simulation'
+       ? (options.requireAuthenticatedMutations ?? false)
+       : true
+ 
+@@ -1334,11 +1345,11 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'approval:decide',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const identity = resolveOperatorIdentity(
+         request.headers,
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const body = CapabilityApprovalIssueRequestSchema.parse(request.body)
+       const version = await platform.getVersion(scope, body.versionId)
+@@ -1413,7 +1424,7 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'approval:view',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = CapabilityApprovalParamsSchema.parse(request.params)
+         const approval = await capabilityApprovalAuthority.get(
+@@ -1443,11 +1454,11 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'approval:decide',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const identity = resolveOperatorIdentity(
+           request.headers,
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = CapabilityApprovalParamsSchema.parse(request.params)
+         const revoked = await capabilityApprovalAuthority.revoke(
+@@ -1492,11 +1503,11 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'approval:execute',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const identity = resolveOperatorIdentity(
+           request.headers,
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = CapabilityApprovalParamsSchema.parse(request.params)
+         const body = CapabilityApprovalExecutionRequestSchema.parse(
+@@ -1856,11 +1867,11 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:configure',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const identity = resolveOperatorIdentity(
+         request.headers,
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const entry = await platform.createPluginCatalogEntry(
+         scope,
+@@ -1895,7 +1906,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:configure',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const query = z
+         .object({
+@@ -1926,7 +1937,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:configure',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const params = z
+         .object({ pluginId: PluginCatalogIdSchema })
+@@ -1955,11 +1966,11 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'agent:configure',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const identity = resolveOperatorIdentity(
+           request.headers,
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = z
+           .object({ pluginId: PluginCatalogIdSchema })
+@@ -2002,11 +2013,11 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:configure',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const identity = resolveOperatorIdentity(
+         request.headers,
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const source = await platform.createKnowledgeSource(
+         scope,
+@@ -2041,7 +2052,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:configure',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       return ok(await platform.listKnowledgeSources(scope), correlationId)
+     } catch (error) {
+@@ -2057,7 +2068,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:configure',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const params = z
+         .object({ sourceId: KnowledgeSourceIdSchema })
+@@ -2083,11 +2094,11 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'agent:configure',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const identity = resolveOperatorIdentity(
+           request.headers,
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = z
+           .object({ sourceId: KnowledgeSourceIdSchema })
+@@ -2130,11 +2141,11 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:configure',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const identity = resolveOperatorIdentity(
+         request.headers,
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const candidate = await platform.createReleaseCandidate(
+         scope,
+@@ -2171,7 +2182,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:configure',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const query = z
+         .object({ agentId: AgentIdSchema })
+@@ -2196,7 +2207,7 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'agent:configure',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = z
+           .object({ candidateId: ReleaseCandidateIdSchema })
+@@ -2226,11 +2237,11 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'agent:configure',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const identity = resolveOperatorIdentity(
+           request.headers,
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = z
+           .object({ candidateId: ReleaseCandidateIdSchema })
+@@ -2275,11 +2286,11 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:configure',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const identity = resolveOperatorIdentity(
+         request.headers,
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const agent = await platform.createAgent(
+         { tenantId: scope.tenantId },
+@@ -2317,7 +2328,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:view',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       return ok(await platform.listAgents(scope), correlationId)
+     } catch (error) {
+@@ -2333,11 +2344,11 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:configure',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const identity = resolveOperatorIdentity(
+         request.headers,
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const params = request.params as { agentId: string }
+       const agentId = AgentIdSchema.parse(params.agentId)
+@@ -2377,11 +2388,11 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'agent:configure',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const identity = resolveOperatorIdentity(
+           request.headers,
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = request.params as {
+           agentId: string
+@@ -2432,7 +2443,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:view',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const params = request.params as { agentId: string }
+       const agentId = AgentIdSchema.parse(params.agentId)
+@@ -2452,7 +2463,7 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'agent:configure',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = request.params as {
+           agentId: string
+@@ -2473,7 +2484,7 @@
+         }
+         const identity = resolveOperatorIdentity(
+           request.headers,
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const updated = await platform.transitionVersion(
+           scope,
+@@ -2511,7 +2522,7 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'agent:configure',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = request.params as {
+           agentId: string
+@@ -2534,7 +2545,7 @@
+         })
+         const identity = resolveOperatorIdentity(
+           request.headers,
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         await appendPlatformAudit(
+           audit,
+@@ -2569,7 +2580,7 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'agent:configure',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = request.params as {
+           agentId: string
+@@ -2583,7 +2594,7 @@
+         }
+         const identity = resolveOperatorIdentity(
+           request.headers,
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const body = z
+           .object({
+@@ -2667,11 +2678,11 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:configure',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const identity = resolveOperatorIdentity(
+         request.headers,
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const params = request.params as { agentId: string }
+       const agentId = AgentIdSchema.parse(params.agentId)
+@@ -2765,7 +2776,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'test:run',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const body = TestLabRequestSchema.parse(request.body)
+       const trace = await runTestLab({
+@@ -2784,7 +2795,7 @@
+       })
+       const identity = resolveOperatorIdentity(
+         request.headers,
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       await appendPlatformAudit(
+         audit,
+@@ -2821,11 +2832,11 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'agent:configure',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const identity = resolveOperatorIdentity(
+         request.headers,
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const suite = await platform.createTestSuite(
+         scope,
+@@ -2860,7 +2871,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'test:run',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const query = z
+         .object({ agentId: AgentIdSchema })
+@@ -2885,11 +2896,11 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'agent:configure',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const identity = resolveOperatorIdentity(
+           request.headers,
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = z
+           .object({ suiteId: TestSuiteIdSchema })
+@@ -2920,11 +2931,11 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'test:run',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const identity = resolveOperatorIdentity(
+           request.headers,
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = z
+           .object({ suiteId: TestSuiteIdSchema })
+@@ -2973,11 +2984,11 @@
+         const scope = requirePlatformScope(
+           request.headers,
+           'test:run',
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const identity = resolveOperatorIdentity(
+           request.headers,
+-          options.operatorIdentityResolver
++          operatorIdentityResolver
+         )
+         const params = z
+           .object({ suiteId: TestSuiteIdSchema })
+@@ -3041,7 +3052,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'test:run',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const params = z
+         .object({ suiteId: TestSuiteIdSchema })
+@@ -3078,7 +3089,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'test:run',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const limit = parseTraceLimit(request.query)
+       const items = await platform.listTestRuns(scope, limit)
+@@ -3107,7 +3118,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'audit:view_full',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const limit = parseTraceLimit(request.query)
+       const items = await platform.listExecutionTraces(scope, limit)
+@@ -3136,7 +3147,7 @@
+       const scope = requirePlatformScope(
+         request.headers,
+         'test:run',
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       const body = TestLabEvaluationRequestSchema.parse(request.body)
+       const result = await evaluateTestLabSuite({
+@@ -3151,7 +3162,7 @@
+       })
+       const identity = resolveOperatorIdentity(
+         request.headers,
+-        options.operatorIdentityResolver
++        operatorIdentityResolver
+       )
+       await appendPlatformAudit(
+         audit,
+@@ -3801,6 +3812,40 @@
+   return parseOperatorIdentity(headers)
+ }
+ 
++/**
++ * Trusted mode never falls back to simulation headers: without a resolver it
++ * fails closed, and resolver identities must be tenant-bound so a
++ * self-asserted tenant header can never widen scope. Simulation mode keeps the
++ * controlled header flow, delegating to an injected resolver when present.
++ */
++function createEffectiveOperatorIdentityResolver(
++  identityMode: IdentityMode,
++  resolver: OperatorIdentityResolver | undefined
++): OperatorIdentityResolver | undefined {
++  if (!resolver) {
++    if (identityMode === 'trusted') {
++      return () => {
++        throw new DomainError(
++          'unauthorized',
++          'A trusted operator identity resolver is required in production'
++        )
++      }
++    }
++    return undefined
++  }
++  if (identityMode === 'simulation') return resolver
++  return (headers) => {
++    const identity = resolver(headers)
++    if (!identity.tenantId) {
++      throw new DomainError(
++        'unauthorized',
++        'Trusted operator identity must be tenant-bound'
++      )
++    }
++    return identity
++  }
++}
++
+ async function appendPlatformAudit(
+   audit: RuntimePersistence['audit'],
+   identity: OperatorIdentity,
+@@ -5123,8 +5168,26 @@
+       'NODE_ENV must be explicitly set to development, test or production'
+     )
+   }
+-  const persistenceMode = env.API_PERSISTENCE_MODE ?? 'memory'
+   const { webhookReplayStore, ...buildOptions } = options
++  /**
++   * The identity mode follows the explicit option, then `CVG_IDENTITY_MODE`,
++   * then the process environment (the source `buildServer` itself reads).
++   * Production always composes as trusted so a simulated environment can never
++   * fall back to self-asserted headers.
++   */
++  const identityMode =
++    buildOptions.identityMode ??
++    (env[IDENTITY_MODE_ENV]?.trim()
++      ? parseIdentityMode(env[IDENTITY_MODE_ENV], env.NODE_ENV)
++      : env.NODE_ENV === 'production'
++        ? ('trusted' as const)
++        : parseIdentityMode(undefined, process.env.NODE_ENV))
++  if (env.NODE_ENV === 'production' && identityMode === 'simulation') {
++    throw new Error(
++      'Production requires trusted operator identity mode; simulation is forbidden'
++    )
++  }
++  const persistenceMode = env.API_PERSISTENCE_MODE ?? 'memory'
+   if (persistenceMode !== 'memory' && persistenceMode !== 'postgres') {
+     throw new Error('API_PERSISTENCE_MODE must be memory or postgres')
+   }
+@@ -5173,6 +5236,7 @@
+       ...(configuredInboundTenantResolver
+         ? { inboundTenantResolver: configuredInboundTenantResolver }
+         : {}),
++      identityMode,
+       durableInbound: durableInbound,
+       httpSecurity,
+       persistence: { kind: 'memory' }
+@@ -5358,6 +5422,7 @@
+     ...(env.NODE_ENV === 'production'
+       ? { requireAuthenticatedMutations: true }
+       : {}),
++    identityMode,
+     durableInbound: durableInbound,
+     httpSecurity: configuredHttpSecurity,
+     persistence: persistenceConfig

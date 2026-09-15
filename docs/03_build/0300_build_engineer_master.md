@@ -1,5 +1,13 @@
 # 0300 — Build Engineer Master
 
+## Complemento pós-auditoria de 13/09/2026
+
+Consultar [plano para produção](../PLANO_EXECUTIVO_PRODUCAO.md), [roadmap](../ROADMAP_PRODUCAO.md) e [backlog consolidado](../BACKLOG_PRODUCAO.md). Os 42 IDs AAA mantêm seus contratos/status; 14 IDs PROD acrescentam correções e pré-requisitos de saída. Não concluir pela evidência histórica de outro candidato. Este índice não concede gate de BUILD ou produção.
+
+## Programa AAA pós-auditoria — 2026-09-12
+
+Planejamento vigente da remediação `AUD-20260912-001`: [plano executivo 0324](0324_aaa_executive_plan.md), [roadmap 0325](0325_aaa_roadmap.md), [backlog 0326](0326_aaa_backlog.md). O [JSON canônico](tracking/aaa_program_backlog.json) registra 42 tasks propostas; nenhum gate BUILD é concedido por este índice. Preservar gates históricos e ler a SPEC aprovada da task antes de código.
+
 ## Objetivo da construcao
 
 Construir a Esmeralda V2 como plataforma de agente hospitalar modular, auditavel e semi-autonoma, iniciando pelo MVP entre autonomia nivel 1 e nivel 2.

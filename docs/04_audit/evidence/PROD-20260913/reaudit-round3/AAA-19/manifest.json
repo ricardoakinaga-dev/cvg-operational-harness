@@ -1,0 +1,328 @@
+{
+  "schemaVersion": 1,
+  "kind": "aaa-task-builder-evidence",
+  "taskId": "AAA-19",
+  "title": "Entregar consumer contínuo e shutdown recuperável",
+  "program": "PROD-20260913",
+  "round": "reaudit-round3",
+  "lane": "builder",
+  "generatedAt": "2026-09-13T16:06:00Z",
+  "status": "NO_PRODUCT_CHANGE_REQUIRED",
+  "statusDetail": "All AAA-19 acceptance behaviors present in the frozen candidate product code; this round adds 5 negative-first discriminating tests and neutralization evidence. No product source byte changed; main.ts was temporarily modified for neutralization and restored byte-identically.",
+  "candidate": {
+    "head": "512bc11",
+    "dirtyTreePreserved": true,
+    "productSourceUnchanged": "verified 25/25 apps/worker files against docs/04_audit/evidence/PROD-20260913/reaudit-round2/manifest.json; only the two preexisting untracked test files that this round extended differ, plus the new test file"
+  },
+  "environment": {
+    "node": "v22.23.2",
+    "postgres": "16.15 at 127.0.0.1:55481, user cvg_prod (trust)",
+    "testDatabaseUrl": "postgres://cvg_prod@127.0.0.1:55481/lane19_r3_7444",
+    "port5432Touched": false,
+    "data": "synthetic only",
+    "externalEffects": false,
+    "productionEnabled": false
+  },
+  "filesChanged": [
+    {
+      "path": "apps/worker/src/__tests__/continuous-worker.test.ts",
+      "added": false,
+      "sha256": "e9eeed02db9f73777bb87f6d90a919ad704987a592e5a028d18bb0fadaaf0f44",
+      "changes": [
+        "+ test 'fails closed for each missing continuous configuration dimension' (acceptance 4)",
+        "+ test 'dead-letters a failing event and consumes it after an operator requeue' (acceptance 3)"
+      ]
+    },
+    {
+      "path": "apps/worker/src/__tests__/postgres-controlled-hardening.test.ts",
+      "added": false,
+      "sha256": "20a834f38edce656a32fb55c19a4a19282ea63ee105d53c6ed11e4258b008b40",
+      "changes": [
+        "+ test 'suppresses outbound without touching any injected port' (acceptance 7)"
+      ]
+    },
+    {
+      "path": "apps/worker/src/__tests__/continuous-worker-entrypoint.integration.test.ts",
+      "added": true,
+      "sha256": "18a9da5459999d24417af639d9119d544f06749b7e527a0d8523632d3f407ac5",
+      "changes": [
+        "+ DB-conditional test 'consumes events around a restart and drains on a real SIGTERM without loss or duplication' (acceptances 1+2)",
+        "+ DB-conditional test 'runs the role preflight before the first claim and leaves the queue untouched on rejection' (acceptance 6)"
+      ]
+    },
+    {
+      "path": "apps/worker/src/main.ts",
+      "added": false,
+      "sha256": "9138a3d079aa2da3a20964a177faf335a6146019543c9b0f44bdf3b5c5c9c4f5",
+      "changes": [
+        "net-zero: temporarily disabled preflight and shutdown.install for neutralization evidence, then restored from backup; hash equals the frozen candidate manifest value"
+      ]
+    }
+  ],
+  "notModified": [
+    "apps/worker/src/continuous-worker.ts, main.ts (net-zero), postgres-controlled.ts, worker.ts, jobs/, sweeps.ts, health.ts, postgres-role-preflight.ts, controlled-worker.ts, worker-observability.ts (product source)",
+    "package.json / package-lock.json",
+    "server.ts, persistence, migrations",
+    "docs outside this evidence path and other lanes' files"
+  ],
+  "acceptance": [
+    {
+      "id": 1,
+      "criterion": "Eventos antes/depois de restart são consumidos (no loss/duplication)",
+      "result": "PASS",
+      "command": "TEST_DATABASE_URL=… npx vitest run --no-file-parallelism apps/worker",
+      "exitCode": 0,
+      "tests": [
+        "continuous-worker.test.ts > consumes events enqueued before and after a simulated restart",
+        "continuous-worker-postgres.integration.test.ts > consumes events across a simulated restart and dead-letters a poison event",
+        "continuous-worker-entrypoint.integration.test.ts > consumes events around a restart and drains on a real SIGTERM without loss or duplication (per-event journal rows = 1)"
+      ],
+      "log": "worker-tests.log"
+    },
+    {
+      "id": 2,
+      "criterion": "SIGTERM não perde efeito: shutdown drena/libera de forma recuperável (discriminating test added)",
+      "result": "PASS",
+      "command": "TEST_DATABASE_URL=… npx vitest run --no-file-parallelism --testTimeout=90000 apps/worker/src/__tests__/continuous-worker-entrypoint.integration.test.ts",
+      "exitCode": 0,
+      "tests": [
+        "NEW entrypoint test: real SIGTERM → exit 0, worker.shutdown.completed, drained=true, released=0, no loss/duplication",
+        "continuous-worker.test.ts > finishes an in-flight handler on SIGTERM without losing or duplicating the effect",
+        "continuous-worker.test.ts > releases the lease on a bounded SIGTERM and a later worker retries safely",
+        "continuous-worker-postgres.integration.test.ts > releases bounded leases and a later worker completes the same idempotency key"
+      ],
+      "discrimination": {
+        "neutralization": "shutdown.install(process) disabled in runPostgresContinuousWorker",
+        "observed": "test fails with code 143 instead of 0",
+        "log": "neutralization-shutdown.log",
+        "exitCode": 1
+      },
+      "log": "focused-entrypoint.log"
+    },
+    {
+      "id": 3,
+      "criterion": "Poison event não bloqueia a fila (dead-letter) e requeue funciona",
+      "result": "PASS",
+      "command": "TEST_DATABASE_URL=… npx vitest run --no-file-parallelism apps/worker",
+      "exitCode": 0,
+      "tests": [
+        "continuous-worker.test.ts > dead-letters a poison event without blocking the queue",
+        "NEW continuous-worker.test.ts > dead-letters a failing event and consumes it after an operator requeue (dead_letter → requeueDeadLetter → processed, 1 journal row)",
+        "continuous-worker-postgres.integration.test.ts > poison event dead-lettered while the queue continues"
+      ],
+      "log": "focused-unit.log"
+    },
+    {
+      "id": 4,
+      "criterion": "Startup sem configuração falha (missing adapter/tenant/database/RLS/controlled-mode) — fail-closed",
+      "result": "PASS",
+      "command": "npx vitest run apps/worker + npm run test:worker:startup",
+      "exitCode": 0,
+      "tests": [
+        "NEW continuous-worker.test.ts > fails closed for each missing continuous configuration dimension (queue_adapter_missing, controlled_tenant_missing, postgres_database_missing, postgres_rls_required, controlled_mode_required, production_controlled_worker_forbidden)",
+        "continuous-worker.test.ts > exits non-zero when the real entrypoint starts without required config",
+        "npm run test:worker:startup > worker.startup_smoke_passed + worker.controlled_smoke_verified"
+      ],
+      "log": "worker-startup.log"
+    },
+    {
+      "id": 5,
+      "criterion": "Queue lag observável (backlog probe/metric) e lease/heartbeat com retry/backoff",
+      "result": "PASS",
+      "command": "TEST_DATABASE_URL=… npx vitest run --no-file-parallelism apps/worker",
+      "exitCode": 0,
+      "tests": [
+        "observes queue lag while a handler is in flight (worker_outbox_lag metric)",
+        "prefers an explicit outboxBacklog probe when the adapter exposes one",
+        "heartbeats the claimed lease while the handler runs",
+        "renews the lease through the adapter heartbeat seam when available",
+        "detects a lost lease and fails closed instead of committing the effect",
+        "backs off and recovers when the claim boundary fails",
+        "backs off while idle and keeps supervising the queue",
+        "PG integration: lag=2 observed, heartbeats >= 1"
+      ],
+      "log": "worker-tests.log"
+    },
+    {
+      "id": 6,
+      "criterion": "PROD-05 role preflight runs before the first claim (do not regress)",
+      "result": "PASS",
+      "command": "TEST_DATABASE_URL=… npx vitest run --no-file-parallelism --testTimeout=90000 apps/worker/src/__tests__/continuous-worker-entrypoint.integration.test.ts",
+      "exitCode": 0,
+      "tests": [
+        "NEW entrypoint test: permissive-policy role → process exits 1, event stays pending with attempts=0, zero outbox_effects/outbox_attempts, no worker.continuous_ready",
+        "postgres-role-preflight.test.ts full matrix (extra policy, privileges, superuser/BYPASSRLS, membership, ownership, DDL, missing schema, context cleanup)"
+      ],
+      "discrimination": {
+        "neutralization": "assertPostgresWorkerPreflight disabled in runPostgresContinuousWorker",
+        "observed": "test fails (entrypoint never exits; it would claim and process)",
+        "log": "neutralization-preflight.log",
+        "exitCode": 1
+      },
+      "log": "focused-entrypoint.log"
+    },
+    {
+      "id": 7,
+      "criterion": "No real effect path is composed (outbound suppressed, handlers synthetic)",
+      "result": "PASS",
+      "command": "TEST_DATABASE_URL=… npx vitest run --no-file-parallelism apps/worker",
+      "exitCode": 0,
+      "tests": [
+        "NEW postgres-controlled-hardening.test.ts > suppresses outbound without touching any injected port (throwing ports never called)",
+        "createControlledNoopHandlers returns controlled_inbound_consumed / controlled_outbound_suppressed with externalEffects:false",
+        "entrypoint start logs durable:true, externalEffects:false"
+      ],
+      "log": "focused-unit.log"
+    }
+  ],
+  "negativeTestsAdded": [
+    "fails closed for each missing continuous configuration dimension",
+    "dead-letters a failing event and consumes it after an operator requeue",
+    "consumes events around a restart and drains on a real SIGTERM without loss or duplication",
+    "runs the role preflight before the first claim and leaves the queue untouched on rejection",
+    "suppresses outbound without touching any injected port"
+  ],
+  "gates": [
+    {
+      "command": "npm run typecheck",
+      "result": "PASS",
+      "exitCode": 0,
+      "log": "typecheck.log",
+      "note": "An earlier attempt failed with 28 errors, all in untracked apps/api identity-*.test.ts being written concurrently by the AAA-20 lane (none in apps/worker or packages); the final run after that lane finished is clean"
+    },
+    {
+      "command": "npx prettier --check <3 changed files>",
+      "result": "PASS",
+      "exitCode": 0,
+      "log": "prettier-check.log"
+    },
+    {
+      "command": "npx eslint apps/worker",
+      "result": "PASS",
+      "exitCode": 0,
+      "log": "eslint.log"
+    },
+    {
+      "command": "TEST_DATABASE_URL=… npx vitest run --no-file-parallelism apps/worker",
+      "result": "PASS 15 files / 91 tests / 0 failed / 0 skipped",
+      "exitCode": 0,
+      "log": "worker-tests.log"
+    },
+    {
+      "command": "npx vitest run --no-file-parallelism apps/worker (no TEST_DATABASE_URL)",
+      "result": "PASS 12 passed + 3 conditional-skip files; 74 passed + 17 skipped tests",
+      "exitCode": 0,
+      "log": "worker-tests-no-url.log"
+    },
+    {
+      "command": "npm run test:worker:startup",
+      "result": "PASS worker.startup_smoke_passed + worker.controlled_smoke_verified",
+      "exitCode": 0,
+      "log": "worker-startup.log"
+    },
+    {
+      "command": "TEST_DATABASE_URL=… npm run test:postgres",
+      "result": "PASS 19 files / 163 tests / 0 failed / 0 skipped",
+      "exitCode": 0,
+      "log": "postgres-gate.log"
+    }
+  ],
+  "neutralizations": [
+    {
+      "target": "apps/worker/src/main.ts runPostgresContinuousWorker preflight call",
+      "method": "temporary `if (false)` guard, then restored from backup and hash-verified",
+      "expected": "entrypoint test fails",
+      "observed": "test failed: entrypoint did not exit within the timeout",
+      "exitCode": 1,
+      "log": "neutralization-preflight.log"
+    },
+    {
+      "target": "apps/worker/src/main.ts runPostgresContinuousWorker shutdown.install(process)",
+      "method": "temporary `if (false)` guard, then restored from backup and hash-verified",
+      "expected": "entrypoint test fails",
+      "observed": "test failed: exit code 143 instead of 0",
+      "exitCode": 1,
+      "log": "neutralization-shutdown.log"
+    },
+    {
+      "target": "restoration verification",
+      "method": "sha256 of apps/worker/src/main.ts == frozen candidate manifest value; entrypoint test re-run",
+      "observed": "hash 9138a3d079aa2da3a20964a177faf335a6146019543c9b0f44bdf3b5c5c9c4f5; 2/2 tests pass",
+      "exitCode": 0,
+      "log": "entrypoint-post-restore-green.log"
+    }
+  ],
+  "skips": [
+    {
+      "file": "apps/worker/src/__tests__/continuous-worker-entrypoint.integration.test.ts",
+      "reason": "describe.skip when TEST_DATABASE_URL is absent (existing repository pattern for DB-backed worker suites)",
+      "count": 2,
+      "conditional": true,
+      "withDatabase": "0 skipped"
+    },
+    {
+      "file": "apps/worker/src/__tests__/continuous-worker-postgres.integration.test.ts",
+      "reason": "preexisting DB-conditional pattern",
+      "count": 2,
+      "conditional": true,
+      "withDatabase": "0 skipped"
+    },
+    {
+      "file": "apps/worker/src/__tests__/postgres-role-preflight.test.ts",
+      "reason": "preexisting DB-conditional pattern",
+      "count": 13,
+      "conditional": true,
+      "withDatabase": "0 skipped"
+    }
+  ],
+  "unconditionalSkipsAdded": 0,
+  "testsWeakened": false,
+  "thresholdsChanged": false,
+  "limitations": [
+    "Builder output only; not a VERIFIED claim — independent review is required (builder cannot self-approve).",
+    "Real-signal release path (bounded SIGTERM release) is proven at unit and PostgreSQL worker.stop level, not through the entrypoint, whose composed handlers complete too fast to hold a lease past drainMs; no test seam was added to the product for this.",
+    "Periodic sweeps remain dependency-injected and disabled in the entrypoint pending AAA-21/D01 (worker.sweeps_disabled); unchanged.",
+    "Preexisting limitation (prior builder): worker imports @cvg/agent-runtime, @cvg/approval-engine, @cvg/observability without package.json registration; package.json is a forbidden path.",
+    "Full-repo npm test was not re-run this round; the required worker/startup/postgres/typecheck/lint/format gates were.",
+    "Concurrent AAA-20 lane edits to apps/api transiently broke typecheck and postgres-outbox-bridge.integration.test.ts mid-session; both resolved by that lane before the final gate runs (cross-lane-bridge-failure.log).",
+    "Local disposable PostgreSQL 16.15 only: no physical crash/fsync/failover, no Docker, no production, no external effect. Production remains NO-GO."
+  ],
+  "blockers": [],
+  "boundaries": {
+    "commit": false,
+    "push": false,
+    "deploy": false,
+    "npmInstall": false,
+    "realPatientData": false,
+    "externalEffects": false,
+    "operationalDatabase": false,
+    "port5432": false,
+    "productionEnablement": false
+  },
+  "evidenceSha256": {
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/contract-note.md": "53f5c744ee3a079bc928bfea10afb3bfdbb13faa80d976223b511f12cb6ae76e",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/commands.log": "000b83d449288550acd42b3cb92ad5d58e174a48e5e80c69855de80b03e78531",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/report.md": "effdac61e1efbdcc5f5f4d117d329fd243eecccb514dba45fdf78334e7bd8c16",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/cross-lane-bridge-failure.log": "1f3503d05679d4f82c19b610b2d9e352ad9a6b98a92dbdefe00177cb31b22fda",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/entrypoint-post-restore-green.log": "04ec03394ee594305f8f0742265ec20e7965947845ee1d72fb472e7deda7acfe",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/eslint.log": "259beb8aa0a52f0148a4e3f515ecb6d4e0b486a3b59236797084344b96319cdb",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/focused-entrypoint.log": "3ca74d6760164409bb1134242bec52c56cfacb5f0aee6a11f5e02d8e715dd03d",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/focused-unit.log": "91db9dd8cdb44c96cb6adec6c3599f0f0ef6971c38824353a4ccff5ff5ebd128",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/neutralization-preflight.log": "2921c9c7b254921dbdfd9e2b4a5c6ac0a596e13f1412d81227d5db1917613146",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/neutralization-shutdown.log": "6800f167e3274d1e8c578cb5754e2f2d00cc1ecd8b4104e3adf4f8a885828158",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/postgres-gate.log": "b9f94aac1e41d97a3270a9e1cb83118cdd8870c47d5a64dcf474c2360d0af088",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/prettier-check.log": "e5fff2922b8d2d08046aa898faa585f0d4261ccb1daf3a4fac0d99953da70421",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/typecheck.log": "f9b8993c7199decfe025385da08c6fb2e50bfb6be24bf0fda412c639474b1047",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/worker-startup.log": "d2ff7d26a52a9d7655a04d62212182749d349d2545fc70920d97d21a860e7662",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/worker-tests.log": "e72c431785c57d0658790ae8c2ee9e2ed0f5e7f34da2cd54866a3e02fc87f8da",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/worker-tests-no-url.log": "39c2c64d88b28e4eb99daa0d69f22d8c5f769ef94335d1429ee1682c4e4634d6",
+    "docs/04_audit/evidence/PROD-20260913/reaudit-round3/AAA-19/sha256-changed.txt": "0f382a5ae07632e1d93e5ae78005c696444e9efb90f6ee0ca6372d272b178b51"
+  },
+  "sourceSha256": {
+    "apps/worker/src/__tests__/continuous-worker.test.ts": "e9eeed02db9f73777bb87f6d90a919ad704987a592e5a028d18bb0fadaaf0f44",
+    "apps/worker/src/__tests__/postgres-controlled-hardening.test.ts": "20a834f38edce656a32fb55c19a4a19282ea63ee105d53c6ed11e4258b008b40",
+    "apps/worker/src/__tests__/continuous-worker-entrypoint.integration.test.ts": "18a9da5459999d24417af639d9119d544f06749b7e527a0d8523632d3f407ac5",
+    "apps/worker/src/main.ts": "9138a3d079aa2da3a20964a177faf335a6146019543c9b0f44bdf3b5c5c9c4f5"
+  },
+  "independence": "builder output; independent review required before VERIFIED/DONE"
+}

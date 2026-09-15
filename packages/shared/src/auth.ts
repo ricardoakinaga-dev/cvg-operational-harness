@@ -96,3 +96,50 @@ export function parseOperatorIdentity(
     ...(tenantId === undefined ? {} : { tenantId })
   })
 }
+
+/**
+ * Trusted identity port. Implementations resolve an operator identity from the
+ * request (claims/tokens), never from self-asserted simulation headers.
+ */
+export type OperatorIdentityResolver = (
+  headers: Record<string, unknown>
+) => OperatorIdentity
+
+export const IdentityModeSchema = z.enum(['simulation', 'trusted'])
+export type IdentityMode = z.infer<typeof IdentityModeSchema>
+
+export const IDENTITY_MODE_ENV = 'CVG_IDENTITY_MODE'
+
+/**
+ * Explicit identity mode. `simulation` is the controlled header-based flow and
+ * is only a default for `NODE_ENV=test`; every other environment fails closed
+ * to `trusted` unless an operator opts in explicitly.
+ */
+export function parseIdentityMode(
+  raw: string | null | undefined,
+  nodeEnv: string | undefined
+): IdentityMode {
+  const value = typeof raw === 'string' ? raw.trim() : ''
+  if (value === '') return nodeEnv === 'test' ? 'simulation' : 'trusted'
+  const parsed = IdentityModeSchema.safeParse(value)
+  if (!parsed.success) {
+    throw new Error('CVG_IDENTITY_MODE must be simulation or trusted')
+  }
+  return parsed.data
+}
+
+export interface IdentitySigningKey {
+  keyId: string
+  /** Local/synthetic key material only; production secrets stay in runtime env. */
+  secret: string
+}
+
+/**
+ * Rotation port for trusted identity signing keys. Implementations must return
+ * only the keys usable at `nowSeconds`: revoked keys and previous keys past the
+ * bounded rotation window are omitted, so a stale or revoked key never
+ * authorizes a request.
+ */
+export interface IdentityKeyRingPort {
+  keysAt(nowSeconds: number): readonly IdentitySigningKey[]
+}

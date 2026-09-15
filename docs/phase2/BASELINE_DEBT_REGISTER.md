@@ -1,0 +1,23 @@
+# Phase 2 baseline debt register (historical comparison)
+
+> These rows describe the pre-implementation snapshot. The current R2 gates
+> supersede environment observations where they were re-run; the original
+> counts and recommended actions remain preserved for regression comparison.
+
+This register classifies the exact pre-implementation regression envelope. A
+known baseline item is not permission to introduce the same failure in new
+Phase 2 paths.
+
+| ID | Test / area | Classification | Baseline evidence | Current evidence | Impact | Phase 2 blocker? | Recommended action |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| P2-BD-001 | tests/worker-controlled-smoke.test.js | KNOWN_BASELINE_DEBT | npm test: exit 1, controlled smoke assertion returned code 1 instead of 0. Same area was recorded in Phase 0/1 baseline. | No Phase 2 code was changed at baseline capture. | Existing worker controlled composition is not green. | No, unless the canonical Phase 2 path reuses the failing behavior. | Reproduce in an isolated worker command after the Phase 2 path is wired; keep separate from the new spine. |
+| P2-BD-002 | tests/worker-startup-smoke.test.js | KNOWN_BASELINE_DEBT | npm test: startup smoke assertion returned code 1 instead of 0. | Same pre-implementation run. | Existing startup smoke evidence is unavailable. | No, for Phase 2 synthetic package tests; yes for a claim that all worker startup behavior is green. | Repair only with a separate gate and regression evidence; do not weaken the smoke test. |
+| P2-BD-003 | apps/worker/src/__tests__/continuous-worker.test.ts | KNOWN_BASELINE_DEBT | npm test: startup event list did not contain the expected fail-closed event. | Same pre-implementation run. | Existing continuous-worker startup evidence is incomplete. | No, if the new worker Harness has independent proof; yes for global PASS. | Re-run with the actual entrypoint and capture raw startup output. |
+| P2-BD-004 | apps/api/src/__tests__/identity-composition-wiring.test.ts | ENVIRONMENT_DEPENDENT | Subprocess assertion received tsx IPC listen EPERM instead of the expected resolver error. | Same local Node 24 sandbox. | The subprocess proof cannot observe the intended boundary here. | Yes for an independent subprocess claim; not a Phase 2 code defect by itself. | Re-run outside the restricted IPC environment or with a supported runner; retain as blocked meanwhile. |
+| P2-BD-005 | packages/model-gateway/src/__tests__/local-http-providers.test.ts (8 tests + 8 errors) | ENVIRONMENT_DEPENDENT | All loopback servers failed with listen EPERM: operation not permitted 127.0.0.1; tests timed out at 15s. | Same sandbox run. | Local provider behavior is unverified in this environment. | Yes for loopback HTTP provider certification; not for deterministic provider proof. | Run with authorized loopback binding and record the eight tests separately. |
+| P2-BD-006 | Nine skipped tests in npm test | ENVIRONMENT_DEPENDENT | Full run reported 9 skips; PostgreSQL-conditional suites are guarded by missing test DB. | No TEST_DATABASE_URL and Docker server inaccessible. | Real PostgreSQL claims cannot be made. | Yes: PostgreSQL is a critical Phase 2 gate for full PASS. | Obtain a disposable PostgreSQL test authority or finish as CONDITIONAL_PASS / D0–D2. |
+| P2-BD-007 | npm run test:postgres | ENVIRONMENT_BLOCKED | Not executed because the required local database was not available. | docker info client succeeded but server access returned permission denied; no psql/pg_isready/server process found. | No D3/D4/D5 evidence is currently possible. | Yes for D4/D5 and PASS. | Re-run only against an isolated local PostgreSQL instance; never substitute memory or SQLite. |
+
+No new Phase 2 failure is inferred from this baseline. Any later change in
+failure count, skipped critical test, export, or architecture boundary must be
+recorded as a new row rather than folded into this historical debt.

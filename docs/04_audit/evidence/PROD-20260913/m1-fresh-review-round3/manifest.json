@@ -1,0 +1,150 @@
+{
+  "program": "PROD-20260913",
+  "round": "m1-fresh-review-round3",
+  "task": "closing M1 reaudit condition (RA-M1-01..08)",
+  "authority": "user prompt authorizes local reversible corrections, synthetic data and disposable databases; D01 registered explicitly as option C in this round",
+  "candidate": {
+    "kind": "working tree over 512bc11 (no commit)",
+    "fingerprint_before_after": "b0c675233a0bdf68e9b6aa8f3b07c225634bcbc223c25c6d9c5e9318710a90fe",
+    "fingerprint_files": 648,
+    "fingerprint_mismatches": 0,
+    "note": "the 2659-file candidate digest differs from round2 only in governance docs updated after that fingerprint; all 648 product source files match"
+  },
+  "critic": {
+    "independence": "fresh context, new agent, did not build or review prior rounds; no access to builder narratives",
+    "report": "docs/04_audit/evidence/PROD-20260913/m1-fresh-review-round3/REVIEW.md",
+    "reportSha256": "69024a38171e3e4b77058d6754c23c0ccc9a02bb483d705033775b249faf777f",
+    "verdict": "PASS",
+    "gates": [
+      {
+        "command": "npm run typecheck",
+        "result": "PASS"
+      },
+      {
+        "command": "npx eslint (changed files)",
+        "result": "PASS"
+      },
+      {
+        "command": "focused vitest 8 files",
+        "result": "PASS: 83 tests"
+      },
+      {
+        "command": "focus worker 3 files",
+        "result": "PASS: 19 tests"
+      },
+      {
+        "command": "npm run test:postgres",
+        "result": "PASS: 19 files / 163 tests, 0 skips"
+      },
+      {
+        "command": "npm test",
+        "result": "PASS: 242 files / 1733 tests, 0 skips"
+      },
+      {
+        "command": "npm run test:worker:startup",
+        "result": "PASS"
+      },
+      {
+        "command": "npm run build:web",
+        "result": "PASS"
+      },
+      {
+        "command": "readiness probe (round2 script)",
+        "result": "PASS: /ready 503, /live 200"
+      }
+    ],
+    "adversarialProbes": [
+      "late/blocked readiness admission",
+      "UI neutralization in throwaway copy (6+6 failures)",
+      "real-trigger task atomicity + concurrent replay without 25P02",
+      "preflight extra permissive policy + privilege perturbations",
+      "HTTP actor/correlation spoofing blocked"
+    ],
+    "findings": [
+      {
+        "id": "P3-A",
+        "note": "preflight covers the 11 declared critical tables; platform_* tables read by the default handler are RLS-protected but not privilege-checked by the preflight (fail-closed after claim)"
+      },
+      {
+        "id": "P3-B",
+        "note": "withTenantContext (non-transactional) keeps the pre-round cleanup style; verified reset is implemented in withTenantTransaction and the worker preflight (out of RA-M1-04/05/08 scope)"
+      }
+    ],
+    "limits": [
+      "UI in jsdom, not real browser this round",
+      "no sustained real pool exhaustion/load for /ready",
+      "no physical durability/failover",
+      "Docker unavailable",
+      "fingerprint scope is the 648 product files"
+    ]
+  },
+  "gateEvidence": [
+    {
+      "command": "TEST_DATABASE_URL=… npx vitest run postgres-persistence-mode journeys-api-postgres journeys-api",
+      "result": "PASS: 3 files / 36 tests (AAA-18)",
+      "at": "2026-09-13T15:53:47.812Z"
+    }
+  ],
+  "promotions": [
+    {
+      "task": "PROD-02",
+      "from": "REVIEW",
+      "to": "VERIFIED",
+      "basis": "fresh round3 PASS + RA-M1-04/05/08 verified"
+    },
+    {
+      "task": "PROD-03",
+      "from": "REVIEW",
+      "to": "VERIFIED",
+      "basis": "fresh round3 PASS + RA-M1-02/03 verified with neutralization"
+    },
+    {
+      "task": "PROD-05",
+      "from": "REVIEW",
+      "to": "VERIFIED",
+      "basis": "fresh round3 PASS + RA-M1-06/07 verified with real roles/policies"
+    },
+    {
+      "task": "PROD-06",
+      "from": "REVIEW",
+      "to": "VERIFIED",
+      "basis": "fresh round3 PASS + trusted actor/correlation verified over HTTP"
+    },
+    {
+      "task": "AAA-18",
+      "from": "PENDING",
+      "to": "VERIFIED",
+      "basis": "concrete journey port in factory, fail-closed adapter checks, 36 tests over HTTP/PostgreSQL on current bytes"
+    },
+    {
+      "task": "AAA-02",
+      "from": "REVIEW",
+      "to": "VERIFIED",
+      "basis": "decision packet + briefing document D01–D05 with options/impact/state; D01 registered, D02–D05 explicit PENDING"
+    },
+    {
+      "task": "AAA-06",
+      "from": "BLOCKED",
+      "to": "READY",
+      "basis": "D01 registered (option C); deps AAA-02/03/05 verified"
+    }
+  ],
+  "notPromoted": [
+    {
+      "task": "AAA-22",
+      "status": "REVIEW",
+      "reason": "RA-M1-01 fresh-PASS; full acceptance requires the composed consumer probe (AAA-21, now unblocked by D01)"
+    },
+    {
+      "task": "PROD-14",
+      "status": "REVIEW",
+      "reason": "D01 registered; D02–D05 remain PENDING"
+    }
+  ],
+  "limitations": [
+    "no production/data/homologation/deploy",
+    "Docker NOT_RUN (socket permission)",
+    "D02–D05 pending"
+  ],
+  "observedAt": "2026-09-13T15:53:47.812Z"
+}

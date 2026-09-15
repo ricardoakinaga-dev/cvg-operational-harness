@@ -1,0 +1,1192 @@
+tentar ativamente encontrar:
+
+A. hidden synchronous execution path;
+B. second non-canonical Worker path;
+C. tool execution bypass;
+D. direct provider bypass;
+E. policy bypass;
+F. approval replay;
+G. duplicate effect after crash;
+H. stale Worker commit after lease loss;
+I. tenant leakage;
+J. idempotency race;
+K. illegal state transition;
+L. terminal state resurrection;
+M. audit event emitted before causal action;
+N. telemetry claim inconsistent with persistence;
+O. fake restart proof;
+P. fake PostgreSQL proof using in-memory substitute;
+Q. evidence generated from stale code;
+R. docs claiming behavior not covered by executable proof.
+
+Qualquer finding crítico deve bloquear APPROVE até reparo ou classificação
+honesta como NOT_PROVEN quando permitido.
+
+---
+
+# 351. CRITIC ANTI-BIAS RULE
+
+O crítico deve assumir inicialmente:
+
+THE CANDIDATE IS NOT PROVEN.
+
+A implementação precisa demonstrar o contrário.
+
+Não pedir ao crítico:
+
+"confirme que está correto".
+
+Pedir:
+
+"tente encontrar razão técnica para rejeitar".
+
+---
+
+# 352. SECONDARY CRITIC
+
+Se orchestration disponível e custo aceitável, execute uma segunda revisão
+independente focada apenas em:
+
+concurrency
+durability
+security
+evidence integrity.
+
+Não é obrigatório se o primeiro crítico for realmente independente e
+abrangente.
+
+Se executado:
+
+registre ambos.
+
+---
+
+# 353. CRITIC DISAGREEMENT
+
+Se críticos discordarem:
+
+não escolha automaticamente o resultado mais favorável.
+
+Investigue o ponto de divergência.
+
+Produza:
+
+docs/phase2/evidence/CRITIC_DISAGREEMENT.md
+
+quando aplicável.
+
+---
+
+# 354. EVIDENCE FRESHNESS
+
+Toda evidência final deve estar ligada ao candidato atual.
+
+Se source mudar após um teste crítico:
+
+esse teste pode ficar STALE.
+
+Reexecute o necessário.
+
+Não reutilize resultado antigo como prova de HEAD novo sem justificativa.
+
+---
+
+# 355. CANDIDATE IDENTITY
+
+Crie:
+
+docs/phase2/CANDIDATE_IDENTITY.json
+
+Inclua:
+
+baseCommit
+currentHead
+worktreeDigest
+relevantFileDigest
+migrationDigest
+generatedAt.
+
+Como o worktree pode permanecer dirty, HEAD sozinho NÃO identifica o candidato.
+
+Isso é obrigatório.
+
+---
+
+# 356. WORKTREE DIGEST
+
+Gere digest determinístico dos arquivos relevantes do candidato.
+
+Exclua:
+
+node_modules
+coverage
+temporary logs
+build cache
+irrelevant generated artifacts
+
+conforme regras documentadas.
+
+Inclua source/config/migrations/tests críticos.
+
+---
+
+# 357. TEST-TO-CANDIDATE BINDING
+
+Cada bundle crítico deve registrar:
+
+candidate digest.
+
+Assim:
+
+Evidence E
+proves
+Candidate C.
+
+Se digest não casar:
+
+evidence = STALE.
+
+---
+
+# 358. MIGRATION-TO-CANDIDATE BINDING
+
+Registre digest das migrations usadas na prova PostgreSQL.
+
+Não certifique schema diferente do source candidate.
+
+---
+
+# 359. FINAL SENTINEL
+
+Após:
+
+tests finais
+critic approval
+reports finais
+
+execute sentinel.
+
+Ele deve verificar:
+
+candidate digest unchanged
+critical evidence present
+evidence digests valid
+critic result APPROVE
+PHASE_2_RESULT.json consistent
+no missing required artifact.
+
+Resultado:
+
+MATCH
+ou
+MISMATCH.
+
+MISMATCH impede PASS final.
+
+---
+
+# 360. REPORT CONSISTENCY CHECK
+
+Valide automaticamente que:
+
+PHASE_2_REPORT.md
+PHASE_2_RESULT.json
+PRODUCTION_READINESS_MATRIX.md
+DURABILITY_CERTIFICATION.md
+
+não possuem decisões contraditórias.
+
+Exemplo proibido:
+
+JSON:
+production = NO_GO
+
+Executive Report:
+"ready for production".
+
+---
+
+# 361. SCORE CONSISTENCY
+
+Se Durability Certification for D2:
+
+não permita score 10/10 em Crash Recovery.
+
+Se Worker restart não foi provado:
+
+não permita marcar Worker Restart como PROVEN.
+
+Crie consistency validator quando viável.
+
+---
+
+# 362. PROOF GRANULARITY
+
+Não marque componente inteiro como PROVEN se apenas uma parte foi testada.
+
+Exemplo:
+
+Approval:
+pause = proven
+restart persistence = proven
+concurrent consume = not proven
+
+Resultado:
+
+PARTIAL
+
+até fechamento.
+
+---
+
+# 363. ENVIRONMENT_BLOCKED DISCIPLINE
+
+Use ENVIRONMENT_BLOCKED somente quando realmente faltar infraestrutura.
+
+Não use para:
+
+teste difícil
+implementação incompleta
+bug.
+
+Documente:
+
+required environment
+why unavailable
+what exact proof remains.
+
+---
+
+# 364. KNOWN DEBT DISCIPLINE
+
+KNOWN_BASELINE_DEBT não pode ser usado para classificar regressão nova.
+
+Compare com baseline registrado.
+
+---
+
+# 365. BASELINE RECONCILIATION
+
+Ao final, compare:
+
+Phase 0/1 baseline
+Phase 2 pre-flight
+Phase 2 final.
+
+Explique mudanças em:
+
+pass
+fail
+skip
+errors.
+
+Nenhuma diferença relevante deve ficar sem explicação.
+
+---
+
+# 366. NO SKIP INFLATION
+
+Se novos testes forem skipped:
+
+cada skip deve ter justificativa.
+
+Critical test skipped:
+
+bloqueia PASS, salvo ENVIRONMENT_BLOCKED explicitamente permitido.
+
+---
+
+# 367. TEST QUARANTINE
+
+Não mova teste falhando para quarantine apenas para limpar CI.
+
+Quarantine exige:
+
+issue/debt ID
+reason
+owner/future phase
+impact.
+
+Critical invariant não pode ser quarantined para obter PASS.
+
+---
+
+# 368. FLAKY TEST POLICY
+
+Flaky critical test:
+
+Phase != PASS.
+
+Primeiro estabilize ou demonstre que o problema é infraestrutura externa
+fora do escopo.
+
+---
+
+# 369. CONCURRENCY REPETITION
+
+Para testes críticos concorrentes:
+
+rode múltiplas iterações.
+
+Exemplo mínimo recomendado:
+
+20 rounds
+
+quando custo razoável.
+
+Registre:
+
+rounds
+failures
+duration.
+
+---
+
+# 370. DUPLICATE EFFECT ASSERTION
+
+O teste de efeito duplicado deve verificar o estado real durável.
+
+Não apenas:
+
+mockFunction called once.
+
+Verifique tabela/registro sintético final.
+
+---
+
+# 371. PROCESS RESTART ASSERTION
+
+Restart proof deve verificar que estado em memória foi realmente perdido
+quando classificado como PROCESS_RESTART_PROOF.
+
+---
+
+# 372. POSTGRES PROOF ASSERTION
+
+Real PostgreSQL proof deve registrar versão real do servidor.
+
+SQLite
+memory adapter
+mock repository
+
+não contam como PostgreSQL proof.
+
+---
+
+# 373. SQL TRANSACTION FAILURE TEST
+
+Quando possível, injete falha entre:
+
+execution persistence
+e
+outbox persistence
+
+para provar atomicidade.
+
+---
+
+# 374. EFFECT COMMIT FAILURE TEST
+
+Simule:
+
+external/synthetic effect committed
+→ persistence update failure.
+
+Prove recuperação/idempotency/reconciliation.
+
+---
+
+# 375. AUDIT FAILURE TEST
+
+Simule audit failure no ponto definido pela policy.
+
+Prove comportamento:
+
+fail-closed
+ou
+durable deferred audit
+
+conforme decisão arquitetural.
+
+---
+
+# 376. TELEMETRY FAILURE TEST
+
+Simule telemetry failure.
+
+Prove que não duplica side effect nem corrompe execution.
+
+---
+
+# 377. MODEL TIMEOUT TEST
+
+Simule timeout realístico via controlled provider.
+
+Não use sleep longo.
+
+Use controllable promise/clock/abort.
+
+---
+
+# 378. TOOL TIMEOUT TEST
+
+Mesma regra.
+
+Prove effect semantics quando timeout ocorrer:
+
+before effect
+versus
+unknown after dispatch.
+
+---
+
+# 379. ABORT PROPAGATION TEST
+
+Quando AbortSignal implementado:
+
+prove que deadline/cancel propaga até provider/tool compatível.
+
+Não declare cancelamento de efeito externo já executado.
+
+---
+
+# 380. CANCELLATION RACE
+
+Teste quando viável:
+
+cancel
+versus
+worker claim
+
+cancel
+versus
+tool start
+
+Defina winner semantics.
+
+Não deixe comportamento acidental.
+
+---
+
+# 381. APPROVAL RACE
+
+Teste:
+
+approve
+versus
+cancel
+
+ou:
+
+two approvers simultaneously
+
+quando aplicável.
+
+Preserve decisão única/semântica clara.
+
+---
+
+# 382. IDEMPOTENCY CONFLICT
+
+Mesmo idempotency key com payload semanticamente diferente deve possuir
+comportamento explícito.
+
+Não silenciosamente retornar execution antiga se isso puder esconder erro.
+
+Opções:
+
+IDEMPOTENCY_CONFLICT
+
+ou hash-bound key semantics.
+
+Documente.
+
+---
+
+# 383. IDEMPOTENCY PAYLOAD HASH
+
+Considere vincular idempotency key ao canonical request hash.
+
+Se mesma key + hash diferente:
+
+conflict.
+
+Não force se design existente possui solução equivalente.
+
+---
+
+# 384. CANONICAL SERIALIZATION
+
+Se usar hash para payload:
+
+use serialização determinística.
+
+Não dependa de ordem incidental de propriedades JSON.
+
+Teste.
+
+---
+
+# 385. EFFECT PAYLOAD HASH
+
+Para effect journal/approval binding, use mesma disciplina quando necessário.
+
+---
+
+# 386. HASH ALGORITHM
+
+Use algoritmo padrão seguro existente, por exemplo SHA-256, quando hashes
+de integridade forem necessários.
+
+Não invente algoritmo.
+
+---
+
+# 387. HASH IS NOT ENCRYPTION
+
+Documente:
+
+hash de integridade não protege confidencialidade.
+
+Não armazenar segredo achando que SHA resolve privacidade.
+
+---
+
+# 388. DB AUTHORIZATION
+
+Tenant isolation deve existir na aplicação e, se arquitetura suportar,
+pode ser reforçada no DB.
+
+Não introduza RLS obrigatoriamente nesta fase se isso causar expansão grande.
+
+Mas documente status real.
+
+---
+
+# 389. TENANT CONTEXT
+
+Não aceite tenantId arbitrário do payload externo como autoridade sem validação.
+
+Tenant deve vir de identidade/trusted boundary quando aplicável.
+
+Nos testes sintéticos, simule essa boundary.
+
+---
+
+# 390. OPERATOR IDENTITY
+
+Preserve identidade de operador quando execution é iniciada por humano.
+
+Não use `system` indiscriminadamente.
+
+Para Worker:
+
+actor técnico pode ser Worker/System
+
+mas origin actor deve permanecer rastreável.
+
+---
+
+# 391. ACTOR CHAIN
+
+Quando apropriado, diferencie:
+
+requestedBy
+executedBy
+approvedBy.
+
+Isso será importante em ambiente hospitalar.
+
+---
+
+# 392. SYSTEM ACTOR
+
+Defina identidade canônica para ações automáticas.
+
+Não use string livre diferente em cada package.
+
+---
+
+# 393. CLOCK / TIMESTAMP SEMANTICS
+
+Use timestamps UTC internamente.
+
+Apresentação local pertence ao produto/UI.
+
+Não misture timezone hospitalar com persistence core.
+
+---
+
+# 394. ORDERING
+
+Não use timestamp sozinho como ordering authority quando concorrência exigir
+sequence/version.
+
+---
+
+# 395. EXECUTION HISTORY QUERY
+
+Não é obrigatório criar API pública completa.
+
+Mas deve ser possível internamente recuperar timeline de uma execution para
+debug/audit.
+
+---
+
+# 396. AUDIT QUERY TENANT SAFETY
+
+Qualquer query de audit deve respeitar tenant/authorization.
+
+---
+
+# 397. TOOL DESCRIPTOR IMMUTABILITY
+
+Orchestrator recebe snapshot/read-only descriptors.
+
+Não pode alterar:
+
+risk
+approval requirement
+implementation.
+
+---
+
+# 398. TOOL REGISTRY MUTATION
+
+Se Tool Registry for mutável em runtime, documente governance.
+
+Para Phase 2, configuração estática no bootstrap é aceitável.
+
+---
+
+# 399. MODEL REGISTRY MUTATION
+
+Mesma disciplina.
+
+Não precisa dynamic hot reload nesta fase.
+
+---
+
+# 400. BOOT VALIDATION
+
+Harness startup deve validar configuração crítica.
+
+Exemplos:
+
+missing persistence
+missing policy
+invalid tool registration
+duplicate tool IDs
+invalid model profile.
+
+Fail fast quando apropriado.
+
+---
+
+# 401. DUPLICATE TOOL ID TEST
+
+Registrar duas Tools com mesmo ID/version conflitante deve falhar
+deterministicamente.
+
+---
+
+# 402. INVALID POLICY CONFIG TEST
+
+Config inválida não deve iniciar silenciosamente com allow-all.
+
+Fail closed.
+
+---
+
+# 403. MISSING AUDIT CONFIG
+
+Se Audit for obrigatório para lane governada:
+
+startup deve refletir isso.
+
+Não degradar silenciosamente para no-op em produção.
+
+Test environment pode usar explicit TestAuditSink.
+
+---
+
+# 404. NO-OP COMPONENTS
+
+No-op implementations devem ser explicitamente nomeadas:
+
+NoopTelemetry
+TestAuditSink
+etc.
+
+Não fazer fallback invisível.
+
+---
+
+# 405. ENVIRONMENT MODE
+
+Se houver:
+
+development
+test
+production
+
+defina diferenças explicitamente.
+
+Production não pode habilitar:
+
+fault injection
+synthetic provider
+synthetic side-effect tool
+
+por acidente.
+
+---
+
+# 406. FAULT INJECTION SAFETY
+
+Fault injection deve exigir:
+
+test-only wiring
+ou
+explicit safe environment guard.
+
+Startup de production com fault injection ativo:
+
+FAIL.
+
+---
+
+# 407. SYNTHETIC TOOL SAFETY
+
+Synthetic Tool não deve ser registrada no catálogo de produção por default.
+
+---
+
+# 408. SYNTHETIC MODEL SAFETY
+
+Mesma regra.
+
+---
+
+# 409. PRODUCTION CONFIG VALIDATION
+
+Mesmo que Production permaneça NO-GO, crie validações para impedir
+configurações obviamente inseguras.
+
+---
+
+# 410. DEPLOYMENT ARTIFACT
+
+Se Dockerfile existente for afetado, preserve build.
+
+Não faça deployment real.
+
+Teste container build quando viável.
+
+---
+
+# 411. API / WORKER SEPARATION
+
+Se mesmo container/image puder rodar ambos via comandos distintos, tudo bem.
+
+Mas processos devem possuir lifecycle independente.
+
+---
+
+# 412. SINGLE PROCESS DEV MODE
+
+Pode existir modo de desenvolvimento que inicia API + Worker juntos.
+
+Mas não confunda com arquitetura canônica de durabilidade.
+
+Documente como DEV convenience.
+
+---
+
+# 413. CANONICAL PRODUCTION MODEL
+
+Documente conceitualmente:
+
+API process(es)
+Worker process(es)
+PostgreSQL
+
+mesmo sem deploy real.
+
+---
+
+# 414. HORIZONTAL WORKER READINESS
+
+Prove ao menos com dois Workers locais que claim semantics funcionam.
+
+Isso é mais importante que Kubernetes.
+
+---
+
+# 415. HORIZONTAL API READINESS
+
+Idempotency não pode depender de memória de uma instância API.
+
+Prove com persistence compartilhada conceitualmente/por teste.
+
+---
+
+# 416. NO IN-MEMORY IDEMPOTENCY AUTHORITY
+
+Cache pode acelerar.
+
+DB é autoridade.
+
+---
+
+# 417. NO IN-MEMORY APPROVAL AUTHORITY
+
+Approval durável.
+
+---
+
+# 418. NO IN-MEMORY EXECUTION AUTHORITY
+
+Execution durável.
+
+---
+
+# 419. NO IN-MEMORY EFFECT AUTHORITY
+
+Effect Journal durável.
+
+---
+
+# 420. STATE RECOVERY FROM DATABASE
+
+Após restart completo:
+
+API/Worker devem conseguir reconstruir estado necessário do DB/config.
+
+---
+
+# 421. CACHE LOSS TEST
+
+Se houver caches relevantes:
+
+simule cache vazio.
+
+Execution não pode ser perdida.
+
+---
+
+# 422. AUDIT RECONSTRUCTION
+
+Para uma execution concluída, deve ser possível responder:
+
+quem pediu?
+qual agent/version?
+qual policy?
+houve approval?
+qual model profile?
+qual Tool/version?
+qual efeito?
+qual resultado?
+quando?
+quantas tentativas?
+
+Sem chain-of-thought.
+
+---
+
+# 423. DEBUGGABILITY
+
+Adicione ferramentas internas/read-only ou documentação suficiente para
+investigar executionId.
+
+Não precisa UI.
+
+---
+
+# 424. SUPPORTABILITY
+
+Um operador técnico deve conseguir distinguir:
+
+stuck
+waiting approval
+retrying
+failed terminal
+completed.
+
+---
+
+# 425. OPERATIONAL ERROR MESSAGES
+
+Logs/runbook devem indicar ação possível.
+
+Evite apenas:
+
+"something went wrong".
+
+---
+
+# 426. DOCUMENTATION AS CODE
+
+Quando possível, derive tabelas/listas de estados/enums diretamente de contratos
+ou valide consistência.
+
+Evite docs divergirem silenciosamente.
+
+---
+
+# 427. STATE MACHINE DOCUMENTATION TEST
+
+Se viável, teste que todos os states documentados existem no contrato e vice-versa.
+
+---
+
+# 428. ERROR TAXONOMY DOCUMENTATION TEST
+
+Mesma ideia quando custo baixo.
+
+---
+
+# 429. ADR CONSISTENCY
+
+ADRs não devem contradizer implementação final.
+
+Atualize status:
+
+Accepted
+Superseded
+Proposed.
+
+---
+
+# 430. CHANGE LOG
+
+Crie:
+
+docs/phase2/CHANGELOG.md
+
+Liste mudanças arquiteturais relevantes da Phase.
+
+Não precisa replicar git diff inteiro.
+
+---
+
+# 431. REMOVAL LOG
+
+Se código legado for removido:
+
+documente:
+
+what
+why
+replacement
+tests proving safe removal.
+
+---
+
+# 432. DEPRECATION LOG
+
+Se código permanecer mas não for canônico:
+
+documente.
+
+---
+
+# 433. PHASE 2 NON-GOALS
+
+Reitere no relatório final que NÃO foram objetivos:
+
+natural conversation
+better reasoning
+iterative RAG
+multi-agent
+MCP ecosystem
+production deployment
+real hospital integrations.
+
+Isso evita avaliação errada da Phase.
+
+---
+
+# 434. ARCHITECTURAL QUALITY BAR
+
+A Phase 2 deve privilegiar:
+
+simple
+explicit
+typed
+durable
+testable
+observable
+recoverable
+governed.
+
+Evite:
+
+clever
+magical
+implicit
+reflection-heavy
+framework-heavy.
+
+---
+
+# 435. COMMENTS
+
+Comente invariants difíceis.
+
+Não comente código óbvio.
+
+Especialmente documente:
+
+why lease/fencing exists
+why effect journal exists
+why transaction does not span external call
+why approval is resumable.
+
+---
+
+# 436. NAMING
+
+Use nomes semânticos.
+
+Evite:
+
+Manager2
+HandlerNew
+ProcessorFinal
+TempExecution.
+
+---
+
+# 437. NO VERSION SUFFIX CHAOS
+
+Runtime V1/V2 pode ser conceito arquitetural.
+
+Não criar dezenas de arquivos:
+
+runtime-v2-final-new.ts.
+
+Use versionamento limpo.
+
+---
+
+# 438. TYPE SAFETY
+
+Evite `any` nas boundaries críticas.
+
+Use schemas/types validados.
+
+---
+
+# 439. UNKNOWN OVER ANY
+
+Quando dado externo ainda não foi validado:
+
+unknown
+→ parse/validate
+→ typed.
+
+---
+
+# 440. DATABASE ROW MAPPING
+
+Não espalhe casting de row SQL para domain type.
+
+Centralize mapping quando necessário.
+
+---
+
+# 441. SERIALIZATION BOUNDARY
+
+Defina claramente tipos internos vs wire representation.
+
+Especialmente Date/timestamps/enums.
+
+---
+
+# 442. UTC
+
+Persistência usa UTC.
+
+---
+
+# 443. MONOTONIC DURATION
+
+Para duration em processo, use clock adequado quando disponível.
+
+Para timestamps duráveis, wall-clock/DB time.
+
+Não overengineer.
+
+---
+
+# 444. TEST CLOCK
+
+Clock injetável onde necessário.
+
+---
+
+# 445. RANDOMNESS
+
+IDs aleatórios devem ser controláveis/testáveis quando necessário.
+
+Não use deterministic IDs em produção apenas para facilitar teste.
+
+---
+
+# 446. ID COLLISION
+
+Use estratégia robusta existente:
+
+UUID/ULID/etc.
+
+Não invente ID generator.
+
+---
+
+# 447. CORRELATION
+
+Preserve correlation através de retry/resume.
+
+Attempt pode mudar.
+
+Execution correlation principal deve permanecer.
+
+---
+
+# 448. TRACE
+
+Novo Worker attempt pode ter novo span/trace relationship conforme observability
+design.
+
+Documente.
+
+---
+
+# 449. APPROVAL CORRELATION
+
+Approval deve referenciar execution/correlation adequadamente.
+
+---
+
+# 450. EFFECT CORRELATION
+
+Effect Journal também.
+
+---
+
+# 451. OUTBOX CORRELATION
+
+Outbox events também.
+
+---
+
+# 452. ONE EXECUTION, MANY ATTEMPTS
+
+Modelo conceitual obrigatório.
+
+Não crie nova execution automaticamente para cada technical retry.
+
+---
+
+# 453. ONE EXECUTION, FUTURE

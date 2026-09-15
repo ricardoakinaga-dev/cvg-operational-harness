@@ -1,0 +1,194 @@
+{
+  "taskId": "AAA-07",
+  "program": "AAA-20260912",
+  "remediation": "P1-2R",
+  "title": "Recuperacao fail-closed para aprovacoes legadas sem operationKey persistida",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "observedAt": "2026-09-13T06:16:30Z",
+  "capturedAtSource": "date -u +%Y-%m-%dT%H:%M:%SZ",
+  "timestampForm": "UTC ISO 8601 with explicit Z suffix only; the Vitest runner prints host-local start times (UTC-3) and the UTC equivalents are recorded in commands.md",
+  "executor": "builder agent (agent-runtime lane)",
+  "authority": "Residual P1-2R in docs/04_audit/evidence/AAA/P1-independent-review-round2/REVIEW.md section 8 and review.json findings[0]; successor of the P1-2 remediation in docs/04_audit/evidence/AAA/AAA-07/sweep-duplicate-fix/.",
+  "treeBinding": {
+    "workspace": "/home/ricardo/cvg-agent-secretary-v2",
+    "head": "512bc11e80fbf7c7b8baf6263aacc811ff829309",
+    "branch": "main",
+    "dirtyEntries": 120,
+    "node": "v24.20.0",
+    "npm": "11.19.0",
+    "reviewedCandidate": "911f049888a45ab206770c29c07a492b4294905225ce0d722f7a193e694da9d4",
+    "frozenSnapshot": "/tmp/opencode/aaa13-rehearsal-20260913T052107Z/repo"
+  },
+  "finding": {
+    "id": "P1-2R",
+    "severity": "P1",
+    "source": "docs/04_audit/evidence/AAA/P1-independent-review-round2/REVIEW.md section 8 (reviewer refs runtime.ts:1174, 2047-2067, 2185-2231; contract aaa_execution_contract.md:118)",
+    "before": "A keyless (pre-fix) approval retried with a changed/absent caller idempotency key while its reservation lease was active had the journal key resolved from the caller key, found no record under that key, released the possibly-started effect to APPROVED and re-executed the tool, orphaning the original EFFECT_STARTED journal record. The same asymmetry existed in #recoverExpiredReservation.",
+    "after": "Both recovery helpers resolve the durable identity before touching the journal. A keyless approval never re-arms: only CONFIRMED replays (no new effect); every other state denies operation_uncertain and the original journal record is untouched. A persisted key re-arms/releases only with positive proof (absent + never EXECUTING, or a no-effect terminal record); EFFECT_STARTED/RESERVED/UNCERTAIN, lookup failure, ambiguous binding or keyless absence deny without re-executing. The TTL sweep behavior is unchanged."
+  },
+  "contract": [
+    "docs/02_spec/aaa_execution_contract.md:118 (recovery returns to APPROVED only with proof of absence of effect; doubt => UNCERTAIN)",
+    "docs/02_spec/aaa_execution_contract.md section 4 (orphan reservation recovery) and T-18",
+    "docs/02_spec/aaa_execution_contract.md section 7 (durable intent and effect journal)"
+  ],
+  "changedFiles": [
+    {
+      "path": "packages/agent-runtime/src/runtime.ts",
+      "sha256": "1fe73b1da50d5fd8d42eddd1dfd301e3404b634da2d944fff5aa883464dfb78c",
+      "preSha256": "82b938441fb6d1dd264d0d34257f3c774171f14a0aafb1d2c86a5c3e97f886d5",
+      "change": [
+        "#denyRecoveryUncertain(): centralized fail-closed denial (operation_uncertain); marks UNCERTAIN only when the reservation cannot progress",
+        "#recoverExpiredReservation(): lookup failure denies; keyless absence/ABANDONED denies; persisted absence releases only when the approval never reached EXECUTING; EFFECT_STARTED/UNCERTAIN unchanged (mark + deny)",
+        "#recoverActiveReservation(): reads the journal under the resolved key before any reserve; keyless records replay only CONFIRMED and otherwise deny without journal mutation; persisted EFFECT_STARTED/RESERVED -> operation_in_progress, UNCERTAIN -> mark + deny, absent + EXECUTING -> deny uncertain; re-arm only for CONFIRMED replay, no-effect terminal records or absent + never EXECUTING",
+        "Both helpers deny operation_uncertain when the journal record is bound to a different proposalHash (ambiguous identity)"
+      ]
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/runtime-execution-recovery.test.ts",
+      "sha256": "bb0f2db23ed220f2e45b5147fbfb43b4132a367e8715d261b647c1faa135a384",
+      "preSha256": "c8a640dc6e37910b83e8502eab5873cdabe414674c556745c0cea2cf35890018",
+      "change": [
+        "reserveBinding()/persistedOperationKeyFor(): test fixtures can now persist an operationKey and reserve without markExecuting, so safe recovery paths stay covered",
+        "journal lookup failure test now asserts fail-closed denial (operation_uncertain) instead of the removed fail-open execution",
+        "twelve recovery tests converted from keyless fixtures to persisted-key fixtures where the behavior remains supported (re-arm of no-effect terminals, replay, expired-release, generic fault mapping); no assertion weakened"
+      ]
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/runtime-legacy-rearm.test.ts",
+      "sha256": "4c1d86af3dcf67c989fcaa713b8c7b33c2c9f8cab33c290f2fed02ddc7959a69",
+      "preSha256": null,
+      "change": "8 new P1-2R tests: legacy active lease + changed key (RED before fix), legacy active lease + absent key (RED), legacy expired lease + changed key, legacy lookup failure, persisted proven-absent positive control (executes once under the persisted key), persisted EFFECT_STARTED => denied uncertain, persisted EXECUTING without record => denied uncertain, persisted journal bound to a foreign proposal => denied uncertain"
+    },
+    {
+      "path": "docs/04_audit/evidence/AAA/AAA-07/sweep-legacy-fix/probe-legacy-rearm.ts",
+      "sha256": "1497724a4840298fc083c210f700733c1e7b716d684cc79a89db2266b8141a60",
+      "change": "Synthetic adjudication probe: real child crash after markEffectStarted (exit 99), legacy migration state, five scenarios with raw JSON trace"
+    }
+  ],
+  "unchanged": [
+    "packages/approval-engine/** (the P1-2 engine changes are untouched by this package)",
+    "packages/agent-runtime/src/effect-journal.ts, contracts.ts, proposal.ts, index.ts",
+    "docs/02_spec/** contracts (not modified)",
+    "docs/03_build/tracking/**, docs/99_runtime_state.md, docs/20_master_execution_log.md, docs/30_backlog_master.md (coordinator persists from this manifest)",
+    "No production call site of sweepExpiredApprovals was added; periodic worker wiring remains AAA-19"
+  ],
+  "red": {
+    "command": "npx vitest run packages/agent-runtime/src/__tests__/runtime-legacy-rearm.test.ts --no-file-parallelism --maxWorkers=2",
+    "exitCode": 1,
+    "result": "4 failed | 3 passed (7). The reviewer scenario (legacy active lease, retry with changed key B) returned outcome 'executed' (tool re-execution) instead of denied/operation_uncertain; the absent-key variant and the lookup-failure and persisted-EXECUTING-absent scenarios also executed.",
+    "artifacts": ["red-focused.log", "red-focused.exit"],
+    "observedAtUtc": "2026-09-13T05:58:06Z"
+  },
+  "green": {
+    "focused": {
+      "command": "npx vitest run packages/agent-runtime packages/approval-engine --no-file-parallelism --maxWorkers=2",
+      "exitCode": 0,
+      "result": "20 files passed (20); 369 tests passed (369)",
+      "artifacts": ["green-focused.log", "green-focused.exit"],
+      "observedAtUtc": "2026-09-13T06:12:35Z"
+    },
+    "newSuites": {
+      "command": "npx vitest run packages/agent-runtime/src/__tests__/runtime-legacy-rearm.test.ts packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts --no-file-parallelism --maxWorkers=2",
+      "exitCode": 0,
+      "result": "2 files passed (2); 15 tests passed (15) (8 new P1-2R + 7 preserved P1-2 sweep tests)",
+      "artifacts": ["green-new-suites.log", "green-new-suites.exit"],
+      "observedAtUtc": "2026-09-13T06:12:37Z"
+    },
+    "full": {
+      "command": "npm test",
+      "exitCode": 0,
+      "result": "230 files passed | 4 skipped (234); 1585 tests passed | 57 skipped (1642); zero failures, zero new skips",
+      "baseline": "round-2 review baseline 1577 passed | 57 skipped; delta +8 = new tests, no test removed, no skip added",
+      "artifacts": ["full-test.log", "full-test.exit"],
+      "observedAtUtc": "2026-09-13T06:16:18Z"
+    }
+  },
+  "checks": [
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "typecheck.log",
+      "observedAtUtc": "2026-09-13T06:12:48Z"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "lint.log",
+      "observedAtUtc": "2026-09-13T06:12:53Z"
+    },
+    {
+      "command": "npx prettier --check packages/agent-runtime/src/runtime.ts packages/agent-runtime/src/__tests__/runtime-legacy-rearm.test.ts packages/agent-runtime/src/__tests__/runtime-execution-recovery.test.ts",
+      "exitCode": 0,
+      "result": "PASS (changed files only)",
+      "artifact": "format-check.log",
+      "observedAtUtc": "2026-09-13T06:12:54Z"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "git-diff-check.log",
+      "observedAtUtc": "2026-09-13T06:12:54Z"
+    }
+  ],
+  "rawTraces": [
+    {
+      "probe": "probe-legacy-rearm.ts (real child crash exit 99 + 5 scenarios)",
+      "exitCode": 0,
+      "invariants": [true, true, true, true, true],
+      "artifact": "probe-legacy-rearm.log",
+      "observedAtUtc": "2026-09-13T06:12:12Z"
+    },
+    {
+      "probe": "P1-independent-review-round2/probes/p12-legacy-active-repro.ts (reviewer, frozen, re-run unmodified)",
+      "exitCode": 0,
+      "result": "legacy and legacy-absent-key denied/operation_uncertain, tool 0, journal A EFFECT_STARTED, effectsLogGrew false",
+      "artifact": "reviewer-p12-legacy-active-probe.log",
+      "observedAtUtc": "2026-09-13T06:12:13Z"
+    },
+    {
+      "probe": "P1-independent-review-round2/probes/p12-sweep-operation-key.ts (reviewer, frozen, re-run unmodified)",
+      "exitCode": 0,
+      "result": "9/9 scenarios invariantHeld, real crash child status 99, effects.log 7 -> 7 bytes, failed: 0",
+      "artifact": "reviewer-p12-sweep-probe-after-fix.log",
+      "observedAtUtc": "2026-09-13T06:12:14Z"
+    }
+  ],
+  "guarantees": [
+    "A keyless legacy approval can no longer re-execute an effect through any in-turn recovery path: the journal is not mutated and the denial is operation_uncertain.",
+    "The original EFFECT_STARTED journal record (possibly under a changed caller key) is never orphaned or hidden by recovery.",
+    "A persisted operationKey re-arms/releases only with positive proof under that key (absent + never EXECUTING, or no-effect terminal states); EFFECT_STARTED/RESERVED/UNCERTAIN/CONFIRMED, lookup failure or ambiguous state never re-execute.",
+    "Replay of CONFIRMED records is preserved and cannot duplicate an effect.",
+    "The TTL sweep behavior fixed in P1-2 is preserved and re-verified by the reviewer's own frozen probes (9/9).",
+    "No existing test was weakened: the adjusted fixtures remain persisted-key positive paths or were converted to stricter fail-closed expectations."
+  ],
+  "scopeDeclaration": {
+    "syntheticOnly": true,
+    "noRealData": true,
+    "noRealActions": true,
+    "noCommitPushDeploy": true,
+    "noNpmInstall": true,
+    "filesWritten": [
+      "packages/agent-runtime/src/runtime.ts",
+      "packages/agent-runtime/src/__tests__/runtime-execution-recovery.test.ts",
+      "packages/agent-runtime/src/__tests__/runtime-legacy-rearm.test.ts",
+      "docs/04_audit/evidence/AAA/AAA-07/sweep-legacy-fix/**"
+    ]
+  },
+  "limitations": "see limitations.md",
+  "review": {
+    "status": "PENDING",
+    "reviewerRequirement": "critic that did not implement this remediation",
+    "requestedChecks": [
+      "attempt to reach a re-arm with a keyless approval (active lease, expired lease, lookup failure) and confirm tool 0 and journal immutability",
+      "challenge the persisted-key positive path: only absent + never EXECUTING or no-effect terminal records may re-arm",
+      "confirm the adjusted recovery tests are stricter or equivalent, not weakened",
+      "confirm the TTL sweep unchanged behavior via the round-2 probes",
+      "confirm no file outside the declared write scope was touched"
+    ]
+  },
+  "nextAction": "Independent review; coordinator persists runtime state/backlog. Any byte change to the hashed files expires these verdicts.",
+  "production": "NO-GO"
+}

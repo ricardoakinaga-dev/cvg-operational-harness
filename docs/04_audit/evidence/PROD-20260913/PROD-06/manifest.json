@@ -1,0 +1,70 @@
+{
+  "task": "PROD-06",
+  "title": "Preservar ator e correlação na auditoria da jornada",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "origin": [
+    "D13-06",
+    "Q-A14-01"
+  ],
+  "contract": "docs/02_spec/prod20260913_m1_corrections_contract.md",
+  "negativeReproduced": {
+    "evidence": "audit 0560 D13-06: actor System/journey-r3 and correlation derived from resource",
+    "verdict": "FAIL_SYSTEM_ACTOR"
+  },
+  "positiveVerified": {
+    "probe": "parity contract test + HTTP PostgreSQL test",
+    "verdict": "PASS: operator actor/correlation persisted; body-injected actor ignored; missing context falls back to explicit system actor"
+  },
+  "source": [
+    "packages/persistence/src/journeys.ts",
+    "packages/persistence/src/journeys-postgres.ts",
+    "apps/api/src/server.ts",
+    "packages/persistence/src/__tests__/journeys-postgres.test.ts",
+    "apps/api/src/__tests__/journeys-api-postgres.test.ts"
+  ],
+  "evidence": [
+    "docs/04_audit/evidence/PROD-20260913/PROD-02/tests.log"
+  ],
+  "gates": [
+    {
+      "command": "npm run typecheck",
+      "result": "PASS",
+      "exitCode": 0,
+      "note": "re-run on the final bytes after the fake-pool test type fix; earlier P1 finding F1 resolved"
+    },
+    {
+      "command": "npx eslint (changed files)",
+      "result": "PASS",
+      "exitCode": 0
+    },
+    {
+      "command": "npm test",
+      "result": "PASS: Test Files 234 passed | 7 skipped (241); Tests 1625 passed | 83 skipped (1708)",
+      "exitCode": 0,
+      "note": "full suite executed during this session after the M1 changes"
+    },
+    {
+      "command": "TEST_DATABASE_URL=… npx vitest run journeys-postgres.test.ts journeys-api-postgres.test.ts",
+      "result": "PASS: 2 files / 32 tests, 0 skipped (includes actor/body-injection cases)",
+      "exitCode": 0,
+      "log": "docs/04_audit/evidence/PROD-20260913/PROD-02/tests.log"
+    }
+  ],
+  "limitations": [
+    "recordHandoff has no public HTTP route yet; propagation proven at repository and journey route level",
+    "timeline query by correlation uses the existing audit evidence APIs; no new endpoint added"
+  ],
+  "observedAt": "2026-09-13T14:41:17.823Z",
+  "contractSha256": "7cff313dae00a5aade0a8e5f5414ce397ff4fd08b8b60e25ca9da1a775956ab6",
+  "sourceSha256": {
+    "packages/persistence/src/journeys.ts": "60b9816db5ea537b050fe98b04bb27c44e7a9e1bf17081830ff9862dafd10538",
+    "packages/persistence/src/journeys-postgres.ts": "e0026ece35cf533724d5101051d72975667aed424c0532667e00619c14355caa",
+    "apps/api/src/server.ts": "d31d2385382e47df4a2b0f4a347cb3386fc95f9307e66244e4e8f1b3e2b7e4e6",
+    "packages/persistence/src/__tests__/journeys-postgres.test.ts": "48f2b8246b426412ec750887cdee72a48e57d1f027b111efa8eeb97162f06c8c",
+    "apps/api/src/__tests__/journeys-api-postgres.test.ts": "c6c97bb7ec5467986f595779e28104c6a46dcb83de1e51d5d15eb93e15e8f6ab"
+  },
+  "evidenceSha256": {
+    "docs/04_audit/evidence/PROD-20260913/PROD-02/tests.log": "ff2497a957de01a6cedd87488606966bc4378f99cd05cc149f12fa152d61fab6"
+  },
+  "independence": "builder output; independent review required before VERIFIED/DONE"
+}

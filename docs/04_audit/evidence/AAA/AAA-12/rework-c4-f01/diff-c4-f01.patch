@@ -1,0 +1,133 @@
+--- docs/04_audit/evidence/AAA/AAA-12/rework-c4-f01/before/effect-journal.ts	2026-09-12 19:14:35.054011316 -0300
++++ packages/channel-gateway/src/effect-journal.ts	2026-09-12 19:15:18.765754215 -0300
+@@ -10,10 +10,37 @@
+ export const SHARED_HASH_VERSION = 'shared-rfc8785-subset-v1'
+ export const CURRENT_HASH_VERSION = SHARED_HASH_VERSION
+ 
+-export function isSupportedHashVersion(version: string): boolean {
++export function isSupportedHashVersion(version: unknown): version is string {
+   return version === LEGACY_HASH_VERSION || version === SHARED_HASH_VERSION
+ }
+ 
++/**
++ * Returns the version of a persisted record. Only an absent property is
++ * interpreted as `legacy-local-v1`; an explicit malformed or unknown value
++ * resolves to `undefined` (fail closed) and is never blessed as legacy.
++ */
++export function resolvePersistedHashVersion(
++  record: Pick<ChannelEffectRecord, 'hashVersion'>
++): string | undefined {
++  const raw = (record as { hashVersion?: unknown }).hashVersion
++  if (raw === undefined) return LEGACY_HASH_VERSION
++  return isSupportedHashVersion(raw) ? raw : undefined
++}
++
++export function assertSupportedPersistedHashVersion(
++  record: ChannelEffectRecord
++): string {
++  const version = resolvePersistedHashVersion(record)
++  if (version === undefined) {
++    throw new ChannelError(
++      'hash_algorithm_mismatch',
++      'Channel operation record has an invalid or unknown hash version',
++      false
++    )
++  }
++  return version
++}
++
+ export interface ChannelEffectIdentity {
+   tenantId: string
+   channel: string
+@@ -181,9 +208,9 @@
+     return { action: 'version_mismatch' }
+   }
+   if (!existing) return { action: 'create' }
+-  const existingHashVersion = existing.hashVersion ?? LEGACY_HASH_VERSION
++  const existingHashVersion = resolvePersistedHashVersion(existing)
+   if (
+-    !isSupportedHashVersion(existingHashVersion) ||
++    existingHashVersion === undefined ||
+     existingHashVersion !== input.hashVersion
+   ) {
+     return { action: 'version_mismatch' }
+@@ -530,6 +557,7 @@
+         true
+       )
+     }
++    assertSupportedPersistedHashVersion(record)
+     const updated = update(record, now)
+     this.#entries.set(key, updated)
+     return cloneEffectRecord(updated)
+@@ -543,6 +571,7 @@
+     const key = channelEffectKey(identity)
+     const record = this.#entries.get(key)
+     if (!record) return 'lease_lost'
++    assertSupportedPersistedHashVersion(record)
+     if (
+       record.state === 'CONFIRMED' ||
+       record.state === 'FAILED' ||
+--- docs/04_audit/evidence/AAA/AAA-12/rework-c4-f01/before/effect-journal-file.ts	2026-09-12 19:14:35.054059977 -0300
++++ packages/channel-gateway/src/effect-journal-file.ts	2026-09-12 19:15:34.166664178 -0300
+@@ -13,6 +13,7 @@
+ import { ChannelError, type ChannelErrorCode } from './errors.ts'
+ import {
+   LEGACY_HASH_VERSION,
++  assertSupportedPersistedHashVersion,
+   channelEffectHasActiveLease,
+   channelEffectKey,
+   cloneEffectRecord,
+@@ -118,6 +119,7 @@
+     const key = channelEffectKey(identity)
+     return this.#withLock(key, async () => {
+       const record = await this.#readRecord(key)
++      if (record) assertSupportedPersistedHashVersion(record)
+       const now = this.#clock()
+       if (
+         !record ||
+@@ -150,6 +152,7 @@
+     const key = channelEffectKey(identity)
+     return this.#withLock(key, async () => {
+       const record = await this.#readRecord(key)
++      if (record) assertSupportedPersistedHashVersion(record)
+       const now = this.#clock()
+       if (
+         !record ||
+@@ -250,6 +253,7 @@
+     const deadline = this.#clock() + timeoutMs
+     for (;;) {
+       const record = await this.#readRecord(key)
++      if (record) assertSupportedPersistedHashVersion(record)
+       if (record && isTerminalForWaiter(record.state)) return record
+       const remaining = deadline - this.#clock()
+       if (remaining <= 0) return undefined
+@@ -264,6 +268,7 @@
+     const key = channelEffectKey(identity)
+     return this.#withLock(key, async () => {
+       const record = await this.#readRecord(key)
++      if (record) assertSupportedPersistedHashVersion(record)
+       if (!record || record.state !== 'UNCERTAIN') {
+         throw new ChannelError(
+           'reconciliation_required',
+@@ -305,6 +310,7 @@
+     return this.#withLock(key, async () => {
+       const record = await this.#readRecord(key)
+       if (!record) return 'lease_lost'
++      assertSupportedPersistedHashVersion(record)
+       if (
+         record.state === 'CONFIRMED' ||
+         record.state === 'FAILED' ||
+@@ -348,9 +354,10 @@
+       ) {
+         throw new Error('invalid channel effect record')
+       }
+-      // Legacy records persisted before hash versioning are read as the
+-      // legacy algorithm. The file is never rewritten on read.
+-      if (typeof parsed.hashVersion !== 'string' || parsed.hashVersion === '') {
++      // Only an absent property represents a legacy record. An explicit
++      // malformed or unknown value is preserved as-is and fails closed at the
++      // version check; the file is never rewritten on read.
++      if ((parsed as { hashVersion?: unknown }).hashVersion === undefined) {
+         parsed.hashVersion = LEGACY_HASH_VERSION
+       }
+       return parsed

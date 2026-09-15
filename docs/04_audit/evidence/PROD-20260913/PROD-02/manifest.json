@@ -1,0 +1,105 @@
+{
+  "task": "PROD-02",
+  "title": "Tornar mutação SQL de jornada e auditoria atômicas",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "origin": [
+    "D13-01",
+    "Q-A11-01"
+  ],
+  "contract": "docs/02_spec/prod20260913_m1_corrections_contract.md",
+  "negativeReproduced": {
+    "probe": "docs/04_audit/evidence/PROD-20260913/PROD-01/sql-atomicity-probe.before.json",
+    "verdict": "FAIL_PARTIAL_STATE",
+    "observed": {
+      "firstError": "synthetic audit failure",
+      "draftsAfterFailedMutation": 1,
+      "auditAfterFailedMutation": 0,
+      "replayStatus": "draft",
+      "auditRowsAfterReplay": 0
+    }
+  },
+  "positiveVerified": {
+    "probe": "docs/04_audit/evidence/PROD-20260913/PROD-02/sql-atomicity-probe.after.json",
+    "verdict": "PASS_ATOMIC",
+    "observed": {
+      "probe": "sql-atomicity",
+      "schema": "prod01_probe_atomicity",
+      "firstError": "synthetic audit failure",
+      "draftsAfterFailedMutation": 0,
+      "auditAfterFailedMutation": 0,
+      "replayStatus": "draft",
+      "auditRowsAfterReplay": 1,
+      "verdict": "PASS_ATOMIC"
+    }
+  },
+  "source": [
+    "packages/persistence/src/tenant-scoped-postgres.ts",
+    "packages/persistence/src/journeys-postgres.ts",
+    "packages/persistence/src/__tests__/journeys-postgres.test.ts",
+    "apps/api/src/__tests__/journeys-api-postgres.test.ts"
+  ],
+  "evidence": [
+    "docs/04_audit/evidence/PROD-20260913/PROD-02/sql-atomicity-probe.after.json",
+    "docs/04_audit/evidence/PROD-20260913/PROD-02/tests.log",
+    "docs/04_audit/evidence/PROD-20260913/PROD-05/test-postgres.log"
+  ],
+  "gates": [
+    {
+      "command": "npm run typecheck",
+      "result": "PASS",
+      "exitCode": 0,
+      "note": "re-run on the final bytes after the fake-pool test type fix; earlier P1 finding F1 resolved"
+    },
+    {
+      "command": "npx eslint (changed files)",
+      "result": "PASS",
+      "exitCode": 0
+    },
+    {
+      "command": "npm test",
+      "result": "PASS: Test Files 234 passed | 7 skipped (241); Tests 1625 passed | 83 skipped (1708)",
+      "exitCode": 0,
+      "note": "full suite executed during this session after the M1 changes"
+    },
+    {
+      "command": "TEST_DATABASE_URL=… npx vitest run journeys-postgres.test.ts journeys-api-postgres.test.ts",
+      "result": "PASS: 2 files / 32 tests, 0 skipped",
+      "exitCode": 0,
+      "log": "docs/04_audit/evidence/PROD-20260913/PROD-02/tests.log"
+    },
+    {
+      "command": "TEST_DATABASE_URL=… npm run test:postgres",
+      "result": "PASS: 18 files / 151 tests, 0 skipped",
+      "exitCode": 0,
+      "log": "docs/04_audit/evidence/PROD-20260913/PROD-05/test-postgres.log"
+    }
+  ],
+  "limitations": [
+    "does not prove physical fsync durability; disposable cluster used",
+    "no production data or real confirmation path touched"
+  ],
+  "observedAt": "2026-09-13T14:41:17.814Z",
+  "contractSha256": "7cff313dae00a5aade0a8e5f5414ce397ff4fd08b8b60e25ca9da1a775956ab6",
+  "sourceSha256": {
+    "packages/persistence/src/tenant-scoped-postgres.ts": "055bca028dfa3152bea7bd224daab33e8cb511ea7a979fb61227000e4e24e2f7",
+    "packages/persistence/src/journeys-postgres.ts": "e0026ece35cf533724d5101051d72975667aed424c0532667e00619c14355caa",
+    "packages/persistence/src/__tests__/journeys-postgres.test.ts": "48f2b8246b426412ec750887cdee72a48e57d1f027b111efa8eeb97162f06c8c",
+    "apps/api/src/__tests__/journeys-api-postgres.test.ts": "c6c97bb7ec5467986f595779e28104c6a46dcb83de1e51d5d15eb93e15e8f6ab"
+  },
+  "evidenceSha256": {
+    "docs/04_audit/evidence/PROD-20260913/PROD-02/sql-atomicity-probe.after.json": "22a89fdde89508e70f68c133014d538adea0f710d652063133e62fb860b40238",
+    "docs/04_audit/evidence/PROD-20260913/PROD-02/tests.log": "ff2497a957de01a6cedd87488606966bc4378f99cd05cc149f12fa152d61fab6",
+    "docs/04_audit/evidence/PROD-20260913/PROD-05/test-postgres.log": "2961974c644462cd373da70c3baad82301f668f3aa8c769aef5a32615a8635ae"
+  },
+  "independence": "builder output; independent review required before VERIFIED/DONE",
+  "reviewFindingsAddressed": [
+    {
+      "finding": "P3: no post-fix artifact for the D13-01 probe",
+      "fix": "sql-atomicity-probe.after.json added and hashed; probe re-run on the corrected tree"
+    },
+    {
+      "finding": "P3 (F5): cleanup failure after COMMIT gave the caller an error for a committed mutation",
+      "fix": "tenant-context reset and verification now happen inside the transaction before COMMIT; a reset failure rolls back, so an error never follows a committed mutation"
+    }
+  ]
+}

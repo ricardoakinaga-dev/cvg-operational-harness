@@ -1,5 +1,7 @@
 export * from './contracts.ts'
 export * from './errors.ts'
+export * from './effect-journal.ts'
+export * from './effect-journal-file.ts'
 export * from './idempotency.ts'
 export * from './gateway.ts'
 export * from './adapters/fake.ts'

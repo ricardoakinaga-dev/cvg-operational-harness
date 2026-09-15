@@ -1,0 +1,888 @@
+{
+  "schemaVersion": 1,
+  "kind": "aaa-live-execution-ledger",
+  "program": "AAA-20260912",
+  "createdAt": "2026-09-12",
+  "updatedAt": "2026-09-13T16:20:00Z",
+  "planningBaseline": {
+    "path": "docs/03_build/tracking/aaa_program_backlog.json",
+    "sha256": "40f50ba6e44fd062e9414377865ef71bb00dfad1fb1f67a98c336f07e6e479ce",
+    "note": "sha256 is the pre-execution planning artifact reviewed in AAA-20260912-PLAN; AAA-01/AAA-03 live statuses were appended afterward and the planner validator still passes; current file hash is in docs/04_audit/evidence/AAA/AAA-01/round1-artifact-hashes.txt"
+  },
+  "frontActivity": {
+    "detectedAt": "2026-09-12T20:37:00+00:00",
+    "note": "agent-2 is executing concurrently in the same worktree; detected work-in-progress, not reviewed status",
+    "agent-2": {
+      "AAA-05": "docs/02_spec/aaa_data_api_contract.md published 17:35 local (PROPOSED_NOT_FROZEN); must reconcile with AAA-03 operationKey/EffectJournalPort before freeze",
+      "AAA-12": "channel-gateway effect journal (effect-journal.ts, effect-journal-file.ts) plus RED/GREEN logs in docs/04_audit/evidence/AAA/AAA-12/",
+      "AAA-16": "dedicated disposable PostgreSQL at /tmp/opencode/aaa-agent2-pg16 (port 55432, fsync off, /tmp/opencode); evidence shows 11 files/84 tests PASS exit 0 with 0 required skips; independent review pending"
+    },
+    "agent-1Impact": "AAA-01 candidate manifest captured before these writes; agent-1 owned surfaces re-hashed unchanged",
+    "integrationRisks": [
+      "AAA-05 operationIdentity (tenantId, channel, operationKind, idempotencyKey) vs AAA-03 operationKey/EffectJournalPort: reconcile one canonical identity or document the mapping before freezing",
+      "AAA-12 journal and AAA-10 journal are adjacent surfaces; agent-2 owns channel persistence, agent-1 owns runtime journal; migration sequence remains agent-2"
+    ],
+    "latestReconciliation": {
+      "at": "2026-09-12T21:06:44.521273+00:00",
+      "agent-1": "AAA-04 reviewed independently (APPROVE_WITH_CONDITIONS scoped to coverage/performance qualification); AAA-03 revision 2 reconciled with AAA-05 and review conditions, hash 9df1a05f..., final agent-3 review requested; AAA-08 policy scope implemented and in REVIEW",
+      "agent-2": "AAA-05/AAA-12/AAA-16 handoffs received; SQL adapter/migration ownership decisions D05-1/D05-2 recorded; independent review still pending",
+      "agent-3": "AAA-04 authored; own supply-chain edits pending review; lint currently red in scripts/phase10-verify.mjs (unused imports) as an in-flight change"
+    }
+  },
+  "coordinatorDecisions": [
+    {
+      "id": "D05-1",
+      "decision": "Migration numbers reserved: 0012_channel_effect_journal for AAA-12, 0013_runtime_effect_journal for AAA-10; only agent-2 applies/writes migration files",
+      "authority": "lead coordination decision (technical ownership, not a human business gate)",
+      "at": "2026-09-12T21:06:44.521273+00:00"
+    },
+    {
+      "id": "D05-2",
+      "decision": "SQL adapter ownership: channel journal adapter + migration 0012 belong to agent-2; runtime effect journal SQL adapter + migration 0013 are specified by agent-1 (AAA-10) and implemented by agent-2 under handoff; outbox.ts/postgres.ts remain exclusive to AAA-10 with agent-2 handoff",
+      "authority": "lead coordination decision (technical ownership)",
+      "at": "2026-09-12T21:06:44.521273+00:00"
+    },
+    {
+      "id": "D05-COMP",
+      "decision": "Confirmed composition: channel idempotencyKey := runtime operationKey; AA-05 section 3.1 must be updated by its author to reference AAA-03 revision 2 hash 9df1a05f... before freeze",
+      "authority": "lead coordination decision",
+      "at": "2026-09-12T21:06:44.521273+00:00"
+    },
+    {
+      "id": "D01",
+      "decision": "APPROVED option C: LangGraph coordinates workflow composition behind an explicit adapter/frontier; the governed kernel keeps identity, policy, approval, idempotency, persistence and effect authority; no LangGraph path reaches an effect without the governance chain.",
+      "authority": "explicit human session decision via decision prompt; formal name/role not provided (nominal ratification recommended)",
+      "at": "2026-09-13T15:53:14.359Z",
+      "status": "APPROVED",
+      "scope": "runtime canonical choice for PROD-20260913; does not approve D02-D05, real channels/providers/IdP, real effects, data, homologation, deploy or production",
+      "reference": "docs/02_spec/prod20260913_decision_packet.md#registros-emitidos (packet sha256 3ba82555...)",
+      "unblocks": [
+        "AAA-06",
+        "AAA-19",
+        "AAA-20",
+        "AAA-21",
+        "PROD-04"
+      ]
+    },
+    {
+      "id": "D02",
+      "decision": "APPROVED option A: draft-only frozen (current fields, 24h TTL, real confirm/reschedule/cancel denied)",
+      "authority": "explicit human session decision; name/role not provided",
+      "at": "2026-09-13T16:20:00Z",
+      "status": "APPROVED",
+      "unblocks": [
+        "PROD-07 contract semantics"
+      ]
+    },
+    {
+      "id": "D03",
+      "decision": "APPROVED option A: lab targets p95<=2s, ack<=10s, 10k->100k events, 24h soak, 99.9% availability, RPO<=5min/RTO<=30min; production acceptance only after measurement in authorized environment",
+      "authority": "explicit human session decision; name/role not provided",
+      "at": "2026-09-13T16:20:00Z",
+      "status": "APPROVED",
+      "unblocks": [
+        "AAA-31",
+        "AAA-32"
+      ]
+    },
+    {
+      "id": "D04",
+      "decision": "APPROVED option A: all real integrations remain blocked; prepare homologation briefing without executing",
+      "authority": "explicit human session decision; name/role not provided",
+      "at": "2026-09-13T16:20:00Z",
+      "status": "APPROVED",
+      "keeps_blocked": [
+        "AAA-37",
+        "AAA-38",
+        "AAA-39"
+      ]
+    },
+    {
+      "id": "D05-3/4",
+      "decision": "APPROVED option A: 30-day journal/dedup retention, 30-day inbound TTL, UNCERTAIN never auto-expires, idempotent/queryable provider required when D04 authorizes",
+      "authority": "explicit human session decision; name/role not provided",
+      "at": "2026-09-13T16:20:00Z",
+      "status": "APPROVED",
+      "unblocks": [
+        "AAA-24"
+      ]
+    },
+    {
+      "id": "D05-SIG",
+      "decision": "DEFERRED option A: signoff only after requalified candidate, residual risk and complete evidence; no vulnerability/license exceptions granted now",
+      "authority": "explicit human session decision; name/role not provided",
+      "at": "2026-09-13T16:20:00Z",
+      "status": "APPROVED_DEFERRED"
+    }
+  ],
+  "schemaFallback": {
+    "skill": "orchestrate",
+    "status": "NOT_INSTALLED",
+    "evidence": "skills present at session start: engineering-framework, gauntlet-loop, customize-opencode",
+    "fallback": "ledger schema mirrors docs/03_build/tracking/rem0539_execution.json and plan 0324 readiness rules; no state is claimed as VERIFIED/DONE by self-assessment"
+  },
+  "authorization": {
+    "source": "user brief AAA-01 coordinator, 2026-09-12",
+    "scope": "controlled local corrections for approval, execution binding, idempotency and limits; synthetic data and disposable resources only",
+    "granted": [
+      "read/inspect working tree and docs",
+      "run synthetic reproductions and local gates",
+      "author contracts and evidence for review",
+      "coordinate three agents and publish shared tracking updates"
+    ],
+    "notGranted": [
+      "fictitious SPEC approval, D01/RF-011 decision",
+      "real appointment/clinical/financial/record actions",
+      "real provider/channel/IdP/RAG source, egress, deploy, production",
+      "commit, push or deploy"
+    ]
+  },
+  "team": {
+    "registration": "THREE_FRONTS_OBSERVED_BY_ARTIFACTS; no current process identity inferred; agent-3 AAA-01/03 reviews and AAA-04 manifest present",
+    "maxAgents": 3,
+    "planningTopologyNote": "plan 0324 defines 1 lead + 2 builders + 1 fresh critic reserved; the user constrained this program to three named agents, with the fresh-critic role rotating in time",
+    "agents": [
+      {
+        "id": "agent-1",
+        "role": "lead/integrator; approval, authorization policy, execution binding, idempotency and limits",
+        "tasks": [
+          "AAA-01",
+          "AAA-03",
+          "AAA-07",
+          "AAA-08",
+          "AAA-09",
+          "AAA-10",
+          "AAA-11"
+        ],
+        "ownedPaths": [
+          "packages/approval-engine/",
+          "packages/policy-engine/",
+          "packages/policy/",
+          "packages/agent-runtime/",
+          "docs/02_spec/aaa_execution_contract.md",
+          "docs/04_audit/evidence/AAA/AAA-01/",
+          "docs/04_audit/evidence/AAA/AAA-03/",
+          "docs/04_audit/evidence/AAA/AAA-07/",
+          "docs/04_audit/evidence/AAA/AAA-08/",
+          "docs/04_audit/evidence/AAA/AAA-09/",
+          "docs/04_audit/evidence/AAA/AAA-10/",
+          "docs/04_audit/evidence/AAA/AAA-11/"
+        ],
+        "exclusivePublisher": [
+          "docs/03_build/tracking/aaa_program_backlog.json",
+          "docs/03_build/tracking/aaa_execution_ledger.json",
+          "docs/30_backlog_master.md",
+          "docs/20_master_execution_log.md",
+          "docs/99_runtime_state.md"
+        ]
+      },
+      {
+        "id": "agent-2",
+        "role": "data/channels; persistence contracts, PostgreSQL, effect journal, channel concurrency",
+        "tasks": [
+          "AAA-05",
+          "AAA-12",
+          "AAA-16"
+        ],
+        "ownedPaths": [
+          "docs/02_spec/aaa_data_api_contract.md",
+          "packages/persistence/",
+          "packages/channel-gateway/",
+          "packages/chaos/src/__tests__/chaos-postgres.test.ts",
+          ".github/workflows/verify.yml",
+          "docs/04_audit/evidence/AAA/AAA-05/",
+          "docs/04_audit/evidence/AAA/AAA-12/",
+          "docs/04_audit/evidence/AAA/AAA-16/"
+        ],
+        "reservedForHandoff": [
+          "packages/persistence/src/outbox.ts (AAA-10 shared surface; no concurrent writer)",
+          "packages/persistence/src/postgres.ts (AAA-10 shared surface; no concurrent writer)",
+          "migration sequence (additive journal migration must be scheduled by agent-2)"
+        ]
+      },
+      {
+        "id": "agent-3",
+        "role": "quality; frozen bar, supply chain, certification and independent review of other fronts",
+        "tasks": [
+          "AAA-04",
+          "AAA-13",
+          "AAA-14",
+          "AAA-15"
+        ],
+        "ownedPaths": [
+          "docs/02_spec/aaa_quality_contract.md",
+          "scripts/phase10-certify.mjs",
+          "scripts/phase10-verify.mjs",
+          "scripts/lib/certification-rules.mjs",
+          "certification/",
+          "package.json",
+          "package-lock.json",
+          "Dockerfile",
+          ".github/workflows/",
+          "scripts/check-licenses.mjs",
+          "scripts/generate-sbom.mjs",
+          "docs/04_audit/evidence/AAA/AAA-04/",
+          "docs/04_audit/evidence/AAA/AAA-13/",
+          "docs/04_audit/evidence/AAA/AAA-14/",
+          "docs/04_audit/evidence/AAA/AAA-33/",
+          "docs/04_audit/evidence/AAA/AAA-34/",
+          "docs/04_audit/evidence/AAA/AAA-36/",
+          "docs/04_audit/evidence/AAA/AAA-41/",
+          "docs/04_audit/evidence/AAA/AAA-15/"
+        ],
+        "futureTasksNotAssignedByThisRound": [
+          "AAA-33",
+          "AAA-34",
+          "AAA-36",
+          "AAA-41"
+        ],
+        "reservedForHandoff": [
+          "apps/api/src/server.ts: AAA-15 formatting only; exclusive window granted by agent-1",
+          "verify.yml: shared with agent-2; no concurrent writer"
+        ]
+      }
+    ],
+    "reviewPolicy": {
+      "selfApproval": "forbidden",
+      "rotation": "the reviewer must differ from the implementer; with three agents, review and implementation alternate in time",
+      "freshContext": "review consumes the frozen artifact and original criteria, not the builder narrative",
+      "partialApproval": "a specialist review that fails to run is not an approval"
+    },
+    "unassignedTasks": "Tasks outside the current three-front assignment remain unassigned; future quality tasks are not automatically active; AAA-15 explicitly belongs to agent-3 with a lead-controlled formatting lock."
+  },
+  "readinessRules": [
+    "PENDING -> READY only when every dependency is VERIFIED or DONE with current artifact and evidence",
+    "READY -> RUNNING requires task contract hash frozen and resource lock acquired",
+    "RUNNING -> IMPLEMENTED requires focused tests, preserved negative reproduction and evidence manifest",
+    "IMPLEMENTED -> REVIEW requires a reviewer different from the implementer",
+    "REVIEW -> VERIFIED requires reviewer verdict plus affected regression rerun",
+    "VERIFIED -> DONE only by lead after operational registries update; no self-assessment",
+    "changed contract/source invalidates affected evidence and reopens dependents",
+    "NOT_RUN/SKIPPED/UNKNOWN/BLOCKED never satisfy a mandatory criterion",
+    "two failed attempts on the same hypothesis require cause/contract replan before retry",
+    "Per-task prerequisites apply: AAA-16 blocks AAA-10, not AAA-07/08/09; reviewed AAA-04 quality bar precedes BUILD while final G_QUALITY follows implementation."
+  ],
+  "gates": {
+    "G_PLAN": "BASELINE_REVIEWED; AAA-01 VERIFIED only for its pinned historical snapshot",
+    "G_SPEC": "TASK_SCOPED_AUTHORIZATION_RECORDED for AAA-08 (controlled local, user round-2 instruction + AAA-03 rev2 9df1a05f... + AAA-04 v1 reviewed by agent-1); NOT_GRANTED for other tasks; AAA-03 rev2 final agent-3 review pending; AAA-05 final review pending",
+    "G_INTEGRITY": "PARTIAL: F15 fixed at the policy boundary by AAA-08 (REVIEW, negative reproduction; no independent review yet); F01-F03 remain OPEN (AAA-09/10); F05 remains OPEN (AAA-11)",
+    "G_QUALITY": "NOT_VERIFIED; AAA-04 v1 reviewed by agent-1 with conditions for bar v2 (coverage/performance); final qualification follows implementation and is not a circular pre-BUILD prerequisite",
+    "G_D01": "PENDING human decision on RF-011; does not block AAA-07..11",
+    "postgres_gate": "FUNCTIONAL_EVIDENCE_84_OF_84_PENDING_REVIEW; disposable port 55432 ownership must be confirmed; fsync disabled per prior ledger, not physical durability evidence; operational port 5432 forbidden"
+  },
+  "resourceLocks": [
+    {
+      "resource": "runtime-ts",
+      "owner": "agent-1",
+      "sequence": "AAA-09 -> AAA-10 -> AAA-11"
+    },
+    {
+      "resource": "persistence-outbox-postgres",
+      "owner": "agent-1 (AAA-10) with agent-2 handoff",
+      "concurrentWriters": "forbidden"
+    },
+    {
+      "resource": "migration-sequence",
+      "owner": "agent-2"
+    },
+    {
+      "resource": "quality-bar-and-certification",
+      "owner": "agent-3"
+    },
+    {
+      "resource": "npm-install-coverage-certification-slot",
+      "owner": "mutual exclusion: at most one front runs npm install, global coverage or certification at a time"
+    },
+    {
+      "resource": "migration-0012-and-journal-sql-design",
+      "owner": "agent-2",
+      "status": "RESERVED_PLANNING_ONLY",
+      "scope": "0012 reserved; propose exact SQL adapter paths and task assignment for both journal ports; no code authorization",
+      "excluded": "outbox.ts/postgres.ts and runtime integration remain agent-1; exports require explicit handoff"
+    },
+    {
+      "resource": "AAA-12-canonicalization-local-rework",
+      "owner": "agent-2",
+      "paths": [
+        "packages/channel-gateway/src/effect-journal.ts",
+        "packages/channel-gateway/src/effect-journal-file.ts",
+        "packages/channel-gateway/src/gateway.ts",
+        "packages/channel-gateway/src/errors.ts",
+        "packages/channel-gateway/src/__tests__/"
+      ],
+      "status": "RESERVED_LOCAL_CORRECTION_ONLY",
+      "releaseCondition": "IMPLEMENTED/BLOCKED handoff; code review before promotion",
+      "noSql": true
+    },
+    {
+      "resource": "approval-engine-AAA-07-local",
+      "owner": "agent-1",
+      "paths": [
+        "packages/approval-engine/src/"
+      ],
+      "scope": "local lifecycle; runtime/SQL excluded",
+      "releaseCondition": "IMPLEMENTED or BLOCKED handoff"
+    }
+  ],
+  "tasks": {
+    "AAA-01": {
+      "status": "VERIFIED",
+      "attempts": 1,
+      "artifact": "docs/04_audit/evidence/AAA/AAA-01/manifest.json",
+      "candidateDigest": "9ed0777a3591a370be95a3c99de4897af6b8e64f7c43e4651591e4046384bc67",
+      "reproductionsMatchAudit": true,
+      "next": "Historical baseline verified; capture fresh candidate for current qualification.",
+      "reviewStatus": "APPROVE_PINNED_BASELINE_ONLY",
+      "coordinationObservedAt": "2026-09-12T20:52:38.491232+00:00",
+      "reviewEvidence": [
+        "docs/04_audit/evidence/AAA/AAA-01/review-agent-3/review.json"
+      ],
+      "verificationScope": "baseline at 2026-09-12T20:34:08+00:00 only; not live tree",
+      "currentTreeQualified": false
+    },
+    "AAA-03": {
+      "status": "VERIFIED",
+      "attempts": 2,
+      "artifact": "docs/02_spec/aaa_execution_contract.md",
+      "contractHash": "9df1a05fdf36293d02e006917f191f0c96e8c1109e4a10d1e9fc49f5d9ef3ff7",
+      "previousContractHash": "db75899f6b730fa04b642da8cdc6d65e747a7c7e62e22673bf038a52163d66f8",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-03/manifest.json",
+      "next": "Technical base and R-ACT addendum approved; no additional author task. Human/production gates separate.",
+      "reviewStatus": "APPROVE_REV2_PLUS_R_ACT_V1",
+      "conditionsClosed": [
+        "AAA03-R3-F01 identity mapping 2.1",
+        "AAA03-R3-F02 verifyAndConsume banned in governed path",
+        "AAA03-R3-F03 sweep defined",
+        "Q1 per-turn budget",
+        "Q2 real-adapter denial",
+        "Q4 governed-path migration",
+        "Q5 parameterized TTL"
+      ],
+      "reconciliation": "AAA-05 section 3.1 observed at sha256 200c2bc3...; agent-2 must update its reference to the revision-2 hash before freeze",
+      "coordinationObservedAt": "2026-09-12T21:06:44.521273+00:00",
+      "reviewEvidence": [
+        "docs/04_audit/evidence/AAA/AAA-03/review-agent-3/review.json",
+        "docs/04_audit/evidence/AAA/AAA-03/review-request-v2.md",
+        "docs/04_audit/evidence/AAA/AAA-08/review-coordinator-r2/review.json",
+        "docs/04_audit/evidence/AAA/AAA-03/review-agent-3/review-rev2.json"
+      ],
+      "promotionBlocked": false,
+      "coordinatorReview": "docs/04_audit/evidence/AAA/AAA-08/review-coordinator-rework/review.json",
+      "reviewedContractHash": "9df1a05fdf36293d02e006917f191f0c96e8c1109e4a10d1e9fc49f5d9ef3ff7",
+      "contractStatus": "FROZEN_TECHNICAL_REV2_PLUS_R_ACT_V1",
+      "technicalFreeze": {
+        "baseRevision": "AAA-03 rev2",
+        "baseSha256": "9df1a05fdf36293d02e006917f191f0c96e8c1109e4a10d1e9fc49f5d9ef3ff7",
+        "addendumPath": "docs/04_audit/evidence/AAA/AAA-08/rework-aaa08-c1-f01/contract-addendum-proposal-action-binding.md",
+        "addendumSha256": "d67fc9155207659c6ee9c874c7ce17a2d187b5ea86b13c1b99144da24099b54f",
+        "addendumVersion": "AAA03-R-ACT-v1",
+        "decision": "APPROVE_AND_TECHNICAL_FREEZE_BASE_PLUS_ADDENDUM",
+        "scope": "R-ACT-1..4 and explicit aliases; no human/production gate",
+        "note": "T-22 uses read as shorthand for a read capability (e.g. schedule.read), not a new capability named read; literal enum remains unchanged"
+      },
+      "blockedBy": []
+    },
+    "AAA-04": {
+      "status": "VERIFIED",
+      "owner": "agent-3",
+      "blockedBy": [],
+      "next": "Technical v2 accepted by coordinator; product qualification and human gates remain distinct. No new author task.",
+      "reviewStatus": "APPROVE_V2_TECHNICAL_FREEZE",
+      "reviewEvidence": [
+        "docs/04_audit/evidence/AAA/AAA-04/review-agent-1/review.json",
+        "docs/04_audit/evidence/AAA/AAA-04/review-agent-1/REVIEW.md",
+        "docs/04_audit/evidence/AAA/AAA-04/manifest.json",
+        "docs/04_audit/evidence/AAA/AAA-08/review-coordinator-r2/review.json",
+        "docs/04_audit/evidence/AAA/AAA-13/review-coordinator-r3/review.json"
+      ],
+      "conditions": [
+        "AAA04-R1-F01 numeric coverage/mutation thresholds or justified alternative (blocks coverage-based qualification, not AAA-08)",
+        "AAA04-R1-F02 proposed performance bounds registered (not AAA-08)"
+      ],
+      "coordinationObservedAt": "2026-09-12T21:06:44.521273+00:00",
+      "promotionBlocked": false,
+      "coordinatorReview": "docs/04_audit/evidence/AAA/AAA-13/review-coordinator-r3/review.json",
+      "contractStatus": "FROZEN_TECHNICAL_V2",
+      "technicalFreeze": {
+        "scope": "technical normative v2 only; not G_SPEC/human/production",
+        "contractSha256": "aec324018513c43a3e949663e41769f2d59180c6812d7430bd5980fb4a357097",
+        "barSha256": "3c2ffe03fe0c63458657d730f613227d5c3b945cf248d96ee954e5424fdf14da",
+        "artifactSet": "six AAA-04 hashes in checks.json",
+        "closes": [
+          "AAA04-R1-F01",
+          "AAA04-R1-F02"
+        ],
+        "mutationScope": "100% selected critical guard mutations, not 100% arbitrary code mutations",
+        "performance": "PROPOSED_NOT_APPROVED_D03"
+      }
+    },
+    "AAA-05": {
+      "status": "VERIFIED",
+      "owner": "agent-2",
+      "blockedBy": [],
+      "detectedEvidence": "docs/04_audit/evidence/AAA/AAA-05/manifest.json",
+      "next": "Contract v3 technically accepted; no additional document rework assigned.",
+      "reviewStatus": "APPROVE_V3_TECHNICAL",
+      "coordinationObservedAt": "2026-09-12T21:05:02.564161+00:00",
+      "reviewEvidence": [
+        "docs/02_spec/aaa_data_api_contract.md",
+        "docs/04_audit/evidence/AAA/AAA-05/review-coordinator-v2/review.json",
+        "docs/04_audit/evidence/AAA/AAA-05/manifest.json",
+        "docs/04_audit/evidence/AAA/AAA-05/handoff-agent1.md",
+        "docs/04_audit/evidence/AAA/AAA-05/review-coordinator-v3/review.json",
+        "docs/04_audit/evidence/AAA/AAA-05/manifest-v3.json"
+      ],
+      "promotionBlocked": false,
+      "deliveryManifest": "docs/04_audit/evidence/AAA/AAA-05/manifest.json",
+      "coordinatorReview": "docs/04_audit/evidence/AAA/AAA-05/review-coordinator-v3/review.json",
+      "reviewedContractHash": "cebeddab53061997718fd59475019ead3a71a061942946b25018fd9580087cd1",
+      "contractStatus": "FROZEN_TECHNICAL_V3",
+      "technicalFreeze": {
+        "sha256": "cebeddab53061997718fd59475019ead3a71a061942946b25018fd9580087cd1",
+        "review": "docs/04_audit/evidence/AAA/AAA-05/review-coordinator-v3/review.json",
+        "scope": "documentary only; no human/SQL/production gate"
+      }
+    },
+    "AAA-12": {
+      "status": "VERIFIED",
+      "owner": "agent-2",
+      "detectedEvidence": "docs/04_audit/evidence/AAA/AAA-12/manifest.json",
+      "next": "Independent review; AAA12-R3-F02 remains assigned to AAA-21.",
+      "reviewStatus": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+      "coordinationObservedAt": "2026-09-12T21:05:02.564161+00:00",
+      "reviewEvidence": [
+        "docs/04_audit/evidence/AAA/AAA-12/green-focused.log",
+        "docs/04_audit/evidence/AAA/AAA-12/full-npm-test.log",
+        "docs/04_audit/evidence/AAA/AAA-12/review-agent-3/review.json",
+        "docs/04_audit/evidence/AAA/AAA-05/review-coordinator-v2/review.json",
+        "docs/04_audit/evidence/AAA/AAA-12/review-coordinator-hash-version/review.json",
+        "docs/04_audit/evidence/AAA/AAA-12/rework-canonicalization/manifest-rework.json",
+        "docs/04_audit/evidence/AAA/AAA-12/review-coordinator-c4/review.json",
+        "docs/04_audit/evidence/AAA/AAA-12/rework-c4-f01/manifest-c4-f01.json",
+        "docs/04_audit/evidence/AAA/coordinator-batch-review/review.json"
+      ],
+      "blockedBy": [
+        "selected mutation evidence pending",
+        "host-local durability limitation",
+        "SQL/AAA-21 composition and applicable gates pending"
+      ],
+      "promotionBlocked": true,
+      "deliveryManifest": "docs/04_audit/evidence/AAA/AAA-12/manifest.json",
+      "coordinatorReview": "docs/04_audit/evidence/AAA/coordinator-batch-review/review.json",
+      "findingDisposition": {
+        "AAA12-R3-F01": "CLOSED_ERRATUM_REPRODUCED",
+        "AAA12-R3-F02": "OPEN_AAA-21",
+        "AAA05-C2-F01": "CORE_CANONICALIZATION_IMPLEMENTED; explicit malformed version tracked by AAA12-C4-F01",
+        "criticalCoverage": "OPEN_SUBSET_FUNCTIONS_FAIL",
+        "AAA12-C4-F01": "CLOSED_INDEPENDENT_REVIEW"
+      },
+      "activeCorrection": null,
+      "correctionBrief": "docs/04_audit/evidence/AAA/AAA-12/review-coordinator-hash-version/next-task-agent-2.md",
+      "correctionScope": "existing local channel candidate only; no SQL/new adapter rollout; not READY for broader BUILD",
+      "reviewedCandidateDigest": "8d49cb2ad7268a06bcaae6aaeebd53169c7d5db0e30a3b4dbed4a9d1f0b55492",
+      "coverageDisposition": "critical subset functions/branches measured and approved in round; global floors superseded by AAA-34 coverage campaign",
+      "artifact": "packages/channel-gateway/src/effect-journal.ts",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-12/actor-alignment/manifest.json",
+      "guarantees": "C4-F01 fail-closed hashVersion; actor alignment; SQL adapter + mutation 16/16 killed",
+      "updatedAt": "2026-09-13T06:49:43.952Z",
+      "criticalCoverage": "CLOSED_SUBSET_MEASURED",
+      "verdict": "VERIFIED (independent reviewer)"
+    },
+    "AAA-16": {
+      "status": "VERIFIED",
+      "owner": "agent-2",
+      "blockedBy": [
+        "AAA-05",
+        "AAA-14",
+        "AAA-04"
+      ],
+      "detectedEvidence": "docs/04_audit/evidence/AAA/AAA-16/manifest.json",
+      "next": "Independent review; physical durability stays NOT_CLAIMED (fsync caveat).",
+      "reviewStatus": "APPROVE_TECHNICAL_LOCAL",
+      "coordinationObservedAt": "2026-09-12T21:05:02.564161+00:00",
+      "reviewEvidence": [
+        "docs/04_audit/evidence/AAA/AAA-16/test-postgres-rerun2.log",
+        "docs/04_audit/evidence/AAA/AAA-16/test-postgres-rerun2.exit",
+        "docs/04_audit/evidence/AAA/AAA-16/review-agent-3/review.json",
+        "docs/04_audit/evidence/AAA/AAA-05/review-coordinator-v2/review.json"
+      ],
+      "promotionBlocked": true,
+      "deliveryManifest": "docs/04_audit/evidence/AAA/AAA-16/manifest.json",
+      "coordinatorReview": "docs/04_audit/evidence/AAA/AAA-05/review-coordinator-v2/review.json",
+      "artifact": "packages/persistence/src/__tests__/tenant-isolation.test.ts",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-16/manifest.json",
+      "guarantees": "test:postgres 14 files/123 tests 0 skips on disposable 55432",
+      "updatedAt": "2026-09-13T06:49:43.952Z",
+      "verdict": "VERIFIED (postgres gate 14/123, 0 skips)"
+    },
+    "AAA-07": {
+      "status": "VERIFIED",
+      "owner": "agent-1",
+      "reviewStatus": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+      "coordinatorReview": "docs/04_audit/evidence/AAA/coordinator-batch-review/review.json",
+      "promotionBlocked": true,
+      "readinessScope": "controlled local synthetic lifecycle only; not real BUILD/SQL authorization",
+      "taskBrief": "docs/04_audit/evidence/AAA/AAA-08/review-coordinator-rework/next-task-agent-1.md",
+      "next": "Closed on candidate 328d6a38; P2-8 multi-generation legacy corner tracked for AAA-19/AAA-34.",
+      "activeCorrection": null,
+      "reviewEvidence": [
+        "docs/04_audit/evidence/AAA/AAA-07/review-coordinator/review.json",
+        "docs/04_audit/evidence/AAA/AAA-07/manifest.json",
+        "docs/04_audit/evidence/AAA/coordinator-batch-review/review.json"
+      ],
+      "findingDisposition": {
+        "AAA07-C6-F01": "CLOSED_INDEPENDENT_C6_REVIEW",
+        "AAA07-C6-F02": "CLOSED_INDEPENDENT_C6_REVIEW"
+      },
+      "artifact": "packages/approval-engine/src/engine.ts",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-07/sweep-legacy-fix/manifest.json",
+      "coverage": "approval-engine branches 99.7%; coverage closure engine.ts 99.68%",
+      "updatedAt": "2026-09-13T06:49:43.952Z",
+      "sweep": "releaseExpired call-site at turn start + exported worker helper; P1-2 fix persists operationKey and fails closed (unknown -> UNCERTAIN)",
+      "verdict": "VERIFIED (independent reviewer round2+closure)"
+    },
+    "AAA-08": {
+      "status": "VERIFIED",
+      "owner": "agent-1",
+      "artifact": "packages/policy-engine/src/capabilities.ts + engine.ts",
+      "implementation": "draft/real capability split (F15): appointment.confirm/reschedule added with no grants; modify restricted to appointment_draft; resource scope checked after tenant and before grants/documents; create keeps appointment/appointment_draft creation semantics",
+      "negativeReproduction": "reproduce.mjs modifyWithoutApproval: ALLOW+toolCall(1) -> DENY+toolCall(0)",
+      "checks": "policy focused 29/29; cross-package runtime+chaos 24/24; npm test 176 files/895 PASS; typecheck PASS; lint PASS on recheck after agent-3 fixed its external file",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-08/manifest.json",
+      "reviewStatus": "APPROVE_CONTROLLED_CORRECTION",
+      "gate": "G_SPEC controlled-local authorized by user round-2 instruction; contract AAA-03 rev2 9df1a05f...; AAA-04 reviewed v1 with conditions scoped away from policy",
+      "blockedBy": [
+        "integrated qualification/critical coverage still pending; no production claim"
+      ],
+      "coordinationObservedAt": "2026-09-12T21:06:44.521273+00:00",
+      "promotionBlocked": true,
+      "coordinatorReview": "docs/04_audit/evidence/AAA/AAA-08/review-coordinator-rework/review.json",
+      "next": "Functional rework approved; preserve candidate for integration. No further corrective task assigned now.",
+      "reviewEvidence": [
+        "docs/04_audit/evidence/AAA/AAA-08/review-coordinator-r2/review.json",
+        "docs/04_audit/evidence/AAA/AAA-08/manifest.json"
+      ],
+      "closedFindings": [
+        "AAA08-C1-F01"
+      ],
+      "verdict": "VERIFIED (independent reviewer)",
+      "updatedAt": "2026-09-13T06:49:43.952Z"
+    },
+    "AAA-09": {
+      "status": "VERIFIED",
+      "owner": "agent-1",
+      "blockedBy": [
+        "AAA-07",
+        "AAA-08",
+        "AAA-04"
+      ],
+      "artifact": "packages/agent-runtime/src/proposal.ts",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-09/builder/manifest.json",
+      "reviewStatus": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+      "guarantees": "T-01/T-02/T-16/T-19 PASS; verifyAndConsume absent",
+      "next": "Independent review against AAA-03 binding and real-effect fail-closed.",
+      "updatedAt": "2026-09-13T06:49:43.952Z",
+      "verdict": "VERIFIED (independent reviewer)"
+    },
+    "AAA-10": {
+      "status": "VERIFIED",
+      "owner": "agent-1",
+      "blockedBy": [
+        "AAA-09",
+        "AAA-05",
+        "AAA-16",
+        "AAA-04"
+      ],
+      "note": "requires handoff with agent-2 before touching outbox.ts/postgres.ts",
+      "artifact": "packages/agent-runtime/src/effect-journal.ts",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-10/wiring/manifest.json",
+      "sql": "migrations 0012/0013 + persistence adapters; test:postgres 122 tests 0 skips",
+      "reviewStatus": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+      "next": "Independent review of crash matrix T-06..T-18 and SQL adapters.",
+      "updatedAt": "2026-09-13T06:49:43.952Z",
+      "verdict": "VERIFIED (independent reviewer)"
+    },
+    "AAA-11": {
+      "status": "VERIFIED",
+      "owner": "agent-1",
+      "blockedBy": [
+        "AAA-10",
+        "AAA-04"
+      ],
+      "artifact": "packages/agent-runtime/src/__tests__/runtime-limits.test.ts",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-11/builder/manifest.json",
+      "reviewStatus": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+      "guarantees": "T-09/T-10/T-11 PASS; spans closed; per-turn limits",
+      "next": "Independent review of F05 budget/deadline/cancel.",
+      "updatedAt": "2026-09-13T06:49:43.952Z",
+      "verdict": "VERIFIED (independent reviewer)"
+    },
+    "AAA-13": {
+      "owner": "agent-3",
+      "status": "VERIFIED",
+      "reviewStatus": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+      "coordinatorReview": "docs/04_audit/evidence/AAA/coordinator-batch-review/review.json",
+      "promotionBlocked": true,
+      "blockedBy": [
+        "frozen quality bar not met",
+        "runtime Node24 rehearsal does not replace Node22 target proof",
+        "current shared candidate not qualified",
+        "external gates and human signoff pending"
+      ],
+      "activeCorrection": null,
+      "next": "Independent review of rehearsal evidence.",
+      "reviewEvidence": [
+        "docs/04_audit/evidence/AAA/AAA-13/review-coordinator-r3/review.json",
+        "docs/04_audit/evidence/AAA/AAA-13/manifest.json",
+        "docs/04_audit/evidence/AAA/AAA-13/review-coordinator-rework-r3/review.json",
+        "docs/04_audit/evidence/AAA/AAA-13/rework-r3/manifest.json",
+        "docs/04_audit/evidence/AAA/AAA-13/review-coordinator-r4/review.json",
+        "docs/04_audit/evidence/AAA/AAA-13/rework-r4/manifest.json",
+        "docs/04_audit/evidence/AAA/coordinator-batch-review/review.json"
+      ],
+      "findingDisposition": {
+        "AAA13-C3-F01": "CLOSED_R4_INDEPENDENT_REVIEW",
+        "AAA13-C5-F01": "CLOSED_R4_INDEPENDENT_REVIEW",
+        "AAA13-C5-F02": "CLOSED_R4_INDEPENDENT_REVIEW"
+      },
+      "controlledNextScope": "Snapshot-only full certify and verifier using synthetic local dependencies, no product edits or shared certificate writes",
+      "artifact": "scripts/phase10-certify.mjs",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-13/integration-rehearsal/manifest.json",
+      "rehearsal": "round-3 candidate e0de9ee3861cbb0bbdabcf49dd17291e99296a0a5bd2a27c5d2674774217152e: producer exit 0 16/16 gates 0 skips coverage 96.74/92.99/97.18/97.34; verifier exit 0 27 hashes; shared tree byte-identical",
+      "updatedAt": "2026-09-13T06:49:43.952Z",
+      "rehearsalEvidence": "docs/04_audit/evidence/AAA/AAA-13/integration-rehearsal/rehearsal-20260913T043233Z/manifest.json",
+      "previousRehearsal": "159dd98e (historical, superseded)",
+      "verdict": "VERIFIED on candidate 328d6a38 (round-5 rehearsal)"
+    },
+    "AAA-14": {
+      "owner": "agent-3",
+      "status": "REVIEW",
+      "reviewStatus": "REVIEW_ENVIRONMENT_BLOCKED",
+      "coordinatorReview": "docs/04_audit/evidence/AAA/AAA-13/review-coordinator-r3/review.json",
+      "promotionBlocked": true,
+      "blockedBy": [
+        "Docker image build NOT_RUN",
+        "remaining acceptance and applicable gates not fully verified"
+      ],
+      "next": "Re-run image build when Docker daemon is available; re-bind to successor candidate.",
+      "reviewEvidence": [
+        "docs/04_audit/evidence/AAA/AAA-13/review-coordinator-r3/review.json",
+        "docs/04_audit/evidence/AAA/AAA-14/manifest.json"
+      ],
+      "artifact": "package-lock.json",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-14/runtime-image-verification/manifest.json",
+      "updatedAt": "2026-09-13T06:49:43.952Z",
+      "licenseIdempotence": "npm run licenses:check non-mutating on re-run (hash stable 55787d37)",
+      "imageStatus": "BLOCKED_ENVIRONMENT_DOCKER_UNAVAILABLE",
+      "verdict": "APPROVE_WITH_CONDITIONS (Docker image NOT_RUN)"
+    },
+    "AAA-15": {
+      "owner": "agent-3",
+      "status": "VERIFIED",
+      "reviewStatus": "REVIEW",
+      "coordinatorReview": "docs/04_audit/evidence/AAA/AAA-13/review-coordinator-r3/review.json",
+      "promotionBlocked": true,
+      "blockedBy": [
+        "whole-tree format gate not closed; preserve pinned evidence during integration"
+      ],
+      "next": "Candidate-scope format gate green in rehearsal; evidence artifacts excluded from candidate scope and never rewritten.",
+      "reviewEvidence": [
+        "docs/04_audit/evidence/AAA/AAA-13/review-coordinator-r3/review.json",
+        "docs/04_audit/evidence/AAA/AAA-15/manifest.json"
+      ],
+      "artifact": "apps/api/src/server.ts",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-15/manifest.json",
+      "updatedAt": "2026-09-13T06:49:43.952Z",
+      "format": "candidate-scope prettier green in round-3 rehearsal; evidence artifacts excluded by AAA-04 §4 and never rewritten",
+      "verdict": "VERIFIED (candidate-scope format gate)"
+    },
+    "AAA-02": {
+      "status": "REVIEW",
+      "artifact": "docs/01_prd/aaa_decision_brief.md",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-02/builder/manifest.json",
+      "reviewStatus": "PENDING_INDEPENDENT_REVIEW",
+      "next": "Independent review of the decision brief; D01-D05 remain human decisions, none inferred.",
+      "updatedAt": "2026-09-13T06:49:43.952Z"
+    },
+    "AAA-17": {
+      "status": "VERIFIED",
+      "artifact": "packages/persistence/migrations/0014_journeys.sql",
+      "evidence": "docs/04_audit/evidence/AAA/AAA-17/builder/manifest.json",
+      "reviewStatus": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+      "next": "Independent review; then AAA-18 API wiring (P2).",
+      "updatedAt": "2026-09-13T06:49:43.952Z",
+      "verdict": "VERIFIED (independent reviewer)"
+    },
+    "AAA-34": {
+      "status": "PENDING",
+      "earlyCoverage": "global floors met on round-3 rehearsal (96.74/92.99/97.18/97.34); agent-runtime critical 96.91; approval 99.7; channel 96.2; policy 97.84; mutation 100% still NOT_RUN",
+      "earlyCoverageEvidence": [
+        "docs/04_audit/evidence/AAA/AAA-34/coverage-agent-runtime/manifest.json",
+        "docs/04_audit/evidence/AAA/AAA-34/coverage-apps-api/manifest.json",
+        "docs/04_audit/evidence/AAA/AAA-34/coverage-persistence-modelgateway/manifest.json",
+        "docs/04_audit/evidence/AAA/AAA-34/coverage-platform-misc/manifest.json",
+        "docs/04_audit/evidence/AAA/AAA-34/coverage-policy-engine/manifest.json"
+      ],
+      "updatedAt": "2026-09-13T06:49:43.952Z",
+      "earlyCoverageBinding": "round-5 candidate 328d6a38: 96.69/93.11/97.36/97.27 (post-fix); critical-path pending re-measure post-fix with adjudicated denominator (P2-A)"
+    },
+    "AAA-06": {
+      "status": "BLOCKED",
+      "blockedBy": [
+        "D01 PENDING (runtime canônico / RF-011): no implicit framework choice allowed"
+      ],
+      "updatedAt": "2026-09-13T06:49:43.952Z"
+    }
+  },
+  "nextActionsByAgent": {
+    "agent-1": "P2: AAA-18 API journey wiring after probe rebind (P2-B); then AAA-19 worker consumer.",
+    "agent-2": "P2: AAA-19 worker consumer + sweeps + DLQ; P2-8 journal list-by-proposalHash registration.",
+    "agent-3": "P2: AAA-20 identity resolver/rotation; AAA-06/AAA-21 blocked on D01 (human)."
+  },
+  "changeControl": {
+    "contractChange": "any change to a frozen contract reopens dependents and invalidates evidence",
+    "sharedRegistryUpdates": "agent-1 only; agent-2/agent-3 submit evidence and requested status in their task directory",
+    "preserveFailures": true,
+    "noSilentBarReduction": true,
+    "lastOneOffPublisher": {
+      "at": "2026-09-12T20:52:38.491232+00:00",
+      "actor": "assistant/root",
+      "authority": "explicit current user request to update docs",
+      "nextPublisher": "agent-1"
+    }
+  },
+  "coordinationHistory": [
+    {
+      "at": "2026-09-12T20:52:38.491232+00:00",
+      "source": "explicit user request to update documentation and prompts",
+      "previousGates": {
+        "G_PLAN": "DOCUMENTATION_REVIEWED; AAA-01 revalidation executed in REVIEW state",
+        "G_SPEC": "NOT_GRANTED; AAA-03 contract is DRAFT_FOR_INDEPENDENT_REVIEW",
+        "G_INTEGRITY": "NOT_VERIFIED; F01-F05/F15 remain OPEN (AAA-01 evidence)",
+        "G_QUALITY": "NOT_VERIFIED; AAA-04 not started",
+        "G_D01": "PENDING human decision on RF-011; does not block AAA-07..11",
+        "postgres_gate": "DISPOSABLE_INSTANCE_AVAILABLE (agent-2, /tmp/opencode/aaa-agent2-pg16 port 55432); test:postgres 11 files/84 tests PASS exit 0 with 0 required skips; independent review pending; port 5432 (cvg-his-v4) remains forbidden"
+      },
+      "previousNextActions": {
+        "agent-1": "respond to AAA-01/AAA-03 review findings; deliver aaa_execution_contract to agent-2 for reconciliation with aaa_data_api_contract; hold AAA-07-AAA-11 until dependencies; no product code before contract freeze",
+        "agent-2": "reconcile operation identity with AAA-03, then request independent review; finish AAA-12 concurrency/restart evidence; keep the disposable PostgreSQL isolated",
+        "agent-3": "review AAA-03 adversarially including Q1-Q5 and review agent-2 contracts/AAA-16 evidence as the independent front; freeze AAA-04 quality bar and benchmark protocol before any BUILD; own AAA-13/AAA-14 after AAA-04"
+      },
+      "note": "Original review artifacts/spec bytes untouched; update scoped statuses without retroactive BUILD approval."
+    },
+    {
+      "at": "2026-09-12T21:05:02.564161+00:00",
+      "source": "docs/04_audit/evidence/AAA-20260912-AGENT2-RECEIPT/manifest.json",
+      "decision": "AAA-05/12/16 IMPLEMENTED, peer review pending; migration 0012 reserved for planning; no gates granted"
+    },
+    {
+      "at": "2026-09-12T21:16:58.454729+00:00",
+      "source": "docs/04_audit/evidence/AAA/AAA-05/review-coordinator-v2/review.json",
+      "decision": "Agent-2 return audited: AAA-05 REWORK; AAA-12/16 peer approvals integrated in REVIEW; digest erratum closed; one next task AAA-05 v3; other fronts preserved"
+    },
+    {
+      "at": "2026-09-12T21:22:42.082742+00:00",
+      "source": "docs/04_audit/evidence/AAA/AAA-08/review-coordinator-r2/review.json",
+      "decision": "Agent-1 return audited: AAA-08 REWORK on executable action-binding counterexample; AAA-03 rev2 APPROVE integrated; AAA-04 v2 observed, review pending; other agents unchanged"
+    },
+    {
+      "at": "2026-09-12T21:36:16.514544+00:00",
+      "source": "docs/04_audit/evidence/AAA/AAA-13/review-coordinator-r3/review.json",
+      "decision": "Agent-3 handoff audited; AAA-04 v2 technically frozen/VERIFIED, AAA-13 REWORK, AAA-14/15 REVIEW scoped opinions; agent-1/2 assignments unchanged"
+    },
+    {
+      "at": "2026-09-12T21:43:28.602514+00:00",
+      "source": "docs/04_audit/evidence/AAA/AAA-05/review-coordinator-v3/review.json",
+      "decision": "AAA-05 v3 technically VERIFIED; three documentary findings closed; one next local rework AAA-12 canonical hashes/versioning, no SQL; other agents unchanged"
+    },
+    {
+      "at": "2026-09-12T21:52:27.360215+00:00",
+      "source": "docs/04_audit/evidence/AAA/AAA-08/review-coordinator-rework/review.json",
+      "decision": "AAA08-C1-F01 closed, functional rework approved; AAA-03 rev2 + action addendum technically frozen; one next task AAA-07 local; other agents preserved"
+    },
+    {
+      "at": "2026-09-12T22:09:06.108882+00:00",
+      "source": "docs/04_audit/evidence/AAA/AAA-12/review-coordinator-hash-version/review.json",
+      "decision": "AAA-12 hashes verified and 51 tests PASS; malformed version probe opens C4-F01, one local correction assigned; other agents preserved"
+    },
+    {
+      "at": "2026-09-12T22:16:52.841504+00:00",
+      "source": "docs/04_audit/evidence/AAA/AAA-13/review-coordinator-rework-r3/review.json",
+      "decision": "AAA13-C3-F01 closed; AAA-13 remains REWORK for C5-F01/F02, public CLI false acceptances; other fronts unchanged",
+      "productGateGranted": false
+    },
+    {
+      "at": "2026-09-12T22:22:19.975346+00:00",
+      "source": "docs/04_audit/evidence/AAA/AAA-07/review-coordinator/review.json",
+      "decision": "AAA-07 implemented candidate audited: 42 tests PASS, fencing counterexamples C6-F01/F02; REWORK, no AAA-09 advancement, other fronts unchanged",
+      "productGateGranted": false
+    },
+    {
+      "at": "2026-09-12T22:41:17.896334+00:00",
+      "source": "docs/04_audit/evidence/AAA/AAA-13/review-coordinator-r4/review.json",
+      "decision": "R4 corrections approved; AAA-13 REVIEW. Authorize only isolated synthetic certification rehearsal on stable snapshot; other fronts unchanged; no current qualification",
+      "productGateGranted": false
+    },
+    {
+      "at": "2026-09-12T22:44:33.079745+00:00",
+      "source": "docs/04_audit/evidence/AAA/AAA-12/review-coordinator-c4/review.json",
+      "decision": "C4-F01 closed; AAA-12 REVIEW, next channel behavioral coverage task (tests only); SQL/AAA-21 not authorized; other fronts unchanged",
+      "productGateGranted": false
+    },
+    {
+      "at": "2026-09-12T23:58:02.929570+00:00",
+      "source": "docs/04_audit/evidence/AAA/coordinator-batch-review/review.json",
+      "decision": "Three bundled handoffs audited. Issue ONE next runnable task to agent-1 (approval coverage); agent-2/3 await coordinator assignment without repeating accepted work."
+    },
+    {
+      "at": "2026-09-13T00:03:00.058475+00:00",
+      "source": "docs/04_audit/evidence/AAA/AAA-12/mutation-assignment/next-task-agent-2.md",
+      "decision": "User requested next agent task; assign agent-2 AAA-12 selected guard mutation, isolated mutants/tests only. Agent-1 approval coverage unchanged; agent-3 awaits assignment. No gate or DONE."
+    },
+    {
+      "at": "2026-09-13T00:05:12.760711+00:00",
+      "source": "docs/04_audit/evidence/AAA/AAA-14/runtime-image-assignment/next-task-agent-3.md",
+      "decision": "User requests agent-3 next task; assign AAA-14 runtime target image verification in isolated copy, evidence only. No product edits, publish or approval; agent-1/2 unchanged."
+    },
+    {
+      "at": "2026-09-13T03:07:58.488Z",
+      "round": "P1 remediation + integrated build",
+      "summary": "AAA-09/10/11 implemented (payload binding, durable effect journal with SQL adapters 0012/0013, budgets/deadline/cancel); AAA-17 journeys SQL (0014); AAA-07 critical coverage closure; AAA-12 hashVersion fail-closed + actor alignment; AAA-13 certify rehearsal candidate 159dd98e exit 0/0 skips with verifier exit 0; AAA-02 decision brief. Phase P1 audit scored 7.8/10 (below >9 bar): remediation = executable independent review, tracking refresh, format-scope clarification. Coverage/mutation floors scheduled to AAA-34 (P4) per roadmap.",
+      "limitations": [
+        "Docker daemon inaccessible: AAA-14 image NOT_RUN (declared)",
+        "fsync-off historical fixture: no physical durability claim",
+        "coverage floors pending AAA-34",
+        "external/human gates pending D03/D04/D05"
+      ]
+    },
+    {
+      "at": "2026-09-13T05:19:41.056Z",
+      "round": "P1 remediation round 2",
+      "summary": "Round-2 critic scored 8.4/10 with P1-1 (review not bound to frozen candidate) and P1-2 (TTL sweep duplicate-effect path with changed caller key). Fixed P1-2 by persisting operationKey on approvals and failing closed on ambiguity (unknown -> UNCERTAIN); policy-engine branches raised to 97.84; coverage global 96.74/92.99; license gate idempotent; channel actor aligned; tracking refreshed; errata recorded for sweep-callsite timestamp.",
+      "limitations": [
+        "Docker image NOT_RUN (environment)",
+        "mutation 100% NOT_RUN (P4)",
+        "external/human gates D03/D04/D05 pending",
+        "Node 24 local vs Node 22 target"
+      ]
+    },
+    {
+      "at": "2026-09-13T06:49:43.952Z",
+      "round": "P1 adjudication — PASS 9.2/10",
+      "summary": "Fresh round-3 critic adjudicated P1 PASS 9.2/10 on frozen candidate 328d6a38: P1-1 (review binding) CLOSED, P1-2 (TTL sweep dup) CLOSED, P1-2R (legacy rearm) CLOSED, no P0/P1. Conditions applied: tracking publication (this entry, binding 328d6a38), P2-B probe rebind on successor bytes at P2 entry, P2-8 registered, mutation/Docker/Node22/external/human remain explicitly pending.",
+      "limitations": [
+        "Any byte change ends the 328d6a38 binding (CANDIDATE_DRIFT)",
+        "critical-path coverage must be re-measured post-fix with adjudicated denominator",
+        "D01 pending blocks AAA-06/AAA-21 composition"
+      ]
+    }
+  ],
+  "p2Register": [
+    {
+      "id": "P2-8",
+      "owner": "AAA-19 (closure), AAA-34 (denominator)",
+      "description": "Multi-generation legacy sweep corner: single-key journal lookup can release a legacy approval whose effect started under a caller key; requires list-by-proposalHash journal API or per-generation key binding before P2 closes.",
+      "evidence": "docs/04_audit/evidence/AAA/P1-independent-review-round2/raw/round5/p12r-multigen-corner.log"
+    }
+  ]
+}

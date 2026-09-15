@@ -1,0 +1,32 @@
+# Revalidação independente M1 round2
+
+**Veredito: CONDITIONAL PASS no recorte RA-M1-01..08.** Nenhum defeito remanescente foi demonstrado nos cenários executados. Sem selo global, AAA, produção ou homologação. A condição decorre de independência: este crítico é distinto dos builders, mas conserva contexto anterior; conforme `gauntlet-loop/SKILL.md`, seção Enforce criticism integrity, não satisfaz o requisito de crítico final fresco. Não rotular esta rodada I1 fresco. Sem descendentes; pacote contratual selado, narrativas anteriores de builders não usadas.
+
+Candidato: `/tmp/cvg-m1-round2-ixwtdmce/final-candidate`; contrato lido diretamente: `docs/02_spec/prod20260913_m1_reaudit_contract.md`. Manifesto de 2.659 arquivos: `/tmp/cvg-m1-round2-ixwtdmce/final-manifest.json`, SHA256 `5a8c731cf6b3100d081cbafaf836fc31d4c8763e5c298fbff287d0eac92a1d43`. Houve correção preparatória explicitamente comunicada pelo coordenador em `journey-task-atomicity.test.ts`; reiniciei o fingerprint e atualizei a cópia antes dos testes. Manifesto final conferido: zero divergências.
+
+## Método e execução
+
+Inspeção de código e testes reais; execução independente com Node **22.23.2**, cópia descartável `/tmp/m1-final-independent` e banco próprio **m1final** em PostgreSQL local porta55584. Nenhum acesso a m1suite/m1builder. Não escrevi na origem/candidato. A cópia de teste usa dependências privadas do snapshot; mudanças experimentais só ocorreram na cópia.
+
+- `/tmp/m1-final-focused.log`: **5 arquivos / 56 testes PASS, zero skips**. Arquivos: readiness.test.ts, journeys.test.tsx, postgres-role-preflight.test.ts, journey-task-atomicity.test.ts, journeys-postgres.test.ts. Banco habilitado, incluindo papéis reais mínimos/adversos e trigger de falha de audit.
+- `/tmp/m1-final-ui.log`: **1 arquivo / 13 testes PASS, zero skips**, journeys-identity-race.test.tsx.
+- `/tmp/m1-final-matrix.log`: teste adicional escrito por este crítico, **PASS**, cobrindo **77 alterações de privilégios** (11 tabelas ×3 grants necessários removidos e ×4 grants proibidos adicionados), com preflight válido antes/depois. Os 12 skips do log são testes não selecionados por `-t`, previamente executados no pacote de56; não são dispensa de gate.
+- `/tmp/m1-final-ui-neutralized.log`: experiência discriminante só na cópia: retirar selectedSessionId das dependências do efeito fez os **4 testes de sessão falharem**, exit1, exatamente por ausência de abort. Nove casos não selecionados. Fonte da cópia restaurada depois; esses FAIL esperados não são falhas do candidato.
+
+## Resultado por fronteira
+
+**RA-M1-01 — atendido nos casos executados.** `apps/api/src/server.ts:4316` mantém uma admissão por probe, inclui connect/query no prazo900ms, marca expiração antes de destruir conexão e rejeita a operação quando destroy provoca rejeição. Cliente tardio é destruído uma única vez sem SELECT. Late success não promove ready nem reabre admissão até a operação subjacente terminar. Testes públicos de /ready e /live, sucesso/falha, conexão pendente e resposta tardia passaram. `readiness.ts` redige erro e limita probe externo. Não simulei esgotamento do pool de produção ou processo real distribuído.
+
+**RA-M1-02/03 — atendido nos casos executados.** `apps/web/src/features/journeys/index.tsx:49` reinicia geração e aborta por identidade e sessão; limpa busy, drafts, candidatos, campos e patientName para o default sintético. Todos os commits assíncronos inspecionados verificam geração; error/finally antigos não sobrescrevem a operação atual. Testes cobrem tenant, ator, role, logout, sessãoB e sessão removida; resultado atual continua aparecendo. Experiência discriminante de sessão falhou conforme esperado quando neutralizada. Ambiente jsdom, não navegador físico; não refiz avaliação visual/acessibilidade global.
+
+**RA-M1-04/05/08 — atendido nos casos executados.** `packages/persistence/src/journeys-postgres.ts:379` executa tarefa e callback de audit via withTenantTransaction. `postgres.ts:2854` usa ON CONFLICT DO NOTHING e só chama callback para INSERT vencedor, evitando consulta em transação abortada. Trigger real rejeitando audit deixa zero task/zero evento; retry e duas inserções concorrentes retornam a mesma task, um evento com ator/correlação e sessão corretos. Paridade de rollback memória testada. `apps/api/src/server.ts:1072` sobrescreve auditContext do body com identidade/correlação confiáveis; helper `:3570` inspecionado. Nesta revalidação não reexecutei um ataque HTTP específico de actor spoofing: a integração HTTP dessa propriedade se apoia na leitura do caminho real, enquanto SQL/memória foram exercitados.
+
+**Cleanup transacional — atendido nos casos executados.** `tenant-scoped-postgres.ts:163` verifica exatamente uma linha tenant_id null; erro, ausência, objeto incompleto ou tenant sujo destroem o cliente. Rollback também executa reset/verificação; primeira falha de cleanup permanece motivo de destruição mesmo se segunda tentativa recuperar. Negativos sintéticos e rollback PostgreSQL executados. Isso não é alegação de que PostgreSQL normal retorna linha ausente, nem valida todo uso histórico do helper não transacional withTenantContext.
+
+**RA-M1-06/07 — atendido nos casos executados.** `apps/worker/src/postgres-role-preflight.ts` exige o conjunto esperado de policies por tabela, USING/WITH CHECK, papel/comando/permissividade, RLS/FORCE RLS e não ownership; policy permissiva adicional foi negada em banco real. Consulta cada privilégio das11 tabelas consumidas. Matriz independente negou as77 perturbações, restaurando cada grant/revoke em finally; baseline mínimo passou. Não é auditoria de todo o catálogo PostgreSQL, funções maliciosas, todas versões do banco ou future migrations; mudança de SQL/policies reabre o aceite.
+
+## Sentinel e limites finais
+
+**Sentinel limpo: 2.659 arquivos do manifesto, zero alterações pré/pós.** `/tmp/m1final-pre.json`, `/tmp/m1final-post.json`, `/tmp/m1final-sentinel.json`. Inclui código, testes, package e contrato; outputs/cache fora do manifesto não são fontes qualificadas. Logs e experimentos estão em /tmp. Nenhum dado real, canal/provider externo, custo, ação clínica/financeira, commit/deploy ou alteração documental da origem.
+
+Este aceite condicional não substitui os fullgates independentes do coordenador, não concede conclusão A01–A20/80 critérios, e não transforma D01/RF-011 ou gates operacionais pendentes em aprovados. Para aceite final com independência plena, o coordenador deve obter crítico realmente fresco ou manter explícita esta condição.

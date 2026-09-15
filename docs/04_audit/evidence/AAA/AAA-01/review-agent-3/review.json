@@ -1,0 +1,92 @@
+{
+  "reviewId": "AAA-01-REVIEW-AGENT-3",
+  "taskId": "AAA-01",
+  "program": "AAA-20260912",
+  "verdict": "APPROVE",
+  "verdictScope": "candidate pinned at 2026-09-12T20:34:08+00:00; not the live tree",
+  "reviewer": "agent-3 (quality front); did not execute AAA-01; no implementation or builder evidence edited",
+  "reviewedAt": "2026-09-12T20:47:00+00:00",
+  "criteria": [
+    {
+      "criterion": "Candidato identificado por fontes/configuração/lockfile",
+      "result": "PASS",
+      "evidence": "858-file manifest digest recomputed 9ed0777a3591a370be95a3c99de4897af6b8e64f7c43e4651591e4046384bc67 equals recorded digest",
+      "artifact": "review-agent-3/manifest-digest-check.txt"
+    },
+    {
+      "criterion": "todas as 15 findings classificadas como abertas ou revalidadas com prova",
+      "result": "PASS",
+      "evidence": "7 findings revalidated by reproduce (F01,F02,F03,F05,F06,F15 at review time; F04 at observation time), 8 by static/gate evidence (F07-F14); none declared fixed",
+      "artifact": "review-agent-3/reproduce.out.json"
+    },
+    {
+      "criterion": "skips não são PASS",
+      "result": "PASS",
+      "evidence": "AAA-01 manifest records postgres PARTIAL 58 PASS/26 skipped and certification:verify historical-only; F14/F11 remain OPEN",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-01/manifest.json"
+    }
+  ],
+  "checks": [
+    {
+      "check": "recompute candidate manifest digest",
+      "command": "sha256sum docs/04_audit/evidence/AAA/AAA-01/candidate-manifest-hashes.txt",
+      "exitCode": 0,
+      "observed": "9ed0777a3591a370be95a3c99de4897af6b8e64f7c43e4651591e4046384bc67 (expected 9ed0777a...)",
+      "status": "PASS"
+    },
+    {
+      "check": "re-hash key hashes",
+      "command": "sha256sum over 16 entries of key-hashes.txt",
+      "exitCode": 0,
+      "observed": "14 MATCH; 2 DRIFT (channel-gateway/src/gateway.ts and aaa_program_backlog.json), both written by other lanes after observation",
+      "status": "PASS_WITH_DRIFT"
+    },
+    {
+      "check": "rerun audit reproduction",
+      "command": "node --import tsx docs/04_audit/evidence/AUD-20260912-001/reproduce.mjs",
+      "exitCode": 0,
+      "observed": "output sha256 8d8141a0dc6997d9cbbffd8f8191f851b5782d588161b1950813007ca0a5d649 vs snapshot cdb6032a019deffcb636c06831368cc03f4d30e4e649e5260a6751a3eb93235d; single delta channelRace.sends 2->1 caused by concurrent AAA-12 lane",
+      "status": "PASS_WITH_DRIFT"
+    },
+    {
+      "check": "product source untouched by AAA-01",
+      "command": "git status --porcelain comparison",
+      "exitCode": 0,
+      "observed": "recorded status equals pre-drift tree; only additions outside AAA-01 evidence belong to other lanes (AAA-03/AAA-05 contracts, AAA-12 sources, coordinator ledger)",
+      "status": "PASS"
+    }
+  ],
+  "findings": [
+    {
+      "id": "AAA01-R3-F01",
+      "severity": "P2",
+      "criterionAffected": "candidate identity vs live tree",
+      "location": "packages/channel-gateway/src/gateway.ts",
+      "reproduction": "sha256sum packages/channel-gateway/src/gateway.ts",
+      "observed": "f1f2b2f103a44f30e2e81a30bf88706d02e2af4d14ccccd0e325bf45ffeefa24 vs pinned 5d0d4000...",
+      "impact": "AAA-01 approval cannot be reused to qualify the current tree; a new manifest is mandatory",
+      "priority": "P2",
+      "confidence": "high",
+      "closeWith": "current-tree manifest under AAA-04/AAA-13 candidate-binding rules"
+    },
+    {
+      "id": "AAA01-R3-F02",
+      "severity": "P3",
+      "criterionAffected": "reproduction reproducibility across lanes",
+      "location": "docs/04_audit/evidence/AUD-20260912-001/reproduce.mjs",
+      "reproduction": "rerun reproduce.mjs",
+      "observed": "F04 no longer reproduces because the artifact changed after observation; future reproductions must pin the candidate manifest before running",
+      "impact": "negative reproductions can silently flip state when run against a drifting tree",
+      "priority": "P3",
+      "confidence": "high",
+      "closeWith": "AAA-13 binds reports to the candidate hash; AAA-12 owns the F04 fix evidence"
+    }
+  ],
+  "limitations": [
+    "Node 22 target not revalidated (host Node 24.20.0)",
+    "No live PostgreSQL; F14 remains open",
+    "F04 fix in the live tree belongs to Agent 2 and was not reviewed here",
+    "Technical opinion only; not human signoff and not a production gate"
+  ],
+  "nextAction": "Coordinator publishes AAA-01 review verdict; any current-tree qualification requires re-pinning under AAA-04/AAA-13"
+}

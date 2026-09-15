@@ -1,0 +1,1181 @@
+STATE_CONFLICT
+LEASE_LOST
+IDEMPOTENCY_CONFLICT
+PERSISTENCE_FAILED
+OUTBOX_FAILED
+AUDIT_FAILED
+TELEMETRY_FAILED
+BUDGET_EXHAUSTED
+DEADLINE_EXCEEDED
+WORKER_CRASHED
+UNKNOWN_INTERNAL_ERROR
+
+Para cada erro defina:
+
+- retryable?
+- terminal?
+- requires human intervention?
+- durable state?
+- stop reason?
+- safe external message?
+- audit severity?
+
+Não exponha erro interno bruto ao consumidor.
+
+Produza:
+
+docs/phase2/FAILURE_TAXONOMY.md
+
+---
+
+# 39. ERROR OWNERSHIP
+
+Defina quem é responsável por cada classe de erro.
+
+Exemplo conceitual:
+
+HTTP Layer
+→ malformed request / authentication
+
+Persistence Layer
+→ storage failures
+
+Worker
+→ claiming / lease / lifecycle
+
+Runtime
+→ execution budget / stop condition
+
+Model Gateway
+→ provider/model failures
+
+Policy Engine
+→ authorization decision
+
+Approval Engine
+→ approval lifecycle
+
+Tool Runtime
+→ capability execution
+
+Audit
+→ evidence recording
+
+Telemetry
+→ operational visibility
+
+Evite:
+
+catch(error) {
+  return generic500
+}
+
+em múltiplas camadas sem semântica.
+
+---
+
+# 40. AUDIT AS DURABLE EVIDENCE
+
+Toda execução deve gerar uma trilha auditável.
+
+Eventos mínimos conceituais:
+
+execution.received
+execution.queued
+execution.claimed
+execution.started
+policy.evaluated
+approval.requested
+approval.consumed
+model.requested
+model.completed
+tool.requested
+tool.started
+tool.completed
+effect.recorded
+execution.completed
+execution.failed
+execution.paused
+execution.resumed
+
+Nem todos precisam existir se o fluxo não passar por aquela fase.
+
+Cada evento deve possuir:
+
+eventId
+executionId
+tenantId
+agentId
+correlationId
+timestamp
+eventType
+actor
+payload seguro
+previous/hash linkage se já suportado.
+
+Preserve o hash-chained audit ledger existente quando aplicável.
+
+---
+
+# 41. AUDIT MUST NOT LIE
+
+Não registre:
+
+tool.completed
+
+antes de o Tool realmente completar.
+
+Não registre:
+
+execution.completed
+
+antes do estado durável correspondente.
+
+Não registre:
+
+approval.consumed
+
+sem consumo real.
+
+A ordem da evidência deve refletir causalidade real.
+
+Crie testes específicos.
+
+---
+
+# 42. AUDIT FAILURE POLICY
+
+Defina comportamento quando audit persistence falhar.
+
+Para ações governadas/sensíveis, avalie fail-closed.
+
+Não permita silenciosamente:
+
+effect succeeded
++
+audit silently disappeared.
+
+Se o desenho atual utilizar outbox para audit durability, prove o caminho.
+
+Documente decisão.
+
+---
+
+# 43. TELEMETRY
+
+Instrumente a execution spine inteira.
+
+Métricas mínimas:
+
+executions_received_total
+executions_started_total
+executions_completed_total
+executions_failed_total
+execution_duration_ms
+execution_attempts
+execution_queue_wait_ms
+worker_claims_total
+worker_reclaims_total
+model_calls_total
+model_failures_total
+tool_calls_total
+tool_failures_total
+policy_denied_total
+approval_required_total
+idempotency_deduplications_total
+
+Evite high-cardinality labels como:
+
+executionId
+userId
+conversation text.
+
+---
+
+# 44. DISTRIBUTED TRACE
+
+Uma execução deve possuir correlação observável através de:
+
+HTTP
+→ persistence
+→ worker
+→ runtime
+→ model
+→ tool
+→ audit.
+
+Propague:
+
+correlationId
+trace context
+
+quando suportado.
+
+Não invente tracing distribuído se a infraestrutura atual não suportar.
+
+Nesse caso documente a lacuna.
+
+---
+
+# 45. AUDIT VS TELEMETRY
+
+Preserve a separação:
+
+AUDIT
+= prova de comportamento/decisão.
+
+TELEMETRY
+= saúde e desempenho do sistema.
+
+Um trace não substitui audit.
+
+Audit não substitui métricas.
+
+---
+
+# 46. RESULT PERSISTENCE
+
+O resultado final da execução deve ser durável.
+
+Estrutura conceitual:
+
+ExecutionResult {
+  executionId
+  state
+  stopReason
+  output
+  completedAt
+  attempts
+  toolEffects
+  modelMetadata
+}
+
+Não persista secrets ou chain-of-thought.
+
+Não armazene raciocínio interno privado do modelo.
+
+Armazene apenas:
+
+- decisões estruturadas necessárias;
+- tool calls;
+- resultados;
+- provenance;
+- audit evidence;
+- metadata operacional.
+
+---
+
+# 47. SENSITIVE DATA BOUNDARY
+
+Mesmo usando dados sintéticos nesta Phase:
+
+prepare contratos para classificação de dados.
+
+Preserve:
+
+dataClassification.
+
+Garanta que:
+
+logs
+telemetry
+audit
+error messages
+
+não façam dump indiscriminado de:
+
+prompts
+tool payloads
+user messages
+tokens
+secrets
+credentials.
+
+---
+
+# 48. OUTBOX ATOMICITY
+
+Se o fluxo for:
+
+persist execution
++
+enqueue outbox
+
+garanta atomicidade quando necessário.
+
+Evite:
+
+transaction commits execution
+→ process crashes
+→ outbox never created.
+
+Preferência:
+
+execution state
++
+outbox event
+
+na mesma transaction boundary quando semanticamente apropriado.
+
+Prove com teste.
+
+---
+
+# 49. OUTBOX DELIVERY SEMANTICS
+
+Documente explicitamente:
+
+- delivery guarantee;
+- retry behavior;
+- deduplication;
+- ordering;
+- poison event handling;
+- consumer identity.
+
+Não declare ordering global se só houver ordering local.
+
+---
+
+# 50. INBOX / DEDUPLICATION
+
+Se workers ou consumers processarem eventos at-least-once, avalie uma
+Inbox/Deduplication boundary.
+
+Objetivo:
+
+mesmo eventId recebido duas vezes
+→ uma única aplicação semântica.
+
+Reutilize mecanismos existentes se disponíveis.
+
+Não crie abstração paralela desnecessária.
+
+---
+
+# 51. TRANSACTION BOUNDARIES
+
+Documente claramente onde transactions começam e terminam.
+
+Exemplos:
+
+HTTP ingestion transaction
+
+worker claim transaction
+
+effect journal transaction
+
+terminal state transaction
+
+approval transaction.
+
+Não mantenha transaction SQL aberta durante chamada lenta de LLM ou API
+externa sem justificativa forte.
+
+---
+
+# 52. LONG-RUNNING EXECUTION SAFETY
+
+Mesmo Runtime V1 sendo single-pass, prepare a execution spine para trabalho
+que dure mais que uma request HTTP.
+
+O Worker deve poder:
+
+- renovar lease quando necessário;
+- detectar deadline;
+- cancelar de forma segura;
+- persistir failure;
+- liberar/recover claim.
+
+Não implemente distributed workflow engine completa.
+
+---
+
+# 53. CANCELLATION
+
+Defina contrato mínimo de cancelamento.
+
+Exemplo:
+
+POST /v1/executions/:id/cancel
+
+ou equivalente.
+
+Prove pelo menos:
+
+QUEUED → CANCELLED
+
+e determine comportamento para:
+
+RUNNING.
+
+Se cancelamento seguro durante efeito externo não puder ser garantido,
+documente claramente.
+
+---
+
+# 54. BACKPRESSURE
+
+A API não deve iniciar trabalho ilimitado em memória.
+
+Avalie:
+
+queue depth
+worker concurrency
+claim batch size
+max in-flight executions.
+
+Implemente limites básicos configuráveis.
+
+Não introduza infraestrutura distribuída desnecessária.
+
+---
+
+# 55. WORKER CONCURRENCY
+
+Defina configuração explícita:
+
+WORKER_CONCURRENCY
+
+com default seguro.
+
+Prove que aumentar concurrency não viola:
+
+- tenant isolation;
+- idempotency;
+- claim ownership;
+- effect journal.
+
+---
+
+# 56. SHUTDOWN GRACEFUL
+
+Worker deve responder corretamente a:
+
+SIGTERM
+SIGINT
+
+Quando receber shutdown:
+
+- parar de buscar novos jobs;
+- concluir ou abandonar de forma segura os atuais;
+- não publicar terminal state falso;
+- liberar/recover lease conforme design;
+- fechar connections.
+
+Crie teste quando viável.
+
+---
+
+# 57. STARTUP RECOVERY
+
+Ao iniciar, o Worker deve lidar com:
+
+- stale claims;
+- retryable executions;
+- queued work;
+- expired leases.
+
+Não dependa de estado em memória da execução anterior.
+
+---
+
+# 58. APPROVAL RESUME IDEMPOTENCY
+
+Teste:
+
+approval submit
+→ duplicate approval submit
+→ execution resume
+
+A mesma approval não pode liberar múltiplos efeitos indevidos.
+
+Preserve proposal binding já existente.
+
+Prove binding entre:
+
+approval
+execution
+action
+resource
+payload
+tenant.
+
+---
+
+# 59. POLICY RE-EVALUATION ON RESUME
+
+Defina explicitamente se, após longa espera por approval, a policy é:
+
+A. reutilizada da decisão anterior;
+
+B. reavaliada;
+
+C. reavaliada apenas quando versão/contexto mudou.
+
+Faça decisão consciente.
+
+Para ações sensíveis, considere mudanças de:
+
+policy version
+agent version
+resource state
+approval expiration.
+
+Registre em ADR.
+
+---
+
+# 60. VERSION PINNING
+
+Uma execução deve saber quais versões a governaram.
+
+Quando aplicável registre:
+
+agentVersion
+runtimeVersion
+policyVersion
+modelProfile
+toolVersion
+promptVersion
+
+Não é necessário persistir código inteiro.
+
+Mas deve ser possível explicar:
+
+"com qual configuração essa execução ocorreu?"
+
+---
+
+# 61. CANONICAL EXECUTION API
+
+Ao final desta Phase deve existir uma API conceitual estável semelhante a:
+
+submitExecution()
+
+getExecution()
+
+cancelExecution()
+
+resumeExecution()
+
+Não necessariamente com estes nomes.
+
+O importante é que produtos futuros não precisem conhecer:
+
+SQL
+worker internals
+outbox internals
+lease internals.
+
+---
+
+# 62. PRODUCT INDEPENDENCE PROOF
+
+O caminho completo Phase 2 NÃO pode depender de:
+
+Secretary prompts
+Secretary routes
+Secretary workflows
+Secretary UI
+Secretary terminology
+EvolutionAPI
+Chatwoot
+WhatsApp.
+
+Use somente:
+
+Harness
++
+synthetic agent profile
++
+synthetic tool.
+
+Se o fluxo precisar de código Secretary para funcionar:
+
+FAIL.
+
+---
+
+# 63. PUBLIC API PROOF
+
+Crie teste a partir de um consumidor externo ao package principal.
+
+Ele deve importar apenas exports públicos.
+
+Exemplo conceitual:
+
+import {
+  createOperationalHarness
+} from '@cvg/harness'
+
+Não permita deep import necessário como:
+
+@cvg/harness/src/internal/...
+
+para o caminho canônico.
+
+---
+
+# 64. ISOLATED BUILD PROOF
+
+Prove que packages públicos principais podem ser resolvidos/buildados sem
+depender acidentalmente do app Secretary legado.
+
+Verifique:
+
+workspace resolution
+package exports
+TypeScript references
+build graph.
+
+---
+
+# 65. INTEGRATION TEST — HAPPY PATH
+
+Construa prova executável:
+
+HTTP POST
+ ↓
+202
+ ↓
+SQL execution row
+ ↓
+outbox/queue
+ ↓
+worker claim
+ ↓
+createOperationalHarness
+ ↓
+Runtime V1
+ ↓
+policy ALLOW
+ ↓
+deterministic model
+ ↓
+synthetic tool
+ ↓
+effect journal
+ ↓
+terminal state SUCCEEDED
+ ↓
+audit
+ ↓
+telemetry
+ ↓
+GET execution
+ ↓
+SUCCEEDED.
+
+Não mocke o caminho inteiro.
+
+Mocks são permitidos apenas nas fronteiras externas apropriadas, como
+model provider sintético.
+
+---
+
+# 66. INTEGRATION TEST — POLICY DENIED
+
+Prove:
+
+execution submitted
+→ worker
+→ runtime
+→ policy DENY
+→ zero tool effect
+→ FAILED_TERMINAL ou estado semântico equivalente
+→ stopReason POLICY_DENIED
+→ audit evidence.
+
+---
+
+# 67. INTEGRATION TEST — APPROVAL REQUIRED
+
+Prove:
+
+submit
+→ worker
+→ REQUIRE_APPROVAL
+→ WAITING_APPROVAL
+→ process ends
+
+depois:
+
+approve
+→ requeue
+→ new worker execution
+→ approval verified/consumed
+→ effect
+→ SUCCEEDED.
+
+Nenhum estado em memória pode ser necessário entre as duas partes.
+
+---
+
+# 68. INTEGRATION TEST — MODEL FAILURE
+
+Prove:
+
+model provider transient failure
+→ FAILED_RETRYABLE
+→ retry
+→ success
+
+e:
+
+permanent model failure
+→ terminal state
+
+conforme taxonomia.
+
+---
+
+# 69. INTEGRATION TEST — TOOL FAILURE
+
+Prove:
+
+tool fails before effect
+→ retry classification correta.
+
+Depois:
+
+tool produces effect
+→ simulated crash
+→ retry
+→ effect journal prevents duplicate semantic effect.
+
+Esse teste é crítico.
+
+---
+
+# 70. INTEGRATION TEST — WORKER CRASH
+
+Prove:
+
+execution CLAIMED/RUNNING
+→ worker crash
+→ lease expiration/recovery
+→ another worker
+→ completion.
+
+Registre evidência.
+
+---
+
+# 71. INTEGRATION TEST — DUPLICATE REQUEST
+
+Prove concorrência real ou realisticamente concorrente:
+
+N submissions
+same tenant
+same idempotency key
+
+→ one semantic execution.
+
+---
+
+# 72. INTEGRATION TEST — CROSS-TENANT
+
+Prove:
+
+same idempotency key
+Tenant A
+Tenant B
+
+→ independent executions.
+
+E:
+
+Tenant A cannot query B.
+
+---
+
+# 73. INTEGRATION TEST — BUDGET
+
+Prove pelo menos:
+
+maxDuration
+maxModelCalls
+maxToolCalls
+
+quando aplicável ao Runtime V1.
+
+Resultado deve possuir stop reason canônico.
+
+---
+
+# 74. INTEGRATION TEST — DEADLINE
+
+Use clock control quando possível.
+
+Não faça teste dormir por longos períodos.
+
+Prove deadline deterministicamente.
+
+---
+
+# 75. REPLAY SAFETY
+
+Defina claramente diferença entre:
+
+RETRY
+REPLAY
+RESUME.
+
+RETRY
+= repetir tentativa técnica da mesma execução.
+
+RESUME
+= continuar execução pausada.
+
+REPLAY
+= reproduzir execução histórica para análise/teste.
+
+Não permita que replay de auditoria execute side effects reais por padrão.
+
+---
+
+# 76. REPLAY MODE
+
+Se já houver infraestrutura adequada, crie modo seguro:
+
+DRY_RUN / REPLAY
+
+onde:
+
+- model pode ser fixture;
+- tool effects são bloqueados/simulados;
+- audit pode ser reconstruído;
+- resultado comparado.
+
+Se isso ampliar demais o escopo, documente como Phase futura.
+
+Não prejudique a Phase 2 para implementá-lo.
+
+---
+
+# 77. EVIDENCE BUNDLE
+
+Cada cenário crítico deve gerar evidência estruturada.
+
+Crie:
+
+docs/phase2/evidence/
+
+Inclua resultados de:
+
+happy path
+policy denied
+approval pause/resume
+duplicate request
+worker crash
+tool-effect crash
+cross-tenant
+model retry
+tool retry
+deadline/budget.
+
+Preferencialmente gere JSON machine-readable além de Markdown.
+
+---
+
+# 78. DURABILITY PROOF REPORT
+
+Produza:
+
+docs/phase2/DURABILITY_PROOF.md
+
+Responda:
+
+1. O que acontece se API cair?
+2. O que acontece se Worker cair?
+3. O que acontece se DB cair?
+4. O que acontece se Model Provider cair?
+5. O que acontece se Tool cair?
+6. O que acontece se crash ocorrer depois do side effect?
+7. Como duplicate request é tratado?
+8. Como stale claim é recuperado?
+9. Como approval sobrevive a restart?
+10. Qual garantia real de delivery/execution existe?
+
+---
+
+# 79. CANONICAL COMPOSITION PROOF
+
+Produza:
+
+docs/phase2/CANONICAL_COMPOSITION_PROOF.md
+
+Mostre a implementação real:
+
+HTTP
+ ↓
+Persistence
+ ↓
+Queue/Outbox
+ ↓
+Worker
+ ↓
+Harness Factory
+ ↓
+Runtime
+ ↓
+Governance
+ ↓
+Model
+ ↓
+Tool
+ ↓
+Persistence
+ ↓
+Audit/Telemetry.
+
+Para cada seta:
+
+- package;
+- arquivo;
+- símbolo;
+- teste que prova.
+
+---
+
+# 80. RUNTIME EXECUTION SEQUENCE
+
+Documente sequence diagram Mermaid.
+
+Exemplo conceitual:
+
+sequenceDiagram
+    participant Client
+    participant API
+    participant DB
+    participant Worker
+    participant Harness
+    participant Policy
+    participant Model
+    participant Tool
+    participant Audit
+
+    Client->>API: submit execution
+    API->>DB: persist + enqueue
+    API-->>Client: 202
+    Worker->>DB: claim
+    Worker->>Harness: run
+    Harness->>Policy: evaluate
+    Harness->>Model: generate
+    Harness->>Tool: execute
+    Harness->>Audit: append
+    Harness->>DB: terminal result
+
+Use o fluxo REAL implementado, não apenas este exemplo.
+
+---
+
+# 81. ADRs OBRIGATÓRIOS
+
+Crie ADRs para pelo menos:
+
+ADR-009 — Durable execution authority
+ADR-010 — Queue/outbox mechanism
+ADR-011 — Worker claim and lease semantics
+ADR-012 — Idempotency semantics
+ADR-013 — Effect journal guarantee
+ADR-014 — Approval pause/resume
+ADR-015 — Retry classification
+ADR-016 — Audit failure policy
+ADR-017 — Transaction boundaries
+ADR-018 — Policy re-evaluation on resume
+
+Numeração pode ser ajustada à sequência existente.
+
+---
+
+# 82. SECURITY REVIEW
+
+Revise a nova execution spine para:
+
+SQL injection
+tenant bypass
+IDOR
+untrusted payload
+mass assignment
+unsafe deserialization
+tool argument injection
+approval bypass
+idempotency abuse
+queue poisoning
+lease stealing
+audit tampering
+sensitive log exposure.
+
+Crie:
+
+docs/phase2/SECURITY_REVIEW.md
+
+---
+
+# 83. THREAT MODEL
+
+Crie trust boundaries para:
+
+Client
+API
+Database
+Worker
+Harness
+Model Provider
+Tool
+Audit
+Telemetry.
+
+Inclua pelo menos:
+
+asset
+attacker
+entry point
+threat
+control
+residual risk.
+
+Não precisa ser burocrático.
+
+Precisa ser útil.
+
+---
+
+# 84. PERFORMANCE BASELINE
+
+Meça em ambiente local/teste:
+
+HTTP ingestion latency
+queue wait
+worker processing
+runtime duration
+DB roundtrips
+
+Não use números sintéticos inventados.
+
+Registre ambiente.
+
+Não declare performance de produção.
+
+Crie:
+
+docs/phase2/PERFORMANCE_BASELINE.md
+
+---
+
+# 85. LOAD SMOKE
+
+Se ambiente permitir, execute um smoke controlado.
+
+Exemplo:
+
+100–1000 synthetic submissions
+
+com concurrency moderada.
+
+Meça:
+
+throughput
+error rate
+duplicate effects
+claim conflicts
+queue growth.
+
+Não transforme esta Phase em benchmark completo.
+
+Se ambiente não suportar:
+
+ENVIRONMENT_BLOCKED.
+
+---
+
+# 86. DATABASE REALITY
+
+Se PostgreSQL real estiver disponível:
+
+use-o para os durability proofs críticos.
+
+Se NÃO estiver:
+
+não simule e declare durabilidade certificada.
+
+Classifique:
+
+STRUCTURAL_PROOF_ONLY
+
+e mantenha produção NO-GO.
+
+Essa distinção é obrigatória.
+
+---
+
+# 87. NO PRODUCTION PROVIDERS
+
+Não use:
+
+WhatsApp real
+Chatwoot real
+EvolutionAPI real
+dados de pacientes
+dados de clientes
+produção hospitalar
+
+para certificar esta fase.
+
+Use fixtures sintéticas.
+
+---
+
+# 88. OBSERVABILITY DASHBOARD CONTRACT
+
+Não é necessário construir dashboard completo.
+
+Mas documente quais métricas permitirão futuramente visualizar:
+
+queue depth
+running executions
+failure rate
+retry rate
+worker health
+model latency
+tool latency
+policy denials
+approval backlog.
+
+---
+
+# 89. HEALTH / READINESS
+
+Separe:
+
+LIVENESS
+
+de:
+
+READINESS.
+
+Worker vivo mas sem DB:
+
+live = true
+ready = false.
+
+API viva mas incapaz de persistir execution:
+
+live = true
+ready = false.
+
+Teste.
+
+---
+
+# 90. MIGRATION SAFETY
+
+Todas as migrations devem:
+
+- ser versionadas;
+- ser deterministicamente aplicáveis;
+- evitar destructive change sem necessidade;
+- possuir rollback strategy documentada.
+
+Não faça DROP destr

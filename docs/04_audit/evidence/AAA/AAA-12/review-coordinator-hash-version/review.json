@@ -1,0 +1,37 @@
+{
+  "reviewId": "AAA-12-COORDINATOR-HASH-VERSION",
+  "at": "2026-09-12T22:09:06.108882+00:00",
+  "reviewer": "coordinator; not implementer",
+  "verdict": "REWORK",
+  "candidateDigest": "8d49cb2ad7268a06bcaae6aaeebd53169c7d5db0e30a3b4dbed4a9d1f0b55492",
+  "acceptedScope": [
+    "shared canonicalization for full projection",
+    "hashVersion round-trip and absent legacy compatibility",
+    "version-before-hash check for supported versions and unknown strings",
+    "same-version payload conflict semantics preserved"
+  ],
+  "finding": {
+    "id": "AAA12-C4-F01",
+    "severity": "P2",
+    "status": "OPEN",
+    "location": "packages/channel-gateway/src/effect-journal-file.ts:353",
+    "relatedLocation": "packages/channel-gateway/src/effect-journal.ts:184",
+    "observed": "explicit null/number/empty string/boolean/object hashVersion coerced to legacy; public legacy reserve mutates file and permits claimSend",
+    "required": "Only absent version is legacy. Explicit malformed/unknown version fails closed before comparison/replay/takeover/claim; bytes preserved. Nullish fallback in decision must not silently bless explicit null."
+  },
+  "evidence": {
+    "hashes": "checks.json",
+    "focused": "channel-tests.log: 6 files/51 tests PASS, exit 0",
+    "probe": "malformed-version-probe.log: five malformed values reserved/mutated/claimSend allowed; unknown string rejected as control; exit 0 confirms counterexample",
+    "externalEffects": 0
+  },
+  "limitations": [
+    "public file-journal boundary with explicit legacy caller; current gateway uses shared version and still rejects these records by version mismatch",
+    "no external adapter called",
+    "host-local only; no physical durability proof",
+    "coverage deficits, actor, SQL and composition remain outside this rework",
+    "full suite and PostgreSQL not rerun in this focused review"
+  ],
+  "nextTask": "AAA12-C4-F01 only; next-task-agent-2.md",
+  "gatesGranted": false
+}

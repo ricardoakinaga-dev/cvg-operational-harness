@@ -1,0 +1,118 @@
+
+ RUN  v4.1.11 /tmp/cvg-m1-round2-ixwtdmce/candidate
+
+ ❯ apps/worker/src/__tests__/postgres-role-preflight.test.ts (12 tests | 2 failed) 1455ms
+     × rejects an additional permissive policy before any claim 75ms
+     × rejects missing effect privileges and forbidden privileges on any critical table 49ms
+ ❯ apps/api/src/__tests__/readiness.test.ts (11 tests | 3 failed) 7447ms
+     × returns 503 when destruction rejects the timed out query 956ms
+     × bounds pending pool admission and destroys a late client exactly once 5056ms
+     × ignores late query success and recovers after the outstanding operation settles 1021ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  apps/api/src/__tests__/readiness.test.ts > readiness probe > returns 503 when destruction rejects the timed out query
+AssertionError: expected 200 to be 503 // Object.is equality
+
+- Expected
++ Received
+
+- 503
++ 200
+
+ ❯ apps/api/src/__tests__/readiness.test.ts:195:32
+    193|     try {
+    194|       const ready = await app.inject({ method: 'GET', url: '/ready' })
+    195|       expect(ready.statusCode).toBe(503)
+       |                                ^
+    196|       expect(destroyed).toBe(1)
+    197|       expect((await app.inject({ method: 'GET', url: '/live' })).statu…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  apps/api/src/__tests__/readiness.test.ts > readiness probe > bounds pending pool admission and destroys a late client exactly once
+AssertionError: expected 5 to be 1 // Object.is equality
+
+- Expected
++ Received
+
+- 1
++ 5
+
+ ❯ apps/api/src/__tests__/readiness.test.ts:216:25
+    214|         expect((await app.inject({ method: 'GET', url: '/ready' })).st…
+    215|       }
+    216|       expect(connected).toBe(1)
+       |                         ^
+    217|       resolveConnect({ query: async () => { queried += 1 }, release: (…
+    218|       await new Promise((resolve) => setImmediate(resolve))
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  apps/api/src/__tests__/readiness.test.ts > readiness probe > ignores late query success and recovers after the outstanding operation settles
+AssertionError: expected 200 to be 503 // Object.is equality
+
+- Expected
++ Received
+
+- 503
++ 200
+
+ ❯ apps/api/src/__tests__/readiness.test.ts:239:79
+    237|     try {
+    238|       expect((await app.inject({ method: 'GET', url: '/ready' })).stat…
+    239|       expect((await app.inject({ method: 'GET', url: '/ready' })).stat…
+       |                                                                               ^
+    240|       expect(connected).toBe(1)
+    241|       resolveQuery()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  apps/worker/src/__tests__/postgres-role-preflight.test.ts > worker PostgreSQL role preflight > rejects an additional permissive policy before any claim
+AssertionError: promise resolved "undefined" instead of rejecting
+
+- Expected:
+Error {
+  "message": "rejected promise",
+}
+
++ Received:
+undefined
+
+ ❯ apps/worker/src/__tests__/postgres-role-preflight.test.ts:92:78
+     90|       await assertPostgresWorkerPreflight(pool, { tenantId: tenant })
+     91|       await admin.query(`CREATE POLICY synthetic_allow_all ON ${schema…
+     92|       await expect(assertPostgresWorkerPreflight(pool, { tenantId: ten…
+       |                                                                              ^
+     93|     } finally {
+     94|       await admin.query(`DROP POLICY IF EXISTS synthetic_allow_all ON …
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  apps/worker/src/__tests__/postgres-role-preflight.test.ts > worker PostgreSQL role preflight > rejects missing effect privileges and forbidden privileges on any critical table
+AssertionError: promise resolved "undefined" instead of rejecting
+
+- Expected:
+Error {
+  "message": "rejected promise",
+}
+
++ Received:
+undefined
+
+ ❯ apps/worker/src/__tests__/postgres-role-preflight.test.ts:105:78
+    103|     try {
+    104|       await admin.query(`REVOKE INSERT ON ${schema}.outbox_effects FRO…
+    105|       await expect(assertPostgresWorkerPreflight(pool, { tenantId: ten…
+       |                                                                              ^
+    106|       await admin.query(`GRANT INSERT ON ${schema}.outbox_effects TO $…
+    107|       await assertPostgresWorkerPreflight(pool, { tenantId: tenant })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+
+ Test Files  2 failed (2)
+      Tests  5 failed | 18 passed (23)
+   Start at  12:01:26
+   Duration  17.20s (transform 3.73s, setup 0ms, import 4.96s, tests 8.90s, environment 2.74s)
+

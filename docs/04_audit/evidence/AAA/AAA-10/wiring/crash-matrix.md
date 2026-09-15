@@ -1,0 +1,26 @@
+# AAA-10 wiring — matriz de crash/falha/retry (§6) → teste
+
+Todos os cenários são sintéticos, com relógio injetável e adapters falsos. `E` =
+chamada à ferramenta. Nenhum teste usa dado real, provider real ou canal real.
+
+| # | Fronteira de falha (§6) | Aprovação | Journal | Efeito | Recuperação exigida | Teste de prova | Resultado |
+| - | ----------------------- | --------- | ------- | ------ | ------------------- | -------------- | --------- |
+| 1 | Antes da reserva da aprovação | `APPROVED` | ausente | 0 | retry cria nova reserva | `runtime-binding.test.ts` T-16 "releases the approval when the tool proves a pre-effect failure" (release → APPROVED) + execução normal | PASS |
+| 2 | Após reserva, antes de `markEffectStarted` | `RESERVED`/`EXECUTING` | `RESERVED` | 0 | TTL expira → release para `APPROVED` | T-18 "returns an expired RESERVED attempt to APPROVED and never executes" (sweep → `ABANDONED`; `approvals.release` → `APPROVED`) | PASS |
+| 3 | Após `markEffectStarted`, antes/durante E | `EXECUTING` | `EFFECT_STARTED` | 0..1 | recuperação marca `UNCERTAIN`; reconciliação explícita | T-06 (nova instância, sweep → `UNCERTAIN`; `denied operation_uncertain`; ferramenta 0x) | PASS |
+| 4 | E ok, antes de `confirmEffect` | `EXECUTING` | `EFFECT_STARTED` | 1 | recuperação confirma apenas com `executionRef` comprovado | T-06 cobre a honestidade (não confirma sozinho; `UNCERTAIN`); confirmação explícita por `reconcile` provada em `effect-journal.test.ts` (lane ports) | PASS |
+| 5 | E falhou comprovadamente sem efeito | `EXECUTING` | `EFFECT_FAILED` | 0 | release/`FAILED`; retry permitido | `runtime-binding.test.ts` T-16 "releases the approval…" (`journal.failEffect` + release) e `effect-journal.test.ts` re-arm de `EFFECT_FAILED` | PASS |
+| 6 | Efeito confirmado, antes de `approval.confirm` | `EXECUTING` | `CONFIRMED` | 1 | recuperação conclui `approval.confirm` (não repete E) | T-14 (replay → `approvals.confirm` com `exec_ref` persistido; ferramenta 0x; `EXECUTED`) | PASS |
+| 7 | Aprovação `EXECUTED`, antes da outbox | `EXECUTED` | `CONFIRMED` | 1 | recuperação enfileira outbox com a mesma `operationKey` | T-07 (2º turno replay reenfileira; 3º turno outbox ok; ferramenta 1x) | PASS |
+| 8 | Outbox falhou após efeito | `EXECUTED` + `outbox_pending` | `CONFIRMED` | 1 | retry da outbox deduplicado; nenhuma nova E | T-07 (1º/2º turnos `executed`/`outboxPending`; 3º turno sucesso com a mesma chave) | PASS |
+| 9 | Duas tentativas concorrentes | uma `RESERVED`/`EXECUTING` | uma `IN_PROGRESS` | ≤1 | perdedora nega com `already_reserved`/`operation_in_progress` | T-08 (duas instâncias `FileEffectJournal` no mesmo diretório; 1 executada, 1 `denied operation_in_progress`, ferramenta 1x) | PASS |
+| 10 | Restart após efeito e antes do ack | `UNCERTAIN`/`EXECUTING` | `EFFECT_STARTED`/`CONFIRMED` | 1 | reconciliação explícita; nunca auto-reexecuta | T-06 (`EFFECT_STARTED` → `UNCERTAIN`, ferramenta 0x) e T-14 (`CONFIRMED` → conclui ack, ferramenta 0x) | PASS |
+
+Extra fora da matriz §6, exigido pelo enunciado:
+
+| Cenário | Teste | Resultado |
+| ------- | ----- | --------- |
+| Sem journal para capability de efeito real | "denies a high-risk capability without an effect journal before the tool" → `durability_required`, ferramenta 0x, aprovação `APPROVED` | PASS |
+| Sweep indisponível no início do turno | "fails closed with journal_sweep_failed when the start-of-turn sweep throws" → `denied journal_sweep_failed`, modelo 0x | PASS |
+| Replay devolve `resultDigest` persistido sem nova ferramenta | T-07/T-14/T-17 (`resultDigest` = `sha256(canonicalizeJson(result))`) | PASS |
+| Conflito de chave com proposta diferente | T-15 → `idempotency_key_reuse`, ferramenta 1x total | PASS |

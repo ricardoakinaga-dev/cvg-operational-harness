@@ -59,7 +59,9 @@ describe('capability catalog and least privilege', () => {
       'exam.release',
       'finance.write',
       'admin.policy.manage',
-      'admin.agent.manage'
+      'admin.agent.manage',
+      'appointment.confirm',
+      'appointment.reschedule'
     ] satisfies Capability[]) {
       expect(granted).not.toContain(forbidden)
     }
@@ -86,18 +88,42 @@ describe('policy engine decisions', () => {
     const policy = engine()
     for (const capability of [
       'schedule.read',
-      'appointment.create',
-      'appointment.modify',
       'conversation.read',
       'message.draft',
       'message.send',
       'patient.summary.read'
     ] satisfies Capability[]) {
-      const decision = policy.evaluate(input({ capability }))
+      const decision = policy.evaluate(
+        input({ capability, action: capability })
+      )
       expect(decision.decision, capability).toBe('ALLOW')
       expect(decision.policyId).toBe('builtin.deny_by_default')
       expect(decision.policyVersion).toBe('policy-engine-v1')
     }
+    const draftCreate = policy.evaluate(
+      input({
+        capability: 'appointment.create',
+        action: 'appointment.create',
+        resource: { type: 'appointment_draft', id: 'draft_1' }
+      })
+    )
+    expect(draftCreate.decision).toBe('ALLOW')
+    const shellCreate = policy.evaluate(
+      input({
+        capability: 'appointment.create',
+        action: 'appointment.create',
+        resource: { type: 'appointment', id: 'apt_1' }
+      })
+    )
+    expect(shellCreate.decision).toBe('ALLOW')
+    const draftModify = policy.evaluate(
+      input({
+        capability: 'appointment.modify',
+        action: 'appointment.modify',
+        resource: { type: 'appointment_draft', id: 'draft_1' }
+      })
+    )
+    expect(draftModify.decision).toBe('ALLOW')
   })
 
   it('denies every capability outside the profile grant (deny by default)', () => {
@@ -114,7 +140,9 @@ describe('policy engine decisions', () => {
       'admin.policy.manage',
       'admin.agent.manage'
     ] satisfies Capability[]) {
-      const decision = policy.evaluate(input({ capability }))
+      const decision = policy.evaluate(
+        input({ capability, action: capability })
+      )
       expect(decision.decision, capability).toBe('DENY')
       expect(decision.reason, capability).toBe('capability_not_granted')
     }
@@ -123,21 +151,39 @@ describe('policy engine decisions', () => {
   it('requires approval for declared grant levels and high-risk capabilities', () => {
     const policy = engine()
     expect(
-      policy.evaluate(input({ capability: 'appointment.cancel' })).decision
-    ).toBe('REQUIRE_APPROVAL')
-    expect(
       policy.evaluate(
-        input({ capability: 'patient.record.write', agentProfile: 'clinical' })
+        input({
+          capability: 'appointment.cancel',
+          action: 'appointment.cancel',
+          resource: { type: 'appointment', id: 'apt_1' }
+        })
       ).decision
     ).toBe('REQUIRE_APPROVAL')
     expect(
       policy.evaluate(
-        input({ capability: 'finance.write', agentProfile: 'financial' })
+        input({
+          capability: 'patient.record.write',
+          action: 'patient.record.write',
+          agentProfile: 'clinical'
+        })
       ).decision
     ).toBe('REQUIRE_APPROVAL')
     expect(
       policy.evaluate(
-        input({ capability: 'exam.release', agentProfile: 'clinical' })
+        input({
+          capability: 'finance.write',
+          action: 'finance.write',
+          agentProfile: 'financial'
+        })
+      ).decision
+    ).toBe('REQUIRE_APPROVAL')
+    expect(
+      policy.evaluate(
+        input({
+          capability: 'exam.release',
+          action: 'exam.release',
+          agentProfile: 'clinical'
+        })
       ).decision
     ).toBe('REQUIRE_APPROVAL')
   })
@@ -160,6 +206,7 @@ describe('policy engine decisions', () => {
     const tenantMismatch = policy.evaluate(
       input({
         capability: 'appointment.modify',
+        action: 'appointment.modify',
         resource: { type: 'appointment', id: 'a1', tenantId: OTHER_TENANT }
       })
     )
@@ -205,12 +252,16 @@ describe('policy engine decisions', () => {
         ]
       }
     ])
-    const denied = policy.evaluate(input({ capability: 'message.send' }))
+    const denied = policy.evaluate(
+      input({ capability: 'message.send', action: 'message.send' })
+    )
     expect(denied.decision).toBe('DENY')
     expect(denied.policyId).toBe('tenant.strict')
     expect(denied.policyVersion).toBe('2.1.0')
 
-    const expansion = policy.evaluate(input({ capability: 'finance.write' }))
+    const expansion = policy.evaluate(
+      input({ capability: 'finance.write', action: 'finance.write' })
+    )
     expect(expansion.decision).toBe('DENY')
     expect(expansion.reason).toBe('capability_not_granted')
   })
@@ -272,11 +323,14 @@ describe('policy engine decisions', () => {
       }
     ])
     expect(
-      policy.evaluate(input({ capability: 'message.send' })).decision
+      policy.evaluate(
+        input({ capability: 'message.send', action: 'message.send' })
+      ).decision
     ).toBe('ALLOW')
     const clinical = policy.evaluate(
       input({
         capability: 'message.send',
+        action: 'message.send',
         context: { dataClassification: 'CLINICAL' }
       })
     )
@@ -287,7 +341,11 @@ describe('policy engine decisions', () => {
   it('requires a medical operator for medical capabilities', () => {
     const policy = engine()
     const withoutMedical = policy.evaluate(
-      input({ capability: 'clinical.prescribe', agentProfile: 'clinical' })
+      input({
+        capability: 'clinical.prescribe',
+        action: 'clinical.prescribe',
+        agentProfile: 'clinical'
+      })
     )
     expect(withoutMedical.decision).toBe('REQUIRE_APPROVAL')
     expect(withoutMedical.reason).toMatch(/medical operator/)

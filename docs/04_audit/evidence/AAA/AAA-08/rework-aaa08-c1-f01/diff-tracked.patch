@@ -1,0 +1,361 @@
+diff --git a/packages/policy-engine/src/__tests__/policy-engine.test.ts b/packages/policy-engine/src/__tests__/policy-engine.test.ts
+index 2252fc0..239121a 100644
+--- a/packages/policy-engine/src/__tests__/policy-engine.test.ts
++++ b/packages/policy-engine/src/__tests__/policy-engine.test.ts
+@@ -59,7 +59,9 @@ describe('capability catalog and least privilege', () => {
+       'exam.release',
+       'finance.write',
+       'admin.policy.manage',
+-      'admin.agent.manage'
++      'admin.agent.manage',
++      'appointment.confirm',
++      'appointment.reschedule'
+     ] satisfies Capability[]) {
+       expect(granted).not.toContain(forbidden)
+     }
+@@ -86,18 +88,42 @@ describe('policy engine decisions', () => {
+     const policy = engine()
+     for (const capability of [
+       'schedule.read',
+-      'appointment.create',
+-      'appointment.modify',
+       'conversation.read',
+       'message.draft',
+       'message.send',
+       'patient.summary.read'
+     ] satisfies Capability[]) {
+-      const decision = policy.evaluate(input({ capability }))
++      const decision = policy.evaluate(
++        input({ capability, action: capability })
++      )
+       expect(decision.decision, capability).toBe('ALLOW')
+       expect(decision.policyId).toBe('builtin.deny_by_default')
+       expect(decision.policyVersion).toBe('policy-engine-v1')
+     }
++    const draftCreate = policy.evaluate(
++      input({
++        capability: 'appointment.create',
++        action: 'appointment.create',
++        resource: { type: 'appointment_draft', id: 'draft_1' }
++      })
++    )
++    expect(draftCreate.decision).toBe('ALLOW')
++    const shellCreate = policy.evaluate(
++      input({
++        capability: 'appointment.create',
++        action: 'appointment.create',
++        resource: { type: 'appointment', id: 'apt_1' }
++      })
++    )
++    expect(shellCreate.decision).toBe('ALLOW')
++    const draftModify = policy.evaluate(
++      input({
++        capability: 'appointment.modify',
++        action: 'appointment.modify',
++        resource: { type: 'appointment_draft', id: 'draft_1' }
++      })
++    )
++    expect(draftModify.decision).toBe('ALLOW')
+   })
+ 
+   it('denies every capability outside the profile grant (deny by default)', () => {
+@@ -114,7 +140,9 @@ describe('policy engine decisions', () => {
+       'admin.policy.manage',
+       'admin.agent.manage'
+     ] satisfies Capability[]) {
+-      const decision = policy.evaluate(input({ capability }))
++      const decision = policy.evaluate(
++        input({ capability, action: capability })
++      )
+       expect(decision.decision, capability).toBe('DENY')
+       expect(decision.reason, capability).toBe('capability_not_granted')
+     }
+@@ -123,21 +151,39 @@ describe('policy engine decisions', () => {
+   it('requires approval for declared grant levels and high-risk capabilities', () => {
+     const policy = engine()
+     expect(
+-      policy.evaluate(input({ capability: 'appointment.cancel' })).decision
++      policy.evaluate(
++        input({
++          capability: 'appointment.cancel',
++          action: 'appointment.cancel',
++          resource: { type: 'appointment', id: 'apt_1' }
++        })
++      ).decision
+     ).toBe('REQUIRE_APPROVAL')
+     expect(
+       policy.evaluate(
+-        input({ capability: 'patient.record.write', agentProfile: 'clinical' })
++        input({
++          capability: 'patient.record.write',
++          action: 'patient.record.write',
++          agentProfile: 'clinical'
++        })
+       ).decision
+     ).toBe('REQUIRE_APPROVAL')
+     expect(
+       policy.evaluate(
+-        input({ capability: 'finance.write', agentProfile: 'financial' })
++        input({
++          capability: 'finance.write',
++          action: 'finance.write',
++          agentProfile: 'financial'
++        })
+       ).decision
+     ).toBe('REQUIRE_APPROVAL')
+     expect(
+       policy.evaluate(
+-        input({ capability: 'exam.release', agentProfile: 'clinical' })
++        input({
++          capability: 'exam.release',
++          action: 'exam.release',
++          agentProfile: 'clinical'
++        })
+       ).decision
+     ).toBe('REQUIRE_APPROVAL')
+   })
+@@ -160,6 +206,7 @@ describe('policy engine decisions', () => {
+     const tenantMismatch = policy.evaluate(
+       input({
+         capability: 'appointment.modify',
++        action: 'appointment.modify',
+         resource: { type: 'appointment', id: 'a1', tenantId: OTHER_TENANT }
+       })
+     )
+@@ -205,12 +252,16 @@ describe('policy engine decisions', () => {
+         ]
+       }
+     ])
+-    const denied = policy.evaluate(input({ capability: 'message.send' }))
++    const denied = policy.evaluate(
++      input({ capability: 'message.send', action: 'message.send' })
++    )
+     expect(denied.decision).toBe('DENY')
+     expect(denied.policyId).toBe('tenant.strict')
+     expect(denied.policyVersion).toBe('2.1.0')
+ 
+-    const expansion = policy.evaluate(input({ capability: 'finance.write' }))
++    const expansion = policy.evaluate(
++      input({ capability: 'finance.write', action: 'finance.write' })
++    )
+     expect(expansion.decision).toBe('DENY')
+     expect(expansion.reason).toBe('capability_not_granted')
+   })
+@@ -272,11 +323,14 @@ describe('policy engine decisions', () => {
+       }
+     ])
+     expect(
+-      policy.evaluate(input({ capability: 'message.send' })).decision
++      policy.evaluate(
++        input({ capability: 'message.send', action: 'message.send' })
++      ).decision
+     ).toBe('ALLOW')
+     const clinical = policy.evaluate(
+       input({
+         capability: 'message.send',
++        action: 'message.send',
+         context: { dataClassification: 'CLINICAL' }
+       })
+     )
+@@ -287,7 +341,11 @@ describe('policy engine decisions', () => {
+   it('requires a medical operator for medical capabilities', () => {
+     const policy = engine()
+     const withoutMedical = policy.evaluate(
+-      input({ capability: 'clinical.prescribe', agentProfile: 'clinical' })
++      input({
++        capability: 'clinical.prescribe',
++        action: 'clinical.prescribe',
++        agentProfile: 'clinical'
++      })
+     )
+     expect(withoutMedical.decision).toBe('REQUIRE_APPROVAL')
+     expect(withoutMedical.reason).toMatch(/medical operator/)
+diff --git a/packages/policy-engine/src/capabilities.ts b/packages/policy-engine/src/capabilities.ts
+index 744f004..e582304 100644
+--- a/packages/policy-engine/src/capabilities.ts
++++ b/packages/policy-engine/src/capabilities.ts
+@@ -4,6 +4,8 @@ export const CapabilitySchema = z.enum([
+   'schedule.read',
+   'appointment.create',
+   'appointment.modify',
++  'appointment.confirm',
++  'appointment.reschedule',
+   'appointment.cancel',
+   'conversation.read',
+   'message.draft',
+@@ -67,13 +69,28 @@ export const CAPABILITY_CATALOG: Readonly<
+     capability: 'appointment.create',
+     category: 'schedule',
+     risk: 'MEDIUM_RISK_WRITE',
+-    description: 'Create an appointment draft/confirmation'
++    description:
++      'Create an appointment creation step/draft; real confirmation is a separate denied capability'
+   },
+   'appointment.modify': {
+     capability: 'appointment.modify',
+     category: 'schedule',
+     risk: 'MEDIUM_RISK_WRITE',
+-    description: 'Modify an existing appointment'
++    description: 'Modify an appointment draft only (never a real appointment)'
++  },
++  'appointment.confirm': {
++    capability: 'appointment.confirm',
++    category: 'schedule',
++    risk: 'HIGH_RISK_WRITE',
++    description:
++      'Confirm a draft into a real appointment; no grant in the controlled scope'
++  },
++  'appointment.reschedule': {
++    capability: 'appointment.reschedule',
++    category: 'schedule',
++    risk: 'HIGH_RISK_WRITE',
++    description:
++      'Change an existing real appointment; no grant in the controlled scope'
+   },
+   'appointment.cancel': {
+     capability: 'appointment.cancel',
+@@ -173,6 +190,82 @@ export const CAPABILITY_CATALOG: Readonly<
+   }
+ })
+ 
++/**
++ * Resource-type applicability for effect capabilities. A capability present in
++ * this map can only act on the listed resource types; an absent or incompatible
++ * resource fails closed before grants and policy documents are consulted.
++ */
++export const CAPABILITY_RESOURCE_TYPES: Readonly<
++  Partial<Record<Capability, readonly string[]>>
++> = Object.freeze({
++  'appointment.create': ['appointment', 'appointment_draft'],
++  'appointment.modify': ['appointment_draft'],
++  'appointment.confirm': ['appointment'],
++  'appointment.reschedule': ['appointment'],
++  'appointment.cancel': ['appointment']
++})
++
++export type ResourceTypeScope =
++  | { status: 'not_scoped' }
++  | { status: 'required' }
++  | { status: 'not_allowed' }
++  | { status: 'allowed' }
++
++export function capabilityResourceScope(
++  capability: Capability,
++  resource: { type?: string } | undefined
++): ResourceTypeScope {
++  const allowed = CAPABILITY_RESOURCE_TYPES[capability]
++  if (!allowed) return { status: 'not_scoped' }
++  if (!resource || typeof resource.type !== 'string') {
++    return { status: 'required' }
++  }
++  return allowed.includes(resource.type)
++    ? { status: 'allowed' }
++    : { status: 'not_allowed' }
++}
++
++/**
++ * Explicit action identifiers accepted per capability. The map is closed and
++ * exhaustive: every capability declares its actions, and the only tolerated
++ * difference from the canonical capability name is a declared alias (for
++ * example the generic `read` action of read-only capabilities). A declared
++ * sensitive action (confirm/reschedule/cancel) can never be smuggled through a
++ * draft or read capability.
++ */
++export const CAPABILITY_ACTIONS: Readonly<
++  Record<Capability, readonly string[]>
++> = Object.freeze({
++  'schedule.read': ['schedule.read', 'read'],
++  'appointment.create': ['appointment.create'],
++  'appointment.modify': ['appointment.modify'],
++  'appointment.confirm': ['appointment.confirm'],
++  'appointment.reschedule': ['appointment.reschedule'],
++  'appointment.cancel': ['appointment.cancel'],
++  'conversation.read': ['conversation.read', 'read'],
++  'message.draft': ['message.draft'],
++  'message.send': ['message.send'],
++  'patient.summary.read': ['patient.summary.read', 'read'],
++  'patient.record.read': ['patient.record.read', 'read'],
++  'patient.record.write': ['patient.record.write'],
++  'exam.read': ['exam.read', 'read'],
++  'exam.release': ['exam.release'],
++  'finance.read': ['finance.read', 'read'],
++  'finance.write': ['finance.write'],
++  'hospitalization.manage': ['hospitalization.manage'],
++  'clinical.diagnose': ['clinical.diagnose'],
++  'clinical.prescribe': ['clinical.prescribe'],
++  'admin.policy.manage': ['admin.policy.manage'],
++  'admin.agent.manage': ['admin.agent.manage']
++})
++
++export function actionMatchesCapability(
++  capability: Capability,
++  action: string
++): boolean {
++  return CAPABILITY_ACTIONS[capability].includes(action)
++}
++
+ export function capabilityRisk(capability: Capability): ToolRiskLevel {
+   return CAPABILITY_CATALOG[capability].risk
+ }
+diff --git a/packages/policy-engine/src/engine.ts b/packages/policy-engine/src/engine.ts
+index faee032..20c837d 100644
+--- a/packages/policy-engine/src/engine.ts
++++ b/packages/policy-engine/src/engine.ts
+@@ -7,6 +7,8 @@ import { z } from 'zod'
+ import {
+   CAPABILITY_CATALOG,
+   CapabilitySchema,
++  actionMatchesCapability,
++  capabilityResourceScope,
+   capabilityRisk,
+   type Capability
+ } from './capabilities.ts'
+@@ -147,6 +149,48 @@ export class PolicyEngine {
+       )
+     }
+ 
++    const resourceScope = capabilityResourceScope(
++      request.capability,
++      request.resource
++    )
++    if (resourceScope.status === 'required') {
++      return this.#deny(
++        'resource_type_required',
++        'Capability requires a resource with an explicit type',
++        undefined,
++        {
++          correlationId: request.correlationId,
++          capability: request.capability,
++          profile: request.agentProfile
++        }
++      )
++    }
++    if (resourceScope.status === 'not_allowed') {
++      return this.#deny(
++        'resource_type_not_allowed',
++        'Capability cannot act on this resource type in the controlled scope',
++        undefined,
++        {
++          correlationId: request.correlationId,
++          capability: request.capability,
++          profile: request.agentProfile
++        }
++      )
++    }
++
++    if (!actionMatchesCapability(request.capability, request.action)) {
++      return this.#deny(
++        'action_capability_mismatch',
++        'Action is not bound to the requested capability',
++        undefined,
++        {
++          correlationId: request.correlationId,
++          capability: request.capability,
++          profile: request.agentProfile
++        }
++      )
++    }
++
+     const grant = grantFor(request.agentProfile, request.capability)
+     if (!grant) {
+       return this.#deny(

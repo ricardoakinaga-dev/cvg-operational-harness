@@ -1,0 +1,59 @@
+# AAA-11 builder — commands and exit codes
+
+Environment: local Node v24.20.0 (target engines >=22 <23); synthetic fixtures only;
+no provider/channel/PostgreSQL/real data; no install, commit, push or deploy.
+
+1. RED (mutation of the AAA-11 enforcement; see limitations.md)
+   command: npx vitest run packages/agent-runtime/src/__tests__/runtime-limits.test.ts --no-file-parallelism --maxWorkers=2
+   exit: 1
+   result: 1 file failed; 13 failed | 3 passed (16)
+   log: red-focused.log
+
+2. GREEN focused package
+   command: npx vitest run packages/agent-runtime --no-file-parallelism --maxWorkers=2
+   exit: 0
+   result: 6 files passed; 98 passed (98)
+   log: green-focused.log
+
+3. GREEN new file verbose (T-09/T-10/T-11 + boundaries)
+   command: npx vitest run packages/agent-runtime/src/__tests__/runtime-limits.test.ts --no-file-parallelism --maxWorkers=2 --reporter=verbose
+   exit: 0
+   result: 1 file passed; 16 passed (16)
+   log: green-limits-verbose.log
+
+4. Span-closure proof
+   command: npx vitest run packages/agent-runtime/src/__tests__/runtime-limits.test.ts --no-file-parallelism --maxWorkers=2 --reporter=verbose -t "span closure"
+   exit: 0
+   result: 1 passed | 15 skipped (16)
+   log: span-closure.log
+
+5. Model-gateway focused (no model-gateway files changed by this lane)
+   command: npx vitest run packages/model-gateway --no-file-parallelism --maxWorkers=2
+   exit: 0
+   result: 3 files passed; 45 passed (45)
+   log: model-gateway-focused.log
+
+6. Typecheck
+   command: npm run typecheck  (tsc -p tsconfig.typecheck.json --noEmit)
+   exit: 0
+   log: typecheck.log
+
+7. Lint
+   command: npm run lint  (eslint .)
+   exit: 0
+   log: lint.log
+
+8. Prettier (changed files)
+   command: npx prettier --check packages/agent-runtime/src/contracts.ts packages/agent-runtime/src/runtime.ts packages/agent-runtime/src/__tests__/runtime-limits.test.ts
+   exit: 0
+   result: All matched files use Prettier code style!
+
+9. Full suite
+   command: npm test  (vitest run --no-file-parallelism --maxWorkers=2)
+   exit: 0
+   result: 195 files passed | 4 skipped (199); 1148 passed | 56 skipped (1204); zero failures
+   baseline (current worktree, before this lane): 194 files passed | 4 skipped; 1132 passed | 56 skipped
+   delta: +1 file / +16 tests, all from packages/agent-runtime/src/__tests__/runtime-limits.test.ts
+   log: full-npm-test.log
+
+No `git add`, `git commit`, `git push`, deploy, npm install or external call was executed.

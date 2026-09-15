@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "taskId": "AAA-12",
+  "program": "AAA-20260912",
+  "round": "local canonicalization and hash-version rework (AAA05-C2-F01 follow-up)",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "authorization": "local controlled correction of the delivered candidate; no G_SPEC human, no SQL, no promotion",
+  "candidateDigest": "8d49cb2ad7268a06bcaae6aaeebd53169c7d5db0e30a3b4dbed4a9d1f0b55492",
+  "candidateDigestDefinition": "sha256 over lines '<path>\\0<sha256>' for the 13 files sorted lexicographically, joined with '\\n' with no trailing newline",
+  "candidateDigestCommand": "python3 - <<'EOF'\nimport hashlib, json\nm = json.load(open('docs/04_audit/evidence/AAA/AAA-12/rework-canonicalization/manifest-rework.json'))\nh = m['fileHashes']\nprint(hashlib.sha256('\\n'.join(f'{p}\\0{h[p]}' for p in sorted(h)).encode()).hexdigest())\nEOF",
+  "supersedes": "docs/04_audit/evidence/AAA/AAA-12/manifest.json (candidate 33aa2807...) preserved as history",
+  "fileHashes": {
+    "packages/channel-gateway/src/errors.ts": "d428fa1da34d159471d03ebc87f103d4d751cfb2e09c74bbd92d59be43646d8d",
+    "packages/channel-gateway/src/effect-journal.ts": "e42f4a989897e8551ae2410238ed111f755870bf30a71867808f43de3c7b0914",
+    "packages/channel-gateway/src/effect-journal-file.ts": "68eadbea485b012a16e8eb817cbd2843c46b29d61182c6325f5103a5e927fb6b",
+    "packages/channel-gateway/src/gateway.ts": "f638c5aacbda48bca01deddeb85cb56c52e330d51ac40c8a7110d03186fd5ec6",
+    "packages/channel-gateway/src/idempotency.ts": "53cd6354220771e2a32b7496512e3a64a44b6dd18c74f64159e3d1271104e4ce",
+    "packages/channel-gateway/src/index.ts": "d13bc8b401f41cec73ce675b994d4d200aa239f4e65239f21bf5f6cefc1f7541",
+    "packages/channel-gateway/src/adapters/evolution.ts": "78d6def08ee33969c7c348d9e7f4661ba585f7ad5ec9f613c57418d5ce5a0a10",
+    "packages/channel-gateway/src/adapters/chatwoot.ts": "def2d1def4f0cbe7ede46c9bb139865640713ce8d555cd29a5edc110fa4252fb",
+    "packages/channel-gateway/src/__tests__/channel-effect-race.test.ts": "5b1dce5d497e4b6721351112881ac9d338f57c769f8e5cf1665667a802170928",
+    "packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts": "1f914464d297ef7fde1e1db5101445906fe5ef322cff0c0c14a22e393d7a973b",
+    "packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts": "a351d7f2ea4b5a97c617763361e386d682753b1c919d624e2a1dc8d633d5e9da",
+    "packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts": "a6e9e599fe2bf0e97b5fae72d5a6206f2880fada620112b36002a1a82fc1bd02",
+    "packages/chaos/src/__tests__/chaos-postgres.test.ts": "a122ae5179b6cabe18e99067beb60311c51ad8f19ee07aef14aa0cc5417c7418"
+  },
+  "red": {
+    "command": "npx vitest run packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts --no-file-parallelism --maxWorkers=1",
+    "exitCode": 1,
+    "result": "7 failed | 2 passed (9)",
+    "log": "red.log"
+  },
+  "green": {
+    "hashVersionFocused": {
+      "command": "same as RED",
+      "exitCode": 0,
+      "result": "9 passed (9)",
+      "log": "green-hash-version.log"
+    },
+    "consumers": {
+      "command": "TEST_DATABASE_URL=postgres://ricardo@127.0.0.1:55432/cvg_aaa16_test npx vitest run packages/channel-gateway packages/chaos --no-file-parallelism --maxWorkers=2",
+      "exitCode": 0,
+      "result": "Test Files 9 passed (9); Tests 71 passed (71)",
+      "log": "green-final.log"
+    },
+    "fullSuite": {
+      "command": "npm test",
+      "exitCode": 0,
+      "result": "Test Files 178 passed | 4 skipped; Tests 913 passed | 27 skipped",
+      "log": "full-npm-test.log"
+    },
+    "typecheck": {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "log": "typecheck.log"
+    },
+    "lint": {
+      "command": "npx eslint packages/channel-gateway",
+      "exitCode": 0,
+      "log": "lint-channel.log"
+    },
+    "format": {
+      "command": "npx prettier --check packages/channel-gateway",
+      "exitCode": 0,
+      "log": "format-check.log"
+    },
+    "coverageFull": {
+      "command": "npx vitest run --coverage --coverage.reportsDirectory=docs/04_audit/evidence/AAA/AAA-12/rework-canonicalization/coverage-full --no-file-parallelism --maxWorkers=2",
+      "exitCode": 0,
+      "result": "86.44 statements / 81.59 branches / 89.7 functions / 87.52 lines",
+      "log": "coverage-full.log"
+    },
+    "coverageChannelSubset": {
+      "command": "npx vitest run packages/channel-gateway --coverage --coverage.include='packages/channel-gateway/src/**' ...",
+      "exitCode": 1,
+      "result": "subset functions 78.21% < 80% global threshold; gateway.ts functions 54.54% pre-existing; full-repo coverage passes",
+      "log": "coverage-channel.log"
+    }
+  },
+  "requirementMap": [
+    {
+      "requirement": "projeção completa runtime/canal com chaves integer-like",
+      "test": "runtime and channel agree on the full projection with integer-like metadata keys"
+    },
+    {
+      "requirement": "permutações/Unicode estáveis e mudança de campo altera o hash",
+      "test": "permutations and Unicode keys are stable, changed fields change the hash"
+    },
+    {
+      "requirement": "hashVersion persistido em memoria/file + round-trip + check de tipos",
+      "test": "new records persist the shared hash version in memory and in the file round-trip; typecheck exit 0"
+    },
+    {
+      "requirement": "replay de registro novo após restart sem novo envio",
+      "test": "gateway replays a new record after restart without a second send"
+    },
+    {
+      "requirement": "registro antigo sem versão = legacy-local-v1; nunca replay sob algoritmo novo; 0 envios; bytes preservados",
+      "test": "a legacy record without hashVersion is read as legacy-local-v1 and never replayed under a new algorithm"
+    },
+    {
+      "requirement": "mesmos bytes de hash com versões diferentes falham fechado",
+      "test": "zero sends when hash bytes are equal but versions differ"
+    },
+    {
+      "requirement": "todos os estados não escapam da checagem de versão; bytes preservados",
+      "test": "every persisted state fails closed on an unknown version without mutating the record"
+    },
+    {
+      "requirement": "versão desconhecida solicitada não cria registro",
+      "test": "rejects an unknown requested version without creating a record"
+    },
+    {
+      "requirement": "registro legado permanece utilizável na versão legada",
+      "test": "legacy records remain usable under the legacy version"
+    },
+    {
+      "requirement": "preservar concorrência, fencing, incerto e isolamento",
+      "test": "suites existentes channel-effect-race/journal/edges + mandatory 11 reexecutadas em green-final.log (9 files/71 tests)"
+    }
+  ],
+  "limitations": [
+    "Fora do escopo e não implementados: actor de reconciliação, adapter SQL/migrations 0012/0013, migração automática de registros legados e composição AAA-21.",
+    "Registros legacy não são reescritos; sob o algoritmo novo permanecem bloqueados (fail closed) até reconciliação/planejamento próprio.",
+    "Cobertura do subset channel falha o threshold global de functions (78.21%) por debito pre-existente de gateway.ts (54.54%); a cobertura full-repo passa (89.7%) e nenhum limiar foi reduzido.",
+    "Durabilidade do adapter em arquivo continua host-local e sem fsync; nada de durabilidade física foi alegado.",
+    "Os hashes do candidato anterior (33aa2807...) foram superseded; o manifest antigo permanece preservado."
+  ]
+}

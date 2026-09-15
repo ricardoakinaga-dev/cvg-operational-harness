@@ -1,0 +1,114 @@
+
+ RUN  v4.1.11 /home/ricardo/cvg-agent-secretary-v2
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts (6 tests | 6 failed) 53ms
+     × does not re-execute a possibly-started effect when a legacy approval is retried with a changed caller key 31ms
+     × does not re-execute when the reservation persisted the caller operation key and the retry changes the key 4ms
+     × releases a persisted-key reservation to APPROVED only when the journal proves no effect 4ms
+     × keeps a persisted-key reservation UNCERTAIN when the journal shows EFFECT_STARTED 3ms
+     × keeps a legacy approval without a persisted operationKey UNCERTAIN even when the derived journal is absent 6ms
+     × reuses the persisted operation key for journal and outbox after a proven-no-effect release 3ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 6 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts > P1-2: caller operationKey persistence closes the TTL duplicate window > does not re-execute a possibly-started effect when a legacy approval is retried with a changed caller key
+AssertionError: expected 'executed' to be 'denied' // Object.is equality
+
+Expected: "denied"
+Received: "executed"
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts:262:27
+    260|     )
+    261|
+    262|     expect(retry.outcome).toBe('denied')
+       |                           ^
+    263|     expect(retry.reason).toBe('operation_uncertain')
+    264|     expect(harness.approvals.get(TENANT, approvalId).status).toBe('UNC…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts > P1-2: caller operationKey persistence closes the TTL duplicate window > does not re-execute when the reservation persisted the caller operation key and the retry changes the key
+ApprovalError: Reservation request failed schema validation
+ ❯ ApprovalEngine.reserve packages/approval-engine/src/engine.ts:468:13
+    466|     const parsed = ApprovalReserveSchema.safeParse(input)
+    467|     if (!parsed.success) {
+    468|       throw new ApprovalError(
+       |             ^
+    469|         'invalid_request',
+    470|         'Reservation request failed schema validation'
+ ❯ reserveOrphan packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts:202:41
+ ❯ packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts:288:24
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts > P1-2: caller operationKey persistence closes the TTL duplicate window > releases a persisted-key reservation to APPROVED only when the journal proves no effect
+ApprovalError: Reservation request failed schema validation
+ ❯ ApprovalEngine.reserve packages/approval-engine/src/engine.ts:468:13
+    466|     const parsed = ApprovalReserveSchema.safeParse(input)
+    467|     if (!parsed.success) {
+    468|       throw new ApprovalError(
+       |             ^
+    469|         'invalid_request',
+    470|         'Reservation request failed schema validation'
+ ❯ reserveOrphan packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts:202:41
+ ❯ packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts:335:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts > P1-2: caller operationKey persistence closes the TTL duplicate window > keeps a persisted-key reservation UNCERTAIN when the journal shows EFFECT_STARTED
+ApprovalError: Reservation request failed schema validation
+ ❯ ApprovalEngine.reserve packages/approval-engine/src/engine.ts:468:13
+    466|     const parsed = ApprovalReserveSchema.safeParse(input)
+    467|     if (!parsed.success) {
+    468|       throw new ApprovalError(
+       |             ^
+    469|         'invalid_request',
+    470|         'Reservation request failed schema validation'
+ ❯ reserveOrphan packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts:202:41
+ ❯ packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts:370:24
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/6]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts > P1-2: caller operationKey persistence closes the TTL duplicate window > keeps a legacy approval without a persisted operationKey UNCERTAIN even when the derived journal is absent
+AssertionError: expected { released: 1, uncertain: +0 } to deeply equal { released: +0, uncertain: 1 }
+
+- Expected
++ Received
+
+  {
+-   "released": 0,
+-   "uncertain": 1,
++   "released": 1,
++   "uncertain": 0,
+  }
+
+ ❯ packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts:429:22
+    427|     })
+    428|
+    429|     expect(counters).toEqual({ released: 0, uncertain: 1 })
+       |                      ^
+    430|     expect(harness.approvals.get(TENANT, approvalId).status).toBe('UNC…
+    431|     expect(harness.toolExecutor).not.toHaveBeenCalled()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/6]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts > P1-2: caller operationKey persistence closes the TTL duplicate window > reuses the persisted operation key for journal and outbox after a proven-no-effect release
+ApprovalError: Reservation request failed schema validation
+ ❯ ApprovalEngine.reserve packages/approval-engine/src/engine.ts:468:13
+    466|     const parsed = ApprovalReserveSchema.safeParse(input)
+    467|     if (!parsed.success) {
+    468|       throw new ApprovalError(
+       |             ^
+    469|         'invalid_request',
+    470|         'Reservation request failed schema validation'
+ ❯ reserveOrphan packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts:202:41
+ ❯ packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts:449:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/6]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  6 failed (6)
+   Start at  01:58:57
+   Duration  1.42s (transform 337ms, setup 0ms, import 498ms, tests 53ms, environment 690ms)
+

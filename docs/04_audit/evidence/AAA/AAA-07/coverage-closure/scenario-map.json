@@ -1,0 +1,120 @@
+{
+  "taskId": "AAA-07",
+  "kind": "aaa07-critical-coverage-closure-scenario-map",
+  "observedAt": "2026-09-13T01:35:10Z",
+  "newTestFile": "packages/approval-engine/src/__tests__/approval-coverage-closure.test.ts",
+  "scenarios": [
+    {
+      "scenario": "reserve CAS/concurrency",
+      "newTests": [
+        "AAA-07 coverage closure: reservation CAS and concurrency > lets exactly one concurrent reserve win and fences the loser",
+        "AAA-07 coverage closure: reservation CAS and concurrency > replays the active token and rejects a competing token without mutating state"
+      ],
+      "preExistingTests": [
+        "approval-lifecycle.test.ts > allows exactly one reservation winner and fences the loser",
+        "approval-critical-coverage.test.ts > fails closed when the reservation CAS loses"
+      ],
+      "assertions": "winner/loser count, already_reserved code, single approval.reserved event, reservationId/generation/owner frozen, no executionCount change"
+    },
+    {
+      "scenario": "markExecuting token rules",
+      "newTests": [
+        "AAA-07 coverage closure: markExecuting token rules > rejects empty and foreign tokens and refuses a second transition"
+      ],
+      "preExistingTests": [
+        "approval-lifecycle.test.ts > rejects an old reservation token after release and re-reservation",
+        "approval-lifecycle-edges.test.ts > keeps an expired live reservation from being resumed",
+        "approval-critical-coverage.test.ts > fails closed when marking EXECUTING loses the CAS",
+        "approval-critical-coverage.test.ts > treats a reservation without expiry as alive for markExecuting"
+      ],
+      "assertions": "reservation_mismatch for empty/foreign token, invalid_state on repeated transition, executingAt stable, single approval.executing event"
+    },
+    {
+      "scenario": "confirm/release/fail/markUncertain/reconcile paths",
+      "newTests": [
+        "AAA-07 coverage closure: terminal immutability > keeps EXECUTED closed to every further transition",
+        "AAA-07 coverage closure: terminal immutability > keeps FAILED closed to every further transition",
+        "AAA-07 coverage closure: terminal immutability > keeps UNCERTAIN closed until an explicit reconciliation"
+      ],
+      "preExistingTests": [
+        "approval-lifecycle.test.ts > runs reserve -> executing -> confirm and only confirmation increments use",
+        "approval-lifecycle.test.ts > fails terminal only with absence proof and blocks new reservations",
+        "approval-lifecycle.test.ts > marks uncertain without proof and reconciles only with typed evidence",
+        "approval-lifecycle.test.ts > reconciles uncertain to FAILED with absence proof",
+        "approval-lifecycle.test.ts > replays the same confirmation without double counting or second reservation",
+        "approval-lifecycle-edges.test.ts > fails closed on invalid proofs inside reserved states",
+        "approval-critical-coverage.test.ts > fails closed when %s loses the CAS (release/fail/markUncertain/reconcile)"
+      ],
+      "assertions": "typed evidence required per path, invalid_proof for wrong proof, terminal states reject all five paths with unchanged snapshot"
+    },
+    {
+      "scenario": "reservation TTL sweep with/without EFFECT_STARTED-equivalent guard",
+      "newTests": [
+        "AAA-07 coverage closure: TTL sweep and effect-started guard > returns an expired EXECUTING reservation to UNCERTAIN when the effect may have started",
+        "AAA-07 coverage closure: TTL sweep and effect-started guard > never turns confirmed evidence into EXECUTED during the sweep",
+        "AAA-07 coverage closure: TTL sweep and effect-started guard > releases an EXECUTING reservation once absence of effect is proven",
+        "AAA-07 coverage closure: TTL sweep and effect-started guard > treats malformed evidence as unknown and keeps the fallback reason",
+        "AAA-07 coverage closure: TTL sweep and effect-started guard > leaves expired non-reservation records to expireStale"
+      ],
+      "preExistingTests": [
+        "approval-lifecycle.test.ts > sweeps expired reservations to APPROVED only with explicit absence proof",
+        "approval-lifecycle.test.ts > sweeps ambiguous or missing proof to UNCERTAIN without blind retry",
+        "approval-lifecycle.test.ts > treats a throwing evidence provider as unknown, never as release",
+        "approval-lifecycle.test.ts > runs sweep concurrently with an active turn without double effect",
+        "approval-lifecycle-edges.test.ts > sweeps only expired reservations and maps ambiguous evidence to uncertain"
+      ],
+      "assertions": "released/uncertain counters, status UNCERTAIN with fallback reason for possibly_started/confirmed/malformed evidence, executionCount and executionRef stay at zero, second sweep no-op on UNCERTAIN"
+    },
+    {
+      "scenario": "generation fencing (released/renewed token cannot be reused; stale sweep cannot touch newer reservation)",
+      "newTests": [
+        "AAA-07 coverage closure: generation fencing across renewal > rejects a sweep-released token in the next generation everywhere"
+      ],
+      "preExistingTests": [
+        "approval-lifecycle-fencing.test.ts > stale sweep with no_effect evidence cannot release a newer reservation",
+        "approval-lifecycle-fencing.test.ts > stale sweep with ambiguous evidence cannot mark a newer reservation UNCERTAIN",
+        "approval-lifecycle-fencing.test.ts > sweep skips when the callback confirms the expired reservation",
+        "approval-lifecycle-fencing.test.ts > rejects reuse of a spent reservation token in the callback and keeps APPROVED honest",
+        "approval-lifecycle-fencing.test.ts > rejects an explicit spent token and fences every mutation of the old generation",
+        "approval-lifecycle-fencing.test.ts > keeps the legitimate replay of the active reservation and fresh auto tokens"
+      ],
+      "assertions": "reservation_reused after renewal when generation is APPROVED, reservation_mismatch on markExecuting/confirm/release/fail/markUncertain with the old token, new reservation intact (id + generation 2)"
+    },
+    {
+      "scenario": "terminal immutability (EXECUTED/FAILED/UNCERTAIN never reopen)",
+      "newTests": [
+        "AAA-07 coverage closure: terminal immutability > keeps EXECUTED closed to every further transition",
+        "AAA-07 coverage closure: terminal immutability > keeps FAILED closed to every further transition",
+        "AAA-07 coverage closure: terminal immutability > keeps UNCERTAIN closed until an explicit reconciliation"
+      ],
+      "preExistingTests": [
+        "approval-lifecycle.test.ts > replays the same confirmation without double counting or second reservation",
+        "approval-lifecycle.test.ts > fails terminal only with absence proof and blocks new reservations"
+      ],
+      "assertions": "invalid_state/uncertain/already_executed per path, full record snapshot equality after attempts, FAILED keeps confirmationEvidenceRef, UNCERTAIN only leaves via reconcile"
+    },
+    {
+      "scenario": "cross-tenant rejection",
+      "newTests": [
+        "AAA-07 coverage closure: tenant and expiry denial > rejects every stateful operation from a foreign tenant"
+      ],
+      "preExistingTests": [
+        "approval-lifecycle.test.ts > rejects tenant and binding divergence before any reservation",
+        "approval-engine.test.ts > denies self approval and enforces tenant isolation"
+      ],
+      "assertions": "not_found for submit/approve/reject/cancel/reserve/markExecuting/confirm/release/fail/markUncertain/reconcile/get, empty list, foreign-tenant sweep returns {0,0}, tenant A record unchanged"
+    },
+    {
+      "scenario": "expired approval denial",
+      "newTests": [
+        "AAA-07 coverage closure: tenant and expiry denial > denies submit and approve after approval expiry and records EXPIRED"
+      ],
+      "preExistingTests": [
+        "approval-lifecycle.test.ts > expires approvals before reservation and reservation TTL releases only with no-effect proof",
+        "approval-critical-coverage.test.ts > rejects consumption of an approval already marked EXPIRED",
+        "approval-engine.test.ts > expires approvals and fails closed after the deadline"
+      ],
+      "assertions": "expired code for submit (REQUESTED) and approve (PENDING), persisted status EXPIRED, denial before any decision transition"
+    }
+  ]
+}

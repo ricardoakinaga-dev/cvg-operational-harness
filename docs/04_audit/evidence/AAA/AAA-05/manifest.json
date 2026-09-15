@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "taskId": "AAA-05",
+  "program": "AAA-20260912",
+  "title": "Especificar dados, migrações, APIs e fronteiras de ownership",
+  "owner": "agent-2",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "contractStatus": "PROPOSED_NOT_FROZEN",
+  "artifact": {
+    "path": "docs/02_spec/aaa_data_api_contract.md",
+    "sha256": "8db1541f3f0428b64b47d5235c406cc4450b19ecc85eee75290837229dbf17e5",
+    "beforeReconciliationSha256": "4cc502e701da5635392f33b0a883f73e0869d5490183ec3c39a551fcae96d7a0",
+    "note": "hash before reconciliation preserved; current artifact reconciled with AAA-03",
+    "afterExamplesSha256": "8db1541f3f0428b64b47d5235c406cc4450b19ecc85eee75290837229dbf17e5",
+    "examplesAdded": "retry, colisão entre canais/tenants, mudança de payload, namespace de notificação outbox (rodada 2 / 0327)"
+  },
+  "claim": "Contrato de dados/APIs concreto e consumível por AAA-10/AAA-12/AAA-16, reconciliado com o contrato de execução AAA-03.",
+  "notClaimed": [
+    "SPEC aprovada ou hash congelado",
+    "G_SPEC",
+    "task DONE",
+    "escolha unilateral de número de migration"
+  ],
+  "dependencies": {
+    "AAA-01": "READY candidate 512bc11e80fbf7c7b8baf6263aacc811ff829309",
+    "AAA-03": {
+      "artifact": "docs/02_spec/aaa_execution_contract.md",
+      "sha256": "db75899f6b730fa04b642da8cdc6d65e747a7c7e62e22673bf038a52163d66f8",
+      "status": "DRAFT_FOR_INDEPENDENT_REVIEW",
+      "reconciliation": "section 3.1 of the AAA-05 contract maps operationKey<->idempotencyKey, state names, payload/proposal hashes and the canonical idempotency_key_reuse code"
+    }
+  },
+  "contents": [
+    "identidade da operação (tenant, canal, kind, chave) e hash canônico de payload",
+    "máquina de estados PENDING/SENDING/CONFIRMED/FAILED/UNCERTAIN/EXPIRED",
+    "porta ChannelEffectJournal e semântica de reserve/claim/renew/complete/fail/release/markUncertain/resolveUncertain",
+    "CAS, constraints, transações e DDL proposta para o adapter SQL futuro",
+    "lease, expiração, retry, heartbeat, fencing e recuperação",
+    "matriz de crash por fronteira e reconciliação de resultado incerto",
+    "reuso de chave com payload divergente (idempotency_key_reuse)",
+    "retenção, limites de memória/payload e TTL",
+    "compatibilidade, migração aditiva e rollback/roll-forward",
+    "RLS FORCE, papéis runtime/migration e withTenantContext",
+    "APIs, eventos, erros, logs, correlação, métricas e evidência de auditoria",
+    "critérios de aceite e os sete casos de validação adversarial da auditoria",
+    "handoffs D05-1..D05-4 e próximos consumidores"
+  ],
+  "pendingDecisions": [
+    "D05-1: reserva do número de migration (última existente: 0011; próxima candidata: 0012) — requer confirmação do coordenador",
+    "D05-2: ownership do adapter SQL (AAA-10 vs. extensão de AAA-12)",
+    "D05-3: retenção aprovada do journal e TTL de deduplicação inbound",
+    "D05-4: idempotência/consulta de resultado em provider de homologação"
+  ],
+  "reviewRequest": {
+    "reviewer": "fresh critic, read-only, diferente do implementador (agent-1 ou agent-3)",
+    "requiredValidation": "walkthrough adversarial dos sete casos da auditoria 0558, incluindo corrida multiconexão, tenant incorreto, migration interrompida e reuso de chave com payload divergente",
+    "freezeAction": "após aprovação, registrar hash congelado e liberar consumo por AAA-10/AAA-19; qualquer alteração posterior invalida evidências dependentes"
+  },
+  "evidence": [
+    "docs/04_audit/evidence/AAA/AAA-16/test-postgres-verbose.log (RLS/papéis/duas conexões que sustentam o contrato)",
+    "docs/04_audit/evidence/AAA/AAA-12/ (implementação de referência da porta no canal)"
+  ],
+  "limitations": [
+    "O adapter SQL do journal não foi implementado; migração e paths de persistence dependem de reserva do coordenador.",
+    "A porta foi validada no pacote de canal (in-memory + arquivo); a validação SQL depende de AAA-10/AAA-17 com SPEC própria.",
+    "O contrato não corrige, por si, nenhum achado; as correções são AAA-10/AAA-12."
+  ]
+}

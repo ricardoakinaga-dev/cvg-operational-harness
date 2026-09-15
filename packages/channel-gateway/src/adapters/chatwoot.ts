@@ -173,7 +173,9 @@ export class ChatwootChannelAdapter
         redirect: 'error'
       })
     } catch {
-      throw new ChannelError('send_failed', 'Chatwoot request failed', true)
+      throw new ChannelError('send_failed', 'Chatwoot request failed', true, {
+        effectUnknown: true
+      })
     }
     if (!response.ok) {
       throw new ChannelError(

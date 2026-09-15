@@ -6,7 +6,21 @@ const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL
 describe.skipIf(!TEST_DATABASE_URL)('chaos: PostgreSQL resilience', () => {
   it('CHAOS-04 temporary disconnect: pool recovers after backend termination', async () => {
     const pool = new Pool({ connectionString: TEST_DATABASE_URL, max: 2 })
+    // A terminated backend emits an error on the idle/checked-out socket; the
+    // pool reports it as an error event. Queries still reject explicitly.
+    pool.on('error', () => {})
     const holder = await pool.connect()
+    holder.on('error', () => {})
+    let holderReleased = false
+    const releaseHolder = () => {
+      if (holderReleased) return
+      holderReleased = true
+      try {
+        holder.release(true)
+      } catch {
+        // pg-pool already removed the client whose backend was terminated.
+      }
+    }
     try {
       await holder.query('BEGIN')
       await holder.query('SELECT 1')
@@ -23,17 +37,18 @@ describe.skipIf(!TEST_DATABASE_URL)('chaos: PostgreSQL resilience', () => {
       await admin.end()
       expect(terminated.rows[0]?.terminated).toBe(true)
       await expect(holder.query('SELECT 1')).rejects.toThrow()
-      holder.release(true)
+      releaseHolder()
       const recovered = await pool.query<{ ok: number }>('SELECT 1 AS ok')
       expect(recovered.rows[0]?.ok).toBe(1)
     } finally {
-      holder.release(true)
+      releaseHolder()
       await pool.end()
     }
   })
 
   it('CHAOS-05 mass termination: connections are re-established cleanly', async () => {
     const pool = new Pool({ connectionString: TEST_DATABASE_URL, max: 3 })
+    pool.on('error', () => {})
     try {
       await Promise.all([pool.query('SELECT 1'), pool.query('SELECT 1')])
       const admin = new Client({ connectionString: TEST_DATABASE_URL })

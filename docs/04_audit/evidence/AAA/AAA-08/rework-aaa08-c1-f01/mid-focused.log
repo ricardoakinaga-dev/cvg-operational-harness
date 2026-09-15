@@ -1,0 +1,151 @@
+
+ RUN  v4.1.11 /home/ricardo/cvg-agent-secretary-v2
+
+ ❯ packages/agent-runtime/src/__tests__/capability-action-binding.test.ts (3 tests | 2 failed) 29ms
+     × denies smuggled sensitive actions with zero fake-tool calls 19ms
+     × keeps confirm/reschedule denied without grant and cancel behind approval 2ms
+ ❯ packages/policy-engine/src/__tests__/policy-engine.test.ts (14 tests | 6 failed) 20ms
+     × allows secretary capabilities that are explicitly granted 8ms
+     × denies every capability outside the profile grant (deny by default) 1ms
+     × requires approval for declared grant levels and high-risk capabilities 1ms
+     × lets policies restrict but never expand grants 2ms
+     × applies classification-based rules only when the threshold is met 1ms
+     × requires a medical operator for medical capabilities 0ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 8 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/capability-action-binding.test.ts > AAA08-C1-F01 public boundary: capability/action/resource binding > denies smuggled sensitive actions with zero fake-tool calls
+AssertionError: appointment.confirm: expected 'policy_denied' to be 'action_capability_mismatch' // Object.is equality
+
+Expected: "action_capability_mismatch"
+Received: "policy_denied"
+
+ ❯ packages/agent-runtime/src/__tests__/capability-action-binding.test.ts:110:37
+    108|       expect(result.outcome, action).toBe('denied')
+    109|       expect(result.decision.decision, action).toBe('DENY')
+    110|       expect(result.reason, action).toBe('action_capability_mismatch')
+       |                                     ^
+    111|       expect(harness.toolExecutor, action).not.toHaveBeenCalled()
+    112|     }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/8]⎯
+
+ FAIL  packages/agent-runtime/src/__tests__/capability-action-binding.test.ts > AAA08-C1-F01 public boundary: capability/action/resource binding > keeps confirm/reschedule denied without grant and cancel behind approval
+AssertionError: expected 'policy_denied' to be 'capability_not_granted' // Object.is equality
+
+Expected: "capability_not_granted"
+Received: "policy_denied"
+
+ ❯ packages/agent-runtime/src/__tests__/capability-action-binding.test.ts:132:34
+    130|     )
+    131|     expect(confirmResult.outcome).toBe('denied')
+    132|     expect(confirmResult.reason).toBe('capability_not_granted')
+       |                                  ^
+    133|     expect(confirm.toolExecutor).not.toHaveBeenCalled()
+    134|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/8]⎯
+
+ FAIL  packages/policy-engine/src/__tests__/policy-engine.test.ts > policy engine decisions > allows secretary capabilities that are explicitly granted
+AssertionError: message.draft: expected 'DENY' to be 'ALLOW' // Object.is equality
+
+Expected: "ALLOW"
+Received: "DENY"
+
+ ❯ packages/policy-engine/src/__tests__/policy-engine.test.ts:97:45
+     95|     ] satisfies Capability[]) {
+     96|       const decision = policy.evaluate(input({ capability }))
+     97|       expect(decision.decision, capability).toBe('ALLOW')
+       |                                             ^
+     98|       expect(decision.policyId).toBe('builtin.deny_by_default')
+     99|       expect(decision.policyVersion).toBe('policy-engine-v1')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/8]⎯
+
+ FAIL  packages/policy-engine/src/__tests__/policy-engine.test.ts > policy engine decisions > denies every capability outside the profile grant (deny by default)
+AssertionError: patient.record.write: expected 'action_capability_mismatch' to be 'capability_not_granted' // Object.is equality
+
+Expected: "capability_not_granted"
+Received: "action_capability_mismatch"
+
+ ❯ packages/policy-engine/src/__tests__/policy-engine.test.ts:140:43
+    138|       const decision = policy.evaluate(input({ capability }))
+    139|       expect(decision.decision, capability).toBe('DENY')
+    140|       expect(decision.reason, capability).toBe('capability_not_granted…
+       |                                           ^
+    141|     }
+    142|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/8]⎯
+
+ FAIL  packages/policy-engine/src/__tests__/policy-engine.test.ts > policy engine decisions > requires approval for declared grant levels and high-risk capabilities
+AssertionError: expected 'DENY' to be 'REQUIRE_APPROVAL' // Object.is equality
+
+Expected: "REQUIRE_APPROVAL"
+Received: "DENY"
+
+ ❯ packages/policy-engine/src/__tests__/policy-engine.test.ts:159:7
+    157|         input({ capability: 'patient.record.write', agentProfile: 'cli…
+    158|       ).decision
+    159|     ).toBe('REQUIRE_APPROVAL')
+       |       ^
+    160|     expect(
+    161|       policy.evaluate(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/8]⎯
+
+ FAIL  packages/policy-engine/src/__tests__/policy-engine.test.ts > policy engine decisions > lets policies restrict but never expand grants
+AssertionError: expected 'builtin.deny_by_default' to be 'tenant.strict' // Object.is equality
+
+Expected: "tenant.strict"
+Received: "builtin.deny_by_default"
+
+ ❯ packages/policy-engine/src/__tests__/policy-engine.test.ts:237:29
+    235|     const denied = policy.evaluate(input({ capability: 'message.send' …
+    236|     expect(denied.decision).toBe('DENY')
+    237|     expect(denied.policyId).toBe('tenant.strict')
+       |                             ^
+    238|     expect(denied.policyVersion).toBe('2.1.0')
+    239|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/8]⎯
+
+ FAIL  packages/policy-engine/src/__tests__/policy-engine.test.ts > policy engine decisions > applies classification-based rules only when the threshold is met
+AssertionError: expected 'DENY' to be 'ALLOW' // Object.is equality
+
+Expected: "ALLOW"
+Received: "DENY"
+
+ ❯ packages/policy-engine/src/__tests__/policy-engine.test.ts:303:7
+    301|     expect(
+    302|       policy.evaluate(input({ capability: 'message.send' })).decision
+    303|     ).toBe('ALLOW')
+       |       ^
+    304|     const clinical = policy.evaluate(
+    305|       input({
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/8]⎯
+
+ FAIL  packages/policy-engine/src/__tests__/policy-engine.test.ts > policy engine decisions > requires a medical operator for medical capabilities
+AssertionError: expected 'DENY' to be 'REQUIRE_APPROVAL' // Object.is equality
+
+Expected: "REQUIRE_APPROVAL"
+Received: "DENY"
+
+ ❯ packages/policy-engine/src/__tests__/policy-engine.test.ts:319:37
+    317|       input({ capability: 'clinical.prescribe', agentProfile: 'clinica…
+    318|     )
+    319|     expect(withoutMedical.decision).toBe('REQUIRE_APPROVAL')
+       |                                     ^
+    320|     expect(withoutMedical.reason).toMatch(/medical operator/)
+    321|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/8]⎯
+
+
+ Test Files  2 failed | 2 passed (4)
+      Tests  8 failed | 30 passed (38)
+   Start at  18:32:21
+   Duration  3.34s (transform 220ms, setup 0ms, import 577ms, tests 71ms, environment 2.22s)
+
+mid-exit=1

@@ -1,0 +1,112 @@
+{
+  "taskId": "AAA-07",
+  "program": "AAA-20260912",
+  "remediation": "P2-1",
+  "title": "Call site de TTL/sweep de aprovacoes no inicio de cada turno + helper de varredura periodica",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "observedAt": "2026-09-13T00:41:00+00:00",
+  "executor": "builder agent (agent-runtime lane)",
+  "authority": "P2-1 remediation assignment; controlled local scope only; evidence in docs/04_audit/evidence/AAA/AAA-07/sweep-callsite/",
+  "finding": {
+    "id": "P2-1",
+    "source": "docs/04_audit/evidence/AAA/P1-independent-review/REVIEW.md:135",
+    "before": "ApprovalEngine.releaseExpired had no production call site; the governed runtime only swept the effect journal at turn start (runtime.ts:425), and no periodic worker sweep existed (condition AAA03-R3-F03).",
+    "after": "Every governed turn sweeps the tenant's expired approval reservations at start (same place as the journal sweep): releaseExpired(no_effect) -> APPROVED; EFFECT_STARTED/UNCERTAIN/CONFIRMED or missing/lookup-failed evidence -> UNCERTAIN. Sweep failure denies with approval_sweep_failed before policy/model/tool/outbox. A tenant-wide helper (sweepExpiredApprovals) is exported for the future periodic worker; apps/worker is intentionally not wired (AAA-19)."
+  },
+  "contract": [
+    "docs/02_spec/aaa_execution_contract.md section 4 (TTL/sweep, AAA03-R3-F03)",
+    "docs/02_spec/aaa_execution_contract.md section 12 T-18",
+    "docs/04_audit/evidence/AAA/AAA-07/handoff-agent-09.md (Recuperacao)"
+  ],
+  "changedFiles": [
+    {
+      "path": "packages/agent-runtime/src/runtime.ts",
+      "sha256": "5e67f355e491084414471ec8468a139f106d42d6e13bfe86bb9e5b84099b9b0f",
+      "change": [
+        "approvalSweepEvidence (runtime.ts:183): journal-state evidence mapping; absent/RESERVED/ABANDONED/EFFECT_FAILED -> no_effect; EFFECT_STARTED/UNCERTAIN/CONFIRMED -> unknown",
+        "approvalOperationKey (runtime.ts:~217): derived operationKey recomputation from the approval proposal (no caller idempotency key)",
+        "collectApprovalSweepEvidence (runtime.ts:231): tenant RESERVED/EXECUTING evidence map; lookup failure or proposalHash mismatch never releases",
+        "sweepExpiredApprovals (runtime.ts:271, exported): periodic worker helper wrapping approvals.releaseExpired with bounded reservationTtlMs (default 60s)",
+        "runTurn (runtime.ts:565): approval sweep at turn start after the journal sweep; failure -> audit + denied approval_sweep_failed",
+        "#runExecutionTurn (runtime.ts:1116): an UNCERTAIN approval denies operation_uncertain before any reserve"
+      ]
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/runtime-journal.test.ts",
+      "sha256": "eb5d364179f61154b408c61964d757e29b25cf59ad8f3a93318d940e8ec62534",
+      "change": "P2-1 start-of-turn releaseExpired sweep suite (6 cases): orphaned RESERVED with journal RESERVED->ABANDONED; reservation without effect evidence; EFFECT_STARTED uncertainty; approval_sweep_failed; journal lookup failure; exported periodic helper. Tool/outbox never called in all cases."
+    }
+  ],
+  "unchanged": [
+    "packages/approval-engine/** (releaseExpired semantics consumed as-is; no engine edit)",
+    "packages/persistence/**, apps/worker/** (periodic wiring is AAA-19)",
+    "packages/agent-runtime/src/effect-journal.ts, contracts.ts, proposal.ts, index.ts",
+    "docs/99_runtime_state.md, docs/20_master_execution_log.md, docs/30_backlog_master.md (write scope of this task excludes them; see limitations)"
+  ],
+  "red": {
+    "command": "npx vitest run packages/agent-runtime/src/__tests__/runtime-journal.test.ts",
+    "exitCode": 1,
+    "result": "4 failed | 12 passed (16): release to APPROVED (2), UNCERTAIN on EFFECT_STARTED-equivalent, approval_sweep_failed — all failed because no approval sweep existed",
+    "artifacts": ["red-focused.log", "red-focused.exit"]
+  },
+  "green": {
+    "focused": {
+      "command": "npx vitest run packages/agent-runtime/src/__tests__/runtime-journal.test.ts",
+      "exitCode": 0,
+      "result": "18 passed (18)",
+      "artifacts": ["green-focused.log", "green-focused-verbose.log", "green-focused-verbose.exit"]
+    },
+    "full": {
+      "command": "npm test",
+      "exitCode": 0,
+      "result": "196 files passed | 4 skipped (200); 1160 tests passed | 57 skipped (1217); baseline 1154/57 preserved, +6 new tests, zero failures",
+      "artifacts": ["full-test.log", "full-test.exit"]
+    }
+  },
+  "checks": [
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "typecheck.log"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "lint.log"
+    },
+    {
+      "command": "npx prettier --check packages/agent-runtime/src/runtime.ts packages/agent-runtime/src/__tests__/runtime-journal.test.ts",
+      "exitCode": 0,
+      "result": "PASS (changed files only)",
+      "artifact": "format-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "git-diff-check.log"
+    }
+  ],
+  "guarantees": [
+    "The sweep never executes an effect: it only lists approvals, reads the effect journal and transitions approval state; tests assert toolExecutor/outbox are never called.",
+    "Expired RESERVED/EXECUTING without EFFECT_STARTED returns to APPROVED (journal absent/RESERVED/ABANDONED/EFFECT_FAILED); EFFECT_STARTED/UNCERTAIN/CONFIRMED keeps an honest UNCERTAIN requiring explicit reconciliation (T-18).",
+    "Missing evidence, journal lookup failure and proposalHash mismatch are never converted into a release.",
+    "Sweep failure is fail-closed with the stable code approval_sweep_failed before policy evaluation, model call, tool or outbox; no effect is authorized and no tool/outbox runs.",
+    "Reservation TTL is the existing runtime option (reservationTtlMs, default 60s) passed to releaseExpired; no new option or unbounded default.",
+    "Periodic worker sweep exists only as the exported helper sweepExpiredApprovals; no apps/worker wiring (AAA-19)."
+  ],
+  "limitations": "see limitations.md",
+  "review": {
+    "status": "PENDING",
+    "reviewerRequirement": "critic that did not implement this remediation",
+    "requestedChecks": [
+      "challenge absent-journal -> no_effect release given that caller idempotency keys are not persisted on approvals (limitations.md)",
+      "confirm the sweep ordering (journal sweep then approval sweep) cannot release a possibly-started effect",
+      "verify approval_sweep_failed fires before any model/tool/outbox side effect and that the audit entry is appended",
+      "confirm no file outside packages/agent-runtime/ and the evidence directory was touched"
+    ]
+  },
+  "nextAction": "Independent review; coordinator updates backlog/runtime state; AAA-19 wires the periodic helper into apps/worker under its own authorization."
+}

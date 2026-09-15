@@ -1,0 +1,78 @@
+{
+  "reviewId": "AAA-05-REVIEW-AGENT-3",
+  "taskId": "AAA-05",
+  "program": "AAA-20260912",
+  "verdict": "REJECT",
+  "verdictScope": "freeze of revision 8db1541f only; content otherwise approved in substance",
+  "reviewer": "agent-3; did not author AAA-05",
+  "reviewedAt": "2026-09-12T22:10:00+00:00",
+  "artifact": {
+    "path": "docs/02_spec/aaa_data_api_contract.md",
+    "sha256": "8db1541f3f0428b64b47d5235c406cc4450b19ecc85eee75290837229dbf17e5"
+  },
+  "criteria": [
+    {
+      "criterion": "identity/namespace reconciliation with AAA-03",
+      "result": "PARTIAL"
+    },
+    {
+      "criterion": "proposalHash vs payloadHash canonical binding",
+      "result": "FAIL"
+    },
+    {
+      "criterion": "state machine and FAILED retry coherence",
+      "result": "FAIL"
+    },
+    {
+      "criterion": "fencing on terminal transitions",
+      "result": "PARTIAL"
+    },
+    {
+      "criterion": "proposed SQL not presented as implemented",
+      "result": "PASS"
+    },
+    {
+      "criterion": "stale contract hash references",
+      "result": "FAIL_SOFT"
+    }
+  ],
+  "findings": [
+    {
+      "id": "AAA05-R3-F01",
+      "severity": "P1",
+      "location": "aaa_data_api_contract.md 3.1 table row payloadHash/proposalHash",
+      "observed": "equality mapping between hashes with different canonical coverage; contradicts AAA-03 rev2 R-ID-3",
+      "impact": "binding comparisons could produce false conflict or false replay across boundaries",
+      "closeWith": "state per-boundary hash use and identity-is-the-key; remove equality mapping"
+    },
+    {
+      "id": "AAA05-R3-F02",
+      "severity": "P1",
+      "location": "aaa_data_api_contract.md 2, 5, 7",
+      "observed": "FAILED terminal (new key) vs FAILED(retryable)->PENDING plus dead-letter=FAILED+attempts_exhausted",
+      "impact": "ambiguous retry/fencing behavior for the channel effect journal",
+      "closeWith": "single coherent state machine; align E-1/E-2"
+    },
+    {
+      "id": "AAA05-R3-F03",
+      "severity": "P2",
+      "location": "aaa_data_api_contract.md 3.1",
+      "observed": "cites AAA-03 db75899f (rev1); current 9df1a05f (rev2)",
+      "impact": "stale evidence reference",
+      "closeWith": "update or make revision-agnostic"
+    },
+    {
+      "id": "AAA05-R3-F04",
+      "severity": "P3",
+      "location": "aaa_data_api_contract.md 4",
+      "observed": "fencing text names complete only; implementation fences complete/fail/markUncertain",
+      "impact": "contract understates implemented guarantee",
+      "closeWith": "state all terminal transitions require lease token + CAS"
+    }
+  ],
+  "limitations": [
+    "static contract review",
+    "not human signoff",
+    "REJECT is for freeze, not for the author"
+  ]
+}

@@ -1,0 +1,157 @@
+
+ RUN  v4.1.11 /tmp/opencode/aaa12-mutation/work-M12
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts (6 tests | 1 failed) 404ms
+     × decideReserve treats only the absent property as legacy 13ms
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts (11 tests | 3 failed) 83ms
+     × 3. replay after success returns the durable result without a new send 15ms
+     × 4. restart after reservation takes over the lease and sends exactly once 8ms
+     × 6. failure after the send marks the operation uncertain and blocks blind retry 11ms
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts (10 tests | 1 failed) 73ms
+     × replays FAILED and UNCERTAIN records with stable codes and zero sends 23ms
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts (9 tests | 1 failed) 78ms
+     × gateway replays a new record after restart without a second send 21ms
+ ❯ packages/channel-gateway/src/__tests__/channel-gateway.test.ts (14 tests | 1 failed) 41ms
+     × sends once and journals the effect so retries never duplicate it 12ms
+
+ Test Files  5 failed | 6 passed (11)
+      Tests  7 failed | 98 passed (105)
+   Start at  21:09:10
+   Duration  12.86s (transform 345ms, setup 0ms, import 1.66s, tests 1.07s, environment 8.36s)
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts > gateway replay and uncertainty hardening > replays FAILED and UNCERTAIN records with stable codes and zero sends
+AssertionError: promise resolved "{ …(4) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "accepted": true,
++   "channel": "whatsapp",
++   "externalId": "gate_msg_gateway_cov",
++   "sentAt": "2026-09-12T12:00:00.000Z",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts:243:6
+    241|     await expect(
+    242|       gateway.dispatch(parsed, { takeoverActive: false })
+    243|     ).rejects.toMatchObject({ code: 'send_failed', retryable: false })
+       |      ^
+    244|     expect(adapter.sent).toHaveLength(0)
+    245|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > gateway replays a new record after restart without a second send
+AssertionError: expected [ { messageId: 'msg_hash_1', …(8) } ] to have a length of +0 but got 1
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:210:27
+    208|
+    209|     expect(adapterA.sent).toHaveLength(1)
+    210|     expect(adapterB.sent).toHaveLength(0)
+       |                           ^
+    211|     expect(second).toEqual(first)
+    212|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 3. replay after success returns the durable result without a new send
+AssertionError: expected [ { …(9) }, { …(9) } ] to have a length of 1 but got 2
+
+- Expected
++ Received
+
+- 1
++ 2
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:166:26
+    164|     const second = await gateway.dispatch(parsed, { takeoverActive: fa…
+    165|
+    166|     expect(adapter.sent).toHaveLength(1)
+       |                          ^
+    167|     expect(second).toEqual(first)
+    168|     expect(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 4. restart after reservation takes over the lease and sends exactly once
+AssertionError: expected [ { …(9) }, { …(9) } ] to have a length of 1 but got 2
+
+- Expected
++ Received
+
+- 1
++ 2
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:214:26
+    212|     const replay = await restarted.dispatch(parsed, { takeoverActive: …
+    213|     expect(replay).toEqual(result)
+    214|     expect(adapter.sent).toHaveLength(1)
+       |                          ^
+    215|   })
+    216|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 6. failure after the send marks the operation uncertain and blocks blind retry
+AssertionError: expected 'scripted_msg_journal_1' to be 'reconciled_1' // Object.is equality
+
+Expected: "reconciled_1"
+Received: "scripted_msg_journal_1"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:265:31
+    263|     expect(reconciled.state).toBe('CONFIRMED')
+    264|     const replay = await gateway.dispatch(parsed, { takeoverActive: fa…
+    265|     expect(replay.externalId).toBe('reconciled_1')
+       |                               ^
+    266|     expect(adapter.sent).toHaveLength(1)
+    267|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts > AAA12-C4-F01 missing vs malformed hashVersion > decideReserve treats only the absent property as legacy
+AssertionError: CONFIRMED absent/legacy: expected 'takeover' to be 'replay' // Object.is equality
+
+Expected: "replay"
+Received: "takeover"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts:186:9
+    184|         decideReserve(absent, input(identity, LEGACY_HASH_VERSION), 10…
+    185|         `${state} absent/legacy`
+    186|       ).toBe(expectedActionFor(state))
+       |         ^
+    187|       expect(
+    188|         decideReserve(absent, input(identity, SHARED_HASH_VERSION), 10…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/7]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-gateway.test.ts > channel gateway outbound > sends once and journals the effect so retries never duplicate it
+AssertionError: expected [ …(2) ] to have a length of 1 but got 2
+
+- Expected
++ Received
+
+- 1
++ 2
+
+ ❯ packages/channel-gateway/src/__tests__/channel-gateway.test.ts:124:26
+    122|     const first = await gateway.dispatch(outbound(), { takeoverActive:…
+    123|     const second = await gateway.dispatch(outbound(), { takeoverActive…
+    124|     expect(adapter.sent).toHaveLength(1)
+       |                          ^
+    125|     expect(second).toEqual(first)
+    126|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/7]⎯
+

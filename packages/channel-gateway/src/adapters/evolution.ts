@@ -162,7 +162,12 @@ export class EvolutionChannelAdapter
         redirect: 'error'
       })
     } catch {
-      throw new ChannelError('send_failed', 'EvolutionAPI request failed', true)
+      throw new ChannelError(
+        'send_failed',
+        'EvolutionAPI request failed',
+        true,
+        { effectUnknown: true }
+      )
     }
     if (!response.ok) {
       throw new ChannelError(

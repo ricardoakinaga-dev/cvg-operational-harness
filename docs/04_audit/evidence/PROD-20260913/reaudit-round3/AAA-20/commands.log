@@ -1,0 +1,81 @@
+# AAA-20 — commands executed (reaudit-round3 builder, lane20)
+
+Environment: Node 22 (`/home/ricardo/.nvm/versions/node/v22.23.2/bin`), local synthetic fixtures only.
+Database (postgres-scoped tests): `lane20_r3_15793` at 127.0.0.1:55481 (user `cvg_prod`, trust), created for this lane; never port 5432.
+Outputs sanitized; the only "secrets" below are explicit synthetic test fixtures.
+
+## 1. RED — negative tests before implementation
+
+```
+npx vitest run \
+  apps/api/src/__tests__/identity-trusted-resolver.test.ts \
+  apps/api/src/__tests__/identity-composition-wiring.test.ts \
+  apps/api/src/__tests__/identity-key-ring-rotation.test.ts \
+  packages/shared/src/__tests__/auth-identity-mode.test.ts \
+  --no-file-parallelism
+```
+Result: `Test Files 4 failed (4)`, `Tests 19 failed | 5 passed (24)` — exit 1.
+Log: `red-tests.log`
+
+## 2. Implementation
+
+Edited (only lane-owned paths):
+- `packages/shared/src/auth.ts` — `OperatorIdentityResolver` port, `IdentityMode`/`parseIdentityMode`/`IDENTITY_MODE_ENV`, `IdentitySigningKey`, `IdentityKeyRingPort`.
+- `apps/api/src/operator-identity.ts` — `kid`-bound tokens, key-ring resolution, `createLocalIdentityKeyRing`, `createConfiguredOperatorIdentityResolver`.
+- `apps/api/src/server.ts` — `identityMode` option, trusted/simulation enforcement, effective resolver, `buildServerFromEnv` startup gates.
+- `apps/api/src/main.ts` — entrypoint composes the configured resolver and passes it to `buildServerFromEnv`.
+
+No commit, no reset/checkout/clean; preexisting changes preserved.
+
+## 3. GREEN — focused tests
+
+```
+npx vitest run \
+  apps/api/src/__tests__/identity-trusted-resolver.test.ts \
+  apps/api/src/__tests__/identity-composition-wiring.test.ts \
+  apps/api/src/__tests__/identity-key-ring-rotation.test.ts \
+  packages/shared/src/__tests__/auth-identity-mode.test.ts \
+  apps/api/src/__tests__/trusted-operator-identity.test.ts \
+  --no-file-parallelism
+```
+Result: `Test Files 5 passed (5)`, `Tests 35 passed (35)` — exit 0.
+Log: `focused-green.log`
+
+## 4. Full targeted suites (apps/api + packages/shared)
+
+```
+npx vitest run apps/api packages/shared --no-file-parallelism --maxWorkers=2
+```
+Result: `Test Files 65 passed | 1 skipped (66)`, `Tests 383 passed | 18 skipped (401)` — exit 0.
+The skipped file is `apps/api/src/__tests__/journeys-api-postgres.test.ts` (requires `TEST_DATABASE_URL`); the 18 skipped tests are the postgres-gated ones in that file plus `postgres-persistence-mode.test.ts`/`webhook-security.test.ts`.
+Log: `api-shared-suite.log`
+
+## 5. PostgreSQL API tests (own disposable database)
+
+```
+createdb -h 127.0.0.1 -p 55481 -U cvg_prod lane20_r3_15793
+
+TEST_DATABASE_URL=postgres://cvg_prod@127.0.0.1:55481/lane20_r3_15793 \
+npx vitest run --testTimeout=60000 --no-file-parallelism \
+  apps/api/src/__tests__/postgres-persistence-mode.test.ts \
+  apps/api/src/__tests__/journeys-api-postgres.test.ts \
+  apps/api/src/__tests__/webhook-security.test.ts
+```
+Result: `Test Files 3 passed (3)`, `Tests 51 passed (51)` — exit 0.
+Log: `postgres-api.log` / DB name: `postgres-db.txt`
+
+## 6. Gates
+
+```
+npm run typecheck                      # exit 0 — typecheck.log
+npx prettier --check <8 changed files> # exit 0 — prettier.log
+npx eslint <8 changed files>           # exit 0 — eslint.log
+```
+(The changed-file list is in `source-hashes.txt`.)
+
+## 7. Real entrypoint negative (in-process test)
+
+`identity-composition-wiring.test.ts` spawns `node_modules/.bin/tsx apps/api/src/main.ts`
+with a synthetic production environment and no key ring; observed exit code 1 and
+`{"event":"api.startup_failed","message":"Production requires an injected operator identity resolver"}`.
+Covered inside `focused-green.log`.

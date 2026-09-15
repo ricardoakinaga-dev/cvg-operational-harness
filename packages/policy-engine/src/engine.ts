@@ -7,6 +7,8 @@ import { z } from 'zod'
 import {
   CAPABILITY_CATALOG,
   CapabilitySchema,
+  actionMatchesCapability,
+  capabilityResourceScope,
   capabilityRisk,
   type Capability
 } from './capabilities.ts'
@@ -138,6 +140,48 @@ export class PolicyEngine {
       return this.#deny(
         'tenant_mismatch',
         'Resource belongs to a different tenant',
+        undefined,
+        {
+          correlationId: request.correlationId,
+          capability: request.capability,
+          profile: request.agentProfile
+        }
+      )
+    }
+
+    const resourceScope = capabilityResourceScope(
+      request.capability,
+      request.resource
+    )
+    if (resourceScope.status === 'required') {
+      return this.#deny(
+        'resource_type_required',
+        'Capability requires a resource with an explicit type',
+        undefined,
+        {
+          correlationId: request.correlationId,
+          capability: request.capability,
+          profile: request.agentProfile
+        }
+      )
+    }
+    if (resourceScope.status === 'not_allowed') {
+      return this.#deny(
+        'resource_type_not_allowed',
+        'Capability cannot act on this resource type in the controlled scope',
+        undefined,
+        {
+          correlationId: request.correlationId,
+          capability: request.capability,
+          profile: request.agentProfile
+        }
+      )
+    }
+
+    if (!actionMatchesCapability(request.capability, request.action)) {
+      return this.#deny(
+        'action_capability_mismatch',
+        'Action is not bound to the requested capability',
         undefined,
         {
           correlationId: request.correlationId,

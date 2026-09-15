@@ -113,7 +113,15 @@ const defaultPostgresMigrations = [
   '0008_session_agent_version_pin',
   '0009_release_candidate_validator_integrity',
   '0010_outbox_durability',
-  '0011_outbox_payload_redaction'
+  '0011_outbox_payload_redaction',
+  '0012_channel_effect_journal',
+  '0013_runtime_effect_journal',
+  '0014_journeys',
+  '0015_runtime_approval_store',
+  '0016_operational_execution_spine',
+  '0017_runtime_approval_execution_binding',
+  '0018_operational_execution_invariants',
+  '0019_iterative_execution_steps'
 ]
 
 export interface PostgresQueryable {
@@ -2857,7 +2865,9 @@ export class PostgresRuntimeRepository {
       source: string
       idempotencyKey: string
     },
-    rawTenantId?: TenantId
+    rawTenantId?: TenantId,
+    // Runs only for a new row on this client; the caller owns the transaction.
+    onCreated?: (task: TaskRecord) => Promise<void>
   ): Promise<TaskRecord> {
     const tenantId = rawTenantId ? TenantIdSchema.parse(rawTenantId) : undefined
     if (this.tenantIsolation && !tenantId) {
@@ -2907,62 +2917,65 @@ export class PostgresRuntimeRepository {
       idempotencyKey: input.idempotencyKey,
       createdAt: new Date()
     }
-    try {
-      if (this.tenantIsolation) {
-        await this.client.query(
-          `INSERT INTO tasks (tenant_id, id, session_id, title, description, priority, source, status, idempotency_key, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-          [
-            tenantId,
-            task.id,
-            task.sessionId,
-            task.title,
-            task.description,
-            task.priority,
-            task.source,
-            task.status,
-            task.idempotencyKey,
-            task.createdAt
-          ]
-        )
-      } else {
-        await this.client.query(
-          `INSERT INTO tasks (id, session_id, title, description, priority, source, status, idempotency_key, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [
-            task.id,
-            task.sessionId,
-            task.title,
-            task.description,
-            task.priority,
-            task.source,
-            task.status,
-            task.idempotencyKey,
-            task.createdAt
-          ]
-        )
-      }
-    } catch (error) {
-      if (isUniqueViolation(error)) {
-        const winner = await this.client.query<(typeof existing.rows)[number]>(
-          `SELECT tasks.id, tasks.session_id, tasks.title, tasks.description, tasks.priority, tasks.source, tasks.status, tasks.idempotency_key, tasks.created_at
+    let inserted
+    if (this.tenantIsolation) {
+      inserted = await this.client.query(
+        `INSERT INTO tasks (tenant_id, id, session_id, title, description, priority, source, status, idempotency_key, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           ON CONFLICT (session_id, source, idempotency_key) DO NOTHING
+           RETURNING id`,
+        [
+          tenantId,
+          task.id,
+          task.sessionId,
+          task.title,
+          task.description,
+          task.priority,
+          task.source,
+          task.status,
+          task.idempotencyKey,
+          task.createdAt
+        ]
+      )
+    } else {
+      inserted = await this.client.query(
+        `INSERT INTO tasks (id, session_id, title, description, priority, source, status, idempotency_key, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (session_id, source, idempotency_key) DO NOTHING
+           RETURNING id`,
+        [
+          task.id,
+          task.sessionId,
+          task.title,
+          task.description,
+          task.priority,
+          task.source,
+          task.status,
+          task.idempotencyKey,
+          task.createdAt
+        ]
+      )
+    }
+    if (inserted.rows.length === 0) {
+      const winner = await this.client.query<(typeof existing.rows)[number]>(
+        `SELECT tasks.id, tasks.session_id, tasks.title, tasks.description, tasks.priority, tasks.source, tasks.status, tasks.idempotency_key, tasks.created_at
            FROM tasks
            ${scopeJoin}
            WHERE session_id = $1 AND source = $2 AND idempotency_key = $3
            ${scopeFilter}
            LIMIT 1`,
-          [
-            input.sessionId,
-            input.source,
-            input.idempotencyKey,
-            ...(tenantId ? [tenantId] : [])
-          ]
-        )
-        const winnerRow = winner.rows[0]
-        if (winnerRow) return this.mapTask(winnerRow)
-      }
-      throw error
+        [
+          input.sessionId,
+          input.source,
+          input.idempotencyKey,
+          ...(tenantId ? [tenantId] : [])
+        ]
+      )
+      const winnerRow = winner.rows[0]
+      if (winnerRow) return this.mapTask(winnerRow)
+      throw new DomainError('conflict', 'Task insert was not stored')
     }
+    await onCreated?.(task)
     return task
   }
 

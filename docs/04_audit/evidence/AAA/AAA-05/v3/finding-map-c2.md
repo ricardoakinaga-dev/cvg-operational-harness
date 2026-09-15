@@ -1,0 +1,18 @@
+# AAA-05 v3 — mapa finding → correção → evidência
+
+- Contrato: `docs/02_spec/aaa_data_api_contract.md` v3, sha256 `cebeddab53061997718fd59475019ead3a71a061942946b25018fd9580087cd1` (formatado antes do hash).
+- v2 preservada: `docs/04_audit/evidence/AAA/AAA-05/v2/aaa_data_api_contract.v2.md`, sha256 `2e8738e62926e67ea455f6930003bb836ce224ab95f0f878d6b4424c4a323568`.
+- Parecer: `docs/04_audit/evidence/AAA/AAA-05/review-coordinator-v2/REVIEW.md` (`REWORK`).
+- Diff: `v3/diff-v2-v3.patch` (sha256 `0a9009a55ba20bb5afdcd58447b219bd09a32364b00a8ebeaeb6dcd1e939eb31`).
+
+| Finding        | Sev | Correção nas seções de v3                                                                                                                                                                                                                                                                                                                                        | Evidência                                                                                                                                                  |
+| -------------- | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AAA05-C2-F01` | P1  | §1.1: alvo normativo `canonicalizeJson` com regras exatas (ordem UTF-16 manual, `undefined`, arrays, `Date` rejeitada, budgets); gap do candidato com causa raiz; política `hash_version`/`hash_algorithm_mismatch`; teste de binding da projeção completa especificado. §3: `hashVersion` na porta. §4/§10: coluna aditiva e política de compatibilidade.       | `v3/canonical-probe-repro.log` (contraexemplo reproduzido, exit 0); `docs/04_audit/evidence/AAA/AAA-12/canonicalization-gap.md`                            |
+| `AAA05-C2-F02` | P2  | §3: `release` com assinatura, precondições, efeito, retorno e fencing; `resolveUncertain` restrito a `UNCERTAIN`; replay idempotente definido sem mutação; tabela porta documental × interface real (inclui `actor` e `hashVersion` como diferenças propostas). §4: imutabilidade terminal sem exceção. §2: transições `SENDING -> PENDING` e `FAILED` terminal. | `v3/diff-v2-v3.patch`; contrato §2/§3/§4                                                                                                                   |
+| `AAA05-C2-F03` | P2  | §0: D05-1/D05-2 registradas como decididas, sem autorização de BUILD; §3: ownership e paths SQL por decisão; §10: `0012`/`0013`, somente Agente 2 escreve migrations; §14: handoffs e substituição do A5 antigo.                                                                                                                                                 | `addendum-agent2-v3-sql-handoff.md` (sha256 `9917ceb8ed7e2b3412d26472f401823150ff19409a7cdd80f0e9ff86cb367ccd`); decisões no ledger `coordinatorDecisions` |
+
+## Não alterado
+
+- Código: 12/12 hashes de AAA-12 conferem com o `manifest.json`; nenhuma migration, export, `outbox.ts`/`postgres.ts` ou registro compartilhado tocado.
+- `AAA12-R3-F01` (errata do digest) permanece fechado como já reconhecido pelo coordenador; `AAA12-R3-F02` segue aberto em AAA-21.
+- Evidências anteriores (v1, v2, pareceres, manifestos recebidos) preservadas, sem sobrescrita.

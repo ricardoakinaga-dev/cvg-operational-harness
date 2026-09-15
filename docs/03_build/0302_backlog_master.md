@@ -1,5 +1,13 @@
 # 0302 — Backlog Master
 
+## Complemento pós-auditoria de 13/09/2026
+
+Consultar [plano para produção](../PLANO_EXECUTIVO_PRODUCAO.md), [roadmap](../ROADMAP_PRODUCAO.md) e [backlog consolidado](../BACKLOG_PRODUCAO.md). Os 42 IDs AAA mantêm seus contratos/status; 14 IDs PROD acrescentam correções e pré-requisitos de saída. Não concluir pela evidência histórica de outro candidato. Este índice não concede gate de BUILD ou produção.
+
+## Programa AAA — 2026-09-12
+
+Backlog da auditoria `AUD-20260912-001`: [0326_aaa_backlog.md](0326_aaa_backlog.md), derivado de [tracking/aaa_program_backlog.json](tracking/aaa_program_backlog.json). O JSON é a fonte de status/dependências das 42 tasks propostas; cobre 20 dimensões e 15 achados, sem substituir silenciosamente o backlog REM/Phase 10 nem conceder autorização de BUILD.
+
 ## Planejamento de remediação pós-auditoria — 2026-09-05
 
 Para evolução proposta a partir da auditoria 0539, consultar [0313_backlog_pos_auditoria.md](0313_backlog_pos_auditoria.md) e [plano executivo](0311_plano_executivo_pos_auditoria.md). Os itens abaixo preservam o planejamento original; não representam automaticamente pendências atuais nem aprovação das tasks REM.

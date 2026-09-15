@@ -1,0 +1,1168 @@
+A execution spine construída nesta Phase deve permitir que o futuro
+Runtime V2 execute múltiplos passos SEM precisar redesenhar:
+
+HTTP ingestion
+durable execution identity
+persistence
+worker claiming
+leases
+idempotency
+approval lifecycle
+effect journal
+audit
+telemetry.
+
+Ou seja:
+
+Phase 2 constrói o "sistema circulatório".
+
+Phase 3 poderá trocar o "cérebro executivo".
+
+Não acople a durability layer ao fato de Runtime V1 possuir apenas um passo.
+
+---
+
+# 208. FUTURE ITERATION MODEL
+
+Não implementar agora, mas validar compatibilidade com:
+
+Execution
+  ↓
+Step 1
+  ↓
+Observation
+  ↓
+Step 2
+  ↓
+Observation
+  ↓
+Step 3
+  ↓
+Stop.
+
+A persistence não deve exigir conceitualmente:
+
+Execution = exactly one model call + exactly one tool call.
+
+Se essa suposição estiver codificada no novo desenho, corrija antes de
+encerrar Phase 2.
+
+---
+
+# 209. FUTURE STEP IDENTITY
+
+Prepare contratos para futura identidade de step.
+
+Exemplo conceitual:
+
+StepId
+StepNumber
+StepType
+StepStatus
+
+Não é obrigatório criar persistence completa de Steps nesta Phase.
+
+Mas evite arquitetura que torne isso destrutivo futuramente.
+
+---
+
+# 210. FUTURE CHECKPOINTING
+
+O Runtime V2 poderá precisar:
+
+execute step
+→ checkpoint
+→ process dies
+→ resume next step.
+
+Phase 2 deve avaliar se o modelo durável permite checkpoint futuro.
+
+Produza uma seção específica em:
+
+docs/phase2/RUNTIME_V2_COMPATIBILITY.md
+
+com:
+
+CURRENTLY_SUPPORTED
+PARTIALLY_SUPPORTED
+BLOCKED
+
+para:
+
+multi-step
+checkpoint
+resume
+replan
+waiting-user
+waiting-approval
+multiple tool calls
+multiple model calls.
+
+---
+
+# 211. FUTURE WAITING_USER
+
+Prepare state machine para futuro:
+
+RUNNING
+→ WAITING_USER
+→ QUEUED
+→ RUNNING.
+
+Não implemente diálogo completo.
+
+Mas WAITING_USER não pode exigir processo vivo.
+
+Esse padrão deve ser análogo ao approval pause/resume.
+
+---
+
+# 212. FUTURE HUMAN HANDOFF
+
+Garanta compatibilidade conceitual com:
+
+RUNNING
+→ HUMAN_TAKEOVER
+→ PAUSED/HANDED_OFF
+
+e eventual:
+
+HUMAN_RELEASE
+→ QUEUED
+→ RUNNING.
+
+Não implemente produto Secretary nesta Phase.
+
+Apenas não feche essa porta arquitetural.
+
+---
+
+# 213. FUTURE KNOWLEDGE ITERATION
+
+O Runtime V2 deverá poder futuramente fazer:
+
+knowledge.search
+→ evaluate evidence
+→ knowledge.search again
+→ synthesize.
+
+Não modele `knowledge.search` como caso especial na durability spine.
+
+Deve ser uma capability/tool-like operation governada pelo runtime.
+
+---
+
+# 214. FUTURE SKILL EXECUTION
+
+Uma Skill futura poderá produzir uma sequência:
+
+Skill
+ ↓
+Tool A
+ ↓
+Observation
+ ↓
+Tool B
+ ↓
+Verification.
+
+A Phase 2 não deve assumir:
+
+Skill = Tool.
+
+Preserve separação conceitual.
+
+---
+
+# 215. FUTURE MULTI-AGENT
+
+Não implementar multi-agent.
+
+Mas documente se execution identity poderia futuramente possuir:
+
+parentExecutionId
+rootExecutionId
+
+ou equivalente.
+
+Não adicione complexidade se não necessária.
+
+Apenas registre decisão.
+
+---
+
+# 216. NO PREMATURE DISTRIBUTED WORKFLOW ENGINE
+
+Não introduza nesta fase:
+
+Temporal
+Cadence
+Airflow
+Dagster
+Kafka
+RabbitMQ
+NATS
+Redis Streams
+
+apenas porque poderiam resolver workflows futuros.
+
+Primeiro prove a spine com a infraestrutura existente.
+
+Uma dependência nova desse porte exige ADR e necessidade demonstrável.
+
+---
+
+# 217. NO PREMATURE EVENT SOURCING
+
+Não transforme todo estado em event sourcing.
+
+Audit trail + execution state + effect journal + outbox podem ser suficientes.
+
+Só adote event sourcing se existir requisito concreto não atendido.
+
+---
+
+# 218. NO PREMATURE CQRS
+
+Não separe command/read databases ou modelos complexos sem necessidade.
+
+O objetivo é robustez, não quantidade de padrões arquiteturais.
+
+---
+
+# 219. NO PREMATURE MICROSERVICES
+
+API e Worker podem ser processos separados utilizando packages compartilhados.
+
+Isso NÃO significa que cada package precisa virar microserviço.
+
+Preserve monorepo/modular architecture enquanto for adequada.
+
+---
+
+# 220. COMPLEXITY BUDGET
+
+Toda nova abstração deve responder:
+
+1. Qual problema real resolve?
+2. Qual invariant protege?
+3. Qual teste prova?
+4. Qual custo introduz?
+5. Existe solução mais simples?
+
+Documente decisões relevantes.
+
+---
+
+# 221. DELETE DEAD EXPERIMENTS
+
+Como este repositório é a cópia destinada ao Harness, código experimental
+criado DURANTE esta Phase e posteriormente abandonado pode ser removido.
+
+Não preserve lixo apenas por histórico.
+
+Entretanto:
+
+não remova brownfield legacy sem entender dependências.
+
+---
+
+# 222. SECRETARY LEGACY LANE
+
+O legado Secretary existente deve continuar isolado.
+
+Nenhum novo código Phase 2 pode depender dele.
+
+Crie/fortaleça gate:
+
+canonical harness packages
+→ MUST NOT IMPORT
+legacy/secretary-product
+
+ou localização equivalente.
+
+---
+
+# 223. CVG DOMAIN NEUTRALITY
+
+O Core do Harness não deve possuir conceitos como:
+
+patient
+veterinarian
+appointment
+hospitalization
+tutor
+medical record
+
+em seus contratos fundamentais.
+
+Esses pertencem aos produtos/domínios.
+
+O Harness pode conhecer genericamente:
+
+resource
+actor
+tenant
+capability
+execution
+tool
+agent
+policy.
+
+---
+
+# 224. DOMAIN EXTENSION POINTS
+
+Produtos futuros poderão introduzir:
+
+AppointmentResource
+PatientResource
+ClinicalKnowledgeResource
+
+através de contratos externos/extensions.
+
+Não coloque esses conceitos no Core agora.
+
+---
+
+# 225. AGENT PROFILE
+
+O synthetic demo deve utilizar um AgentProfile explícito.
+
+AgentProfile deve poder declarar conceitualmente:
+
+id
+version
+modelProfile
+allowed/available capabilities
+policy context
+optional skills
+optional knowledge providers
+execution defaults.
+
+Não transforme AgentProfile em um objeto gigante de configuração.
+
+---
+
+# 226. AGENT PROFILE IMMUTABILITY
+
+Uma execução deve referenciar versão concreta do profile.
+
+Não depender apenas de:
+
+agentId = secretary
+
+com configuração mutável invisível.
+
+---
+
+# 227. TOOL CATALOG VERSION
+
+Se Tool Registry puder mudar durante execution lifetime, avalie versionamento
+ou snapshot.
+
+Não precisa construir registry distribuído.
+
+Mas execution audit deve conseguir identificar qual Tool/version executou.
+
+---
+
+# 228. MODEL PROFILE
+
+Preserve abstração de ModelProfile.
+
+Exemplo conceitual:
+
+fast
+balanced
+reasoning
+local
+
+sem o Core precisar saber que:
+
+fast = provider X/model Y.
+
+Model Gateway resolve.
+
+---
+
+# 229. PROVIDER ADAPTER
+
+Garanta a cadeia:
+
+Harness
+ ↓
+Model Gateway
+ ↓
+Provider Adapter
+ ↓
+SDK/API.
+
+SDK é detalhe do Adapter.
+
+Isso reforça a arquitetura conceitual do projeto.
+
+---
+
+# 230. MODEL PROVIDER FAILURE ISOLATION
+
+Provider failure não deve corromper execution state.
+
+O Worker deve receber erro tipado e decidir via retry semantics.
+
+---
+
+# 231. TOOL PROVIDER FAILURE ISOLATION
+
+Da mesma forma:
+
+Tool Adapter failure
+
+não pode escrever terminal success.
+
+Effect Journal deve refletir estado correto.
+
+---
+
+# 232. MODEL COST ACCOUNTING
+
+Preserve/fortaleça:
+
+estimated/actual model cost
+
+quando disponível.
+
+ExecutionBudget deve poder interromper execução futura por custo.
+
+Para provider sintético, custo pode ser zero ou fixture explícita.
+
+---
+
+# 233. TOKEN ACCOUNTING
+
+Se Model Gateway já expõe token usage:
+
+registre em telemetry/result metadata.
+
+Não bloqueie Phase 2 se provider sintético não possuir tokenização real.
+
+---
+
+# 234. BUDGET AUTHORITY
+
+Runtime é responsável por enforcing execution budget.
+
+Orchestrator pode considerar budget.
+
+Model não decide seu próprio orçamento.
+
+---
+
+# 235. DEADLINE AUTHORITY
+
+Execution deadline deve ser calculado/transportado de forma canônica.
+
+Evite cada layer inventar seu próprio prazo sem relação.
+
+Tool/model timeout podem ser menores que deadline.
+
+---
+
+# 236. STOP REASON AUTHORITY
+
+Use StopReason canônico de @cvg/harness-contracts.
+
+Não espalhe strings arbitrárias:
+
+"done"
+"failed"
+"timeout2"
+"approval_wait"
+
+por diferentes packages.
+
+---
+
+# 237. STOP REASON VS FAILURE CODE
+
+Diferencie:
+
+StopReason
+= por que execution parou.
+
+FailureCode
+= natureza técnica/semântica da falha.
+
+Exemplo:
+
+stopReason = FAILED
+failureCode = MODEL_TIMEOUT
+
+ou taxonomia equivalente.
+
+Não force exatamente essa representação se contratos atuais forem melhores.
+
+---
+
+# 238. BUSINESS OUTCOME VS INFRASTRUCTURE OUTCOME
+
+Prepare separação:
+
+execution infrastructure succeeded
+
+versus
+
+agent outcome.
+
+Exemplo:
+
+Harness processou corretamente uma request que terminou:
+
+POLICY_DENIED.
+
+Isso pode ser:
+
+infrastructure = SUCCESS
+
+agent outcome = DENIED.
+
+Evite métricas que tratem todo DENY como falha de infraestrutura.
+
+---
+
+# 239. HTTP STATUS SEMANTICS
+
+Da mesma forma:
+
+HTTP 202
+
+pode ser correto mesmo se posteriormente a execução terminar DENIED.
+
+HTTP representa protocolo.
+
+Execution state representa trabalho.
+
+---
+
+# 240. OPERATIONAL METRICS SEMANTICS
+
+Separe métricas:
+
+execution_outcome_total
+
+de:
+
+infrastructure_errors_total.
+
+Isso permitirá operação real futuramente.
+
+---
+
+# 241. SLO READINESS
+
+Não definir SLOs de produção sem dados.
+
+Mas documente quais métricas futuramente permitirão:
+
+availability
+execution success rate
+queue latency
+processing latency
+retry rate.
+
+---
+
+# 242. ALERT READINESS
+
+Documente futuros alert candidates:
+
+queue depth high
+stale claims high
+retry storm
+audit failure
+DB unavailable
+worker unavailable
+duplicate effect detection
+approval backlog.
+
+Não precisa integrar PagerDuty/Grafana nesta Phase.
+
+---
+
+# 243. HEALTH CONTRACT
+
+Crie contrato consistente de health/readiness para:
+
+API
+Worker
+DB dependency.
+
+Exemplo conceitual:
+
+{
+  "status": "ready|degraded|not_ready",
+  "checks": [...]
+}
+
+Não exponha detalhes sensíveis.
+
+---
+
+# 244. WORKER HEARTBEAT
+
+Avalie necessidade de heartbeat operacional.
+
+Se Worker lifecycle já é observável de outra maneira, não duplique.
+
+Caso implemente, heartbeat não deve ser confundido com execution lease.
+
+---
+
+# 245. EXECUTION LEASE VS WORKER HEARTBEAT
+
+Lease:
+
+"este Worker possui temporariamente esta execução."
+
+Heartbeat:
+
+"este Worker/processo está vivo."
+
+São conceitos diferentes.
+
+Documente.
+
+---
+
+# 246. CLAIM FAIRNESS TEST
+
+Se possível, com dois Workers:
+
+submeta múltiplas executions
+
+e prove que nenhuma execution é processada simultaneamente por ambos.
+
+Não é necessário provar distribuição perfeitamente uniforme.
+
+---
+
+# 247. STALE CLAIM TEST
+
+Prove:
+
+Worker A claims
+→ dies
+→ lease expires
+→ Worker B claims.
+
+Use clock control/DB time quando possível.
+
+---
+
+# 248. LEASE LOST TEST
+
+Se Worker A continuar vivo após perder lease:
+
+ele não deve conseguir publicar efeito/terminal state indevidamente.
+
+Use fencing/version guard se arquitetura exigir.
+
+Esse teste é especialmente importante se leases forem implementados.
+
+---
+
+# 249. APPROVAL EXPIRATION
+
+Se approval possui TTL/expiration:
+
+teste.
+
+Se não possui:
+
+documente risco e decisão.
+
+Não invente TTL arbitrário apenas para satisfazer checklist.
+
+---
+
+# 250. EXECUTION EXPIRATION
+
+Não faça executions desaparecerem automaticamente.
+
+Retention policy é problema separado.
+
+Documente futura necessidade.
+
+---
+
+# 251. DATA RETENTION
+
+Documente categorias:
+
+execution state
+audit
+effect journal
+telemetry
+logs.
+
+Cada uma poderá possuir retention diferente.
+
+Não implemente política de produção sem requisito.
+
+---
+
+# 252. PII MINIMIZATION
+
+Core execution records devem preferir referências a entidades quando possível,
+não cópias desnecessárias de dados pessoais.
+
+Mesmo com synthetic data agora, preserve princípio.
+
+---
+
+# 253. SECRET REDACTION
+
+Teste pelo menos um cenário onde payload contém campo sensível fixture.
+
+Garanta que:
+
+log
+audit
+telemetry
+
+não exponham o valor quando política de redaction exigir.
+
+---
+
+# 254. AUDIT PAYLOAD ALLOWLIST
+
+Considere allowlist/structured audit payload em vez de dump arbitrário de objetos.
+
+Não faça:
+
+audit.append({ payload: entireRequest })
+
+por conveniência.
+
+---
+
+# 255. ERROR REDACTION
+
+Internal error pode conter:
+
+connection string
+URL
+token
+provider response.
+
+Safe external error deve ser separado de diagnostic internal error.
+
+---
+
+# 256. SQL ERROR REDACTION
+
+Não retorne SQL error bruto pela API.
+
+---
+
+# 257. MODEL ERROR REDACTION
+
+Não retorne provider credentials/request internals.
+
+---
+
+# 258. TOOL ERROR REDACTION
+
+Tool error para usuário/cliente deve ser sanitizado.
+
+Audit interno pode registrar metadata segura necessária.
+
+---
+
+# 259. SCHEMA DOCUMENTATION
+
+Documente tabelas/estruturas novas em:
+
+docs/phase2/DURABLE_SCHEMA.md
+
+Inclua relações e invariantes.
+
+---
+
+# 260. ARCHITECTURE DIAGRAM
+
+Crie:
+
+docs/phase2/ARCHITECTURE.md
+
+com diagrama Mermaid da arquitetura real.
+
+Deve mostrar pelo menos:
+
+Client
+API
+Postgres
+Queue/Outbox
+Worker
+Harness
+Runtime
+Orchestrator compatibility
+Policy
+Approval
+Model Gateway
+Tool Registry
+Effect Journal
+Audit
+Telemetry.
+
+---
+
+# 261. COMPONENT RESPONSIBILITY TABLE
+
+No mesmo documento inclua tabela:
+
+Component
+Responsibility
+Owns state?
+Can execute effects?
+Can authorize?
+Can call model?
+Durable?
+
+Isso ajudará a impedir confusão futura.
+
+---
+
+# 262. AUTHORITY TABLE
+
+Crie uma tabela específica:
+
+LLM
+- propose: YES
+- authorize: NO
+- execute: NO
+
+Orchestrator
+- choose logical next step: YES
+- authorize: NO
+- execute tool directly: NO
+
+Policy
+- authorize: YES
+
+Approval
+- human authorization: YES
+
+Runtime
+- enforce: YES
+
+Tool
+- execute: YES
+
+Worker
+- lifecycle: YES
+- business authorization: NO
+
+Persistence
+- durable truth: YES.
+
+---
+
+# 263. RUNTIME V1 DOCUMENTATION UPDATE
+
+Atualize documentação para deixar inequívoco:
+
+Runtime V1 = governed single-pass runtime.
+
+Não o descreva como:
+
+autonomous agent loop
+
+se não for.
+
+---
+
+# 264. ORCHESTRATOR DOCUMENTATION UPDATE
+
+Deixe claro:
+
+Phase 2 utiliza compatibility/single-pass orchestration.
+
+Full Hybrid Orchestrator pertence à Phase 3+.
+
+---
+
+# 265. NO MARKETING LANGUAGE
+
+Evite:
+
+"production-grade"
+"enterprise-ready"
+"bulletproof"
+"exactly-once"
+"zero-loss"
+
+sem prova correspondente.
+
+Use:
+
+PROVEN
+PARTIAL
+NOT_PROVEN
+ENVIRONMENT_BLOCKED.
+
+---
+
+# 266. EVIDENCE-BOUND CLAIMS
+
+Toda claim no relatório final deve apontar para:
+
+test
+artifact
+file/symbol
+runtime evidence
+
+quando relevante.
+
+---
+
+# 267. REQUIREMENTS TRACEABILITY
+
+Crie:
+
+docs/phase2/REQUIREMENTS_TRACEABILITY.md
+
+Mapeie cada requisito crítico deste prompt para:
+
+IMPLEMENTED
+PROVEN
+PARTIAL
+NOT_IMPLEMENTED
+OUT_OF_SCOPE
+ENVIRONMENT_BLOCKED
+
+e:
+
+evidence.
+
+Não declare 267/267 simplesmente porque um documento existe.
+
+---
+
+# 268. CRITICAL REQUIREMENTS
+
+Marque como CRITICAL pelo menos:
+
+durable ingestion
+worker execution
+canonical harness composition
+idempotency
+tenant isolation
+policy enforcement
+approval resume
+effect journal
+crash recovery
+audit causality
+no tool bypass.
+
+Qualquer CRITICAL FAIL:
+
+Phase 2 != PASS.
+
+---
+
+# 269. PHASE 2 DEFINITION OF DONE
+
+A implementação está concluída somente quando:
+
+A. há uma execution spine canônica;
+
+B. HTTP apenas aceita/persiste/enfileira;
+
+C. Worker executa através do Harness público;
+
+D. Runtime V1 permanece governado;
+
+E. Policy continua autoridade;
+
+F. Approval pausa e retoma duravelmente;
+
+G. Tools executam apenas na lane governada;
+
+H. Idempotency está provada;
+
+I. Effect Journal protege efeitos;
+
+J. Worker crash é recuperável;
+
+K. Tenant isolation está provada;
+
+L. Audit reflete causalidade real;
+
+M. Telemetry cobre o caminho;
+
+N. State machine é explícita;
+
+O. Failure semantics são explícitas;
+
+P. Não existem novas regressões;
+
+Q. Evidências são reproduzíveis;
+
+R. Independent Critic aprova;
+
+S. Production status é honestamente classificado.
+
+---
+
+# 270. FINAL DECISION
+
+No final escolha exatamente uma:
+
+PASS
+
+CONDITIONAL_PASS
+
+FAIL
+
+Separadamente escolha:
+
+PRODUCTION_GO
+
+PRODUCTION_NO_GO.
+
+Exemplo perfeitamente aceitável:
+
+Phase 2 = PASS
+Production = NO_GO
+
+porque certificação de Harness e certificação de produção não são a mesma coisa.
+
+---
+
+# 271. PHASE 2 SCORE
+
+Calcule score 0–10 baseado em evidência.
+
+Não use média ingênua se componente crítico falhar.
+
+Cap score se:
+
+tenant isolation falhar
+idempotency falhar
+effect duplication ocorrer
+policy bypass existir
+crash recovery não for provado.
+
+Explique cap.
+
+---
+
+# 272. RECOMMENDED NEXT STEP
+
+Se:
+
+Phase 2 = PASS
+
+ou:
+
+forte CONDITIONAL_PASS sem blockers arquiteturais,
+
+recomende:
+
+PHASE 3 — RUNTIME V2 & HYBRID ORCHESTRATOR
+
+com foco em:
+
+iterative agent loop
+step model
+observation
+planning
+replanning
+sufficiency evaluation
+semantic retry
+checkpointing
+stop conditions
+conversation pause/resume.
+
+Se Phase 2 possuir blockers de durability:
+
+NÃO avance para Runtime V2.
+
+Recomende:
+
+PHASE 2.x HARDENING.
+
+---
+
+# 273. FINAL TERMINAL OUTPUT
+
+Ao concluir, imprima um resumo curto e verificável:
+
+CVG OPERATIONAL HARNESS — PHASE 2
+
+Base commit:
+Current HEAD:
+Worktree:
+Phase status:
+Production status:
+Durability certification:
+Canonical spine:
+HTTP durable ingestion:
+PostgreSQL:
+Worker:
+Harness public composition:
+Runtime V1:
+Policy:
+Approval pause/resume:
+Idempotency:
+Effect journal:
+Crash recovery:
+Tenant isolation:
+Audit:
+Telemetry:
+New regressions:
+Independent critic:
+Score:
+Next phase:
+
+Depois liste os principais artifacts.
+
+---
+
+# 274. FINAL PRINCIPLE
+
+Não otimize inteligência nesta fase.
+
+Otimize confiança na execução.
+
+A sequência arquitetural é:
+
+PHASE 0/1
+SEPARATE THE ENGINE
+
+        ↓
+
+PHASE 2
+MAKE THE ENGINE DURABLE
+
+        ↓
+
+PHASE 3
+MAKE THE ENGINE ITERATIVE
+
+        ↓
+
+PHASE 4+
+MAKE THE ENGINE SMARTER
+
+O Harness precisa primeiro sobreviver ao mundo real antes de ganhar
+autonomia maior.
+
+---
+
+# 275. EXECUTION INSTRUCTION
+
+Execute agora a:
+
+PHASE 2 — DUR

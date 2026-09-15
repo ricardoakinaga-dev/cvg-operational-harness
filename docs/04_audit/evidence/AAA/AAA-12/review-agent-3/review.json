@@ -1,0 +1,61 @@
+{
+  "reviewId": "AAA-12-REVIEW-AGENT-3",
+  "taskId": "AAA-12",
+  "program": "AAA-20260912",
+  "verdict": "APPROVE",
+  "verdictScope": "candidate files in AAA-12 manifest (12/12 hashes matched); host-local controlled scope only",
+  "reviewer": "agent-3; did not implement AAA-12",
+  "reviewedAt": "2026-09-12T21:52:00+00:00",
+  "independentEvidence": {
+    "focused": "npx vitest run packages/channel-gateway packages/chaos with TEST_DATABASE_URL disposable: 8 files / 62 tests PASS, exit 0",
+    "reproduction": "AUD-20260912-001 reproduce.mjs channelRace.sends = 1",
+    "candidateHashes": "12/12 MATCH"
+  },
+  "acceptance": [
+    {
+      "criterion": "concurrent dispatch one send",
+      "result": "PASS"
+    },
+    {
+      "criterion": "key reuse different payload rejected",
+      "result": "PASS (idempotency_key_reuse)"
+    },
+    {
+      "criterion": "restart/instances preserve result (host-local)",
+      "result": "PASS in controlled scope"
+    },
+    {
+      "criterion": "reserve before send",
+      "result": "PASS by inspection gateway.ts reserve->claimSend->send"
+    }
+  ],
+  "findings": [
+    {
+      "id": "AAA12-R3-F01",
+      "severity": "P2",
+      "criterionAffected": "candidate identity",
+      "location": "docs/04_audit/evidence/AAA/AAA-12/manifest.json",
+      "reproduction": "recompute digest from listed hashes via four canonicalizations",
+      "observed": "manifest candidateDigest 33aa2807... not reproducible; all file hashes match",
+      "impact": "aggregate identity cannot be independently verified",
+      "priority": "P2",
+      "closeWith": "publish exact digest command or adopt AAA-13 candidateId"
+    },
+    {
+      "id": "AAA12-R3-F02",
+      "severity": "P2",
+      "criterionAffected": "durable reserve before effect",
+      "location": "packages/channel-gateway/src/gateway.ts constructor",
+      "reproduction": "grep FileChannelEffectJournal non-test callers",
+      "observed": "default journal is InMemory; no non-test composition injects the durable file journal",
+      "impact": "durability guarantee is opt-in until AAA-21",
+      "priority": "P2",
+      "closeWith": "AAA-21 injects durable journal and fails closed without it; document host-local limitation until SQL adapter (D05-1/2)"
+    }
+  ],
+  "limitations": [
+    "host-local only",
+    "no channel SQL journal",
+    "not human signoff"
+  ]
+}

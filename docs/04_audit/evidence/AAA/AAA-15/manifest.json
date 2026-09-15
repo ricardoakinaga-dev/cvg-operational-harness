@@ -1,0 +1,86 @@
+{
+  "taskId": "AAA-15",
+  "program": "AAA-20260912",
+  "title": "Restaurar gate de formatação preservando alterações existentes",
+  "status": "REVIEW",
+  "reviewStatus": "PENDING_INDEPENDENT_REVIEW",
+  "owner": "agent-3 (integration/formatting window)",
+  "observedAt": "2026-09-12T22:00:00Z",
+  "authority": "user brief 2026-09-12 controlled local corrections; formatting-only change under reserved window; no refactor",
+  "finding": "AUD-20260912-F13",
+  "window": {
+    "openedAt": "2026-09-12T20:55:02Z",
+    "fileHashBefore": "5830af1b6bc31211628d7c4aafd664af55f2d9ca683a9e833f1f927685eb94ee",
+    "fileHashAfter": "3695e1214f145dbfa216a0737faa2ece6d70131efc9385d1c78fb6f2e24e03c3",
+    "fileMtimeBefore": "2026-09-12T12:05:04-03:00 (stable ~9h before the window)",
+    "concurrentWriters": "none observed; no lsof holder; preexisting semantic changes preserved"
+  },
+  "change": {
+    "path": "apps/api/src/server.ts",
+    "operation": "npx prettier --write (formatting only)",
+    "semanticEquivalence": {
+      "method": "TypeScript compiler AST comparison ignoring positions and trivia (comments, whitespace, optional semicolons)",
+      "command": "node /tmp/opencode/ast-equivalent.cjs <pre-format copy> <post-format copy>",
+      "result": "AST_EQUIVALENT",
+      "artifact": "ast-equivalence.log"
+    }
+  },
+  "validation": [
+    {
+      "check": "prettier --check apps/api/src/server.ts (before)",
+      "result": "FAIL as expected (F13)",
+      "artifact": "format-before.log"
+    },
+    {
+      "check": "prettier --check apps/api/src/server.ts (after)",
+      "result": "PASS",
+      "artifact": "format-after.log"
+    },
+    {
+      "check": "AST equivalence pre/post",
+      "result": "PASS AST_EQUIVALENT",
+      "artifact": "ast-equivalence.log"
+    },
+    {
+      "check": "npm run typecheck",
+      "result": "PASS",
+      "artifact": "typecheck.log"
+    },
+    {
+      "check": "npx vitest run apps/api",
+      "result": "PASS 45 files / 207 tests, 8 skipped",
+      "artifact": "focused-api-tests.log"
+    },
+    {
+      "check": "git diff --check",
+      "result": "PASS",
+      "artifact": "git-diff-check.log"
+    },
+    {
+      "check": "format:check on all tracked files",
+      "result": "PASS all tracked files prettier-clean",
+      "artifact": "format-check-tracked.log"
+    },
+    {
+      "check": "npm run format:check (whole tree)",
+      "result": "FAIL: 9 files from other lanes remain unformatted (agent-1: PLAN/review.json, AAA-01/npm-audit.json, AAA-03/review-request-v2.md, packages/policy-engine/src/__tests__/capability-scope.test.ts; agent-2: AAA-05/manifest.json, AAA-12/{coverage-summary,handoff-agent1,manifest}, AAA-16/manifest.json). None is owned by agent-3 and none was edited.",
+      "artifact": "format-check-final.log"
+    }
+  ],
+  "review": {
+    "status": "PENDING",
+    "reviewerRequirement": "agent that did not implement AAA-15 (agent-1 or agent-2)",
+    "requestedChecks": [
+      "confirm the diff of apps/api/src/server.ts is formatting-only and preserves preexisting semantic changes",
+      "rerun npx prettier --check apps/api/src/server.ts and the focused API suite",
+      "confirm other lanes' files were not modified by this task",
+      "decide the full-tree format gate path: owners format their evidence, or .prettierignore gains generated-evidence entries (path is unassigned; requires lead reassignment)"
+    ]
+  },
+  "limitations": [
+    "Whole-tree format:check is still red because of other lanes' generated/evidence files; tracked-file scope is green",
+    "No commit; the formatting change remains in the working tree for the integrator",
+    "This task did not run npm test globally (AAA-14 rerun covered the full suite: 175 files / 886 tests PASS)"
+  ],
+  "nextAction": "Independent review; lead coordinates owner-side formatting or reassigns .prettierignore for generated evidence"
+}

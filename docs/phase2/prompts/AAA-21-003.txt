@@ -1,0 +1,1160 @@
+utivo de tabelas/colunas herdadas apenas para "limpar" arquitetura.
+
+Se uma estrutura antiga não for mais canônica:
+
+- marque como legacy/deprecated;
+- documente;
+- migre de forma incremental;
+- remova somente em fase posterior com evidência suficiente.
+
+Produza:
+
+docs/phase2/MIGRATION_SAFETY.md
+
+---
+
+# 91. SCHEMA INVARIANTS
+
+Defina invariantes importantes no banco quando possível.
+
+Exemplos:
+
+- execution_id único;
+- tenant + idempotency_key com semântica de unicidade apropriada;
+- state válido;
+- attempt >= 0;
+- effect identity única no escopo correto;
+- approval vinculada ao tenant correto;
+- timestamps coerentes.
+
+Não dependa exclusivamente da aplicação para invariantes que podem ser
+garantidos com segurança pela persistence layer.
+
+Teste violações relevantes.
+
+---
+
+# 92. OPTIMISTIC / PESSIMISTIC CONCURRENCY
+
+Analise onde utilizar:
+
+optimistic concurrency
+
+versus
+
+pessimistic locking.
+
+Não aplique locks indiscriminadamente.
+
+Documente especificamente para:
+
+execution state transition
+worker claim
+approval consume
+effect journal
+idempotency registration.
+
+Evite:
+
+read
+→ modify in memory
+→ blind write
+
+quando concorrência puder produzir lost update.
+
+---
+
+# 93. EXECUTION VERSION / CAS
+
+Quando apropriado, adicione mecanismo equivalente a:
+
+version
+revision
+updated_at guard
+
+para evitar transições concorrentes silenciosas.
+
+Exemplo conceitual:
+
+UPDATE executions
+SET state = ...
+WHERE execution_id = ?
+AND version = ?
+
+Se zero rows forem alteradas:
+
+STATE_CONFLICT.
+
+Não force CAS se a transação/locking existente já garantir corretamente.
+
+---
+
+# 94. STATE TRANSITION AUTHORITY
+
+Não permita que qualquer package escreva livremente:
+
+execution.state.
+
+Centralize transições em um componente conceitual como:
+
+ExecutionRepository.transition()
+
+ou:
+
+ExecutionStateMachine.transition()
+
+A transição deve validar:
+
+current state
+requested next state
+ownership/lease quando aplicável
+tenant
+version.
+
+---
+
+# 95. TERMINAL STATE IMMUTABILITY
+
+Uma execução terminal não deve voltar silenciosamente para:
+
+RUNNING
+QUEUED
+CLAIMED.
+
+Se existir mecanismo administrativo de replay/reprocessamento:
+
+crie uma NOVA execution identity
+
+ou semântica explicitamente separada.
+
+Não mutacione história.
+
+---
+
+# 96. RESULT / EFFECT CONSISTENCY
+
+Defina invariantes entre:
+
+execution terminal result
+
+e:
+
+effect journal.
+
+Exemplo:
+
+SUCCEEDED com side-effect obrigatório
+
+não pode existir se o effect correspondente estiver:
+
+UNKNOWN
+STARTED
+FAILED
+
+sem explicação semântica.
+
+Crie verificações/testes.
+
+---
+
+# 97. UNKNOWN EFFECT OUTCOME
+
+Trate explicitamente o caso difícil:
+
+Tool chamou serviço externo
+→ conexão caiu
+→ não sabemos se o serviço executou.
+
+Não classifique automaticamente como:
+
+FAILED_SAFE_TO_RETRY.
+
+Crie estado/erro equivalente a:
+
+EFFECT_OUTCOME_UNKNOWN
+
+quando necessário.
+
+Estratégias possíveis:
+
+- provider idempotency key;
+- reconciliation;
+- external lookup;
+- manual intervention;
+- terminal uncertainty.
+
+Documente a garantia real.
+
+---
+
+# 98. RECONCILIATION CONTRACT
+
+Se um efeito externo puder ficar em estado desconhecido, prepare contrato
+conceitual para reconciliation.
+
+Exemplo:
+
+reconcile(effectReference)
+
+Não é obrigatório implementar integrações reais nesta Phase.
+
+Mas o modelo de falha não pode assumir que todo timeout significa "não executou".
+
+---
+
+# 99. TOOL IDEMPOTENCY CAPABILITIES
+
+Expanda descriptor de Tool, se necessário, para declarar características
+como:
+
+idempotency:
+  NATIVE
+  KEY_SUPPORTED
+  JOURNAL_GUARDED
+  NON_IDEMPOTENT
+  UNKNOWN
+
+Não force exatamente estes enums se houver design melhor.
+
+O Harness precisa saber qual garantia consegue fornecer.
+
+---
+
+# 100. TOOL RISK METADATA
+
+Garanta que Tool descriptors consigam representar ao menos:
+
+risk level
+sideEffect boolean
+approval requirement/policy relationship
+idempotency capability
+
+O Orchestrator pode VER metadata.
+
+O Orchestrator NÃO recebe execute().
+
+---
+
+# 101. NO TOOL BYPASS
+
+Faça busca estrutural por caminhos que permitam:
+
+HTTP
+→ Tool diretamente
+
+Worker
+→ Tool diretamente
+
+Model
+→ Tool diretamente
+
+Orchestrator
+→ execute()
+
+Product residue
+→ internal tool implementation
+
+quando deveriam passar pelo Runtime governado.
+
+Classifique exceções legítimas.
+
+Crie teste arquitetural quando possível.
+
+---
+
+# 102. NO MODEL BYPASS
+
+Faça o mesmo para Model Gateway.
+
+Fluxo canônico:
+
+Runtime
+→ Model Gateway
+→ Provider Adapter
+→ SDK/provider.
+
+Nenhum caminho Phase 2 canônico deve chamar provider diretamente.
+
+---
+
+# 103. NO POLICY BYPASS
+
+Identifique qualquer side effect que possa ocorrer sem decisão de Policy.
+
+Para cada caso:
+
+- corrigir se estiver no caminho canônico;
+- documentar como legacy se estiver fora do escopo;
+- impedir que seja usado pelo novo Harness.
+
+---
+
+# 104. CAPABILITY AUTHORITY
+
+Defina uma identidade canônica de capability.
+
+Exemplo:
+
+calendar.read
+calendar.create
+knowledge.search
+message.send
+synthetic.effect.write
+
+Policy deve avaliar capability/action de forma estruturada.
+
+Evite policy baseada apenas em texto natural produzido pelo modelo.
+
+---
+
+# 105. EXECUTION SNAPSHOT
+
+Antes de executar Runtime, persista ou reconstrua deterministicamente um
+snapshot suficiente da configuração.
+
+Exemplo conceitual:
+
+ExecutionSnapshot {
+  agentId
+  agentVersion
+  policyVersion
+  modelProfile
+  toolCatalogVersion
+  executionBudget
+}
+
+Objetivo:
+
+evitar que uma execução iniciada com configuração A seja retomada
+silenciosamente como configuração B sem decisão explícita.
+
+---
+
+# 106. CONFIGURATION DRIFT
+
+Teste ou documente comportamento quando:
+
+execution queued
+→ configuração muda
+→ worker executa depois.
+
+Escolha semântica explícita:
+
+PINNED
+ou
+LATEST_COMPATIBLE
+ou
+REVALIDATE_ON_START.
+
+Para ambiente governado, prefira previsibilidade.
+
+---
+
+# 107. APPROVAL DRIFT
+
+Considere:
+
+approval foi emitida para:
+
+agentVersion A
+policyVersion 3
+toolVersion X
+payload hash H.
+
+Antes do resume:
+
+agentVersion virou B.
+
+A aprovação antiga continua válida?
+
+Não deixe isso implícito.
+
+Use proposal binding existente e fortaleça quando necessário.
+
+---
+
+# 108. PAYLOAD INTEGRITY
+
+Para operações aprovadas ou efeitos sensíveis, preserve integridade do
+payload autorizado.
+
+Considere:
+
+canonical serialization
++
+hash
+
+para vincular:
+
+approval
+→ action
+→ resource
+→ payload.
+
+O Worker não pode alterar silenciosamente o payload depois da aprovação.
+
+---
+
+# 109. EXECUTION INPUT IMMUTABILITY
+
+Depois de aceita a ExecutionRequest, o input original deve ser tratado como
+imutável.
+
+Novas informações devem entrar como:
+
+event
+resume input
+approval
+user response
+state transition
+
+e não sobrescrevendo história.
+
+Isso será especialmente importante para Runtime V2 futuramente.
+
+---
+
+# 110. EVENT HISTORY
+
+Avalie se execution precisa de uma timeline durável.
+
+Não implemente event sourcing completo apenas por elegância.
+
+Mas deve ser possível reconstruir:
+
+received
+queued
+claimed
+running
+approval wait
+resume
+effect
+completion.
+
+Audit pode cumprir parte desse papel se sua semântica for adequada.
+
+Documente diferença entre:
+
+execution state
+audit history
+event/outbox history.
+
+---
+
+# 111. OUTBOX IS NOT AUDIT
+
+Não trate outbox como trilha de auditoria.
+
+Outbox responde:
+
+"o que precisa ser entregue/processado?"
+
+Audit responde:
+
+"o que aconteceu e por quê?"
+
+Execution state responde:
+
+"em que estado estamos?"
+
+Essas responsabilidades devem permanecer distintas.
+
+---
+
+# 112. EFFECT JOURNAL IS NOT AUDIT
+
+Effect Journal responde:
+
+"qual efeito tentamos/executamos e com qual identidade?"
+
+Audit responde:
+
+"qual decisão e sequência levaram a isso?"
+
+Não misture.
+
+---
+
+# 113. RECOVERY SCENARIOS
+
+Crie cenários documentados para:
+
+API restart
+Worker restart
+Postgres reconnect
+stale lease
+duplicate event
+duplicate HTTP request
+duplicate approval
+provider timeout
+tool timeout
+audit temporary failure
+telemetry failure.
+
+Para cada um:
+
+expected state before
+failure
+recovery mechanism
+expected state after
+duplicate risk
+evidence.
+
+Produza:
+
+docs/phase2/RECOVERY_SCENARIOS.md
+
+---
+
+# 114. TELEMETRY FAILURE MUST NOT EQUAL BUSINESS FAILURE
+
+Se telemetry falhar:
+
+não transforme automaticamente uma execução já corretamente concluída em
+business failure.
+
+Mas registre degradação operacional.
+
+Defina comportamento explícito.
+
+Audit possui requisitos diferentes e pode ser fail-closed em situações
+sensíveis.
+
+---
+
+# 115. LOGGING
+
+Use structured logging.
+
+Inclua quando apropriado:
+
+executionId
+correlationId
+tenantId
+component
+event
+attempt
+
+Redija/remova:
+
+secrets
+authorization headers
+raw credentials
+sensitive payloads.
+
+Não logue chain-of-thought.
+
+---
+
+# 116. DEAD LETTER / QUARANTINE
+
+Após maxAttempts, uma execução retryable que continua falhando deve ir para
+estado terminal ou quarantine explícita.
+
+Exemplo:
+
+FAILED_TERMINAL
++
+failureReason=RETRY_EXHAUSTED
+
+ou:
+
+QUARANTINED
+
+Não deixe job eternamente circulando.
+
+---
+
+# 117. POISON JOB PROTECTION
+
+Um job malformado não deve derrubar o Worker continuamente.
+
+Fluxo:
+
+claim
+→ validation failure
+→ terminal/quarantine
+→ audit
+→ continue worker.
+
+Teste.
+
+---
+
+# 118. WORKER SUPERVISION
+
+Uma execução falhando não deve encerrar o processo Worker inteiro, exceto
+em falhas realmente fatais de infraestrutura.
+
+Separe:
+
+JOB_FAILURE
+
+de:
+
+PROCESS_FATAL_FAILURE.
+
+---
+
+# 119. DATABASE POOL SAFETY
+
+Audite:
+
+pool sizing
+connection lifecycle
+transaction leaks
+worker concurrency vs pool size.
+
+Não aumente concurrency sem considerar pool.
+
+Documente configuração padrão.
+
+---
+
+# 120. TIME CONTROL
+
+Centralize clock quando necessário para testes de:
+
+lease expiration
+deadline
+approval expiration
+retry scheduling.
+
+Evite testes dependentes de sleeps longos.
+
+---
+
+# 121. DETERMINISTIC TEST MODE
+
+Crie ou consolide test mode capaz de controlar:
+
+clock
+model provider
+tool behavior
+fault injection
+worker polling
+
+sem alterar semântica de produção.
+
+Evite conditional branches espalhados como:
+
+if (NODE_ENV === 'test')
+
+em toda arquitetura.
+
+Prefira dependency injection.
+
+---
+
+# 122. TEST DATABASE ISOLATION
+
+Cada suíte de integração deve:
+
+- usar schema/database isolado quando possível;
+- limpar apenas seus próprios dados;
+- não depender da ordem dos testes;
+- não tocar produção;
+- permitir execução repetida.
+
+---
+
+# 123. TEST TENANTS
+
+Use tenants sintéticos explícitos:
+
+tenant_test_a
+tenant_test_b
+
+Nunca reutilize identificadores reais do hospital.
+
+---
+
+# 124. TEST DATA POLICY
+
+Toda evidência Phase 2 deve utilizar dados sintéticos.
+
+Não incluir:
+
+nome real de tutor
+telefone
+endereço
+prontuário
+dados clínicos reais
+credenciais reais.
+
+---
+
+# 125. SCHEMA MIGRATION TEST
+
+Prove:
+
+empty database
+→ migrate
+→ ready
+
+e, se possível:
+
+baseline compatible schema
+→ migrate Phase 2
+→ ready.
+
+Registre migration version.
+
+---
+
+# 126. RESTART TEST MUST BE PROCESS-REALISTIC
+
+Quando possível, o teste de Worker restart deve iniciar/parar processos
+reais ou boundaries suficientemente reais.
+
+Não declare "restart proof" apenas recriando uma classe no mesmo processo,
+se isso não reproduzir perda de memória/process ownership.
+
+Se limitado:
+
+classifique honestamente:
+
+SIMULATED_RESTART
+
+versus:
+
+PROCESS_RESTART_PROOF.
+
+---
+
+# 127. DURABILITY CERTIFICATION LEVELS
+
+Classifique a evidência da Phase 2 em níveis:
+
+D0 — structural only
+D1 — unit/contract
+D2 — integration with persistence abstraction
+D3 — real PostgreSQL integration
+D4 — process restart + real PostgreSQL
+D5 — fault-injected durable execution under concurrency
+
+Não declare nível maior que o realmente provado.
+
+Produza:
+
+docs/phase2/DURABILITY_CERTIFICATION.md
+
+---
+
+# 128. TARGET CERTIFICATION
+
+Objetivo recomendado desta Phase:
+
+D4 mínimo.
+
+Preferência:
+
+D5 para synthetic execution spine.
+
+Se infraestrutura local impedir:
+
+CONDITIONAL_PASS
+
+e produção continua NO-GO.
+
+---
+
+# 129. QUALITY GATES
+
+Ao final execute:
+
+npm run format:check
+npm run typecheck
+npm run lint
+npm run build
+npm test
+npm run test:evals
+
+Quando PostgreSQL estiver disponível:
+
+npm run test:postgres
+
+Execute também os novos gates Phase 2.
+
+Crie scripts canônicos, por exemplo:
+
+test:phase2
+test:phase2:postgres
+verify:phase2
+
+Use nomes coerentes com o projeto existente.
+
+---
+
+# 130. NO REGRESSION RULE
+
+Compare com baseline Phase 0/1.
+
+Não aceite:
+
+new unexpected failures
+new unexplained skips
+new type errors
+new lint errors
+new broken exports.
+
+Falhas brownfield conhecidas devem continuar classificadas separadamente.
+
+---
+
+# 131. COVERAGE
+
+Coverage NÃO é o objetivo primário.
+
+Priorize cobertura de invariantes críticos.
+
+Exigir testes específicos para:
+
+idempotency
+claim
+lease
+state transition
+approval resume
+effect journal
+tenant isolation
+audit causality
+crash recovery.
+
+Uma porcentagem alta sem esses testes não certifica Phase 2.
+
+---
+
+# 132. PROPERTY / INVARIANT TESTS
+
+Quando útil, use property-based ou repeated concurrency tests para invariantes:
+
+one semantic effect per idempotency scope
+no illegal state transitions
+cross-tenant isolation
+terminal immutability.
+
+Não adicione biblioteca pesada se não for necessária.
+
+---
+
+# 133. FLAKINESS
+
+Execute testes críticos repetidamente.
+
+Exemplo:
+
+10–50 repetições
+
+para:
+
+concurrency
+claim
+duplicate request
+crash recovery.
+
+Se houver flakiness:
+
+não esconda.
+
+Registre como blocker.
+
+---
+
+# 134. RACE CONDITION AUDIT
+
+Revise especificamente:
+
+duplicate claim
+approval consume
+idempotency registration
+effect completion
+terminal state write
+lease renewal.
+
+Documente possíveis TOCTOU.
+
+---
+
+# 135. STATIC ARCHITECTURE GATES
+
+Preserve/adapte os testes da Phase 0/1 que impedem:
+
+Harness → Secretary
+Contracts → implementations
+Orchestrator → execute()
+Runtime → provider SDK direto.
+
+Adicione gates Phase 2 para impedir:
+
+HTTP → Tool
+Worker → Tool bypass
+HTTP → Runtime synchronous canonical path
+cross-layer persistence shortcuts inadequados.
+
+---
+
+# 136. PHASE 2 PACKAGE OWNERSHIP
+
+Documente ownership conceitual.
+
+Exemplo:
+
+@cvg/harness-contracts
+→ public contracts
+
+@cvg/harness
+→ canonical composition/public API
+
+runtime
+→ governed execution semantics
+
+persistence
+→ durable state
+
+worker
+→ asynchronous execution lifecycle
+
+policy
+→ authorization
+
+approval
+→ human authorization lifecycle
+
+tools
+→ capability execution
+
+observability
+→ metrics/traces
+
+audit
+→ evidence.
+
+Evite package que "faz tudo".
+
+---
+
+# 137. SERVER GOD-FILE REDUCTION
+
+Se `apps/api/src/server.ts` ou equivalente continuar excessivamente
+concentrado:
+
+extraia somente responsabilidades necessárias para estabelecer a execution
+spine canônica.
+
+Não transforme Phase 2 numa refatoração cosmética completa.
+
+Objetivo:
+
+thin HTTP boundary.
+
+---
+
+# 138. WORKER GOD-FILE PREVENTION
+
+O Worker deve coordenar lifecycle.
+
+Não deve implementar:
+
+policy semantics
+tool business logic
+model provider details
+SQL inline espalhado
+audit semantics.
+
+---
+
+# 139. CANONICAL SERVICE BOUNDARIES
+
+Quando apropriado, estabeleça interfaces como:
+
+ExecutionService
+ExecutionRepository
+ExecutionQueue
+WorkerLeaseManager
+EffectJournal
+AuditSink
+TelemetrySink
+
+Não crie interface para cada função.
+
+Crie somente onde existe boundary real.
+
+---
+
+# 140. PUBLIC CONSUMER EXAMPLE
+
+Atualize o demo sintético para demonstrar:
+
+client
+→ execution API
+→ asynchronous completion.
+
+Não permita que o exemplo precise conhecer internals.
+
+---
+
+# 141. STATUS POLLING EXAMPLE
+
+O demo pode mostrar:
+
+POST execution
+→ executionId
+→ GET status
+→ SUCCEEDED.
+
+Não precisa implementar WebSocket/event streaming nesta fase.
+
+---
+
+# 142. FUTURE EVENT DELIVERY
+
+Documente, mas não implemente necessariamente, como produtos futuros poderão receber:
+
+execution.completed
+approval.required
+execution.failed
+
+via:
+
+webhook
+event bus
+channel gateway
+polling.
+
+Não acople isso ao Core agora.
+
+---
+
+# 143. RUNTIME V2 COMPATIBILITY CHECK
+
+Sem implementar Runtime V2, valide se a nova execution spine permitiria futuramente:
+
+RUNNING
+→ WAITING_USER
+→ resume
+→ RUNNING
+→ multiple tool/model steps
+→ terminal.
+
+Se a persistence model assumir "uma execução = uma chamada única impossível
+de pausar", corrija agora.
+
+---
+
+# 144. ORCHESTRATOR V2 COMPATIBILITY CHECK
+
+Garanta que o Worker não dependa de SinglePassOrchestrator internals.
+
+Ele deve chamar a interface pública.
+
+Assim, futuramente:
+
+CompatibilityOrchestrator
+
+poderá ser substituído por:
+
+HybridOrchestrator
+
+sem reescrever HTTP/SQL/Worker.
+
+---
+
+# 145. SKILL RUNTIME COMPATIBILITY
+
+Não implemente Skill Runtime.
+
+Mas garanta que ExecutionSnapshot possa futuramente referenciar:
+
+skillId
+skillVersion
+
+sem redesign destrutivo.
+
+Campos podem ser opcionais.
+
+---
+
+# 146. KNOWLEDGE COMPATIBILITY
+
+Não implemente Agentic RAG.
+
+Mas não acople a execution spine a ausência de Knowledge Provider.
+
+Runtime V2 futuro deve poder chamar Knowledge como capability.
+
+---
+
+# 147. MCP COMPATIBILITY
+
+Não implemente MCP.
+
+Tool Registry deve continuar independente da origem da Tool.
+
+Futuramente:
+
+Native Tool
+Plugin Tool
+MCP Tool
+
+devem poder implementar o mesmo contrato governado.
+
+---
+
+# 148. MODEL MULTI-PROVIDER COMPATIBILITY
+
+Phase 2 pode certificar com provider sintético.
+
+Não degrade o Model Gateway para assumir um único modelo.
+
+Preserve provider abstraction.
+
+---
+
+# 149. PRODUCTION READINESS MATRIX
+
+Crie:
+
+docs/phase2/PRODUCTION_READINESS_MATRIX.md
+
+Avalie:
+
+HTTP durability
+Postgres
+Worker
+Crash recovery
+Idempotency
+Effect safety
+Approval resume
+Tenant isolation
+Audit
+Telemetry
+Security
+Performance
+Load
+Backup/restore
+Provider certification
+Operational runbook
+Alerting.
+
+Estados:
+
+PROVEN
+PARTIAL
+NOT_PROVEN
+ENVIRONMENT_BLOCKED
+OUT_OF_SCOPE.
+
+---
+
+# 150. PRODUCTION NO-GO DEFAULT
+
+A Phase 2 começa:
+
+PRODUCTION = NO-GO.
+
+Somente mude se TODOS os gates de produção explicitamente definidos forem
+satisfeitos.
+
+Não é objetivo obrigatório desta fase mudar para GO.
+
+É perfeitamente aceitável terminar:

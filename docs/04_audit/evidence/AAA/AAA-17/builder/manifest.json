@@ -1,0 +1,173 @@
+{
+  "task": "AAA-17",
+  "title": "PostgreSQL persistence for journeys (tenant-scoped drafts)",
+  "status": "IMPLEMENTED",
+  "program": "AAA-20260912",
+  "date": "2026-09-12",
+  "builder": "builder-lane",
+  "scope": {
+    "domain": "journeys (tutor/patient identifiers, slots, appointment drafts)",
+    "semantics": "draft-only; appointment_draft never confirmed; expiry marks rows, never deletes",
+    "tenant_isolation": "withTenantContext + ENABLE/FORCE RLS + tenant policy + explicit tenant_id predicates",
+    "fixtures": "synthetic only; disposable PostgreSQL 127.0.0.1:55432/cvg_aaa16_test"
+  },
+  "migration": {
+    "number": "0014",
+    "name": "0014_journeys",
+    "file": "packages/persistence/migrations/0014_journeys.sql",
+    "sha256": "99759a1759a99a0d56a9fc80fb559cc6f114459568091516b379190c9285af6c",
+    "runner_checksum_verified": "99759a1759a99a0d56a9fc80fb559cc6f114459568091516b379190c9285af6c",
+    "registered_in": "packages/persistence/src/postgres.ts#defaultPostgresMigrations",
+    "tables": [
+      "journey_owner_drafts",
+      "journey_patient_drafts",
+      "journey_appointment_drafts"
+    ],
+    "additive": true,
+    "destructive_changes": false
+  },
+  "files_changed": [
+    "packages/persistence/src/postgres.ts",
+    "packages/persistence/src/journeys.ts",
+    "packages/persistence/src/index.ts",
+    "package.json"
+  ],
+  "files_added": [
+    "packages/persistence/migrations/0014_journeys.sql",
+    "packages/persistence/src/journeys-postgres.ts",
+    "packages/persistence/src/__tests__/journeys-postgres.test.ts"
+  ],
+  "hashes": {
+    "packages/persistence/migrations/0014_journeys.sql": "99759a1759a99a0d56a9fc80fb559cc6f114459568091516b379190c9285af6c",
+    "packages/persistence/src/journeys-postgres.ts": "577254ee15b55d6e53b5617bef6b207b291599793be6366334d1e1765d68d7a2",
+    "packages/persistence/src/journeys.ts": "15790fa25c381638fe57699ecf4f7548f6f1a9cd85edaf3ad052cdd5df4a9b80",
+    "packages/persistence/src/__tests__/journeys-postgres.test.ts": "a4602fa6d9331e8c418ee259b5e0c2a0b8fb11d082bfb92d42f2e1a9ec868d03",
+    "packages/persistence/src/postgres.ts": "7c3f3b11b43f182ec778911651e5c480ef6d3fc659ec2d0ce3e35f982766f25f",
+    "packages/persistence/src/index.ts": "d2306864c64309a1ed4e2d7111eec93ef01f39303a157214b3ad3786b118f858",
+    "package.json": "1b093cef18a49adcda5b543a3ef7077e65f7bee6b0fc21076841ef932e5432f2"
+  },
+  "gates": [
+    {
+      "command": "npx vitest run packages/persistence/src/__tests__/journeys-postgres.test.ts (RED, before implementation)",
+      "exitCode": 1,
+      "result": "RED captured: missing ../journeys-postgres.ts import, 0 tests collected",
+      "log": "RED-focused.log"
+    },
+    {
+      "command": "TEST_DATABASE_URL=postgres://ricardo@127.0.0.1:55432/cvg_aaa16_test npx vitest run packages/persistence/src/__tests__/journeys-postgres.test.ts --testTimeout=60000",
+      "exitCode": 0,
+      "result": "1 file passed, 17/17 tests passed, 0 skipped",
+      "log": "GREEN-focused.log"
+    },
+    {
+      "command": "TEST_DATABASE_URL=postgres://ricardo@127.0.0.1:55432/cvg_aaa16_test npm run test:postgres",
+      "exitCode": 0,
+      "result": "14 files passed, 122/122 tests passed, 0 skipped",
+      "log": "GREEN-postgres.log"
+    },
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "result": "194 files passed | 4 skipped (198); 1132 passed | 56 skipped (1188); zero failures",
+      "log": "GREEN-full-suite.log"
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "no errors",
+      "log": "typecheck.log"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "no errors (global, after concurrent lane fixed its runtime.ts finding)",
+      "log": "lint-global.log"
+    },
+    {
+      "command": "npx eslint packages/persistence/src/journeys.ts packages/persistence/src/journeys-postgres.ts packages/persistence/src/__tests__/journeys-postgres.test.ts packages/persistence/src/index.ts packages/persistence/src/postgres.ts",
+      "exitCode": 0,
+      "result": "scoped lint clean",
+      "log": "lint-scoped.log"
+    },
+    {
+      "command": "npx prettier --check <AAA-17 files + package.json>",
+      "exitCode": 0,
+      "result": "all matched files use Prettier code style"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "no whitespace errors"
+    },
+    {
+      "command": "checksum verification via runPostgresMigrations on a fresh schema",
+      "exitCode": 0,
+      "result": "schema_migrations row matches migration sha256",
+      "log": "checksum-verification.log"
+    }
+  ],
+  "test_counts": {
+    "focused_persist": { "files": 1, "passed": 17, "failed": 0, "skipped": 0 },
+    "postgres_suite_with_url": {
+      "files": 14,
+      "passed": 122,
+      "failed": 0,
+      "skipped": 0
+    },
+    "full_suite_without_url": {
+      "files_passed": 194,
+      "files_skipped": 4,
+      "tests_passed": 1132,
+      "tests_skipped": 56,
+      "failures": 0
+    }
+  },
+  "evidence": {
+    "parity_matrix": "PARITY_MATRIX.md",
+    "limitations": "LIMITATIONS.md",
+    "commands": "COMMANDS.md",
+    "migration_checksum_file": "migration-0014.sha256",
+    "logs": [
+      "RED-focused.log",
+      "GREEN-focused.log",
+      "GREEN-postgres.log",
+      "GREEN-full-suite.log",
+      "typecheck.log",
+      "lint-global.log",
+      "lint-scoped.log",
+      "checksum-verification.log"
+    ]
+  },
+  "acceptance_checklist": {
+    "shared_contract_memory_vs_postgres": "PARITY_MATRIX.md rows 1-19; journeyContractSuite executed twice",
+    "restart_persistence": "new PostgresJourneyRepository over the same schema in each test; separate PG-specific rerun of migrations preserves rows",
+    "expiry_without_deleting_evidence": "counts stay 1 and status flips to expired (rows never deleted)",
+    "cross_tenant_fail_closed": "repository not_found/null/[] plus non-BYPASSRLS role RLS denial on read/update/insert",
+    "idempotency": "UNIQUE (tenant_id, idempotency_key) + ON CONFLICT DO NOTHING + replay returns existing/expired row",
+    "draft_only_no_real_confirmation": "status enums exclude 'confirmed'; CHECK (confirmation_blocked); confirmationBlocked true",
+    "migration_from_previous_state": "0013 schema seeded, 0014 applied, migrations re-run twice, prior rows preserved",
+    "test_postgres_script_appended": "journeys-postgres.test.ts appended to test:postgres (only package.json change by this lane)"
+  },
+  "limitations": [
+    "AAA-18 must wire PostgresJourneyRepository into apps/api; routes currently fail closed for postgres journeys",
+    "Expiry is read-triggered; no background sweeper",
+    "Candidate fixtures remain synthetic code-owned data; DB stores only draft state",
+    "Disposable fixture DB only; no production durability/RPO/RTO claim",
+    "Working tree includes concurrent lanes; full-suite delta includes their tests"
+  ],
+  "aaa18_dependencies": [
+    "Wire PostgresJourneyRepository into createPersistence (postgres-pool) and await repository calls in route handlers",
+    "Ensure startup migrations include 0014_journeys before serving journeys",
+    "Add route-level PostgreSQL integration test for cross-tenant denial",
+    "Seed real conversation/session rows before draft creation (composite FKs)"
+  ],
+  "boundaries": {
+    "commit": false,
+    "push": false,
+    "deploy": false,
+    "real_patient_data": false,
+    "real_confirmation": false,
+    "operational_database": false,
+    "npm_install": false
+  }
+}

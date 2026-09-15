@@ -1,0 +1,387 @@
+
+ RUN  v4.1.11 /tmp/opencode/aaa12-mutation/work-M08
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts (9 tests | 2 failed) 120ms
+     × reports operation_in_progress when another worker does not finish in time 35ms
+     × treats an unknown adapter error as an uncertain effect 4ms
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts (16 tests | 2 failed) 80ms
+     × turns an expired SENDING lease into UNCERTAIN and allows safe takeover 6ms
+     × keeps the dispatch healthy when heartbeat renewal fails 27ms
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts (12 tests | 5 failed) 66ms
+     × covers renew, release and the terminal guard 11ms
+     × renews only an active owned lease and releases for retry 2ms
+     × fails, marks uncertain and reconciles explicitly 1ms
+     × refuses completion outside SENDING and waits for terminals 3ms
+     × reports conflicts, uncertain reserves and in-flight leases 2ms
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts (11 tests | 4 failed) 74ms
+     × 1. two simultaneous dispatches with the same key produce one send 10ms
+     × 5. failure before the send releases the lease so a retry sends once 7ms
+     × 8. the same key with a different payload is rejected as a conflict 1ms
+     × 9. distinct tenants with the same key do not interfere 1ms
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts (10 tests | 5 failed) 15062ms
+     × runs with the default clock and no event hook 9ms
+     × replays a record committed by another lease and emits replayed 1ms
+     × renews the lease while a slow send is in flight 31ms
+     × fails permanently and replays the recorded failure without a new send 5ms
+     × treats a plain error as an uncertain effect with zero retries 15001ms
+ ❯ packages/channel-gateway/src/__tests__/channel-gateway.test.ts (14 tests | 2 failed) 34ms
+     × sends once and journals the effect so retries never duplicate it 5ms
+     × retries a failed send without duplicating the successful effect 6ms
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-race.test.ts (2 tests | 2 failed) 11ms
+     × Promise.all of two identical dispatches produces exactly one provider send 9ms
+     × rejects a reused idempotency key carrying a different payload 1ms
+
+ Test Files  7 failed | 4 passed (11)
+      Tests  22 failed | 84 passed (106)
+   Start at  21:14:28
+   Duration  24.90s (transform 239ms, setup 0ms, import 1.18s, tests 15.73s, environment 6.56s)
+
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 22 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts > gateway construction and inbound hardening > runs with the default clock and no event hook
+ChannelError: Send completed but the effect could not be recorded under this lease
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:327:11
+    325|       code: 'lease_lost'
+    326|     })
+    327|     throw new ChannelError(
+       |           ^
+    328|       'effect_uncertain',
+    329|       'Send completed but the effect could not be recorded under this …
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts:189:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts > gateway replay and uncertainty hardening > replays a record committed by another lease and emits replayed
+ChannelError: Send completed but the effect could not be recorded under this lease
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:327:11
+    325|       code: 'lease_lost'
+    326|     })
+    327|     throw new ChannelError(
+       |           ^
+    328|       'effect_uncertain',
+    329|       'Send completed but the effect could not be recorded under this …
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts:291:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts > gateway replay and uncertainty hardening > renews the lease while a slow send is in flight
+ChannelError: Send completed but the effect could not be recorded under this lease
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:327:11
+    325|       code: 'lease_lost'
+    326|     })
+    327|     throw new ChannelError(
+       |           ^
+    328|       'effect_uncertain',
+    329|       'Send completed but the effect could not be recorded under this …
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts:340:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts > gateway failure mapping hardening > fails permanently and replays the recorded failure without a new send
+AssertionError: expected ChannelError: Channel operation lease was… { …(3) } to match object { code: 'provider_rejected', …(1) }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+- {
+-   "code": "provider_rejected",
+-   "retryable": false,
++ ChannelError {
++   "code": "lease_lost",
++   "retryable": true,
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts:373:6
+    371|     await expect(
+    372|       gateway.dispatch(parsed, { takeoverActive: false })
+    373|     ).rejects.toMatchObject({ code: 'provider_rejected', retryable: fa…
+       |      ^
+    374|     expect((await journal.find(identityOf(parsed)))?.state).toBe('FAIL…
+    375|     await expect(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts > gateway failure mapping hardening > treats a plain error as an uncertain effect with zero retries
+Error: Test timed out in 15000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts:396:3
+    394|   })
+    395|
+    396|   it('treats a plain error as an uncertain effect with zero retries', …
+       |   ^
+    397|     const journal = new InMemoryChannelEffectJournal()
+    398|     const adapter = new GateAdapter()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts > in-memory journal unsafe-crash and takeover paths > turns an expired SENDING lease into UNCERTAIN and allows safe takeover
+AssertionError: expected 'in_flight' to be 'reserved' // Object.is equality
+
+Expected: "reserved"
+Received: "in_flight"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts:306:30
+    304|       leaseOwner: 'owner-b'
+    305|     })
+    306|     expect(takeover.outcome).toBe('reserved')
+       |                              ^
+    307|     if (takeover.outcome !== 'reserved') {
+    308|       throw new Error('expected reserved takeover')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts > gateway heartbeat and lost-settlement failure paths > keeps the dispatch healthy when heartbeat renewal fails
+ChannelError: Send completed but the effect could not be recorded under this lease
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:327:11
+    325|       code: 'lease_lost'
+    326|     })
+    327|     throw new ChannelError(
+       |           ^
+    328|       'effect_uncertain',
+    329|       'Send completed but the effect could not be recorded under this …
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts:581:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts > in-memory journal hardening > covers renew, release and the terminal guard
+AssertionError: expected 'committed' to be 'lease_lost' // Object.is equality
+
+Expected: "lease_lost"
+Received: "committed"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts:135:6
+    133|     await expect(
+    134|       journal.complete(identity, 'other-owner', resultOf('stale'))
+    135|     ).resolves.toBe('lease_lost')
+       |      ^
+    136|     await expect(
+    137|       journal.complete(identity, 'owner-a', resultOf('winner'))
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts > in-memory journal hardening > renews only an active owned lease and releases for retry
+AssertionError: expected 'lease_lost' to be 'committed' // Object.is equality
+
+Expected: "committed"
+Received: "lease_lost"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts:167:6
+    165|     await expect(
+    166|       journal.release(identity, 'owner-a', 'send_failed')
+    167|     ).resolves.toBe('committed')
+       |      ^
+    168|     expect((await journal.find(identity))?.state).toBe('PENDING')
+    169|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts > in-memory journal hardening > fails, marks uncertain and reconciles explicitly
+AssertionError: expected 'lease_lost' to be 'committed' // Object.is equality
+
+Expected: "committed"
+Received: "lease_lost"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts:177:6
+    175|     await expect(
+    176|       journal.fail(failedIdentity, 'owner-a', 'provider_rejected')
+    177|     ).resolves.toBe('committed')
+       |      ^
+    178|     expect((await journal.find(failedIdentity))?.state).toBe('FAILED')
+    179|     await expect(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts > in-memory journal hardening > refuses completion outside SENDING and waits for terminals
+AssertionError: promise resolved "'lease_lost'" instead of rejecting
+
+- Expected:
+Error {
+  "message": "rejected promise",
+}
+
++ Received:
+"lease_lost"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts:226:6
+    224|     await expect(
+    225|       journal.complete(identity, 'owner-a', resultOf('too-early'))
+    226|     ).rejects.toMatchObject({ code: 'lease_lost' })
+       |      ^
+    227|     await expect(journal.waitForTerminal(identity, 20)).resolves.toBeU…
+    228|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts > in-memory journal hardening > reports conflicts, uncertain reserves and in-flight leases
+AssertionError: expected 'in_flight' to be 'uncertain' // Object.is equality
+
+Expected: "uncertain"
+Received: "in_flight"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts:265:7
+    263|     expect(
+    264|       (await journal.reserve({ ...base, leaseOwner: 'owner-b' })).outc…
+    265|     ).toBe('uncertain')
+       |       ^
+    266|   })
+    267| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts > channel effect journal edges > reports operation_in_progress when another worker does not finish in time
+ChannelError: Send completed but the effect could not be recorded under this lease
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:327:11
+    325|       code: 'lease_lost'
+    326|     })
+    327|     throw new ChannelError(
+       |           ^
+    328|       'effect_uncertain',
+    329|       'Send completed but the effect could not be recorded under this …
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts:312:22
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts > channel effect journal edges > treats an unknown adapter error as an uncertain effect
+AssertionError: expected 'SENDING' to be 'UNCERTAIN' // Object.is equality
+
+Expected: "UNCERTAIN"
+Received: "SENDING"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts:338:61
+    336|       gateway.dispatch(parsed, { takeoverActive: false })
+    337|     ).rejects.toMatchObject({ code: 'effect_uncertain', retryable: fal…
+    338|     expect((await journal.find(identityOf(parsed)))?.state).toBe('UNCE…
+       |                                                             ^
+    339|   })
+    340| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 1. two simultaneous dispatches with the same key produce one send
+ChannelError: Send completed but the effect could not be recorded under this lease
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:327:11
+    325|       code: 'lease_lost'
+    326|     })
+    327|     throw new ChannelError(
+       |           ^
+    328|       'effect_uncertain',
+    329|       'Send completed but the effect could not be recorded under this …
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:115:29
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 5. failure before the send releases the lease so a retry sends once
+AssertionError: expected ChannelError: Channel operation lease was… { …(3) } to match object { Object (code, retryable) }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+- {
+-   "code": "send_failed",
++ ChannelError {
++   "code": "lease_lost",
+    "retryable": true,
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:224:6
+    222|     await expect(
+    223|       gateway.dispatch(message(), { takeoverActive: false })
+    224|     ).rejects.toMatchObject({ code: 'send_failed', retryable: true })
+       |      ^
+    225|     expect(adapter.sent).toHaveLength(0)
+    226|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 8. the same key with a different payload is rejected as a conflict
+ChannelError: Send completed but the effect could not be recorded under this lease
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:327:11
+    325|       code: 'lease_lost'
+    326|     })
+    327|     throw new ChannelError(
+       |           ^
+    328|       'effect_uncertain',
+    329|       'Send completed but the effect could not be recorded under this …
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:328:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 9. distinct tenants with the same key do not interfere
+ChannelError: Send completed but the effect could not be recorded under this lease
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:327:11
+    325|       code: 'lease_lost'
+    326|     })
+    327|     throw new ChannelError(
+       |           ^
+    328|       'effect_uncertain',
+    329|       'Send completed but the effect could not be recorded under this …
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:347:32
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-race.test.ts > AUD-20260912-F04 regression: concurrent outbound dispatch > Promise.all of two identical dispatches produces exactly one provider send
+ChannelError: Send completed but the effect could not be recorded under this lease
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:327:11
+    325|       code: 'lease_lost'
+    326|     })
+    327|     throw new ChannelError(
+       |           ^
+    328|       'effect_uncertain',
+    329|       'Send completed but the effect could not be recorded under this …
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-race.test.ts:33:29
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-race.test.ts > AUD-20260912-F04 regression: concurrent outbound dispatch > rejects a reused idempotency key carrying a different payload
+ChannelError: Send completed but the effect could not be recorded under this lease
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:327:11
+    325|       code: 'lease_lost'
+    326|     })
+    327|     throw new ChannelError(
+       |           ^
+    328|       'effect_uncertain',
+    329|       'Send completed but the effect could not be recorded under this …
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-race.test.ts:46:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-gateway.test.ts > channel gateway outbound > sends once and journals the effect so retries never duplicate it
+ChannelError: Send completed but the effect could not be recorded under this lease
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:327:11
+    325|       code: 'lease_lost'
+    326|     })
+    327|     throw new ChannelError(
+       |           ^
+    328|       'effect_uncertain',
+    329|       'Send completed but the effect could not be recorded under this …
+ ❯ packages/channel-gateway/src/__tests__/channel-gateway.test.ts:122:19
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/22]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-gateway.test.ts > channel gateway outbound > retries a failed send without duplicating the successful effect
+AssertionError: expected ChannelError: Channel operation lease was… { …(3) } to match object { Object (code, retryable) }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+- {
+-   "code": "send_failed",
++ ChannelError {
++   "code": "lease_lost",
+    "retryable": true,
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-gateway.test.ts:143:6
+    141|     await expect(
+    142|       gateway.dispatch(outbound(), { takeoverActive: false })
+    143|     ).rejects.toMatchObject({ code: 'send_failed', retryable: true })
+       |      ^
+    144|     await gateway.dispatch(outbound(), { takeoverActive: false })
+    145|     expect(adapter.sent).toHaveLength(1)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[22/22]⎯
+

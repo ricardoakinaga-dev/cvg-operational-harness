@@ -1,0 +1,394 @@
+
+ RUN  v4.1.11 /tmp/opencode/aaa12-mutation/work-M07
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts (6 tests | 4 failed) 44ms
+     × file adapter rejects malformed persisted versions without mutating bytes 11ms
+     × absent and explicit valid versions preserve the supported happy paths 2ms
+     × memory and file agree on invalid input and valid version transitions 4ms
+     × gateway produces zero sends for every state with a malformed version 8ms
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts (9 tests | 1 failed) 123ms
+     × a corrupt durable record fails closed without sending 11ms
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts (12 tests | 1 failed) 109ms
+     × fails, releases, marks uncertain and never rewrites an UNCERTAIN reserve 32ms
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts (15 tests | 2 failed) 115ms
+     × writes UNCERTAIN when an expired SENDING record is re-presented 20ms
+     × detects a payload conflict on the file adapter without rewriting bytes 5ms
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts (11 tests | 5 failed) 110ms
+     × 2. two instances dispute one operation through a shared durable journal 22ms
+     × 3. replay after success returns the durable result without a new send 15ms
+     × 4. restart after reservation takes over the lease and sends exactly once 11ms
+     × 6. failure after the send marks the operation uncertain and blocks blind retry 14ms
+     × 7. expired lease with a late worker never produces a second send or false success 10ms
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts (10 tests | 1 failed) 71ms
+     × replays FAILED and UNCERTAIN records with stable codes and zero sends 17ms
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts (9 tests | 4 failed) 51ms
+     × gateway replays a new record after restart without a second send 15ms
+     × a legacy record without hashVersion is read as legacy-local-v1 and never replayed under a new algorithm 10ms
+     × zero sends when hash bytes are equal but versions differ 5ms
+     × every persisted state fails closed on an unknown version without mutating the record 5ms
+
+ Test Files  7 failed | 4 passed (11)
+      Tests  18 failed | 87 passed (105)
+   Start at  21:07:37
+   Duration  12.99s (transform 321ms, setup 0ms, import 1.75s, tests 724ms, environment 8.72s)
+
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 18 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts > gateway replay and uncertainty hardening > replays FAILED and UNCERTAIN records with stable codes and zero sends
+AssertionError: promise resolved "{ …(4) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "accepted": true,
++   "channel": "whatsapp",
++   "externalId": "gate_msg_gateway_cov",
++   "sentAt": "2026-09-12T12:00:00.000Z",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-hardening.test.ts:243:6
+    241|     await expect(
+    242|       gateway.dispatch(parsed, { takeoverActive: false })
+    243|     ).rejects.toMatchObject({ code: 'send_failed', retryable: false })
+       |      ^
+    244|     expect(adapter.sent).toHaveLength(0)
+    245|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts > file journal crash-write and storage-failure paths > writes UNCERTAIN when an expired SENDING record is re-presented
+AssertionError: expected 'reserved' to be 'uncertain' // Object.is equality
+
+Expected: "uncertain"
+Received: "reserved"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts:292:29
+    290|       leaseMs: 10_000
+    291|     })
+    292|     expect(outcome.outcome).toBe('uncertain')
+       |                             ^
+    293|     const after = await readFile(path, 'utf8')
+    294|     expect(after).not.toBe(before)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts > file journal crash-write and storage-failure paths > detects a payload conflict on the file adapter without rewriting bytes
+AssertionError: expected 'reserved' to be 'conflict' // Object.is equality
+
+Expected: "conflict"
+Received: "reserved"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-gateway-journal-paths.test.ts:335:30
+    333|       leaseMs: 10_000
+    334|     })
+    335|     expect(conflict.outcome).toBe('conflict')
+       |                              ^
+    336|     expect(await readFile(recordPath(directory, identity), 'utf8')).to…
+    337|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts > file journal hardening > fails, releases, marks uncertain and never rewrites an UNCERTAIN reserve
+AssertionError: expected 'reserved' to be 'uncertain' // Object.is equality
+
+Expected: "uncertain"
+Received: "reserved"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-coverage-journal-hardening.test.ts:308:29
+    306|       leaseMs: 10_000
+    307|     })
+    308|     expect(outcome.outcome).toBe('uncertain')
+       |                             ^
+    309|     expect(
+    310|       await readFile(recordPath(directory, uncertainIdentity), 'utf8')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > gateway replays a new record after restart without a second send
+AssertionError: expected [ { messageId: 'msg_hash_1', …(8) } ] to have a length of +0 but got 1
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:210:27
+    208|
+    209|     expect(adapterA.sent).toHaveLength(1)
+    210|     expect(adapterB.sent).toHaveLength(0)
+       |                           ^
+    211|     expect(second).toEqual(first)
+    212|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > a legacy record without hashVersion is read as legacy-local-v1 and never replayed under a new algorithm
+AssertionError: promise resolved "{ …(4) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "accepted": true,
++   "channel": "whatsapp",
++   "externalId": "counted_msg_hash_1",
++   "sentAt": "2026-09-12T12:00:00.000Z",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:241:6
+    239|     await expect(
+    240|       gateway.dispatch(parsed, { takeoverActive: false })
+    241|     ).rejects.toMatchObject({
+       |      ^
+    242|       code: 'hash_algorithm_mismatch',
+    243|       retryable: false
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > zero sends when hash bytes are equal but versions differ
+AssertionError: promise resolved "{ …(4) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "accepted": true,
++   "channel": "whatsapp",
++   "externalId": "counted_msg_hash_1",
++   "sentAt": "2026-09-12T12:00:00.000Z",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:276:6
+    274|     await expect(
+    275|       gateway.dispatch(parsed, { takeoverActive: false })
+    276|     ).rejects.toMatchObject({
+       |      ^
+    277|       code: 'hash_algorithm_mismatch',
+    278|       retryable: false
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > every persisted state fails closed on an unknown version without mutating the record
+AssertionError: PENDING: expected 'reserved' to be 'version_mismatch' // Object.is equality
+
+Expected: "version_mismatch"
+Received: "reserved"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:317:38
+    315|         leaseMs: 1_000
+    316|       })
+    317|       expect(outcome.outcome, state).toBe('version_mismatch')
+       |                                      ^
+    318|       expect(await readFile(path, 'utf8'), state).toBe(bytesBefore)
+    319|     }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts > channel effect journal edges > a corrupt durable record fails closed without sending
+AssertionError: promise resolved "{ externalId: 'edge_result', …(3) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "accepted": true,
++   "channel": "whatsapp",
++   "externalId": "edge_result",
++   "sentAt": "2026-09-12T12:00:00.000Z",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts:238:6
+    236|     await expect(
+    237|       gateway.dispatch(parsed, { takeoverActive: false })
+    238|     ).rejects.toMatchObject({ code: 'journal_unavailable' })
+       |      ^
+    239|     expect(adapter.sent).toHaveLength(0)
+    240|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 2. two instances dispute one operation through a shared durable journal
+ChannelError: Channel operation lease was lost before the send started
+ ❯ ChannelGateway.dispatch packages/channel-gateway/src/gateway.ts:260:13
+    258|       await this.#effects.claimSend(identity, leaseOwner)
+    259|     } catch {
+    260|       throw new ChannelError(
+       |             ^
+    261|         'lease_lost',
+    262|         'Channel operation lease was lost before the send started',
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:143:29
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 3. replay after success returns the durable result without a new send
+AssertionError: expected [ { …(9) }, { …(9) } ] to have a length of 1 but got 2
+
+- Expected
++ Received
+
+- 1
++ 2
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:166:26
+    164|     const second = await gateway.dispatch(parsed, { takeoverActive: fa…
+    165|
+    166|     expect(adapter.sent).toHaveLength(1)
+       |                          ^
+    167|     expect(second).toEqual(first)
+    168|     expect(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 4. restart after reservation takes over the lease and sends exactly once
+AssertionError: expected [ { …(9) }, { …(9) } ] to have a length of 1 but got 2
+
+- Expected
++ Received
+
+- 1
++ 2
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:214:26
+    212|     const replay = await restarted.dispatch(parsed, { takeoverActive: …
+    213|     expect(replay).toEqual(result)
+    214|     expect(adapter.sent).toHaveLength(1)
+       |                          ^
+    215|   })
+    216|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 6. failure after the send marks the operation uncertain and blocks blind retry
+AssertionError: promise resolved "{ …(4) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "accepted": true,
++   "channel": "whatsapp",
++   "externalId": "scripted_msg_journal_1",
++   "sentAt": "2026-09-12T12:00:00.000Z",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:251:6
+    249|     await expect(
+    250|       gateway.dispatch(parsed, { takeoverActive: false })
+    251|     ).rejects.toMatchObject({ code: 'effect_uncertain' })
+       |      ^
+    252|     expect(adapter.sent).toHaveLength(1)
+    253|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts > channel effect journal contract > 7. expired lease with a late worker never produces a second send or false success
+AssertionError: promise resolved "{ …(4) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "accepted": true,
++   "channel": "whatsapp",
++   "externalId": "scripted_msg_journal_1",
++   "sentAt": "2026-09-12T12:00:00.000Z",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts:311:6
+    309|     await expect(
+    310|       gatewayB.dispatch(parsed, { takeoverActive: false })
+    311|     ).rejects.toMatchObject({ code: 'effect_uncertain' })
+       |      ^
+    312|     expect(adapterB.sent).toHaveLength(0)
+    313|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts > AAA12-C4-F01 missing vs malformed hashVersion > file adapter rejects malformed persisted versions without mutating bytes
+AssertionError: unknown string/PENDING/legacy-local-v1: expected 'reserved' to be 'version_mismatch' // Object.is equality
+
+Expected: "version_mismatch"
+Received: "reserved"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts:259:66
+    257|             leaseMs: 10_000
+    258|           })
+    259|           expect(outcome.outcome, `${label}/${state}/${caller}`).toBe(
+       |                                                                  ^
+    260|             'version_mismatch'
+    261|           )
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts > AAA12-C4-F01 missing vs malformed hashVersion > absent and explicit valid versions preserve the supported happy paths
+AssertionError: expected 'reserved' to be 'version_mismatch' // Object.is equality
+
+Expected: "version_mismatch"
+Received: "reserved"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts:344:35
+    342|       leaseMs: 10_000
+    343|     })
+    344|     expect(sharedAttempt.outcome).toBe('version_mismatch')
+       |                                   ^
+    345|     expect(await readFile(absent.path, 'utf8')).toBe(absent.json)
+    346|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts > AAA12-C4-F01 missing vs malformed hashVersion > memory and file agree on invalid input and valid version transitions
+AssertionError: expected 'reserved' to be 'version_mismatch' // Object.is equality
+
+Expected: "version_mismatch"
+Received: "reserved"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts:470:32
+    468|       leaseMs: 10_000
+    469|     })
+    470|     expect(fileShared.outcome).toBe('version_mismatch')
+       |                                ^
+    471|   })
+    472|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/18]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts > AAA12-C4-F01 missing vs malformed hashVersion > gateway produces zero sends for every state with a malformed version
+AssertionError: promise resolved "{ externalId: 'counted_msg_c4_1', …(3) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "accepted": true,
++   "channel": "whatsapp",
++   "externalId": "counted_msg_c4_1",
++   "sentAt": "2026-09-12T12:00:00.000Z",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts:494:10
+    492|         await expect(
+    493|           gateway.dispatch(parsed, { takeoverActive: false })
+    494|         ).rejects.toMatchObject({ code: 'hash_algorithm_mismatch' })
+       |          ^
+    495|         expect(adapter.sent, `${state}`).toHaveLength(0)
+    496|         expect(await readFile(seeded.path, 'utf8')).toBe(seeded.json)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/18]⎯
+

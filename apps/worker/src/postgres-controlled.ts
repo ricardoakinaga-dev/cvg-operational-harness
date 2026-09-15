@@ -1,8 +1,10 @@
 import { Pool } from 'pg'
 import { executePublishedAgent, getConversationTimeline } from '@cvg/agent-core'
+import { resolveWorkflowCoordinator } from '@cvg/agent-runtime'
 import {
   TenantScopedPostgresControlPlaneRepository,
   TenantScopedPostgresRuntimeRepository,
+  withTenantContext,
   type PostgresPoolLike
 } from '@cvg/persistence'
 import {
@@ -11,7 +13,8 @@ import {
   canBotRespond,
   type AgentId,
   type AgentVersionId,
-  type PluginAuditEvent
+  type PluginAuditEvent,
+  type TenantId
 } from '@cvg/platform'
 import { CorrelationIdSchema, redactSensitiveText } from '@cvg/shared'
 import {
@@ -19,6 +22,23 @@ import {
   type ControlledWorker,
   type ControlledWorkerHandlers
 } from './controlled-worker.ts'
+import {
+  createContinuousWorker,
+  parseContinuousWorkerSettings,
+  type ContinuousSweepHandle,
+  type ContinuousWorker,
+  type ContinuousWorkerTuning,
+  type OutboxBacklogProbe
+} from './continuous-worker.ts'
+import {
+  KERNEL_WORKER_RUNTIME,
+  KernelRuntimeConfigurationError,
+  createPostgresKernelHandlers,
+  createPostgresKernelRuntime,
+  resolveWorkerRuntimeKind,
+  type PostgresKernelRuntime
+} from './kernel-composition.ts'
+import type { WorkerTelemetry } from './worker-observability.ts'
 
 export const POSTGRES_CONTROLLED_QUEUE_ADAPTER = 'postgres-controlled' as const
 
@@ -28,15 +48,49 @@ export interface PostgresControlledWorkerRuntime {
   worker: ControlledWorker
 }
 
+export interface PostgresControlledConnection {
+  pool: Pool
+  adapter: TenantScopedPostgresRuntimeRepository
+  platform: TenantScopedPostgresControlPlaneRepository
+  tenantId: TenantId
+  workerId: string
+  handlers: ControlledWorkerHandlers
+}
+
+export interface PostgresContinuousWorkerOptions {
+  handlers?: ControlledWorkerHandlers
+  telemetry?: WorkerTelemetry
+  tuning?: Partial<ContinuousWorkerTuning>
+  heartbeatIntervalMs?: number
+  lagSampleIntervalMs?: number
+  sweeps?: ContinuousSweepHandle
+}
+
+export interface PostgresContinuousWorkerRuntime {
+  pool: Pool
+  adapter: TenantScopedPostgresRuntimeRepository
+  worker: ContinuousWorker
+  tenantId: TenantId
+  workerId: string
+  tuning: ContinuousWorkerTuning
+}
+
+export interface PostgresControlledHandlerOptions {
+  /** Pool used only when the governed-kernel runtime is selected. */
+  pool?: PostgresPoolLike
+  /** Pre-composed durable kernel runtime; required if no pool is provided. */
+  kernelRuntime?: PostgresKernelRuntime
+}
+
 /**
- * Creates the worker against the same tenant-scoped PostgreSQL outbox used by
- * the API. This is intentionally a controlled/no-external-effects runtime;
- * production activation still requires an explicit controlled-mode flag.
+ * Validates the controlled PostgreSQL configuration and opens the shared
+ * pool/adapter/control-plane resources. It never activates an external effect
+ * path: production is rejected and controlled mode is mandatory.
  */
-export function createPostgresControlledWorker(
+export function openPostgresControlledConnection(
   env: NodeJS.ProcessEnv,
   handlers?: ControlledWorkerHandlers
-): PostgresControlledWorkerRuntime {
+): PostgresControlledConnection {
   if (env.NODE_ENV === 'production') {
     throw new Error(
       'Controlled PostgreSQL worker is disabled in production pending external gates'
@@ -65,14 +119,109 @@ export function createPostgresControlledWorker(
   const platform = new TenantScopedPostgresControlPlaneRepository(
     pool as unknown as PostgresPoolLike
   )
-  const worker = createControlledWorker({
+  return {
+    pool,
+    adapter,
+    platform,
     tenantId,
     workerId: env.CVG_WORKER_ID?.trim() || 'worker-controlled-postgres',
-    adapter,
     handlers:
-      handlers ?? createPostgresControlledHandlers(env, adapter, platform)
+      handlers ??
+      createPostgresControlledHandlers(env, adapter, platform, { pool })
+  }
+}
+
+/**
+ * Creates the worker against the same tenant-scoped PostgreSQL outbox used by
+ * the API. This is intentionally a controlled/no-external-effects runtime;
+ * production activation still requires an explicit controlled-mode flag.
+ */
+export function createPostgresControlledWorker(
+  env: NodeJS.ProcessEnv,
+  handlers?: ControlledWorkerHandlers
+): PostgresControlledWorkerRuntime {
+  const connection = openPostgresControlledConnection(env, handlers)
+  const worker = createControlledWorker({
+    tenantId: connection.tenantId,
+    workerId: connection.workerId,
+    adapter: connection.adapter,
+    handlers: connection.handlers
   })
-  return { pool, adapter, worker }
+  return {
+    pool: connection.pool,
+    adapter: connection.adapter,
+    worker
+  }
+}
+
+/**
+ * Creates the supervised continuous worker over the durable PostgreSQL
+ * outbox. Tuning is read from the explicit override or the opt-in
+ * `CVG_WORKER_*` environment; the queue lag probe is read-only and tenant
+ * scoped. No external effect path is composed here.
+ */
+export function createPostgresContinuousWorker(
+  env: NodeJS.ProcessEnv,
+  options: PostgresContinuousWorkerOptions = {}
+): PostgresContinuousWorkerRuntime {
+  const connection = openPostgresControlledConnection(env, options.handlers)
+  const tuning: ContinuousWorkerTuning = {
+    ...parseContinuousWorkerSettings(env),
+    ...options.tuning
+  }
+  const worker = createContinuousWorker({
+    tenantId: connection.tenantId,
+    workerId: connection.workerId,
+    adapter: connection.adapter,
+    handlers: connection.handlers,
+    ...tuning,
+    ...(options.telemetry ? { telemetry: options.telemetry } : {}),
+    ...(options.heartbeatIntervalMs !== undefined
+      ? { heartbeatIntervalMs: options.heartbeatIntervalMs }
+      : {}),
+    ...(options.lagSampleIntervalMs !== undefined
+      ? { lagSampleIntervalMs: options.lagSampleIntervalMs }
+      : {}),
+    backlogProbe: createPostgresOutboxBacklogProbe(
+      connection.pool,
+      connection.tenantId
+    ),
+    ...(options.sweeps ? { sweeps: options.sweeps } : {})
+  })
+  return {
+    pool: connection.pool,
+    adapter: connection.adapter,
+    worker,
+    tenantId: connection.tenantId,
+    workerId: connection.workerId,
+    tuning
+  }
+}
+
+/**
+ * Read-only queue lag probe over the tenant-scoped outbox. It counts pending
+ * events plus failed events already eligible for retry; no payload is read.
+ */
+export function createPostgresOutboxBacklogProbe(
+  pool: Pool,
+  tenantId: TenantId
+): OutboxBacklogProbe {
+  return async () =>
+    withTenantContext(
+      pool as unknown as PostgresPoolLike,
+      tenantId,
+      async (client) => {
+        const result = await client.query<{ count: number }>(
+          `SELECT count(*)::int AS count
+             FROM outbox_events
+            WHERE tenant_id = $1
+              AND (status = 'pending'
+                   OR (status = 'failed' AND available_at <= now()))`,
+          [tenantId]
+        )
+        return Number(result.rows[0]?.count ?? 0)
+      }
+    )
 }
 
 /**
@@ -84,8 +233,52 @@ export function createPostgresControlledWorker(
 export function createPostgresControlledHandlers(
   env: NodeJS.ProcessEnv,
   conversations: TenantScopedPostgresRuntimeRepository,
-  platform: TenantScopedPostgresControlPlaneRepository
+  platform: TenantScopedPostgresControlPlaneRepository,
+  options: PostgresControlledHandlerOptions = {}
 ): ControlledWorkerHandlers {
+  resolveWorkflowCoordinator(env)
+  if (resolveWorkerRuntimeKind(env) === KERNEL_WORKER_RUNTIME) {
+    const parsedTenantId = TenantIdSchema.safeParse(env.CVG_WORKER_TENANT_ID)
+    if (!parsedTenantId.success) {
+      throw new KernelRuntimeConfigurationError(
+        'kernel_runtime_prerequisites_missing',
+        'Kernel worker runtime requires CVG_WORKER_TENANT_ID'
+      )
+    }
+    const tenantId = parsedTenantId.data
+    if (options.kernelRuntime !== undefined) {
+      if (options.kernelRuntime.tenantId !== tenantId) {
+        throw new KernelRuntimeConfigurationError(
+          'kernel_runtime_prerequisites_missing',
+          'Kernel runtime tenant does not match CVG_WORKER_TENANT_ID'
+        )
+      }
+      return createPostgresKernelHandlers(env, options.kernelRuntime)
+    }
+    const kernelAgentId = resolveWorkerAgentId(env)
+    if (!kernelAgentId) {
+      throw new KernelRuntimeConfigurationError(
+        'kernel_runtime_prerequisites_missing',
+        'Kernel worker runtime requires CVG_WORKER_AGENT_ID (or INBOUND_AGENT_ID)'
+      )
+    }
+    if (options.pool === undefined) {
+      throw new KernelRuntimeConfigurationError(
+        'kernel_runtime_prerequisites_missing',
+        'Kernel worker runtime requires a PostgreSQL pool for the durable effect journal and approval authority'
+      )
+    }
+    return createPostgresKernelHandlers(
+      env,
+      createPostgresKernelRuntime({
+        pool: options.pool,
+        tenantId,
+        env,
+        agentId: kernelAgentId
+      })
+    )
+  }
+
   const configuredAgentId = resolveWorkerAgentId(env)
 
   return {

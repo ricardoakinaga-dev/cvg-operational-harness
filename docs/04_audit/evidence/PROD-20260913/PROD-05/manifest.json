@@ -1,0 +1,99 @@
+{
+  "task": "PROD-05",
+  "title": "Validar papel SQL e RLS no bootstrap do worker",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "origin": [
+    "D13-06",
+    "Q-A06-03"
+  ],
+  "contract": "docs/02_spec/prod20260913_m1_corrections_contract.md",
+  "negativeReproduced": {
+    "evidence": "audit static finding apps/worker/src/postgres-controlled.ts:85 (flag-only check)",
+    "verdict": "FAIL_FLAG_ONLY"
+  },
+  "positiveVerified": {
+    "probe": "apps/worker/src/__tests__/postgres-role-preflight.test.ts",
+    "verdict": "PASS: 10/10 (superuser, BYPASSRLS, membership, owner, DDL, missing schema and broad privileges rejected; minimal role consumes an event; same-pool cleanup verified; destroy-on-cleanup-failure verified)"
+  },
+  "source": [
+    "apps/worker/src/postgres-role-preflight.ts",
+    "apps/worker/src/main.ts",
+    "apps/worker/src/__tests__/postgres-role-preflight.test.ts",
+    "package.json"
+  ],
+  "evidence": [
+    "docs/04_audit/evidence/PROD-20260913/PROD-05/tests.log",
+    "docs/04_audit/evidence/PROD-20260913/PROD-05/test-postgres.log"
+  ],
+  "gates": [
+    {
+      "command": "npm run typecheck",
+      "result": "PASS",
+      "exitCode": 0,
+      "note": "re-run on the final bytes after the fake-pool test type fix; earlier P1 finding F1 resolved"
+    },
+    {
+      "command": "npx eslint (changed files)",
+      "result": "PASS",
+      "exitCode": 0
+    },
+    {
+      "command": "npm test",
+      "result": "PASS: Test Files 234 passed | 7 skipped (241); Tests 1625 passed | 83 skipped (1708)",
+      "exitCode": 0,
+      "note": "full suite executed during this session after the M1 changes"
+    },
+    {
+      "command": "TEST_DATABASE_URL=… npx vitest run postgres-role-preflight.test.ts",
+      "result": "PASS: 1 file / 10 tests, 0 skipped",
+      "exitCode": 0,
+      "log": "docs/04_audit/evidence/PROD-20260913/PROD-05/tests.log"
+    },
+    {
+      "command": "npm run test:worker:startup",
+      "result": "PASS",
+      "exitCode": 0
+    },
+    {
+      "command": "npm run test:postgres",
+      "result": "PASS: 18 files / 151 tests, 0 skipped (inventory now includes continuous-worker-postgres and attendance-approval-postgres)",
+      "exitCode": 0,
+      "log": "docs/04_audit/evidence/PROD-20260913/PROD-05/test-postgres.log"
+    }
+  ],
+  "limitations": [
+    "preflight is wired into the worker bootstrap; the continuous consumer composition remains AAA-19/AAA-21/D01 dependent",
+    "no production role or credential used"
+  ],
+  "observedAt": "2026-09-13T14:41:17.822Z",
+  "contractSha256": "7cff313dae00a5aade0a8e5f5414ce397ff4fd08b8b60e25ca9da1a775956ab6",
+  "sourceSha256": {
+    "apps/worker/src/postgres-role-preflight.ts": "b75df249ea9b1fdecd203c1a458ace995ac534066446e9705a662dc751ce350e",
+    "apps/worker/src/main.ts": "9138a3d079aa2da3a20964a177faf335a6146019543c9b0f44bdf3b5c5c9c4f5",
+    "apps/worker/src/__tests__/postgres-role-preflight.test.ts": "9dd91ae46e844b476704a66ca742969c11c18326f0aee7ee5e447e3b06833cc4",
+    "package.json": "5a943831bcd7ef14e33ed851da66e91d8021ad31bee3f6b2e731d0c272bdbed8"
+  },
+  "evidenceSha256": {
+    "docs/04_audit/evidence/PROD-20260913/PROD-05/tests.log": "8fe35b8f6e0b36d6092a73f56b8d2a37b7971b82b7228f73b2a5ad40dd033167",
+    "docs/04_audit/evidence/PROD-20260913/PROD-05/test-postgres.log": "2961974c644462cd373da70c3baad82301f668f3aa8c769aef5a32615a8635ae"
+  },
+  "independence": "builder output; independent review required before VERIFIED/DONE",
+  "reviewFindingsAddressed": [
+    {
+      "finding": "P2: tenant-context cleanup test was vacuous (invalid role never sets context)",
+      "fix": "replaced by a same-pool rejection case (CREATE privilege) and a fake-client cleanup-failure case that asserts release(error) destruction; 10/10 tests pass"
+    },
+    {
+      "finding": "P1 (independent verifier F1): npm run typecheck failed on the fake-pool test client type",
+      "fix": "fake pool typed via Parameters<typeof assertPostgresWorkerPreflight>[0]; typecheck PASS on final bytes"
+    },
+    {
+      "finding": "P3 (F4): manifest positive verdict still said 8/8 while the run was 10/10",
+      "fix": "verdict corrected to 10/10"
+    },
+    {
+      "finding": "P3 (F6): contract said the preflight runs its queries through withTenantContext",
+      "fix": "contract text corrected to the explicit same-connection tenant context with verified cleanup"
+    }
+  ]
+}

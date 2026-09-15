@@ -4,6 +4,8 @@ export const CapabilitySchema = z.enum([
   'schedule.read',
   'appointment.create',
   'appointment.modify',
+  'appointment.confirm',
+  'appointment.reschedule',
   'appointment.cancel',
   'conversation.read',
   'message.draft',
@@ -67,13 +69,28 @@ export const CAPABILITY_CATALOG: Readonly<
     capability: 'appointment.create',
     category: 'schedule',
     risk: 'MEDIUM_RISK_WRITE',
-    description: 'Create an appointment draft/confirmation'
+    description:
+      'Create an appointment creation step/draft; real confirmation is a separate denied capability'
   },
   'appointment.modify': {
     capability: 'appointment.modify',
     category: 'schedule',
     risk: 'MEDIUM_RISK_WRITE',
-    description: 'Modify an existing appointment'
+    description: 'Modify an appointment draft only (never a real appointment)'
+  },
+  'appointment.confirm': {
+    capability: 'appointment.confirm',
+    category: 'schedule',
+    risk: 'HIGH_RISK_WRITE',
+    description:
+      'Confirm a draft into a real appointment; no grant in the controlled scope'
+  },
+  'appointment.reschedule': {
+    capability: 'appointment.reschedule',
+    category: 'schedule',
+    risk: 'HIGH_RISK_WRITE',
+    description:
+      'Change an existing real appointment; no grant in the controlled scope'
   },
   'appointment.cancel': {
     capability: 'appointment.cancel',
@@ -172,6 +189,82 @@ export const CAPABILITY_CATALOG: Readonly<
     description: 'Deploy or promote agent versions'
   }
 })
+
+/**
+ * Resource-type applicability for effect capabilities. A capability present in
+ * this map can only act on the listed resource types; an absent or incompatible
+ * resource fails closed before grants and policy documents are consulted.
+ */
+export const CAPABILITY_RESOURCE_TYPES: Readonly<
+  Partial<Record<Capability, readonly string[]>>
+> = Object.freeze({
+  'appointment.create': ['appointment', 'appointment_draft'],
+  'appointment.modify': ['appointment_draft'],
+  'appointment.confirm': ['appointment'],
+  'appointment.reschedule': ['appointment'],
+  'appointment.cancel': ['appointment']
+})
+
+export type ResourceTypeScope =
+  | { status: 'not_scoped' }
+  | { status: 'required' }
+  | { status: 'not_allowed' }
+  | { status: 'allowed' }
+
+export function capabilityResourceScope(
+  capability: Capability,
+  resource: { type?: string } | undefined
+): ResourceTypeScope {
+  const allowed = CAPABILITY_RESOURCE_TYPES[capability]
+  if (!allowed) return { status: 'not_scoped' }
+  if (!resource || typeof resource.type !== 'string') {
+    return { status: 'required' }
+  }
+  return allowed.includes(resource.type)
+    ? { status: 'allowed' }
+    : { status: 'not_allowed' }
+}
+
+/**
+ * Explicit action identifiers accepted per capability. The map is closed and
+ * exhaustive: every capability declares its actions, and the only tolerated
+ * difference from the canonical capability name is a declared alias (for
+ * example the generic `read` action of read-only capabilities). A declared
+ * sensitive action (confirm/reschedule/cancel) can never be smuggled through a
+ * draft or read capability.
+ */
+export const CAPABILITY_ACTIONS: Readonly<
+  Record<Capability, readonly string[]>
+> = Object.freeze({
+  'schedule.read': ['schedule.read', 'read'],
+  'appointment.create': ['appointment.create'],
+  'appointment.modify': ['appointment.modify'],
+  'appointment.confirm': ['appointment.confirm'],
+  'appointment.reschedule': ['appointment.reschedule'],
+  'appointment.cancel': ['appointment.cancel'],
+  'conversation.read': ['conversation.read', 'read'],
+  'message.draft': ['message.draft'],
+  'message.send': ['message.send'],
+  'patient.summary.read': ['patient.summary.read', 'read'],
+  'patient.record.read': ['patient.record.read', 'read'],
+  'patient.record.write': ['patient.record.write'],
+  'exam.read': ['exam.read', 'read'],
+  'exam.release': ['exam.release'],
+  'finance.read': ['finance.read', 'read'],
+  'finance.write': ['finance.write'],
+  'hospitalization.manage': ['hospitalization.manage'],
+  'clinical.diagnose': ['clinical.diagnose'],
+  'clinical.prescribe': ['clinical.prescribe'],
+  'admin.policy.manage': ['admin.policy.manage'],
+  'admin.agent.manage': ['admin.agent.manage']
+})
+
+export function actionMatchesCapability(
+  capability: Capability,
+  action: string
+): boolean {
+  return CAPABILITY_ACTIONS[capability].includes(action)
+}
 
 export function capabilityRisk(capability: Capability): ToolRiskLevel {
   return CAPABILITY_CATALOG[capability].risk

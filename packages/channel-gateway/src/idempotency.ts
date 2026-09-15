@@ -1,7 +1,6 @@
 import type {
   CanonicalEnvelopeInput,
-  CanonicalOutboundMessage,
-  OutboundResult
+  CanonicalOutboundMessage
 } from './contracts.ts'
 
 export interface InboundDedupStore {
@@ -71,23 +70,6 @@ export class InboundDeduplicator {
     const key = envelope.idempotencyKey
     const accepted = this.#store.reserve(key, this.#clock() + this.#ttlMs)
     return { accepted, key }
-  }
-}
-
-export interface OutboundEffectJournal {
-  find(idempotencyKey: string): OutboundResult | undefined
-  record(idempotencyKey: string, result: OutboundResult): void
-}
-
-export class InMemoryOutboundEffectJournal implements OutboundEffectJournal {
-  readonly #entries = new Map<string, OutboundResult>()
-
-  find(idempotencyKey: string): OutboundResult | undefined {
-    return this.#entries.get(idempotencyKey)
-  }
-
-  record(idempotencyKey: string, result: OutboundResult): void {
-    this.#entries.set(idempotencyKey, result)
   }
 }
 

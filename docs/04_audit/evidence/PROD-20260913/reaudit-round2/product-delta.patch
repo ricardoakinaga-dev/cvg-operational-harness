@@ -1,0 +1,1241 @@
+--- a/apps/api/src/__tests__/readiness.test.ts
++++ b/apps/api/src/__tests__/readiness.test.ts
+@@ -178,4 +178,125 @@
+       await app.close()
+     }
+   })
++  it('returns 503 when destruction rejects the timed out query', async () => {
++    let destroyed = 0
++    let rejectQuery: (error: Error) => void = () => undefined
++    const pool = {
++      connect: async () => ({
++        query: () =>
++          new Promise((_resolve, reject) => {
++            rejectQuery = reject
++          }),
++        release: (error?: Error) => {
++          if (error) {
++            destroyed += 1
++            rejectQuery(error)
++          }
++        }
++      })
++    }
++    const app = buildServer({
++      persistence: { kind: 'postgres-pool', pool: pool as never },
++      durableInbound: true
++    })
++    try {
++      const ready = await app.inject({ method: 'GET', url: '/ready' })
++      expect(ready.statusCode).toBe(503)
++      expect(destroyed).toBe(1)
++      expect(
++        (await app.inject({ method: 'GET', url: '/live' })).statusCode
++      ).toBe(200)
++    } finally {
++      await app.close()
++    }
++  })
++
++  it('bounds pending pool admission and destroys a late client exactly once', async () => {
++    let connected = 0
++    let released = 0
++    let queried = 0
++    let resolveConnect: (client: unknown) => void = () => undefined
++    const pool = {
++      connect: () => {
++        connected += 1
++        return new Promise((resolve) => {
++          resolveConnect = resolve
++        })
++      }
++    }
++    const app = buildServer({
++      persistence: { kind: 'postgres-pool', pool: pool as never },
++      durableInbound: true
++    })
++    try {
++      expect(
++        (await app.inject({ method: 'GET', url: '/ready' })).statusCode
++      ).toBe(503)
++      for (let i = 0; i < 4; i += 1) {
++        expect(
++          (await app.inject({ method: 'GET', url: '/ready' })).statusCode
++        ).toBe(503)
++      }
++      expect(connected).toBe(1)
++      resolveConnect({
++        query: async () => {
++          queried += 1
++        },
++        release: (error?: Error) => {
++          expect(error).toBeInstanceOf(Error)
++          released += 1
++        }
++      })
++      await new Promise((resolve) => setImmediate(resolve))
++      expect(released).toBe(1)
++      expect(queried).toBe(0)
++    } finally {
++      await app.close()
++    }
++  })
++
++  it('ignores late query success and recovers after the outstanding operation settles', async () => {
++    let released = 0
++    let connected = 0
++    let resolveQuery: () => void = () => undefined
++    const pool = {
++      connect: async () => {
++        connected += 1
++        const first = connected === 1
++        return {
++          query: () =>
++            first
++              ? new Promise<void>((resolve) => {
++                  resolveQuery = resolve
++                })
++              : Promise.resolve(),
++          release: () => {
++            released += 1
++          }
++        }
++      }
++    }
++    const app = buildServer({
++      persistence: { kind: 'postgres-pool', pool: pool as never },
++      durableInbound: true
++    })
++    try {
++      expect(
++        (await app.inject({ method: 'GET', url: '/ready' })).statusCode
++      ).toBe(503)
++      expect(
++        (await app.inject({ method: 'GET', url: '/ready' })).statusCode
++      ).toBe(503)
++      expect(connected).toBe(1)
++      resolveQuery()
++      await new Promise((resolve) => setImmediate(resolve))
++      expect(released).toBe(1)
++      expect(
++        (await app.inject({ method: 'GET', url: '/ready' })).statusCode
++      ).toBe(200)
++      expect(released).toBe(2)
++    } finally {
++      await app.close()
++    }
++  })
+ })
+--- a/apps/api/src/server.ts
++++ b/apps/api/src/server.ts
+@@ -4324,30 +4324,56 @@
+     }
+   }
+   const pool = persistence.pool
++  // Keep admission occupied until the underlying acquisition/query settles.
++  // A deadline cannot cancel pool.connect(), so admitting another probe while
++  // it is pending would grow the pool queue on every health check.
++  let occupied = false
+   return async () => {
+-    const client = await pool.connect()
+-    let timedOut = false
+-    let released = false
+-    const release = (error?: Error): void => {
+-      if (released) return
+-      released = true
+-      client.release(error)
+-    }
+-    const timer = setTimeout(() => {
+-      timedOut = true
+-      release(new Error('readiness probe timeout'))
+-    }, 900)
+-    timer.unref?.()
++    if (occupied) throw new Error('readiness probe is still pending')
++    occupied = true
++    let expired = false
++    let releaseClient: ((error?: Error) => void) | undefined
++    const timeoutError = new Error('readiness probe timeout')
++    let timer: ReturnType<typeof setTimeout> | undefined
++    const deadline = new Promise<never>((_resolve, reject) => {
++      timer = setTimeout(() => {
++        expired = true
++        reject(timeoutError)
++        releaseClient?.(timeoutError)
++      }, 900)
++      timer.unref?.()
++    })
++    const operation = (async () => {
++      try {
++        const client = await pool.connect()
++        let released = false
++        releaseClient = (error?: Error): void => {
++          if (released) return
++          released = true
++          client.release(error)
++        }
++        if (expired) {
++          releaseClient(timeoutError)
++          throw timeoutError
++        }
++        try {
++          await client.query('SELECT 1')
++          if (expired) throw timeoutError
++          releaseClient()
++        } catch (error) {
++          releaseClient(
++            error instanceof Error ? error : new Error('readiness failed')
++          )
++          throw error
++        }
++      } finally {
++        occupied = false
++      }
++    })()
+     try {
+-      await client.query('SELECT 1')
+-      if (timedOut) return
++      await Promise.race([operation, deadline])
++    } finally {
+       clearTimeout(timer)
+-      release()
+-    } catch (error) {
+-      clearTimeout(timer)
+-      if (timedOut) return
+-      release(error instanceof Error ? error : new Error('readiness failed'))
+-      throw error
+     }
+   }
+ }
+@@ -4920,7 +4946,10 @@
+       journeys,
+       conversations: postgres,
+       tasks: {
+-        create: (input, tenantId) => postgres.createTask(input, tenantId),
++        create: (
++          input: Parameters<PostgresRuntimeRepository['createTask']>[0],
++          tenantId?: TenantId
++        ) => postgres.createTask(input, tenantId),
+         list: (tenantId) => postgres.listTasks(tenantId),
+         findById: (id, tenantId) => postgres.findTaskById(id, tenantId),
+         updateStatus: (id, status, tenantId) =>
+--- a/apps/web/src/__tests__/journeys-identity-race.test.tsx
++++ b/apps/web/src/__tests__/journeys-identity-race.test.tsx
+@@ -124,3 +124,158 @@
+     expect(await screen.findByText('SYNTHETIC TENANT B VISIBLE')).toBeTruthy()
+   })
+ })
++
++const deferredResponse = () => {
++  let resolve!: (value: Response) => void
++  let reject!: (reason: Error) => void
++  const promise = new Promise<Response>((yes, no) => {
++    resolve = yes
++    reject = no
++  })
++  return { promise, resolve, reject }
++}
++
++const searchOwner = () => {
++  fireEvent.change(screen.getByLabelText('Telefone sintético'), {
++    target: { value: '+5511999990002' }
++  })
++  fireEvent.click(screen.getByRole('button', { name: 'Buscar tutor' }))
++}
++
++for (const session of ['session_B', null]) {
++  for (const outcome of ['success', 'error']) {
++    it(`invalidates session A ${outcome} on selection ${session} and preserves the current operation`, async () => {
++      const old = deferredResponse()
++      const current = deferredResponse()
++      const fetch = vi
++        .spyOn(globalThis, 'fetch')
++        .mockReturnValueOnce(old.promise)
++        .mockReturnValueOnce(current.promise)
++      const view = render(
++        <JourneysPanel identity={identityA} selectedSessionId="session_A" />
++      )
++      fireEvent.click(
++        screen.getByRole('button', { name: 'Criar tarefa para a sessão' })
++      )
++      const oldSignal = fetch.mock.calls[0]![1]!.signal!
++      view.rerender(
++        <JourneysPanel identity={identityA} selectedSessionId={session} />
++      )
++      expect(oldSignal.aborted).toBe(true)
++      expect(
++        (
++          screen.getByRole('button', {
++            name: 'Carregar horários sintéticos'
++          }) as HTMLButtonElement
++        ).disabled
++      ).toBe(false)
++      expect(
++        (
++          screen.getByRole('button', {
++            name: 'Criar tarefa para a sessão'
++          }) as HTMLButtonElement
++        ).disabled
++      ).toBe(session === null)
++      searchOwner()
++      expect(fetch).toHaveBeenCalledTimes(2)
++      await act(async () => {
++        if (outcome === 'success') old.resolve(envelope({ id: 'task_A' }))
++        else old.reject(new Error('SYNTHETIC SESSION A PRIVATE ERROR'))
++        await old.promise.catch(() => undefined)
++      })
++      expect(screen.queryByRole('status')).toBeNull()
++      expect(
++        (
++          screen.getByRole('button', {
++            name: 'Buscar tutor'
++          }) as HTMLButtonElement
++        ).disabled
++      ).toBe(true)
++      await act(async () => {
++        current.resolve(
++          envelope({
++            matches: [
++              {
++                id: 'current',
++                displayName: 'CURRENT SESSION OWNER',
++                kind: 'owner'
++              }
++            ]
++          })
++        )
++        await current.promise
++      })
++      expect(screen.getByText('CURRENT SESSION OWNER')).toBeTruthy()
++      expect(
++        (
++          screen.getByRole('button', {
++            name: 'Buscar tutor'
++          }) as HTMLButtonElement
++        ).disabled
++      ).toBe(false)
++    })
++  }
++}
++
++const transitions: [string, OperatorIdentity | null, string | null][] = [
++  ['tenant', identityB, 'session_A'],
++  ['actor', { ...identityA, operatorId: 'synthetic.other' }, 'session_A'],
++  ['role', { ...identityA, role: 'Admin' }, 'session_A'],
++  ['logout', null, 'session_A'],
++  ['session', identityA, 'session_B'],
++  ['session cleared', identityA, null]
++]
++
++it.each(transitions)(
++  'clears all form values and draft associations after %s changes',
++  async (_label, nextIdentity, nextSession) => {
++    vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
++      Promise.resolve(
++        envelope({
++          id: 'synthetic-owner-draft',
++          status: 'draft',
++          candidateIds: ['synthetic-owner']
++        })
++      )
++    )
++    const view = render(
++      <JourneysPanel identity={identityA} selectedSessionId="session_A" />
++    )
++    fireEvent.change(screen.getByLabelText('Telefone sintético'), {
++      target: { value: '+5511999990001' }
++    })
++    fireEvent.change(screen.getByLabelText('Nome opcional do tutor'), {
++      target: { value: 'SYNTHETIC PRIVATE OWNER' }
++    })
++    fireEvent.click(screen.getByRole('button', { name: 'Salvar rascunho' }))
++    await screen.findByLabelText('Nome do pet')
++    fireEvent.change(screen.getByLabelText('Nome do pet'), {
++      target: { value: 'SYNTHETIC PRIVATE PET' }
++    })
++    view.rerender(
++      <JourneysPanel identity={nextIdentity} selectedSessionId={nextSession} />
++    )
++    expect(screen.queryByLabelText('Nome do pet')).toBeNull()
++    expect(screen.queryByText('Draft: draft')).toBeNull()
++    expect(screen.queryByRole('status')).toBeNull()
++    if (!nextIdentity)
++      view.rerender(
++        <JourneysPanel identity={identityA} selectedSessionId={nextSession} />
++      )
++    expect(
++      (screen.getByLabelText('Telefone sintético') as HTMLInputElement).value
++    ).toBe('')
++    expect(
++      (screen.getByLabelText('Nome opcional do tutor') as HTMLInputElement)
++        .value
++    ).toBe('')
++    fireEvent.change(screen.getByLabelText('Telefone sintético'), {
++      target: { value: '+5511999990002' }
++    })
++    fireEvent.click(screen.getByRole('button', { name: 'Salvar rascunho' }))
++    const patientInput = (await screen.findByLabelText(
++      'Nome do pet'
++    )) as HTMLInputElement
++    expect(patientInput.value).toBe('Bolt')
++  }
++)
+--- a/apps/web/src/features/journeys/index.tsx
++++ b/apps/web/src/features/journeys/index.tsx
+@@ -56,6 +56,7 @@
+     setOwnerMatches([])
+     setOwnerCandidateId(null)
+     setOwnerDraft(null)
++    setPatientName('Bolt')
+     setPatientMatches([])
+     setPatientDraft(null)
+     setSlots([])
+@@ -66,7 +67,7 @@
+     return () => {
+       controller.abort()
+     }
+-  }, [identityKey])
++  }, [identityKey, selectedSessionId])
+ 
+   const usableIdentity =
+     identity && identity.operatorId.trim() && identity.tenantId
+--- a/apps/worker/src/__tests__/postgres-role-preflight.test.ts
++++ b/apps/worker/src/__tests__/postgres-role-preflight.test.ts
+@@ -81,6 +81,48 @@
+       max,
+       options: `-c search_path=${schemaName}`
+     })
++
++  it('rejects an additional permissive policy before any claim', async () => {
++    const role = await createRole('policy', 'NOSUPERUSER NOBYPASSRLS')
++    await grantValidWorkerPrivileges(role)
++    const pool = poolFor(role)
++    try {
++      await assertPostgresWorkerPreflight(pool, { tenantId: tenant })
++      await admin.query(
++        `CREATE POLICY synthetic_allow_all ON ${schema}.outbox_events FOR ALL USING (true) WITH CHECK (true)`
++      )
++      await expect(
++        assertPostgresWorkerPreflight(pool, { tenantId: tenant })
++      ).rejects.toThrow(/policies/)
++    } finally {
++      await admin.query(
++        `DROP POLICY IF EXISTS synthetic_allow_all ON ${schema}.outbox_events`
++      )
++      await pool.end()
++    }
++  })
++
++  it('rejects missing effect privileges and forbidden privileges on any critical table', async () => {
++    const role = await createRole('effectpriv', 'NOSUPERUSER NOBYPASSRLS')
++    await grantValidWorkerPrivileges(role)
++    const pool = poolFor(role)
++    try {
++      await admin.query(
++        `REVOKE INSERT ON ${schema}.outbox_effects FROM ${role}`
++      )
++      await expect(
++        assertPostgresWorkerPreflight(pool, { tenantId: tenant })
++      ).rejects.toThrow(/privileges/)
++      await admin.query(`GRANT INSERT ON ${schema}.outbox_effects TO ${role}`)
++      await assertPostgresWorkerPreflight(pool, { tenantId: tenant })
++      await admin.query(`GRANT DELETE ON ${schema}.tasks TO ${role}`)
++      await expect(
++        assertPostgresWorkerPreflight(pool, { tenantId: tenant })
++      ).rejects.toThrow(/privileges/)
++    } finally {
++      await pool.end()
++    }
++  })
+ 
+   it('rejects a superuser role', async () => {
+     const role = await createRole('super', 'SUPERUSER')
+@@ -312,19 +354,39 @@
+           return { rows: [{ can_create: false }] }
+         }
+         if (sql.includes('FROM pg_class')) return { rows: criticalTableRows }
++        if (sql.includes('FROM pg_policies')) {
++          return {
++            rows: WORKER_CRITICAL_TABLES.map((table) => {
++              const tenantExpression =
++                "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
++              const expression = ['outbox_effects', 'outbox_attempts'].includes(
++                table
++              )
++                ? tenantExpression
++                : `tenant_isolation_quarantined = false AND ${tenantExpression}`
++              return {
++                tablename: table,
++                policyname: `${table}_tenant_isolation`,
++                permissive: 'PERMISSIVE',
++                roles: '{public}',
++                cmd: 'ALL',
++                qual: expression,
++                with_check: expression
++              }
++            })
++          }
++        }
+         if (sql.includes('has_table_privilege')) {
+           return {
+-            rows: [
+-              {
+-                can_select: true,
+-                can_insert: true,
+-                can_update: true,
+-                can_delete: false,
+-                can_truncate: false,
+-                can_trigger: false,
+-                can_references: false
+-              }
+-            ]
++            rows: WORKER_CRITICAL_TABLES.map(() => ({
++              can_select: true,
++              can_insert: true,
++              can_update: true,
++              can_delete: false,
++              can_truncate: false,
++              can_trigger: false,
++              can_references: false
++            }))
+           }
+         }
+         return { rows: [] }
+--- a/apps/worker/src/postgres-role-preflight.ts
++++ b/apps/worker/src/postgres-role-preflight.ts
+@@ -144,7 +144,47 @@
+       )
+     }
+ 
+-    const outbox = await client.query<{
++    const policies = await client.query<{
++      tablename: string
++      policyname: string
++      permissive: string
++      roles: string
++      cmd: string
++      qual: string | null
++      with_check: string | null
++    }>(
++      `SELECT tablename, policyname, permissive, roles, cmd, qual, with_check
++         FROM pg_policies
++        WHERE schemaname = current_schema() AND tablename = ANY($1::text[])`,
++      [criticalTables]
++    )
++    for (const table of criticalTables) {
++      const tablePolicies = policies.rows.filter(
++        (policy) => policy.tablename === table
++      )
++      const policy = tablePolicies[0]
++      const tenantExpression =
++        "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
++      const expected = ['outbox_effects', 'outbox_attempts'].includes(table)
++        ? tenantExpression
++        : `tenant_isolation_quarantined = false AND ${tenantExpression}`
++      if (
++        tablePolicies.length !== 1 ||
++        !policy ||
++        policy.policyname !== `${table}_tenant_isolation` ||
++        policy.permissive !== 'PERMISSIVE' ||
++        policy.roles !== '{public}' ||
++        policy.cmd !== 'ALL' ||
++        normalizePolicyExpression(policy.qual) !== expected ||
++        normalizePolicyExpression(policy.with_check) !== expected
++      ) {
++        throw new Error(
++          'PostgreSQL worker tenant isolation policies are not verified'
++        )
++      }
++    }
++
++    const tablePrivileges = await client.query<{
+       can_select: boolean
+       can_insert: boolean
+       can_update: boolean
+@@ -153,27 +193,31 @@
+       can_trigger: boolean
+       can_references: boolean
+     }>(
+-      `SELECT has_table_privilege(current_user, format('%I.%I', current_schema(), 'outbox_events'), 'SELECT') AS can_select,
+-              has_table_privilege(current_user, format('%I.%I', current_schema(), 'outbox_events'), 'INSERT') AS can_insert,
+-              has_table_privilege(current_user, format('%I.%I', current_schema(), 'outbox_events'), 'UPDATE') AS can_update,
+-              has_table_privilege(current_user, format('%I.%I', current_schema(), 'outbox_events'), 'DELETE') AS can_delete,
+-              has_table_privilege(current_user, format('%I.%I', current_schema(), 'outbox_events'), 'TRUNCATE') AS can_truncate,
+-              has_table_privilege(current_user, format('%I.%I', current_schema(), 'outbox_events'), 'TRIGGER') AS can_trigger,
+-              has_table_privilege(current_user, format('%I.%I', current_schema(), 'outbox_events'), 'REFERENCES') AS can_references`
+-    )
+-    const privileges = outbox.rows[0]
++      `SELECT has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'SELECT') AS can_select,
++              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'INSERT') AS can_insert,
++              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'UPDATE') AS can_update,
++              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'DELETE') AS can_delete,
++              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'TRUNCATE') AS can_truncate,
++              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'TRIGGER') AS can_trigger,
++              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'REFERENCES') AS can_references
++         FROM unnest($1::text[]) AS table_name`,
++      [criticalTables]
++    )
+     if (
+-      !privileges ||
+-      !privileges.can_select ||
+-      !privileges.can_insert ||
+-      !privileges.can_update ||
+-      privileges.can_delete ||
+-      privileges.can_truncate ||
+-      privileges.can_trigger ||
+-      privileges.can_references
++      tablePrivileges.rows.length !== criticalTables.length ||
++      tablePrivileges.rows.some(
++        (privileges) =>
++          !privileges.can_select ||
++          !privileges.can_insert ||
++          !privileges.can_update ||
++          privileges.can_delete ||
++          privileges.can_truncate ||
++          privileges.can_trigger ||
++          privileges.can_references
++      )
+     ) {
+       throw new Error(
+-        'PostgreSQL worker outbox privileges must be minimal (select/insert/update only)'
++        'PostgreSQL worker table privileges must be minimal (select/insert/update only)'
+       )
+     }
+   } catch (error) {
+@@ -191,7 +235,7 @@
+         `SELECT NULLIF(current_setting($1, true), '') AS tenant_id`,
+         [CVG_TENANT_CONTEXT_SETTING]
+       )
+-      if (leaked.rows[0]?.tenant_id) {
++      if (leaked.rows.length !== 1 || leaked.rows[0]?.tenant_id !== null) {
+         failure ??= new Error(
+           'PostgreSQL tenant context cleanup was not verified'
+         )
+@@ -215,3 +259,18 @@
+     ? error
+     : new Error('PostgreSQL worker role preflight failed')
+ }
++
++// Matches the deparsed expressions installed by the repository migrations.
++// Reject unknown policies rather than attempting arbitrary SQL equivalence.
++function normalizePolicyExpression(expression: string | null): string {
++  return (expression ?? '')
++    .replace(/::text/g, '')
++    .replace(/\s+/g, ' ')
++    .trim()
++    .replace(/\((tenant_isolation_quarantined = false)\)/g, '$1')
++    .replace(
++      /\((tenant_id = NULLIF\(current_setting\('cvg\.tenant_id', true\), ''\))\)/g,
++      '$1'
++    )
++    .replace(/^\((.*)\)$/, '$1')
++}
+--- a/package.json
++++ b/package.json
+@@ -11,7 +11,7 @@
+     "test": "vitest run --no-file-parallelism --maxWorkers=2",
+     "test:coverage": "vitest run --coverage --no-file-parallelism --maxWorkers=2",
+     "test:e2e": "playwright test",
+-    "test:postgres": "vitest run --testTimeout=60000 --no-file-parallelism packages/persistence/src/__tests__/postgres-migration-smoke.test.ts packages/persistence/src/__tests__/tenant-isolation.test.ts packages/persistence/src/__tests__/platform-postgres-smoke.test.ts packages/persistence/src/__tests__/platform-approval-postgres.test.ts packages/persistence/src/__tests__/audit-evidence-checkpoint-postgres.test.ts packages/persistence/src/__tests__/session-version-pinning-postgres.test.ts packages/persistence/src/__tests__/outbox-durability.test.ts packages/persistence/src/__tests__/effect-journal-postgres.test.ts packages/persistence/src/__tests__/channel-effect-journal-postgres.test.ts apps/api/src/__tests__/postgres-persistence-mode.test.ts apps/api/src/__tests__/webhook-security.test.ts apps/api/src/__tests__/journeys-api-postgres.test.ts apps/worker/src/__tests__/postgres-outbox-bridge.integration.test.ts packages/chaos/src/__tests__/chaos-postgres.test.ts packages/persistence/src/__tests__/journeys-postgres.test.ts apps/worker/src/__tests__/continuous-worker-postgres.integration.test.ts apps/worker/src/__tests__/postgres-role-preflight.test.ts packages/persistence/src/__tests__/attendance-approval-postgres.test.ts",
++    "test:postgres": "vitest run --testTimeout=60000 --no-file-parallelism packages/persistence/src/__tests__/postgres-migration-smoke.test.ts packages/persistence/src/__tests__/tenant-isolation.test.ts packages/persistence/src/__tests__/platform-postgres-smoke.test.ts packages/persistence/src/__tests__/platform-approval-postgres.test.ts packages/persistence/src/__tests__/audit-evidence-checkpoint-postgres.test.ts packages/persistence/src/__tests__/session-version-pinning-postgres.test.ts packages/persistence/src/__tests__/outbox-durability.test.ts packages/persistence/src/__tests__/effect-journal-postgres.test.ts packages/persistence/src/__tests__/channel-effect-journal-postgres.test.ts apps/api/src/__tests__/postgres-persistence-mode.test.ts apps/api/src/__tests__/webhook-security.test.ts apps/api/src/__tests__/journeys-api-postgres.test.ts apps/worker/src/__tests__/postgres-outbox-bridge.integration.test.ts packages/chaos/src/__tests__/chaos-postgres.test.ts packages/persistence/src/__tests__/journeys-postgres.test.ts apps/worker/src/__tests__/continuous-worker-postgres.integration.test.ts apps/worker/src/__tests__/postgres-role-preflight.test.ts packages/persistence/src/__tests__/attendance-approval-postgres.test.ts packages/persistence/src/__tests__/journey-task-atomicity.test.ts",
+     "postgres:baseline": "tsx scripts/baseline-postgres.ts",
+     "readiness": "vitest run tests/construction-readiness.test.js",
+     "build": "npm run typecheck && npm run build:web",
+--- a/packages/persistence/src/__tests__/journeys-postgres.test.ts
++++ b/packages/persistence/src/__tests__/journeys-postgres.test.ts
+@@ -186,6 +186,46 @@
+         actorId: 'system.journey-repository'
+       })
+       expect(systemEvent?.correlationId).toMatch(/^corr_/)
++    })
++
++    it('audits journey tasks once with trusted actor and session context', async () => {
++      const seeded = await harness.seedConversation(tenantA, 'task-audit')
++      const input = {
++        tenantId: tenantA,
++        sessionId: seeded.sessionId,
++        title: 'Synthetic',
++        description: 'Synthetic',
++        idempotencyKey: 'task-audit',
++        auditContext: {
++          actorType: 'Operator' as const,
++          actorId: 'operator.synthetic',
++          correlationId: 'corr_00000000-0000-4000-8000-000000000901'
++        }
++      }
++      const task = await harness.repository.createJourneyTask(input)
++      const event = await harness.latestJourneyAudit(
++        tenantA,
++        'journey_task_created'
++      )
++      expect(event).toMatchObject({
++        ...input.auditContext,
++        payload: {
++          resourceId: task.id,
++          conversationId: seeded.conversationId,
++          sessionId: seeded.sessionId
++        }
++      })
++      expect(
++        (
++          await harness.repository.createJourneyTask({
++            ...input,
++            auditContext: { ...input.auditContext, actorId: 'operator.replay' }
++          })
++        ).id
++      ).toBe(task.id)
++      expect(
++        await harness.latestJourneyAudit(tenantA, 'journey_task_created')
++      ).toEqual(event)
+     })
+ 
+     it('links a patient and creates an approval-blocked appointment draft', async () => {
+--- a/packages/persistence/src/__tests__/postgres-migration-smoke.test.ts
++++ b/packages/persistence/src/__tests__/postgres-migration-smoke.test.ts
+@@ -141,6 +141,9 @@
+               created_at: new Date('2026-04-29T12:00:00.000Z')
+             }
+           ] as unknown as T[])
++        }
++        if (text.includes('INSERT INTO tasks')) {
++          return result([{ id: 'task_fake' }] as unknown as T[])
+         }
+         if (text.includes('FROM audit_events')) {
+           return result([
+@@ -575,7 +578,8 @@
+           )
+         }
+         if (text.includes('INSERT INTO tasks')) {
+-          throw { code: '23505' }
++          // PostgreSQL reports no inserted row for ON CONFLICT DO NOTHING.
++          return result([] as T[])
+         }
+         return result([] as T[])
+       }
+--- a/packages/persistence/src/journeys-postgres.ts
++++ b/packages/persistence/src/journeys-postgres.ts
+@@ -391,7 +391,24 @@
+           source: 'journey-r3',
+           idempotencyKey: boundedKey(input.idempotencyKey)
+         },
+-        tenantId
++        tenantId,
++        async (task) => {
++          const context = await this.resolveJourneyContextScoped(
++            client,
++            tenantId,
++            undefined,
++            input.sessionId
++          )
++          await this.appendJourneyAuditScoped(
++            client,
++            tenantId,
++            'journey_task_created',
++            task.id,
++            context.conversationId,
++            context.sessionId,
++            input.auditContext
++          )
++        }
+       )
+     )
+   }
+--- a/packages/persistence/src/journeys.ts
++++ b/packages/persistence/src/journeys.ts
+@@ -507,7 +507,9 @@
+ 
+   createJourneyTask(input: CreateJourneyTaskInput): TaskRecord {
+     const tenantId = this.tenant(input.tenantId)
+-    return this.tasks.create(
++    const previousTasks = this.db.state.tasks
++    const previousAudit = this.db.state.auditEvents
++    const task = this.tasks.create(
+       {
+         sessionId: input.sessionId,
+         title: boundedText(input.title, 'title'),
+@@ -518,6 +520,27 @@
+       },
+       tenantId
+     )
++    if (previousTasks.some((existing) => existing.id === task.id)) return task
++    try {
++      const context = this.resolveJourneyContext(
++        tenantId,
++        undefined,
++        input.sessionId
++      )
++      this.appendJourneyAudit(
++        tenantId,
++        'journey_task_created',
++        task.id,
++        context.conversationId,
++        context.sessionId,
++        input.auditContext
++      )
++    } catch (error) {
++      this.db.state.tasks = previousTasks
++      this.db.state.auditEvents = previousAudit
++      throw error
++    }
++    return task
+   }
+ 
+   recordHandoff(input: RecordHandoffInput): void {
+--- a/packages/persistence/src/postgres.ts
++++ b/packages/persistence/src/postgres.ts
+@@ -2860,7 +2860,9 @@
+       source: string
+       idempotencyKey: string
+     },
+-    rawTenantId?: TenantId
++    rawTenantId?: TenantId,
++    // Runs only for a new row on this client; the caller owns the transaction.
++    onCreated?: (task: TaskRecord) => Promise<void>
+   ): Promise<TaskRecord> {
+     const tenantId = rawTenantId ? TenantIdSchema.parse(rawTenantId) : undefined
+     if (this.tenantIsolation && !tenantId) {
+@@ -2910,62 +2912,65 @@
+       idempotencyKey: input.idempotencyKey,
+       createdAt: new Date()
+     }
+-    try {
+-      if (this.tenantIsolation) {
+-        await this.client.query(
+-          `INSERT INTO tasks (tenant_id, id, session_id, title, description, priority, source, status, idempotency_key, created_at)
+-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+-          [
+-            tenantId,
+-            task.id,
+-            task.sessionId,
+-            task.title,
+-            task.description,
+-            task.priority,
+-            task.source,
+-            task.status,
+-            task.idempotencyKey,
+-            task.createdAt
+-          ]
+-        )
+-      } else {
+-        await this.client.query(
+-          `INSERT INTO tasks (id, session_id, title, description, priority, source, status, idempotency_key, created_at)
+-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+-          [
+-            task.id,
+-            task.sessionId,
+-            task.title,
+-            task.description,
+-            task.priority,
+-            task.source,
+-            task.status,
+-            task.idempotencyKey,
+-            task.createdAt
+-          ]
+-        )
+-      }
+-    } catch (error) {
+-      if (isUniqueViolation(error)) {
+-        const winner = await this.client.query<(typeof existing.rows)[number]>(
+-          `SELECT tasks.id, tasks.session_id, tasks.title, tasks.description, tasks.priority, tasks.source, tasks.status, tasks.idempotency_key, tasks.created_at
++    let inserted
++    if (this.tenantIsolation) {
++      inserted = await this.client.query(
++        `INSERT INTO tasks (tenant_id, id, session_id, title, description, priority, source, status, idempotency_key, created_at)
++           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
++           ON CONFLICT (session_id, source, idempotency_key) DO NOTHING
++           RETURNING id`,
++        [
++          tenantId,
++          task.id,
++          task.sessionId,
++          task.title,
++          task.description,
++          task.priority,
++          task.source,
++          task.status,
++          task.idempotencyKey,
++          task.createdAt
++        ]
++      )
++    } else {
++      inserted = await this.client.query(
++        `INSERT INTO tasks (id, session_id, title, description, priority, source, status, idempotency_key, created_at)
++           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
++           ON CONFLICT (session_id, source, idempotency_key) DO NOTHING
++           RETURNING id`,
++        [
++          task.id,
++          task.sessionId,
++          task.title,
++          task.description,
++          task.priority,
++          task.source,
++          task.status,
++          task.idempotencyKey,
++          task.createdAt
++        ]
++      )
++    }
++    if (inserted.rows.length === 0) {
++      const winner = await this.client.query<(typeof existing.rows)[number]>(
++        `SELECT tasks.id, tasks.session_id, tasks.title, tasks.description, tasks.priority, tasks.source, tasks.status, tasks.idempotency_key, tasks.created_at
+            FROM tasks
+            ${scopeJoin}
+            WHERE session_id = $1 AND source = $2 AND idempotency_key = $3
+            ${scopeFilter}
+            LIMIT 1`,
+-          [
+-            input.sessionId,
+-            input.source,
+-            input.idempotencyKey,
+-            ...(tenantId ? [tenantId] : [])
+-          ]
+-        )
+-        const winnerRow = winner.rows[0]
+-        if (winnerRow) return this.mapTask(winnerRow)
+-      }
+-      throw error
+-    }
++        [
++          input.sessionId,
++          input.source,
++          input.idempotencyKey,
++          ...(tenantId ? [tenantId] : [])
++        ]
++      )
++      const winnerRow = winner.rows[0]
++      if (winnerRow) return this.mapTask(winnerRow)
++      throw new DomainError('conflict', 'Task insert was not stored')
++    }
++    await onCreated?.(task)
+     return task
+   }
+ 
+--- a/packages/persistence/src/tenant-scoped-postgres.ts
++++ b/packages/persistence/src/tenant-scoped-postgres.ts
+@@ -167,6 +167,25 @@
+     released = true
+     client.release(error)
+   }
++  let cleanupFailure: Error | undefined
++  const clearTenantContext = async (): Promise<void> => {
++    try {
++      await client.query('SELECT set_config($1, $2, false)', [
++        CVG_TENANT_CONTEXT_SETTING,
++        ''
++      ])
++      const leaked = await client.query<{ tenant_id: string | null }>(
++        `SELECT NULLIF(current_setting($1, true), '') AS tenant_id`,
++        [CVG_TENANT_CONTEXT_SETTING]
++      )
++      if (leaked.rows.length !== 1 || leaked.rows[0]?.tenant_id !== null) {
++        throw new Error('PostgreSQL tenant context cleanup was not verified')
++      }
++    } catch (error) {
++      cleanupFailure = toError(error)
++      throw error
++    }
++  }
+   try {
+     await client.query('BEGIN')
+     await client.query('SELECT set_config($1, $2, false)', [
+@@ -174,17 +193,7 @@
+       tenantId
+     ])
+     const result = await operation(client)
+-    await client.query('SELECT set_config($1, $2, false)', [
+-      CVG_TENANT_CONTEXT_SETTING,
+-      ''
+-    ])
+-    const leaked = await client.query<{ tenant_id: string | null }>(
+-      `SELECT NULLIF(current_setting($1, true), '') AS tenant_id`,
+-      [CVG_TENANT_CONTEXT_SETTING]
+-    )
+-    if (leaked.rows[0]?.tenant_id) {
+-      throw new Error('PostgreSQL tenant context cleanup was not verified')
+-    }
++    await clearTenantContext()
+     await client.query('COMMIT')
+     release()
+     return result
+@@ -196,15 +205,12 @@
+       throw error
+     }
+     try {
+-      await client.query('SELECT set_config($1, $2, false)', [
+-        CVG_TENANT_CONTEXT_SETTING,
+-        ''
+-      ])
++      await clearTenantContext()
+     } catch (cleanupError) {
+       release(toError(cleanupError))
+       throw error
+     }
+-    release()
++    release(cleanupFailure)
+     throw error
+   }
+ }
+--- /dev/null
++++ b/packages/persistence/src/__tests__/journey-task-atomicity.test.ts
+@@ -0,0 +1,261 @@
++import { randomUUID } from 'node:crypto'
++import { Client, Pool } from 'pg'
++import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
++import type { TenantId } from '@cvg/platform'
++import { InMemoryDatabase } from '../db.ts'
++import { JourneyRepository } from '../journeys.ts'
++import { ConversationRepository } from '../repositories/conversation-repository.ts'
++import { AuditRepository } from '../repositories/audit-repository.ts'
++import { PostgresJourneyRepository } from '../journeys-postgres.ts'
++import { runPostgresMigrations } from '../postgres.ts'
++import {
++  withTenantTransaction,
++  type PostgresPoolLike
++} from '../tenant-scoped-postgres.ts'
++
++const tenantId = `tenant_${randomUUID()}` as TenantId
++const context = {
++  actorType: 'Operator' as const,
++  actorId: 'operator.synthetic',
++  correlationId: `corr_${randomUUID()}`
++}
++
++describe('transaction cleanup verification', () => {
++  it.each(['success', 'failure'] as const)(
++    'destroys client on %s when cleanup verification is absent or dirty',
++    async (path) => {
++      for (const rows of [[], [{}], [{ tenant_id: tenantId }]]) {
++        const release = vi.fn()
++        const client = { query: vi.fn(async () => ({ rows })), release }
++        const pool = {
++          connect: async () => client
++        } as unknown as PostgresPoolLike
++        await expect(
++          withTenantTransaction(pool, tenantId, async () => {
++            if (path === 'failure') throw new Error('callback failure')
++            return 'result'
++          })
++        ).rejects.toThrow(path === 'failure' ? 'callback failure' : 'cleanup')
++        expect(release).toHaveBeenCalledExactlyOnceWith(expect.any(Error))
++      }
++    }
++  )
++
++  it.each(['success', 'failure'] as const)(
++    'reuses verified clean client after %s',
++    async (path) => {
++      const release = vi.fn()
++      const query = vi.fn(async (sql: string) => ({
++        rows: sql.includes('current_setting') ? [{ tenant_id: null }] : []
++      }))
++      const pending = withTenantTransaction(
++        {
++          connect: async () => ({ query, release })
++        } as unknown as PostgresPoolLike,
++        tenantId,
++        async () => {
++          if (path === 'failure') throw new Error('callback failure')
++          return 42
++        }
++      )
++      if (path === 'failure')
++        await expect(pending).rejects.toThrow('callback failure')
++      else await expect(pending).resolves.toBe(42)
++      expect(
++        query.mock.calls.some((call) =>
++          String(call[0]).includes('current_setting')
++        )
++      ).toBe(true)
++      expect(release).toHaveBeenCalledExactlyOnceWith(undefined)
++    }
++  )
++})
++
++it('destroys a client whose first cleanup failed even if rollback cleanup recovers', async () => {
++  let verifications = 0
++  const release = vi.fn()
++  const query = async (sql: string) => ({
++    rows: sql.includes('current_setting')
++      ? ++verifications === 1
++        ? []
++        : [{ tenant_id: null }]
++      : []
++  })
++  await expect(
++    withTenantTransaction(
++      {
++        connect: async () => ({ query, release })
++      } as unknown as PostgresPoolLike,
++      tenantId,
++      async () => 42
++    )
++  ).rejects.toThrow('cleanup')
++  expect(verifications).toBe(2)
++  expect(release).toHaveBeenCalledExactlyOnceWith(expect.any(Error))
++})
++
++describe('journey task memory atomicity', () => {
++  it('restores task and audit state when append fails, then retries once', () => {
++    const db = new InMemoryDatabase()
++    const seeded = new ConversationRepository(db).createWithSession({
++      tenantId,
++      channel: 'web',
++      senderRef: 'synthetic',
++      externalMessageId: 'synthetic-task-audit',
++      body: 'synthetic'
++    })
++    const repo = new JourneyRepository(db)
++    const input = {
++      tenantId,
++      sessionId: seeded.session.id,
++      title: 'synthetic',
++      description: 'synthetic',
++      idempotencyKey: 'memory-rollback',
++      auditContext: context
++    }
++    const beforeTasks = [...db.state.tasks]
++    const beforeAudit = [...db.state.auditEvents]
++    const append = vi
++      .spyOn(AuditRepository.prototype, 'append')
++      .mockImplementationOnce(() => {
++        throw new Error('synthetic audit failure')
++      })
++    try {
++      expect(() => repo.createJourneyTask(input)).toThrow(
++        'synthetic audit failure'
++      )
++      expect(db.state.tasks).toEqual(beforeTasks)
++      expect(db.state.auditEvents).toEqual(beforeAudit)
++    } finally {
++      append.mockRestore()
++    }
++    const task = repo.createJourneyTask(input)
++    expect(repo.createJourneyTask(input).id).toBe(task.id)
++    expect(db.state.tasks).toHaveLength(beforeTasks.length + 1)
++    expect(db.state.auditEvents).toHaveLength(beforeAudit.length + 1)
++  })
++})
++
++describe.skipIf(!process.env.TEST_DATABASE_URL)(
++  'journey task atomicity PostgreSQL',
++  () => {
++    const schema = `task_atomic_${randomUUID().replaceAll('-', '')}`
++    const sessionId = `sess_${randomUUID()}`
++    const conversationId = `conv_${randomUUID()}`
++    let admin: Client
++    let pool: Pool
++    beforeAll(async () => {
++      admin = new Client({ connectionString: process.env.TEST_DATABASE_URL })
++      await admin.connect()
++      await runPostgresMigrations(admin, { schemaName: schema })
++      pool = new Pool({
++        connectionString: process.env.TEST_DATABASE_URL,
++        max: 2,
++        options: `-c search_path=${schema}`
++      })
++      await admin.query(
++        `INSERT INTO conversations(tenant_id,id,channel,sender_ref,sender_ref_hash,status,correlation_id,created_at,updated_at) VALUES($1,$2,'web','synthetic','fff','active',$3,now(),now())`,
++        [tenantId, conversationId, context.correlationId]
++      )
++      await admin.query(
++        `INSERT INTO sessions(tenant_id,id,conversation_id,status,takeover_state,created_at,updated_at) VALUES($1,$2,$3,'active','BOT_ACTIVE',now(),now())`,
++        [tenantId, sessionId, conversationId]
++      )
++    })
++    afterAll(async () => {
++      await pool?.end()
++      await admin?.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
++      await admin?.end()
++    })
++    const input = (key: string) => ({
++      tenantId,
++      sessionId,
++      title: 'synthetic',
++      description: 'synthetic',
++      idempotencyKey: key,
++      auditContext: context
++    })
++    it('rolls back task on rejected audit and retries with one trusted event', async () => {
++      const repo = new PostgresJourneyRepository(pool)
++      await admin.query(
++        `CREATE FUNCTION reject_task_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic audit failure'; END $$`
++      )
++      await admin.query(
++        `CREATE TRIGGER reject_task_audit BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION reject_task_audit()`
++      )
++      try {
++        await expect(repo.createJourneyTask(input('rollback'))).rejects.toThrow(
++          'synthetic audit failure'
++        )
++        expect((await admin.query('SELECT id FROM tasks')).rows).toHaveLength(0)
++        expect(
++          (await admin.query('SELECT id FROM audit_events')).rows
++        ).toHaveLength(0)
++      } finally {
++        await admin.query('DROP TRIGGER reject_task_audit ON audit_events')
++      }
++      const task = await repo.createJourneyTask(input('rollback'))
++      expect((await repo.createJourneyTask(input('rollback'))).id).toBe(task.id)
++      const events = (
++        await admin.query(
++          'SELECT actor_type,actor_id,correlation_id,payload FROM audit_events'
++        )
++      ).rows
++      expect(events).toHaveLength(1)
++      expect(events[0]).toMatchObject({
++        actor_type: context.actorType,
++        actor_id: context.actorId,
++        correlation_id: context.correlationId,
++        payload: {
++          journey: 'journey_task_created',
++          resourceId: task.id,
++          conversationId,
++          sessionId
++        }
++      })
++    })
++    it('concurrent same-key insert returns winner without aborted-transaction recovery', async () => {
++      let arrivals = 0
++      let unlock!: () => void
++      const barrier = new Promise<void>((resolve) => {
++        unlock = resolve
++      })
++      const wrapped = {
++        connect: async () => {
++          const client = await pool.connect()
++          return {
++            query: async (sql: string, args?: unknown[]) => {
++              if (sql.trim().startsWith('INSERT INTO tasks')) {
++                if (++arrivals === 2) unlock()
++                await barrier
++              }
++              return client.query(sql, args)
++            },
++            release: (error?: Error) => client.release(error)
++          }
++        }
++      } as unknown as PostgresPoolLike
++      const repo = new PostgresJourneyRepository(wrapped)
++      const results = await Promise.all([
++        repo.createJourneyTask(input('race-task')),
++        repo.createJourneyTask(input('race-task'))
++      ])
++      expect(results[0]!.id).toBe(results[1]!.id)
++      expect(
++        (
++          await admin.query('SELECT id FROM tasks WHERE idempotency_key=$1', [
++            'race-task'
++          ])
++        ).rows
++      ).toHaveLength(1)
++      expect(
++        (
++          await admin.query(
++            "SELECT id FROM audit_events WHERE payload->>'resourceId'=$1",
++            [results[0]!.id]
++          )
++        ).rows
++      ).toHaveLength(1)
++    })
++  }
++)

@@ -1,0 +1,48 @@
+{
+  "reviewId": "AAA-08-COORDINATOR-R2",
+  "at": "2026-09-12T21:22:42.082742+00:00",
+  "reviewer": "coordinator; not author of policy implementation",
+  "verdict": "REWORK",
+  "scope": "AAA-08 candidate in changed-hashes.txt; policy suite and synthetic runtime probes",
+  "candidateHashes": "checks.json",
+  "checks": [
+    {
+      "command": "npx vitest run packages/policy-engine --no-file-parallelism --maxWorkers=1",
+      "exitCode": 0,
+      "result": "3 files / 29 tests PASS",
+      "log": "policy-tests.log"
+    },
+    {
+      "command": "node --import tsx docs/04_audit/evidence/AUD-20260912-001/reproduce.mjs",
+      "exitCode": 0,
+      "result": "original F15 denied, zero tool calls; other known findings persist",
+      "log": "original-reproduction.json"
+    },
+    {
+      "command": "node --import tsx docs/04_audit/evidence/AAA/AAA-08/review-coordinator-r2/action-binding-probe.mjs",
+      "exitCode": 0,
+      "result": "counterexample confirmed: modify draft paired with confirm/reschedule/cancel yields ALLOW and one fake tool call each",
+      "log": "action-binding-probe.log"
+    }
+  ],
+  "findings": [
+    {
+      "id": "AAA08-C1-F01",
+      "severity": "P1",
+      "status": "OPEN",
+      "location": "packages/policy-engine/src/engine.ts:148",
+      "observed": "resource checked against capability, but sensitive action not bound to capability; runtime forwards both to executor",
+      "impact": "claimed sensitive-action separation is incomplete; fake tool receives forbidden sensitive action under allowed draft capability; no real effect tested",
+      "closeWith": "fail-closed compatibility of capability/action/resource before grants/documents plus adversarial policy and runtime tests proving zero tool calls"
+    }
+  ],
+  "relatedState": {
+    "AAA-03": "APPROVE rev2 exists at review-agent-3/review-rev2.json; freeze and BUILD not granted by that review",
+    "AAA-04": "v1 APPROVE_WITH_CONDITIONS historical; v2 exists, six hashes match, new independent review pending",
+    "AAA-05": "prior REWORK remains, agent-2 next task unchanged",
+    "AAA-16": "local independent APPROVE already integrated, full promotion still depends on gates/dependencies"
+  },
+  "productFullSuite": "NOT_RUN_THIS_REVIEW; builder report 895 PASS is historical",
+  "gatesGranted": false,
+  "nextTask": "AAA-08 corrective rework only; next-task-agent-1.md"
+}

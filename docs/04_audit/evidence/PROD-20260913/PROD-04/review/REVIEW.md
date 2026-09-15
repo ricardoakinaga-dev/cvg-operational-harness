@@ -1,0 +1,108 @@
+# REVIEW.md — PROD-04 (fresh independent critic)
+
+- Programa/task: `PROD-20260913` / `PROD-04` — durable `ApprovalStore` (`ApprovalAuthority` + `PostgresApprovalAuthority`).
+- Critic: fresh, independent, adversarial; did not build the task. Read-only on product/source/test/config; writes confined to `docs/04_audit/evidence/PROD-20260913/PROD-04/review/` and `/tmp/opencode`.
+- Builder artifacts reviewed: `report.md`, `manifest.json`, `probes/`, `final-*.log`, RED/GREEN logs under this directory.
+- **Verdict: PASS** — no P0, no P1, no material P2. One declared, non-material P2 debt (dependency declaration) and several documented limits, none blocking.
+
+## 1. Environment and fingerprints
+
+- Node `v22.23.2`; PostgreSQL 16.15 at `127.0.0.1:55481` user `cvg_prod` (trust, superuser — hence the dedicated `NOBYPASSRLS` role probes; port 5432 never used).
+- Critic database (own, disposable): `critic4_0dd2a1`; all probe schemas dropped after each run (final leftover count: 0).
+- **Fingerprint BEFORE** (all runs executed after this point):
+  - 13 manifest files × sha256 — **all 13 match `manifest.json` byte-for-byte** (new: addendum, authority.ts, persistence index.ts, migration 0015, runtime-approval-store.ts, the SQL test, 4 probes; edited: approval-engine index.ts, postgres.ts, persistence index.ts, agent-runtime contracts/runtime/index, apps/worker sweeps.ts, package.json).
+  - Broad source aggregate (`apps/**` + `packages/**` `*.ts|*.tsx|*.sql|*.json`, excluding `node_modules`/`dist`, sorted): `947b4736e72c7fd66704db13c3ea834ee867d39a1cde9044850af5d1e43e4b41` (505 files).
+  - `package.json` = `edda7868…846b6` (matches manifest); `package-lock.json` = `a5ccf03b…1a414`.
+- **Fingerprint AFTER** (after all gates + probes): files diff empty; source aggregate identical `947b4736…`. `package.json`/`package-lock.json` unchanged. No source, test or config byte moved during the review.
+
+## 2. Static inspection (code, not claims)
+
+| Area | Finding |
+| ---- | ------- |
+| Migration `0015_runtime_approval_store.sql` | Additive `CREATE TABLE IF NOT EXISTS runtime_approvals`, PK `(tenant_id, approval_id)`, 11-state `CHECK`, `revision bigint NOT NULL DEFAULT 1 CHECK (>0)`, `reservation_generation >=0`, `used_reservation_ids jsonb` array-checked, both indexes, `ENABLE/FORCE RLS`, single `USING/WITH CHECK (tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''))` policy, `REVOKE ALL FROM PUBLIC` — same convention as 0012–0014 (which also REVOKE without GRANT). Registered in `defaultPostgresMigrations` (`packages/persistence/src/postgres.ts:113-120`); checksum guard confirmed at `postgres.ts:537-598` (BEGIN/advisory lock/checksum compare/COMMIT). |
+| CAS predicate | `runtime-approval-store.ts:743-765`: `WHERE tenant_id=$1 AND approval_id=$2 AND revision=$ AND status=$ AND COALESCE(reservation_id,'')=$ AND reservation_generation=$ RETURNING revision`, with `revision = revision + 1` in `SET` (:745). All four predicate clauses present and **behaviorally load-bearing** (see §5 falsification). `rowCount≠1 → DomainError('conflict')` (:723-728). |
+| Serialization | `#selectForUpdate` (:698-704) runs `SELECT … FOR UPDATE` inside `withTenantTransaction`; Read-Committed lock wait re-reads the latest row version, so the second writer loads post-commit state and the engine returns its natural error. Confirmed empirically (§4-a). |
+| Revision | Insert sets `revision=1` (:775); every persisted transition goes through the CAS (+1). Independently measured 1→2→3→4→5 across request/submit/approve/reserve/release (probe-g). |
+| Reservation fencing | `reservation_generation`/`usedReservationIds` survive release and UNCERTAIN (`clearReservation` in engine only strips token/owner/expiry; mapper keeps generation when >0, `used_reservation_ids` always). Verified: release/UNCERTAIN/EXECUTING transitions retain generation and history (probes b, c, d, h). |
+| `releaseExpired` selectivity | Adapter selects `status IN ('RESERVED','EXECUTING') AND reservation_expires_at <= $now FOR UPDATE` (:527-536) and delegates to the engine with the same `now`. UNCERTAIN is never selected. Probe-g pinned an UNCERTAIN row with a past `reservation_expires_at`: sweep returned `{0,0}` and the row revision did not change. |
+| `expireStale` | Honestly rejected with `DomainError('invalid_action')` and explicit message (:562-569); probe-g asserts the rejection. |
+| Runtime type/awaits | `GovernedAgentRuntimeOptions.approvals: ApprovalAuthority` (`agent-runtime/src/contracts.ts:148`); every call site `await`ed: `runtime.ts:260, 317, 838, 1058, 1212, 1228, 1292, 1555, 1725, 1769, 1884, 2401, 2557, 2577`; sweep helper awaits `list` and `releaseExpired` (:253-323). Grep for un-awaited approval calls finds only a test-local synchronous `new ApprovalEngine` (`runtime-execution-recovery.test.ts:126,1761`), which is correct. Strict `tsc` passes. |
+| Worker sweep type | `apps/worker/src/sweeps.ts:16` uses `ApprovalAuthority`; `runSweepTick` awaits the journal and `sweepExpiredApprovals` (:42-49); periodic runner never overlaps ticks. |
+| Decision duplication | No decision logic in SQL/adapter: every mutation loads rows, seeds a scratch `InMemoryApprovalStore`, runs the same `ApprovalEngine` method and persists the resulting record(s). `expireStale` unsupported; `request` inserts fresh record via the engine. Confirmed by reading the full adapter (779 lines). |
+| `getByOperationKey` / `listPending` | Concrete adapter methods (`:618-650`) with tenant scope; operation key deliberately non-unique (candidate list). Acceptance test passes; code uses `requested_at, approval_id` ordering. Not part of the `ApprovalAuthority` interface (A2 replaced the `DurableApprovalStorePort`), runtime does not need them. |
+
+## 3. Gates executed by the critic (own DB)
+
+| Gate | Command (all with `TEST_DATABASE_URL=postgresql://cvg_prod@127.0.0.1:55481/critic4_0dd2a1`) | Exit | Result |
+| ---- | --------------------------------------------------------------------------------------------- | ---- | ------ |
+| Typecheck | `npm run typecheck` | 0 | clean |
+| ESLint | `npx eslint` on the 10 changed source files | 0 | clean |
+| Prettier | `npx prettier --check --ignore-unknown` on 16 changed/new files | 0 | clean (SQL skipped: unknown parser, same as builder) |
+| New SQL suite | `npx vitest run --testTimeout=60000 --no-file-parallelism packages/persistence/src/__tests__/runtime-approval-store-postgres.test.ts` | 0 | 1 file / **11 tests** / 0 skips |
+| PostgreSQL suites | `npm run test:postgres` | 0 | 20 files / **174 tests** / 0 skips |
+| Full suite | `npm test` | 0 | 248 files / **1775 tests** / 0 skips |
+| Worker startup | `npm run test:worker:startup` | 0 | startup smoke + controlled smoke passed |
+| Build | `npm run build` | 0 | typecheck + vite build OK |
+| M1 regression | `npx vitest run --testTimeout=60000 --no-file-parallelism packages/persistence/src/__tests__/journey-task-atomicity.test.ts apps/api/src/__tests__/journeys-api-postgres.test.ts apps/api/src/__tests__/readiness.test.ts` | 0 | 3 files / **29 tests** |
+| Approval engine | `npx vitest run --no-file-parallelism packages/approval-engine` | 0 | 8 files / **105 tests** (engine/store untouched; matches builder's correction of the prompt's "427") |
+
+Logs: `review/logs/critic-new-suite.log`, `review/logs/critic-regression.log`; full gate output in `/tmp/opencode/prod04-critic/logs/`.
+
+## 4. Adversarial probes (own code, under /tmp/opencode; copies in `review/probes-src/`, outputs in `review/probes/`)
+
+- **a) Two real pools → exactly one reservation (×5):** 5/5 iterations exactly one fulfilled; loser `ApprovalError('already_reserved')`; persisted status RESERVED, generation 1, exactly one used token = winner token. `probe-a-two-connection.log`, exit 0.
+- **b) Generation fencing:** g1 released (no_effect) then g2 reserved; stale g1 `confirm`, `release`, `markUncertain`, `markExecuting` **all** rejected with `reservation_mismatch`; after each attempt g2 status/token/generation/history intact. Concurrent `confirm` vs `release` on g2: exactly one winner, loser `invalid_state`, generation 2 + full history retained. `probe-b-fencing.log`, exit 0.
+- **c) Crash-before-effect:** reserve → discard pool+adapter → new adapter → `releaseExpired` with `no_effect` → `{released:1,uncertain:0}`; APPROVED, reservation columns NULL, **generation 1 and usedReservationIds retained**, `releasedAt` set; raw SQL confirms `reservation_id IS NULL`. `probe-c-crash-before.log`, exit 0.
+- **d) Crash-after-effect:** markExecuting → new adapter → missing evidence → UNCERTAIN (reservation+generation+history kept); second sweep `{0,0}` and **revision byte-identical** (no auto-expiry/no mutation); `effect_possibly_started` → UNCERTAIN; a further sweep leaves it untouched; explicit `reconcile(effect_confirmed)` → EXECUTED with `executionRef`, `executionCount=1`, generation/history retained. `probe-d-crash-after.log`, exit 0.
+- **e) RLS with a real `NOSUPERUSER NOBYPASSRLS` role:** own row visible; explicit cross-tenant SELECT = 0; no-context = 0; **cross-tenant INSERT rejected** (`new row violates row-level security policy`, 42501); cross-tenant UPDATE rowCount 0; own-tenant INSERT succeeds (grants real). `probe-e-rls.log`, exit 0.
+- **f) Guard falsification in throwaway copies (repo bytes untouched):** generator writes 3 tampered copies under `review/tamper/` from the real file:
+  - control (real adapter): 1 winner, loser `already_reserved`;
+  - T1 (only `SELECT … FOR UPDATE` removed, CAS kept): 1 winner, loser `conflict` — CAS alone protects;
+  - T2 (lock kept; `revision` + `reservation_generation` neutralised in the predicate): 1 winner — lock alone protects;
+  - **T3 (lock removed AND full predicate neutralised): 2 winners with two distinct reservation tokens**, row stores only one → double-award/lost update. This is the requested two-winner simulation: with these guards removed, two transactions both win.
+  - Interleaved-writer injection (bump `revision`/`generation`/marker after the `FOR UPDATE` load): real adapter rejects with `conflict` and rolls back; T2 silently overwrites the external write (`status=RESERVED`, generation reset to stale value) — the predicate is load-bearing, exactly as claimed.
+  - Original adapter still hashes `cbb61a7c…e737f` (manifest value). `probe-f-tamper.log`, exit 0.
+- **g) Invariants:** revision 1..5 on every persisted transition; recorded UPDATE text contains all four CAS clauses; `expireStale` → `invalid_action`; UNCERTAIN with expired reservation untouched by sweep. `probe-g-invariants.log`, exit 0.
+- **h) Remaining durable mutations (critic gap-fill beyond builder's suite):** `fail(no_effect)` → FAILED with generation/history retained and terminal re-reserve rejected `invalid_state`; `verifyAndConsume` → EXECUTED/count 1, replay rejected `already_executed`; `submit`/`reject`/`cancel` persisted. `probe-h-mutations.log`, exit 0.
+
+## 5. Acceptance mapping
+
+| # | Acceptance claim | Evaluation | Evidence |
+| - | ---------------- | ---------- | -------- |
+| a | 0015 additive, checksum guard, forced RLS | PASS | migration + runner code inspection; suite test; `npm run test:postgres` cross-migrations |
+| b | Restart keeps proposal/reservation | PASS | builder test; critic probe c/d across discarded pool+adapter; all 13 fingerprints stable |
+| c | Two connections reserve → one winner | PASS | builder test; critic probe a 5/5; tamper control/t1/t2 |
+| d | Generation fencing + SQL CAS predicate | PASS | builder test + critic probe b (all stale ops) + probe f (guards load-bearing) |
+| e | Crash-before-effect → APPROVED, reservation cleared, generation retained | PASS | builder test; critic probe c (incl. raw SQL) |
+| f | Crash-after-effect → UNCERTAIN, never auto-expires; reconcile → EXECUTED | PASS | builder test; critic probe d (revision unchanged on 2nd sweep) |
+| g | RLS isolation with non-BYPASSRLS role | PASS | builder test; critic probe e adds cross-tenant INSERT/UPDATE denial |
+| h | `getByOperationKey` candidates + `listPending` | PASS | builder SQL test (2 candidates same key, empty list after decisions); code inspection |
+| — | `releaseExpired` never touches UNCERTAIN; `expireStale` rejected | PASS | critic probes d/g; code inspection |
+
+## 6. Test-integrity and hygiene checks
+
+- Only one test file was created/modified inside the PROD-04 window (mtime scan 13:50–14:35): `runtime-approval-store-postgres.test.ts`. No existing test was edited, weakened, skipped or threshold-loosened by this task. `approval-engine` tests keep their Sep-11/12 mtimes and are 105/105 green; `engine.ts`/`store.ts` mtimes (01:59) precede the PROD-04 window (~14:04–14:20), corroborating "untouched by this builder".
+- The new suite's conditional `describe.skip` only triggers when `TEST_DATABASE_URL` is absent (repo-wide convention); with the URL set, runs show 0 skips in all gates.
+- Fixtures are synthetic and labeled (`dataClassification: 'synthetic'`, `synthetic_appointment_draft` payloads); no real data, no real effect/channel/provider/IdP calls; only the local disposable PostgreSQL is contacted. Test role password is a synthetic local fixture, not a secret.
+- `git diff` of changed paths was inspected. Note: the working tree has large prior-task changes vs `HEAD` (runtime, engine, journeys, package.json); PROD-04's specific deltas are the added `ApprovalAuthority` await/type wiring, the 0015 migration registration and the new adapter/test. Mtimes and manifest hashes separate the lanes. The dependency of `packages/persistence` on `@cvg/approval-engine` is not declared in its `package.json` — a real P2 debt, explicitly documented by the builder (addendum §7) and consistent with existing precedent (`effect-journal-postgres.ts` → `@cvg/agent-runtime`, `channel-effect-journal-postgres.ts` → `@cvg/channel-gateway`); it does not affect tests, build or runtime here → **non-blocking**.
+- Builder evidence integrity: all four `probes/*.ts` hashes and the 6 checked log hashes match `manifest.json` exactly.
+
+## 7. Findings
+
+- P0: none.
+- P1: none.
+- Material P2: none.
+- Non-blocking P2/debt (all declared by the builder or inherent to the mechanism): undeclared workspace dependency (§6); jsonb `null` `proposalPayload` collapses to absent (runtime never persists it); durable `verifyAndConsume`/`fail`/decision paths absent from the builder's SQL suite (independently verified here in probe h); per-tenant worker sweep wiring intentionally deferred (contract §5, AAA-21).
+
+## 8. NOT_VERIFIED limits
+
+- OS/process-level restart: restart was proven only at adapter+pool boundary in one process (critic probe c/d discard pool+adapter, same PID). A real second process/OS restart remains for AAA-21.
+- Composed HTTP→API→persistence→worker→runtime→approval/journal→fake effect→audit path: not exercised (AAA-21); sweeps remain intentionally unwired in worker main.
+- Production role/preflight: RLS proven with a role created and granted by the test; the real non-superuser deployment role and its login path are not composed.
+- Real data/effects/channels/providers/IdP, homologation, SLO/RPO/RTO: out of scope; D02–D05 pending; production **NO-GO**.
+- No load/latency/OOM tests; no killed-connection-mid-transaction simulation (rollback correctness relies on PostgreSQL semantics and was only exercised via injected conflict).
+- Authenticity of the builder's "pre-wiring" RED logs cannot be independently reconstructed; superseded by the critic's own tamper probes, which demonstrate the guards' necessity.
+
+## 9. Verdict
+
+**PASS.** The claim is materially true: the durable authority persists the canonical approval state machine through a complete four-clause CAS under `FOR UPDATE`, survives adapter restart, awards exactly one reservation across two connections, fences generations across release/UNCERTAIN, releases only on `no_effect`, keeps `effect_possibly_started`/missing evidence UNCERTAIN with no auto-expiry, isolates tenants under forced RLS, returns operation-key candidates and pending lists, and honestly rejects the cross-tenant `expireStale`. All required gates pass on the pinned toolchain; fingerprints are stable before/after; falsification attempts either failed to break the guard or proved that removing it produces the exact double-award failure it prevents.

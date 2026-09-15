@@ -1,5 +1,13 @@
 # 0301 — Roadmap
 
+## Complemento pós-auditoria de 13/09/2026
+
+Consultar [plano para produção](../PLANO_EXECUTIVO_PRODUCAO.md), [roadmap](../ROADMAP_PRODUCAO.md) e [backlog consolidado](../BACKLOG_PRODUCAO.md). Os 42 IDs AAA mantêm seus contratos/status; 14 IDs PROD acrescentam correções e pré-requisitos de saída. Não concluir pela evidência histórica de outro candidato. Este índice não concede gate de BUILD ou produção.
+
+## Evolução AAA pós-auditoria — 2026-09-12
+
+Para as seis fases propostas de remediação e qualificação multiagente, consultar [0325_aaa_roadmap.md](0325_aaa_roadmap.md) e [0324_aaa_executive_plan.md](0324_aaa_executive_plan.md). O roteiro original abaixo permanece histórico; a nova execução depende de contratos, gates e autoridade próprios.
+
 ## Planejamento de remediação pós-auditoria — 2026-09-05
 
 Para evolução proposta a partir da auditoria 0539, consultar [0312_roadmap_pos_auditoria.md](0312_roadmap_pos_auditoria.md) e [plano executivo](0311_plano_executivo_pos_auditoria.md). Os itens abaixo preservam o planejamento original; não representam automaticamente pendências atuais nem aprovação das tasks REM.

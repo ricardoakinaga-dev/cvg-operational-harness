@@ -1,0 +1,338 @@
+2026-09-13 01:32:55.758 -03 [1608459] LOG:  starting PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+2026-09-13 01:32:55.758 -03 [1608459] LOG:  listening on IPv4 address "127.0.0.1", port 55434
+2026-09-13 01:32:55.760 -03 [1608459] LOG:  listening on Unix socket "/tmp/opencode/aaa13-rehearsal-20260913T043233Z/pg/.s.PGSQL.55434"
+2026-09-13 01:32:55.764 -03 [1608464] LOG:  database system was shut down at 2026-09-13 01:32:55 -03
+2026-09-13 01:32:55.770 -03 [1608459] LOG:  database system is ready to accept connections
+2026-09-13 01:36:12.261 -03 [1647741] ERROR:  new row violates row-level security policy for table "journey_owner_drafts"
+2026-09-13 01:36:12.261 -03 [1647741] STATEMENT:  INSERT INTO journey_owner_drafts
+	             (tenant_id, id, phone, name, candidate_ids, status, idempotency_key, created_at, updated_at, expires_at)
+	           VALUES ($1, $2, NULL, NULL, '[]'::jsonb, 'draft', $3, now(), now(), now() + interval '1 day')
+2026-09-13 01:36:12.267 -03 [1647719] ERROR:  role "cvg_journeys_rls_1789274172230_24e179" cannot be dropped because some objects depend on it
+2026-09-13 01:36:12.267 -03 [1647719] DETAIL:  privileges for schema cvg_journeys_1789274171232_74f6b7
+	privileges for table cvg_journeys_1789274171232_74f6b7.conversations
+	privileges for table cvg_journeys_1789274171232_74f6b7.sessions
+	privileges for table cvg_journeys_1789274171232_74f6b7.tasks
+	privileges for table cvg_journeys_1789274171232_74f6b7.audit_events
+	privileges for table cvg_journeys_1789274171232_74f6b7.journey_owner_drafts
+	privileges for table cvg_journeys_1789274171232_74f6b7.journey_patient_drafts
+	privileges for table cvg_journeys_1789274171232_74f6b7.journey_appointment_drafts
+2026-09-13 01:36:12.267 -03 [1647719] STATEMENT:  DROP ROLE IF EXISTS cvg_journeys_rls_1789274172230_24e179
+2026-09-13 01:36:15.284 -03 [1648003] ERROR:  duplicate key value violates unique constraint "idempotency_pkey"
+2026-09-13 01:36:15.284 -03 [1648003] DETAIL:  Key (tenant_id, key)=(tenant_00000000-0000-4000-8000-000000000079, inbound:whatsapp:sha256:633e82aa5950ec3c13e5e95e9fefdb3dd355c5fba554bdf2a2d5a63f407f6934) already exists.
+2026-09-13 01:36:15.284 -03 [1648003] STATEMENT:  INSERT INTO idempotency (tenant_id, key, resource_id, created_at)
+	         VALUES ($1, $2, $3, $4)
+2026-09-13 01:36:15.285 -03 [1648003] ERROR:  duplicate key value violates unique constraint "messages_conversation_id_external_message_id_key"
+2026-09-13 01:36:15.285 -03 [1648003] DETAIL:  Key (conversation_id, external_message_id)=(conv_7609ba3a-d086-4b8e-9691-c6c9ab56115d, ext_pg_smoke) already exists.
+2026-09-13 01:36:15.285 -03 [1648003] STATEMENT:  INSERT INTO messages (id, conversation_id, external_message_id, direction, body)
+	           VALUES ($1, $2, $3, $4, $5)
+2026-09-13 01:37:13.253 -03 [1655916] ERROR:  synthetic outbox audit failure
+2026-09-13 01:37:13.253 -03 [1655916] CONTEXT:  PL/pgSQL function reject_outbox_audit() line 1 at RAISE
+2026-09-13 01:37:13.253 -03 [1655916] STATEMENT:  INSERT INTO audit_events
+	       (tenant_id, id, type, actor_type, actor_id, correlation_id, policy_version, payload, created_at)
+	     VALUES ($1, $2, 'integration_event', $3, $4, $5, $6, $7::jsonb, $8)
+2026-09-13 01:37:13.609 -03 [1655962] ERROR:  synthetic atomic outbox failure
+2026-09-13 01:37:13.609 -03 [1655962] CONTEXT:  PL/pgSQL function reject_atomic_outbox_1789274233605() line 1 at RAISE
+2026-09-13 01:37:13.609 -03 [1655962] STATEMENT:  INSERT INTO outbox_events
+	           (id, tenant_id, type, envelope_version, correlation_id, idempotency_key,
+	            conversation_id, session_id, agent_id, agent_version_id,
+	            inbound_message_id, payload, payload_protection_version, status, created_at, available_at,
+	            attempts, lease_owner, lease_until, last_error, processed_at,
+	            dead_lettered_at, parent_event_id, tenant_isolation_quarantined)
+	         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb,
+	                 $13, 'pending', $14, $15, 0, NULL, NULL, NULL, NULL, NULL, $16, false)
+	         ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+	         RETURNING 
+	  id, tenant_id, type, envelope_version, correlation_id, idempotency_key,
+	  conversation_id, session_id, agent_id, agent_version_id,
+	  inbound_message_id, payload, status, created_at, available_at, attempts,
+	  lease_owner, lease_until, last_error, processed_at, dead_lettered_at,
+	  parent_event_id
+2026-09-13 01:37:23.433 -03 [1657572] ERROR:  new row violates row-level security policy for table "channel_effect_journal"
+2026-09-13 01:37:23.433 -03 [1657572] STATEMENT:  INSERT INTO channel_effect_journal
+	           (tenant_id, channel, operation_kind, idempotency_key, payload_hash,
+	            hash_version, state, attempt, lease_owner, lease_expires_at,
+	            result, error_code, revision, created_at, updated_at)
+	         VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 1, $7, $8,
+	                 NULL, NULL, 1, $9, $9)
+	         ON CONFLICT (tenant_id, channel, operation_kind, idempotency_key)
+	           DO NOTHING
+	         RETURNING 
+	  tenant_id, channel, operation_kind, idempotency_key, payload_hash,
+	  hash_version, state, attempt, lease_owner, lease_expires_at, result,
+	  error_code, revision, updated_at
+2026-09-13 01:37:23.441 -03 [1657557] ERROR:  role "cvg_chan_role_1789274243414_342546" cannot be dropped because some objects depend on it
+2026-09-13 01:37:23.441 -03 [1657557] DETAIL:  privileges for schema cvg_channel_eff_1789274242957_0debe1
+	privileges for table channel_effect_journal
+2026-09-13 01:37:23.441 -03 [1657557] STATEMENT:  DROP ROLE IF EXISTS cvg_chan_role_1789274243414_342546
+2026-09-13 01:37:35.132 -03 [1659772] ERROR:  new row violates row-level security policy for table "effect_journal"
+2026-09-13 01:37:35.132 -03 [1659772] STATEMENT:  INSERT INTO effect_journal
+	           (tenant_id, operation_key, proposal_hash, state, attempt_id,
+	            expires_at, created_at, updated_at, revision)
+	         VALUES ($1, $2, $3, 'RESERVED', $4, $5, $6, $6, 1)
+	         ON CONFLICT (tenant_id, operation_key) DO NOTHING
+	         RETURNING 
+	  tenant_id, operation_key, proposal_hash, state, attempt_id, execution_ref,
+	  result_digest, error_code, reason, expires_at, reconciled_by,
+	  reconciliation_evidence_ref, created_at, updated_at, revision
+2026-09-13 01:37:35.142 -03 [1659745] ERROR:  role "cvg_eff_role_1789274255110_07d77e" cannot be dropped because some objects depend on it
+2026-09-13 01:37:35.142 -03 [1659745] DETAIL:  privileges for schema cvg_runtime_eff_1789274254704_df8354
+	privileges for table effect_journal
+2026-09-13 01:37:35.142 -03 [1659745] STATEMENT:  DROP ROLE IF EXISTS cvg_eff_role_1789274255110_07d77e
+2026-09-13 01:37:40.996 -03 [1660562] FATAL:  terminating connection due to administrator command
+2026-09-13 01:37:41.019 -03 [1660565] FATAL:  terminating connection due to administrator command
+2026-09-13 01:37:41.019 -03 [1660566] FATAL:  terminating connection due to administrator command
+2026-09-13 01:37:42.487 -03 [1660805] ERROR:  synthetic audit failure
+2026-09-13 01:37:42.487 -03 [1660805] CONTEXT:  PL/pgSQL function reject_attendance_audit() line 1 at RAISE
+2026-09-13 01:37:42.487 -03 [1660805] STATEMENT:  INSERT INTO audit_events (tenant_id, id, type, actor_type, actor_id, correlation_id, policy_version, payload, created_at)
+	         VALUES (NULLIF(current_setting('cvg.tenant_id', true), ''), $1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+2026-09-13 01:37:42.491 -03 [1660805] WARNING:  there is no transaction in progress
+2026-09-13 01:37:43.957 -03 [1661122] ERROR:  duplicate key value violates unique constraint "platform_capability_approvals_tenant_nonce_key"
+2026-09-13 01:37:43.957 -03 [1661122] DETAIL:  Key (tenant_id, nonce)=(tenant_00000000-0000-4000-8000-000000000131, nonce_substitution_fixture) already exists.
+2026-09-13 01:37:43.957 -03 [1661122] STATEMENT:  INSERT INTO platform_capability_approvals
+	           (id, tenant_id, agent_id, version_id, tool_name, input_hash,
+	            actor_id, nonce, issuer, expires_at, issued_at, status)
+	         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'issued')
+	         RETURNING 
+	  id, tenant_id, agent_id, version_id, tool_name, input_hash,
+	  actor_id, nonce, issuer, expires_at, issued_at, status,
+	  consumed_at, revoked_at
+2026-09-13 01:37:44.120 -03 [1661122] ERROR:  Capability approval cannot expire before expires_at
+2026-09-13 01:37:44.120 -03 [1661122] CONTEXT:  PL/pgSQL function cvg_capability_approval_update_guard() line 47 at RAISE
+2026-09-13 01:37:44.120 -03 [1661122] STATEMENT:  UPDATE platform_capability_approvals
+	             SET status = 'expired'
+	             WHERE id = $1
+2026-09-13 01:37:44.886 -03 [1661550] ERROR:  Capability approval binding is immutable
+2026-09-13 01:37:44.886 -03 [1661550] CONTEXT:  PL/pgSQL function cvg_capability_approval_update_guard() line 16 at RAISE
+2026-09-13 01:37:44.886 -03 [1661550] STATEMENT:  UPDATE platform_capability_approvals
+	             SET input_hash = repeat('a', 64)
+	             WHERE id = $1
+2026-09-13 01:37:48.553 -03 [1662240] ERROR:  Release candidate status transition is invalid
+2026-09-13 01:37:48.553 -03 [1662240] CONTEXT:  PL/pgSQL function cvg_release_candidates_update_guard() line 31 at RAISE
+2026-09-13 01:37:48.553 -03 [1662240] STATEMENT:  UPDATE platform_release_candidates
+	             SET validated_by = created_by
+	             WHERE tenant_id = $1 AND id = $2
+2026-09-13 01:37:53.082 -03 [1662892] ERROR:  Release candidate status transition is invalid
+2026-09-13 01:37:53.082 -03 [1662892] CONTEXT:  PL/pgSQL function cvg_release_candidates_update_guard() line 31 at RAISE
+2026-09-13 01:37:53.082 -03 [1662892] STATEMENT:  UPDATE platform_release_candidates
+	             SET validated_by = created_by
+	             WHERE tenant_id = $1 AND id = $2
+2026-09-13 01:37:54.816 -03 [1663109] ERROR:  duplicate key value violates unique constraint "platform_capability_approvals_tenant_nonce_key"
+2026-09-13 01:37:54.816 -03 [1663109] DETAIL:  Key (tenant_id, nonce)=(tenant_00000000-0000-4000-8000-000000000131, nonce_substitution_fixture) already exists.
+2026-09-13 01:37:54.816 -03 [1663109] STATEMENT:  INSERT INTO platform_capability_approvals
+	           (id, tenant_id, agent_id, version_id, tool_name, input_hash,
+	            actor_id, nonce, issuer, expires_at, issued_at, status)
+	         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'issued')
+	         RETURNING 
+	  id, tenant_id, agent_id, version_id, tool_name, input_hash,
+	  actor_id, nonce, issuer, expires_at, issued_at, status,
+	  consumed_at, revoked_at
+2026-09-13 01:37:54.973 -03 [1663109] ERROR:  Capability approval cannot expire before expires_at
+2026-09-13 01:37:54.973 -03 [1663109] CONTEXT:  PL/pgSQL function cvg_capability_approval_update_guard() line 47 at RAISE
+2026-09-13 01:37:54.973 -03 [1663109] STATEMENT:  UPDATE platform_capability_approvals
+	             SET status = 'expired'
+	             WHERE id = $1
+2026-09-13 01:37:55.129 -03 [1608462] LOG:  checkpoint starting: time
+2026-09-13 01:37:55.349 -03 [1663138] ERROR:  Capability approval binding is immutable
+2026-09-13 01:37:55.349 -03 [1663138] CONTEXT:  PL/pgSQL function cvg_capability_approval_update_guard() line 16 at RAISE
+2026-09-13 01:37:55.349 -03 [1663138] STATEMENT:  UPDATE platform_capability_approvals
+	             SET input_hash = repeat('a', 64)
+	             WHERE id = $1
+2026-09-13 01:37:57.576 -03 [1663551] ERROR:  synthetic outbox audit failure
+2026-09-13 01:37:57.576 -03 [1663551] CONTEXT:  PL/pgSQL function reject_outbox_audit() line 1 at RAISE
+2026-09-13 01:37:57.576 -03 [1663551] STATEMENT:  INSERT INTO audit_events
+	       (tenant_id, id, type, actor_type, actor_id, correlation_id, policy_version, payload, created_at)
+	     VALUES ($1, $2, 'integration_event', $3, $4, $5, $6, $7::jsonb, $8)
+2026-09-13 01:37:57.935 -03 [1663634] ERROR:  synthetic atomic outbox failure
+2026-09-13 01:37:57.935 -03 [1663634] CONTEXT:  PL/pgSQL function reject_atomic_outbox_1789274277931() line 1 at RAISE
+2026-09-13 01:37:57.935 -03 [1663634] STATEMENT:  INSERT INTO outbox_events
+	           (id, tenant_id, type, envelope_version, correlation_id, idempotency_key,
+	            conversation_id, session_id, agent_id, agent_version_id,
+	            inbound_message_id, payload, payload_protection_version, status, created_at, available_at,
+	            attempts, lease_owner, lease_until, last_error, processed_at,
+	            dead_lettered_at, parent_event_id, tenant_isolation_quarantined)
+	         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb,
+	                 $13, 'pending', $14, $15, 0, NULL, NULL, NULL, NULL, NULL, $16, false)
+	         ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+	         RETURNING 
+	  id, tenant_id, type, envelope_version, correlation_id, idempotency_key,
+	  conversation_id, session_id, agent_id, agent_version_id,
+	  inbound_message_id, payload, status, created_at, available_at, attempts,
+	  lease_owner, lease_until, last_error, processed_at, dead_lettered_at,
+	  parent_event_id
+2026-09-13 01:38:09.951 -03 [1665099] ERROR:  new row violates row-level security policy for table "journey_owner_drafts"
+2026-09-13 01:38:09.951 -03 [1665099] STATEMENT:  INSERT INTO journey_owner_drafts
+	             (tenant_id, id, phone, name, candidate_ids, status, idempotency_key, created_at, updated_at, expires_at)
+	           VALUES ($1, $2, NULL, NULL, '[]'::jsonb, 'draft', $3, now(), now(), now() + interval '1 day')
+2026-09-13 01:38:09.956 -03 [1665096] ERROR:  role "cvg_journeys_rls_1789274289926_22cb24" cannot be dropped because some objects depend on it
+2026-09-13 01:38:09.956 -03 [1665096] DETAIL:  privileges for schema cvg_journeys_1789274289057_fe7d20
+	privileges for table cvg_journeys_1789274289057_fe7d20.conversations
+	privileges for table cvg_journeys_1789274289057_fe7d20.sessions
+	privileges for table cvg_journeys_1789274289057_fe7d20.tasks
+	privileges for table cvg_journeys_1789274289057_fe7d20.audit_events
+	privileges for table cvg_journeys_1789274289057_fe7d20.journey_owner_drafts
+	privileges for table cvg_journeys_1789274289057_fe7d20.journey_patient_drafts
+	privileges for table cvg_journeys_1789274289057_fe7d20.journey_appointment_drafts
+2026-09-13 01:38:09.956 -03 [1665096] STATEMENT:  DROP ROLE IF EXISTS cvg_journeys_rls_1789274289926_22cb24
+2026-09-13 01:38:24.478 -03 [1667174] ERROR:  new row violates row-level security policy for table "channel_effect_journal"
+2026-09-13 01:38:24.478 -03 [1667174] STATEMENT:  INSERT INTO channel_effect_journal
+	           (tenant_id, channel, operation_kind, idempotency_key, payload_hash,
+	            hash_version, state, attempt, lease_owner, lease_expires_at,
+	            result, error_code, revision, created_at, updated_at)
+	         VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 1, $7, $8,
+	                 NULL, NULL, 1, $9, $9)
+	         ON CONFLICT (tenant_id, channel, operation_kind, idempotency_key)
+	           DO NOTHING
+	         RETURNING 
+	  tenant_id, channel, operation_kind, idempotency_key, payload_hash,
+	  hash_version, state, attempt, lease_owner, lease_expires_at, result,
+	  error_code, revision, updated_at
+2026-09-13 01:38:24.489 -03 [1667111] ERROR:  role "cvg_chan_role_1789274304453_b1bf91" cannot be dropped because some objects depend on it
+2026-09-13 01:38:24.489 -03 [1667111] DETAIL:  privileges for schema cvg_channel_eff_1789274303883_dc7876
+	privileges for table channel_effect_journal
+2026-09-13 01:38:24.489 -03 [1667111] STATEMENT:  DROP ROLE IF EXISTS cvg_chan_role_1789274304453_b1bf91
+2026-09-13 01:38:28.045 -03 [1667699] ERROR:  new row violates row-level security policy for table "effect_journal"
+2026-09-13 01:38:28.045 -03 [1667699] STATEMENT:  INSERT INTO effect_journal
+	           (tenant_id, operation_key, proposal_hash, state, attempt_id,
+	            expires_at, created_at, updated_at, revision)
+	         VALUES ($1, $2, $3, 'RESERVED', $4, $5, $6, $6, 1)
+	         ON CONFLICT (tenant_id, operation_key) DO NOTHING
+	         RETURNING 
+	  tenant_id, operation_key, proposal_hash, state, attempt_id, execution_ref,
+	  result_digest, error_code, reason, expires_at, reconciled_by,
+	  reconciliation_evidence_ref, created_at, updated_at, revision
+2026-09-13 01:38:28.058 -03 [1667635] ERROR:  role "cvg_eff_role_1789274308023_90b163" cannot be dropped because some objects depend on it
+2026-09-13 01:38:28.058 -03 [1667635] DETAIL:  privileges for schema cvg_runtime_eff_1789274307567_f0953b
+	privileges for table effect_journal
+2026-09-13 01:38:28.058 -03 [1667635] STATEMENT:  DROP ROLE IF EXISTS cvg_eff_role_1789274308023_90b163
+2026-09-13 01:38:33.368 -03 [1668329] ERROR:  synthetic audit failure
+2026-09-13 01:38:33.368 -03 [1668329] CONTEXT:  PL/pgSQL function reject_attendance_audit() line 1 at RAISE
+2026-09-13 01:38:33.368 -03 [1668329] STATEMENT:  INSERT INTO audit_events (tenant_id, id, type, actor_type, actor_id, correlation_id, policy_version, payload, created_at)
+	         VALUES (NULLIF(current_setting('cvg.tenant_id', true), ''), $1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+2026-09-13 01:38:33.371 -03 [1668329] WARNING:  there is no transaction in progress
+2026-09-13 01:39:09.569 -03 [1674659] ERROR:  duplicate key value violates unique constraint "idempotency_pkey"
+2026-09-13 01:39:09.569 -03 [1674659] DETAIL:  Key (tenant_id, key)=(tenant_00000000-0000-4000-8000-000000000079, inbound:whatsapp:sha256:633e82aa5950ec3c13e5e95e9fefdb3dd355c5fba554bdf2a2d5a63f407f6934) already exists.
+2026-09-13 01:39:09.569 -03 [1674659] STATEMENT:  INSERT INTO idempotency (tenant_id, key, resource_id, created_at)
+	         VALUES ($1, $2, $3, $4)
+2026-09-13 01:39:09.570 -03 [1674659] ERROR:  duplicate key value violates unique constraint "messages_conversation_id_external_message_id_key"
+2026-09-13 01:39:09.570 -03 [1674659] DETAIL:  Key (conversation_id, external_message_id)=(conv_cf29bcb8-2455-4f9c-a888-a35783552356, ext_pg_smoke) already exists.
+2026-09-13 01:39:09.570 -03 [1674659] STATEMENT:  INSERT INTO messages (id, conversation_id, external_message_id, direction, body)
+	           VALUES ($1, $2, $3, $4, $5)
+2026-09-13 01:40:30.182 -03 [1688853] FATAL:  terminating connection due to administrator command
+2026-09-13 01:40:30.202 -03 [1688857] FATAL:  terminating connection due to administrator command
+2026-09-13 01:40:30.202 -03 [1688856] FATAL:  terminating connection due to administrator command
+2026-09-13 01:42:25.916 -03 [1608462] LOG:  checkpoint complete: wrote 1845 buffers (11.3%); 0 WAL file(s) added, 0 removed, 3 recycled; write=269.908 s, sync=0.788 s, total=270.787 s; sync files=10076, longest=0.004 s, average=0.001 s; distance=54376 kB, estimate=54376 kB; lsn=0/6AA7A70, redo lsn=0/4A0E0C0
+2026-09-13 01:42:40.565 -03 [1704669] ERROR:  Release candidate status transition is invalid
+2026-09-13 01:42:40.565 -03 [1704669] CONTEXT:  PL/pgSQL function cvg_release_candidates_update_guard() line 31 at RAISE
+2026-09-13 01:42:40.565 -03 [1704669] STATEMENT:  UPDATE platform_release_candidates
+	             SET validated_by = created_by
+	             WHERE tenant_id = $1 AND id = $2
+2026-09-13 01:42:45.012 -03 [1705278] ERROR:  synthetic outbox audit failure
+2026-09-13 01:42:45.012 -03 [1705278] CONTEXT:  PL/pgSQL function reject_outbox_audit() line 1 at RAISE
+2026-09-13 01:42:45.012 -03 [1705278] STATEMENT:  INSERT INTO audit_events
+	       (tenant_id, id, type, actor_type, actor_id, correlation_id, policy_version, payload, created_at)
+	     VALUES ($1, $2, 'integration_event', $3, $4, $5, $6, $7::jsonb, $8)
+2026-09-13 01:42:45.340 -03 [1705319] ERROR:  synthetic atomic outbox failure
+2026-09-13 01:42:45.340 -03 [1705319] CONTEXT:  PL/pgSQL function reject_atomic_outbox_1789274565337() line 1 at RAISE
+2026-09-13 01:42:45.340 -03 [1705319] STATEMENT:  INSERT INTO outbox_events
+	           (id, tenant_id, type, envelope_version, correlation_id, idempotency_key,
+	            conversation_id, session_id, agent_id, agent_version_id,
+	            inbound_message_id, payload, payload_protection_version, status, created_at, available_at,
+	            attempts, lease_owner, lease_until, last_error, processed_at,
+	            dead_lettered_at, parent_event_id, tenant_isolation_quarantined)
+	         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb,
+	                 $13, 'pending', $14, $15, 0, NULL, NULL, NULL, NULL, NULL, $16, false)
+	         ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+	         RETURNING 
+	  id, tenant_id, type, envelope_version, correlation_id, idempotency_key,
+	  conversation_id, session_id, agent_id, agent_version_id,
+	  inbound_message_id, payload, status, created_at, available_at, attempts,
+	  lease_owner, lease_until, last_error, processed_at, dead_lettered_at,
+	  parent_event_id
+2026-09-13 01:42:46.636 -03 [1705453] ERROR:  duplicate key value violates unique constraint "platform_capability_approvals_tenant_nonce_key"
+2026-09-13 01:42:46.636 -03 [1705453] DETAIL:  Key (tenant_id, nonce)=(tenant_00000000-0000-4000-8000-000000000131, nonce_substitution_fixture) already exists.
+2026-09-13 01:42:46.636 -03 [1705453] STATEMENT:  INSERT INTO platform_capability_approvals
+	           (id, tenant_id, agent_id, version_id, tool_name, input_hash,
+	            actor_id, nonce, issuer, expires_at, issued_at, status)
+	         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'issued')
+	         RETURNING 
+	  id, tenant_id, agent_id, version_id, tool_name, input_hash,
+	  actor_id, nonce, issuer, expires_at, issued_at, status,
+	  consumed_at, revoked_at
+2026-09-13 01:42:46.792 -03 [1705453] ERROR:  Capability approval cannot expire before expires_at
+2026-09-13 01:42:46.792 -03 [1705453] CONTEXT:  PL/pgSQL function cvg_capability_approval_update_guard() line 47 at RAISE
+2026-09-13 01:42:46.792 -03 [1705453] STATEMENT:  UPDATE platform_capability_approvals
+	             SET status = 'expired'
+	             WHERE id = $1
+2026-09-13 01:42:47.124 -03 [1705588] ERROR:  Capability approval binding is immutable
+2026-09-13 01:42:47.124 -03 [1705588] CONTEXT:  PL/pgSQL function cvg_capability_approval_update_guard() line 16 at RAISE
+2026-09-13 01:42:47.124 -03 [1705588] STATEMENT:  UPDATE platform_capability_approvals
+	             SET input_hash = repeat('a', 64)
+	             WHERE id = $1
+2026-09-13 01:42:48.944 -03 [1705843] ERROR:  new row violates row-level security policy for table "journey_owner_drafts"
+2026-09-13 01:42:48.944 -03 [1705843] STATEMENT:  INSERT INTO journey_owner_drafts
+	             (tenant_id, id, phone, name, candidate_ids, status, idempotency_key, created_at, updated_at, expires_at)
+	           VALUES ($1, $2, NULL, NULL, '[]'::jsonb, 'draft', $3, now(), now(), now() + interval '1 day')
+2026-09-13 01:42:48.948 -03 [1705842] ERROR:  role "cvg_journeys_rls_1789274568922_7e9b00" cannot be dropped because some objects depend on it
+2026-09-13 01:42:48.948 -03 [1705842] DETAIL:  privileges for schema cvg_journeys_1789274568092_363272
+	privileges for table cvg_journeys_1789274568092_363272.conversations
+	privileges for table cvg_journeys_1789274568092_363272.sessions
+	privileges for table cvg_journeys_1789274568092_363272.tasks
+	privileges for table cvg_journeys_1789274568092_363272.audit_events
+	privileges for table cvg_journeys_1789274568092_363272.journey_owner_drafts
+	privileges for table cvg_journeys_1789274568092_363272.journey_patient_drafts
+	privileges for table cvg_journeys_1789274568092_363272.journey_appointment_drafts
+2026-09-13 01:42:48.948 -03 [1705842] STATEMENT:  DROP ROLE IF EXISTS cvg_journeys_rls_1789274568922_7e9b00
+2026-09-13 01:42:53.774 -03 [1706476] ERROR:  new row violates row-level security policy for table "channel_effect_journal"
+2026-09-13 01:42:53.774 -03 [1706476] STATEMENT:  INSERT INTO channel_effect_journal
+	           (tenant_id, channel, operation_kind, idempotency_key, payload_hash,
+	            hash_version, state, attempt, lease_owner, lease_expires_at,
+	            result, error_code, revision, created_at, updated_at)
+	         VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 1, $7, $8,
+	                 NULL, NULL, 1, $9, $9)
+	         ON CONFLICT (tenant_id, channel, operation_kind, idempotency_key)
+	           DO NOTHING
+	         RETURNING 
+	  tenant_id, channel, operation_kind, idempotency_key, payload_hash,
+	  hash_version, state, attempt, lease_owner, lease_expires_at, result,
+	  error_code, revision, updated_at
+2026-09-13 01:42:53.782 -03 [1706440] ERROR:  role "cvg_chan_role_1789274573757_154f55" cannot be dropped because some objects depend on it
+2026-09-13 01:42:53.782 -03 [1706440] DETAIL:  privileges for schema cvg_channel_eff_1789274573322_29d831
+	privileges for table channel_effect_journal
+2026-09-13 01:42:53.782 -03 [1706440] STATEMENT:  DROP ROLE IF EXISTS cvg_chan_role_1789274573757_154f55
+2026-09-13 01:42:55.187 -03 [1706528] ERROR:  new row violates row-level security policy for table "effect_journal"
+2026-09-13 01:42:55.187 -03 [1706528] STATEMENT:  INSERT INTO effect_journal
+	           (tenant_id, operation_key, proposal_hash, state, attempt_id,
+	            expires_at, created_at, updated_at, revision)
+	         VALUES ($1, $2, $3, 'RESERVED', $4, $5, $6, $6, 1)
+	         ON CONFLICT (tenant_id, operation_key) DO NOTHING
+	         RETURNING 
+	  tenant_id, operation_key, proposal_hash, state, attempt_id, execution_ref,
+	  result_digest, error_code, reason, expires_at, reconciled_by,
+	  reconciliation_evidence_ref, created_at, updated_at, revision
+2026-09-13 01:42:55.197 -03 [1706499] ERROR:  role "cvg_eff_role_1789274575169_f42bf0" cannot be dropped because some objects depend on it
+2026-09-13 01:42:55.197 -03 [1706499] DETAIL:  privileges for schema cvg_runtime_eff_1789274574816_7efea3
+	privileges for table effect_journal
+2026-09-13 01:42:55.197 -03 [1706499] STATEMENT:  DROP ROLE IF EXISTS cvg_eff_role_1789274575169_f42bf0
+2026-09-13 01:42:55.915 -03 [1608462] LOG:  checkpoint starting: time
+2026-09-13 01:42:58.960 -03 [1707108] ERROR:  duplicate key value violates unique constraint "idempotency_pkey"
+2026-09-13 01:42:58.960 -03 [1707108] DETAIL:  Key (tenant_id, key)=(tenant_00000000-0000-4000-8000-000000000079, inbound:whatsapp:sha256:633e82aa5950ec3c13e5e95e9fefdb3dd355c5fba554bdf2a2d5a63f407f6934) already exists.
+2026-09-13 01:42:58.960 -03 [1707108] STATEMENT:  INSERT INTO idempotency (tenant_id, key, resource_id, created_at)
+	         VALUES ($1, $2, $3, $4)
+2026-09-13 01:42:58.961 -03 [1707108] ERROR:  duplicate key value violates unique constraint "messages_conversation_id_external_message_id_key"
+2026-09-13 01:42:58.961 -03 [1707108] DETAIL:  Key (conversation_id, external_message_id)=(conv_921f0a4f-6b44-47f9-be3c-a4ca9bd05e18, ext_pg_smoke) already exists.
+2026-09-13 01:42:58.961 -03 [1707108] STATEMENT:  INSERT INTO messages (id, conversation_id, external_message_id, direction, body)
+	           VALUES ($1, $2, $3, $4, $5)
+2026-09-13 01:42:59.763 -03 [1707143] FATAL:  terminating connection due to administrator command
+2026-09-13 01:42:59.784 -03 [1707146] FATAL:  terminating connection due to administrator command
+2026-09-13 01:42:59.784 -03 [1707147] FATAL:  terminating connection due to administrator command
+2026-09-13 01:43:27.041 -03 [1710537] FATAL:  terminating connection due to administrator command
+2026-09-13 01:43:27.061 -03 [1710544] FATAL:  terminating connection due to administrator command
+2026-09-13 01:43:27.061 -03 [1710543] FATAL:  terminating connection due to administrator command
+2026-09-13 01:44:50.684 -03 [1608459] LOG:  received fast shutdown request
+2026-09-13 01:44:50.689 -03 [1608459] LOG:  aborting any active transactions
+2026-09-13 01:44:50.693 -03 [1608459] LOG:  background worker "logical replication launcher" (PID 1608467) exited with exit code 1
+2026-09-13 01:44:51.130 -03 [1608462] LOG:  checkpoint complete: wrote 1265 buffers (7.7%); 0 WAL file(s) added, 0 removed, 4 recycled; write=114.789 s, sync=0.319 s, total=115.216 s; sync files=4755, longest=0.002 s, average=0.001 s; distance=68100 kB, estimate=68100 kB; lsn=0/9379180, redo lsn=0/8C8F2B0
+2026-09-13 01:44:51.131 -03 [1608462] LOG:  shutting down
+2026-09-13 01:44:51.131 -03 [1608462] LOG:  checkpoint starting: shutdown immediate
+2026-09-13 01:44:51.144 -03 [1608462] LOG:  checkpoint complete: wrote 77 buffers (0.5%); 0 WAL file(s) added, 0 removed, 1 recycled; write=0.002 s, sync=0.004 s, total=0.014 s; sync files=38, longest=0.001 s, average=0.001 s; distance=7079 kB, estimate=61998 kB; lsn=0/93791F8, redo lsn=0/93791F8
+2026-09-13 01:44:51.158 -03 [1608459] LOG:  database system is shut down

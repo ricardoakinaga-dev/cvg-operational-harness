@@ -1,0 +1,46 @@
+AAA-09 builder evidence — commands and exit codes
+observedAt: 2026-09-12T22:45:00-03:00
+candidate HEAD: 512bc11e80fbf7c7b8baf6263aacc811ff829309 (working tree; shared with concurrent AAA-10 lane)
+
+1. RED (before fix)
+   command: npx vitest run packages/agent-runtime/src/__tests__/runtime-binding.test.ts --no-file-parallelism --maxWorkers=2
+   exit: 1
+   result: suite failed to load: "../proposal.ts" does not exist; 0 tests
+   artifact: RED.log
+
+2. Focused GREEN (package)
+   command: npx vitest run packages/agent-runtime --no-file-parallelism --maxWorkers=2
+   exit: 0
+   result: 4 files passed | 70 tests passed (17 are AAA-09 runtime-binding; 41 effect-journal belong to the concurrent AAA-10 lane; 12 pre-existing)
+   artifact: GREEN.log
+
+3. Binding-only GREEN
+   command: npx vitest run packages/agent-runtime/src/__tests__/runtime-binding.test.ts --no-file-parallelism --maxWorkers=2
+   exit: 0
+   result: 1 file passed | 17 tests passed
+   artifact: green-binding-only.log
+
+4. Typecheck
+   command: npm run typecheck
+   exit: 0
+   result: tsc --noEmit clean
+   artifact: typecheck.log
+
+5. Lint
+   command: npm run lint
+   exit: 0
+   result: eslint clean
+   artifact: lint.log
+
+6. Full suite
+   command: npm test
+   exit: 0
+   result: 192 files passed | 4 skipped; 1113 tests passed | 46 skipped
+   artifact: full-test.log
+   note: baseline declared in the task was 1039 pass / 27 skip; the working tree grew because a concurrent AAA-10 lane added effect-journal tests during this execution. Zero failures; no regressions attributable to AAA-09.
+
+7. T-16 static proof
+   command: grep -n 'verifyAndConsume' packages/agent-runtime/src/runtime.ts
+   exit: 1 (no match)
+   artifact: T-16-static-proof.txt
+   plus: grep -nE '\.reserve\(|\.confirm\(' runtime.ts -> lines 654/734 (reserve/confirm present)

@@ -1,0 +1,87 @@
+{
+  "task": "AAA-22",
+  "title": "Implementar readiness com probes reais e limitados (correção D13-04)",
+  "status": "IMPLEMENTED_PARTIAL_PENDING_AAA21_D01",
+  "origin": [
+    "D13-04"
+  ],
+  "contract": "docs/02_spec/prod20260913_m1_corrections_contract.md",
+  "negativeReproduced": {
+    "probe": "docs/04_audit/evidence/PROD-20260913/PROD-01/readiness-probe.ts",
+    "verdict": "FAIL_NO_PROBE",
+    "observed": {
+      "queries": 0,
+      "ready": 200
+    }
+  },
+  "positiveVerified": {
+    "probe": "same probe after the fix",
+    "verdict": "PASS_PROBED",
+    "observed": {
+      "queries": 1,
+      "ready": 503,
+      "live": 200
+    },
+    "evidence": "docs/04_audit/evidence/PROD-20260913/PROD-01/readiness-probe.after.json"
+  },
+  "source": [
+    "apps/api/src/readiness.ts",
+    "apps/api/src/server.ts",
+    "apps/api/src/__tests__/readiness.test.ts"
+  ],
+  "evidence": [
+    "docs/04_audit/evidence/PROD-20260913/AAA-22/tests.log",
+    "docs/04_audit/evidence/PROD-20260913/PROD-01/readiness-probe.after.json"
+  ],
+  "gates": [
+    {
+      "command": "npm run typecheck",
+      "result": "PASS",
+      "exitCode": 0,
+      "note": "re-run on the final bytes after the fake-pool test type fix; earlier P1 finding F1 resolved"
+    },
+    {
+      "command": "npx eslint (changed files)",
+      "result": "PASS",
+      "exitCode": 0
+    },
+    {
+      "command": "npm test",
+      "result": "PASS: Test Files 234 passed | 7 skipped (241); Tests 1625 passed | 83 skipped (1708)",
+      "exitCode": 0,
+      "note": "full suite executed during this session after the M1 changes"
+    },
+    {
+      "command": "npx vitest run readiness.test.ts",
+      "result": "PASS: 1 file / 8 tests (DB failure 503, live 200, no connection accumulation, consumer probe)",
+      "exitCode": 0,
+      "log": "docs/04_audit/evidence/PROD-20260913/AAA-22/tests.log"
+    }
+  ],
+  "limitations": [
+    "consumer probe is injectable but not yet wired to the continuous worker composition (AAA-19/AAA-21, D01 pending)",
+    "no production database observed"
+  ],
+  "observedAt": "2026-09-13T14:41:17.825Z",
+  "contractSha256": "7cff313dae00a5aade0a8e5f5414ce397ff4fd08b8b60e25ca9da1a775956ab6",
+  "sourceSha256": {
+    "apps/api/src/readiness.ts": "a3b585e72606f1b52ebedddc586632f3151898f8c99c3765f1af0574f278bc72",
+    "apps/api/src/server.ts": "d31d2385382e47df4a2b0f4a347cb3386fc95f9307e66244e4e8f1b3e2b7e4e6",
+    "apps/api/src/__tests__/readiness.test.ts": "7d953d39f4aa8e8876280a115b6a52f3b669a80412dde9fed4561783d71c0242"
+  },
+  "evidenceSha256": {
+    "docs/04_audit/evidence/PROD-20260913/AAA-22/tests.log": "aee1b4ae3dd8fc709c30ec9146dcb6f504d77b985f5aeada16bcf5915398e2d2",
+    "docs/04_audit/evidence/PROD-20260913/PROD-01/readiness-probe.after.json": "fe342133c84b24f7295e04c851f35147061cf6c8da02b628c992a0bd78ae7957"
+  },
+  "independence": "builder output; independent review required before VERIFIED/DONE",
+  "reviewFindingsAddressed": [
+    {
+      "finding": "P3: readiness probe verdict accepted any query attempt",
+      "fix": "verdict now requires queries>=1, /ready 503 and /live 200; readiness-probe.after.json regenerated"
+    },
+    {
+      "finding": "P3 (F3): PROD-01 input hash of readiness-probe.ts was stale after the verdict tightening",
+      "fix": "PROD-01 manifest regenerated after all bytes froze"
+    }
+  ]
+}

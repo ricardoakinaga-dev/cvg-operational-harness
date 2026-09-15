@@ -1,0 +1,193 @@
+{
+  "taskId": "AAA-08",
+  "rework": "AAA08-C1-F01",
+  "program": "AAA-20260912",
+  "title": "Vincular action à capability antes de grants/documentos",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "observedAt": "2026-09-12T21:55:00+00:00",
+  "executor": "agent-1 (policy front)",
+  "authority": "coordinator rework task 2026-09-12 (docs/04_audit/evidence/AAA/AAA-08/review-coordinator-r2/next-task-agent-1.md); controlled local scope only",
+  "finding": {
+    "id": "AAA08-C1-F01",
+    "severity": "P1",
+    "before": "capability=appointment.modify + resource appointment_draft + action=appointment.confirm|reschedule|cancel -> ALLOW / executed / 1 fake-tool call",
+    "after": "DENY action_capability_mismatch / denied / 0 fake-tool calls",
+    "artifact": "docs/04_audit/evidence/AAA/AAA-08/review-coordinator-r2/action-binding-probe.mjs"
+  },
+  "changedFiles": [
+    {
+      "path": "packages/policy-engine/src/capabilities.ts",
+      "sha256": "8bd71d6980b503394e8c66237d1174d87241ce97e15493e17b70685326bfb00c",
+      "change": "CAPABILITY_ACTIONS closed exhaustive map + actionMatchesCapability; declared read alias for read-only capabilities"
+    },
+    {
+      "path": "packages/policy-engine/src/engine.ts",
+      "sha256": "70fdc4f16de73df51a814c07dadd127c10830cdf489ab36a8a67bf3b66525d05",
+      "change": "action_capability_mismatch check after tenant/resource and before grants/role/documents"
+    },
+    {
+      "path": "packages/policy-engine/src/__tests__/capability-scope.test.ts",
+      "sha256": "eb2464b0fe417ef21479a2edbd982454d7d11b6e3dca73c85e308adc700e13ab",
+      "change": "new action-binding negative/positive matrix"
+    },
+    {
+      "path": "packages/policy-engine/src/__tests__/policy-engine.test.ts",
+      "sha256": "9f78e847e196c59cd8e15b3d9a948c66e1e66eb7bc82c88ba373c8c271e65767",
+      "change": "existing tests now pass the canonical action (or declared read alias); no behavior weakened"
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/capability-action-binding.test.ts",
+      "sha256": "dca3f0661b778cb826f30573bd88e851394d965e4922c4a1d31023a1ae5aacc6",
+      "change": "new public-boundary regression with fake executor and zero-call assertions"
+    }
+  ],
+  "unchanged": [
+    "packages/agent-runtime/src/runtime.ts (probe combos now denied at policy before the runtime path)",
+    "packages/policy-engine/src/grants.ts (no grant added)",
+    "packages/policy/ legacy action-string engine",
+    "docs/02_spec/aaa_execution_contract.md (revision 2 untouched; normative addendum proposed separately for review)"
+  ],
+  "findingToTest": [
+    {
+      "case": "modify + draft + confirm",
+      "policyTest": "capability-scope.test.ts > denies sensitive actions smuggled through a draft capability",
+      "runtimeTest": "capability-action-binding.test.ts > denies smuggled sensitive actions with zero fake-tool calls"
+    },
+    {
+      "case": "modify + draft + reschedule",
+      "policyTest": "same",
+      "runtimeTest": "same"
+    },
+    {
+      "case": "modify + draft + cancel",
+      "policyTest": "same",
+      "runtimeTest": "same"
+    },
+    {
+      "case": "create + appointment + sensitive action",
+      "policyTest": "denies sensitive actions smuggled through create or read capabilities",
+      "runtimeTest": "n/a (policy boundary covered)"
+    },
+    {
+      "case": "read capability + sensitive action",
+      "policyTest": "same",
+      "runtimeTest": "n/a"
+    },
+    {
+      "case": "tenant policy ALLOW expansion on mismatch",
+      "policyTest": "does not let tenant policy expand a capability/action mismatch",
+      "runtimeTest": "n/a"
+    },
+    {
+      "case": "tenant mismatch precedence",
+      "policyTest": "keeps tenant mismatch precedence over action binding",
+      "runtimeTest": "n/a"
+    },
+    {
+      "case": "declared alias schedule.read/read and patient.summary.read/read",
+      "policyTest": "keeps declared aliases and rejects undeclared ones",
+      "runtimeTest": "n/a"
+    },
+    {
+      "case": "draft update remains executable",
+      "policyTest": "keeps legitimate draft, cancel and grant behavior after binding",
+      "runtimeTest": "keeps the legitimate draft update executable against the fake tool"
+    },
+    {
+      "case": "cancel requires approval; confirm/reschedule no grant",
+      "policyTest": "keeps legitimate draft, cancel and grant behavior after binding",
+      "runtimeTest": "keeps confirm/reschedule denied without grant and cancel behind approval"
+    }
+  ],
+  "checks": [
+    {
+      "command": "node --import tsx action-binding-probe.mjs (before)",
+      "exitCode": 0,
+      "result": "counterexample confirmed: 3x ALLOW/executed/1 call; exit 0 = criterion FAIL",
+      "artifact": "rework-aaa08-c1-f01/probe-before.json"
+    },
+    {
+      "command": "npx vitest run capability-scope.test.ts capability-action-binding.test.ts (RED)",
+      "exitCode": 1,
+      "result": "6 failed | 12 passed, failure expected before the fix",
+      "artifact": "rework-aaa08-c1-f01/red-rework.log"
+    },
+    {
+      "command": "npx vitest run packages/policy-engine/src/__tests__/ + runtime binding (GREEN)",
+      "exitCode": 0,
+      "result": "4 files | 38 tests PASS (after formatting)",
+      "artifact": "rework-aaa08-c1-f01/green-focused-post-format.log"
+    },
+    {
+      "command": "node --import tsx action-binding-probe.mjs (after)",
+      "exitCode": 1,
+      "result": "counterexample eliminated: 3x denied/DENY/0 calls; exit 1 because the old counterexample no longer holds",
+      "artifact": "rework-aaa08-c1-f01/probe-after.json"
+    },
+    {
+      "command": "npx vitest run agent-runtime + chaos",
+      "exitCode": 0,
+      "result": "3 files | 27 tests PASS",
+      "artifact": "rework-aaa08-c1-f01/cross-package-focused.log"
+    },
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "result": "177 files PASS | 4 skipped; 904 tests PASS | 27 skipped",
+      "artifact": "rework-aaa08-c1-f01/full-unit.log"
+    },
+    {
+      "command": "npm run test:coverage",
+      "exitCode": 0,
+      "result": "177 files/904 tests PASS; coverage 86.44 statements / 81.55 branches / 89.72 functions / 87.53 lines (above config thresholds 80; bar v2 numeric targets still pending)",
+      "artifact": "rework-aaa08-c1-f01/coverage.log"
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "rework-aaa08-c1-f01/typecheck.log"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "rework-aaa08-c1-f01/lint.log"
+    },
+    {
+      "command": "npx prettier --check <changed files>",
+      "exitCode": 0,
+      "result": "All matched files use Prettier code style",
+      "artifact": "rework-aaa08-c1-f01/green-focused-post-format.log"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "rework-aaa08-c1-f01/diff-stat.txt"
+    }
+  ],
+  "contractImpact": {
+    "aaaExecutionContract": "revision 2 (9df1a05f...) untouched; action binding is not yet normative in the frozen text",
+    "addendumProposal": "docs/04_audit/evidence/AAA/AAA-08/rework-aaa08-c1-f01/contract-addendum-proposal-action-binding.md",
+    "dependency": "implementation relies on the AAA-08 acceptance (explicit decision per sensitive action) plus the coordinator finding; the addendum must be versioned and reviewed before the rule is consumed as frozen contract. If rejected, this rework reverts or is rewritten."
+  },
+  "review": {
+    "status": "PENDING",
+    "reviewerRequirement": "coordinator or agent-2/agent-3; implementer cannot self-approve",
+    "requestedChecks": [
+      "rerun the probe and confirm DENY/0 calls for the three combos",
+      "challenge the alias map: any legitimate action not declared?",
+      "confirm check order: tenant -> resource -> action -> grants/role/documents",
+      "confirm draft allowed, cancel REQUIRE_APPROVAL, confirm/reschedule DENY",
+      "review the addendum proposal before treating action binding as frozen contract"
+    ]
+  },
+  "limitations": [
+    "No production or real action; the fake executor is the only tool used",
+    "Global format:check remains red on apps/api/src/server.ts (AAA-15 window), not on this rework",
+    "Bar v2 numeric coverage targets are still pending (AAA04-R1-F01); coverage reported without claiming the 90/85 proposal",
+    "AAA-05/AAA-16 reviews and later tasks remain with their owners"
+  ],
+  "nextAction": "Independent review of this rework and of the addendum; coordinator integrates status; AAA-07 waits for AAA-05 final review"
+}

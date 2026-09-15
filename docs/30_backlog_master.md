@@ -1,3 +1,380 @@
+# AAA-41 Phase 4 CAPABILITY BOUNDARY — evidence and certification closure — 2026-09-15T10:25:18-03:00
+
+- id: `CVG-PHASE4-CAPABILITY-BOUNDARY` / `AAA-41`
+- status: `IN_PROGRESS_CONTROLLED_AUDIT`; owner: `cvg-operational-harness`;
+  production `NO_GO`.
+- acceptance closure: neutral registry and governed public Runtime path are
+  implemented; recursive authority-spoof rejection, exact-version/negative
+  safety, provider swap, origin parity, concurrency, public conformance,
+  durable worker/approval PostgreSQL recovery, fresh-pool replay, and
+  uncertain-effect evidence are covered by current regressions. Archived
+  `.gauntlet-*` state is outside the candidate scope.
+- verification so far: focused `4/41`; full unit `258/1,811/115`; PostgreSQL
+  `27/200/0`; typecheck/lint/build PASS.
+- certification: final catalog passed all required gates except repository-wide
+  `format` (440 brownfield files); generated hashes and decision are coherent
+  and production remains `NO_GO`.
+- remaining: finish the controlled Gauntlet at `CONDITIONAL_PASS`; the fresh
+  critics did not return a report, so no unconditional approval is claimed.
+- limits: synthetic/disposable local only; no real provider, channel, MCP
+  network, credential, patient/financial data, sensitive action, deploy or
+  production release.
+
+# AAA-31 Phase 3 RUNTIME-V2 — iterative governed agent loop — 2026-09-15
+
+- status: `AUDIT_COMPLETE_CONTROLLED / CONDITIONAL_PASS`; independent critic
+  round 6 `APPROVE`; owner: `cvg-operational-harness`; production `NO_GO`.
+- scope: Runtime V2 iterative loop over the Phase 2 durable execution spine;
+  hybrid orchestrator, context engine, completion/sufficiency evaluation,
+  durable step checkpoints, budgets, loop detection, pause/resume, grounding,
+  trajectory export, and synthetic operational/knowledge certification.
+- acceptance: multi-step loop, semantic replan, tool chain, durable
+  WAITING_USER and WAITING_APPROVAL, checkpoint restart, effect safety, budget
+  stops, loop detection, mid-loop policy denial, zero unauthorized/duplicate
+  effects, tenant isolation, Runtime V1 compatibility.
+- delivered: contracts, runtime, orchestrator, context engine, evaluators,
+  migration `0019`, PostgreSQL step store, worker/API integration, evals,
+  demo/verify commands, docs and evidence.
+- verification: 256 files / 1,785 passed / 111 skipped; PostgreSQL 26/196/0;
+  E2E 6/6; evals 10/10; static gates PASS.
+- next_action: Phase 4 Skill Runtime + Capability Composition (or Phase 4A
+  Conversational Intelligence Layer) under a new gate.
+- limits: synthetic/controlled only; no real data/provider/channel/RAG/
+  deploy/external effect.
+
+# AAA-21-R4 — controlled vertical-effect repair audited — 2026-09-14
+
+- status: `AUDIT_COMPLETE_CONTROLLED / FINAL_CRITIC_BLOCKED_NO_REPORT`; owner:
+  `cvg-operational-harness`; mode: controlled BUILD + independent AUDIT;
+  production `NO_GO`.
+- scope: guarded synthetic phase-2 tool through the public operational worker,
+  PostgreSQL effect-journal confirmation/replay, HTTP/status evidence, and
+  bounded `demo:phase2`/`verify:phase2` commands.
+- dependency: `AAA-21-R3`, frozen `docs/phase2/QUALITY_BAR.md`, and the R4
+  contract in `docs/phase2/TASK.md`/`PRD.md`/`SPEC.md`.
+- acceptance: one durable `CONFIRMED` journal authority, no duplicate
+  synthetic invocation on replay, fail-closed production/config guards, and
+  focused/full/static/evidence checks with environment blockers explicit.
+- delivered: R4 memory and PostgreSQL vertical proofs, one confirmed journal
+  authority, replay without a second invocation, fail-closed guards, and
+  bounded `demo:phase2`/`verify:phase2` commands.
+- verification: focused `5/31`, full `250/1,727/110`, E2E `6/6`, and
+  PostgreSQL `24/190/0`; static/build/evidence gates passed.
+- current_result: `CONDITIONAL_PASS`; fresh R4 critic returned no report within
+  its bounded window and the matching mutation sentinel is recorded.
+- next_action: finish the Gauntlet; retain R3's controlled D4/D5 evidence and
+  all production/real-effect blocks.
+
+# AAA-21-R3 — controlled restart/fault proof complete — 2026-09-14
+
+- status: `AUDIT_COMPLETE_CONTROLLED / FINAL_CRITIC_PENDING`; owner:
+  `cvg-operational-harness`; mode: controlled BUILD + independent AUDIT.
+- delivered: post-claim fault hook, production/unknown-value fail-closed
+  guards, bounded worker idle/poll controls, and a real two-child disposable
+  PostgreSQL restart/reclaim proof with attempt/fence/event/effect assertions.
+- verification: R3 integration `1/1`; PostgreSQL `23 files / 189 tests / 0
+skips`; full regression `249 files / 1,724 passed / 109 skipped`; E2E `6/6`;
+  typecheck/lint/build/evals/startup smoke PASS.
+- current_result: `CONDITIONAL_PASS` pending the final fresh critic; D4/D5 are
+  proven only for the controlled disposable-PostgreSQL empty-tool harness;
+  production remains `NO_GO`.
+- blockers: no external-provider exactly-once proof, global 430-file
+  brownfield formatting drift, and Node 24 versus Node 22 target remain
+  documented limitations.
+- next_action: commission the final fresh read-only critic, record the bounded
+  outcome, finish the Gauntlet, and do not promote to production or real
+  effects.
+- evidence: `docs/phase2/evidence/AAA-21-R3_PROCESS_RESTART.json`,
+  `docs/phase2/PHASE_2_RESULT.json`, `docs/phase2/evidence/FINAL_SENTINEL.json`.
+
+# AAA-21-R3 — durability proof task opened — 2026-09-14
+
+- status: `SUPERSEDED_BY_AUDIT_ENTRY_ABOVE`; owner: `cvg-operational-harness`;
+  mode: controlled BUILD + independent AUDIT.
+- scope: satisfy the original Phase 2 restart/fault requirements with a
+  test-only post-claim child-process interruption, real PostgreSQL lease
+  recovery, and competing-worker proof; no external effects.
+- acceptance: `docs/phase2/TASK.md` R3 acceptance, including process identity,
+  attempt/fence, recovery event, one terminal outcome/effect authority,
+  production fail-closed behavior, and focused/full regression evidence.
+- next_action: completed by the audit entry above; only final critic and
+  publication bookkeeping remain; retain `NO_GO`.
+- evidence: `docs/phase2/TASK.md`, `docs/phase2/SPEC.md`,
+  `docs/phase2/QUALITY_BAR.json`.
+
+# AAA-21-R2 — final controlled backlog status — 2026-09-14
+
+- status: `REVIEW`; owner: `cvg-operational-harness`; mode: controlled BUILD +
+  independent AUDIT.
+- delivered: bounded retry/dead-letter, tenant/auth-scoped safe cancellation,
+  neutral worker concurrency and graceful stop, fail-closed execution
+  invariants, queue mutation guards, operational PostgreSQL preflight, focused
+  tests, full regression, E2E, disposable PostgreSQL D3 evidence, and a
+  least-privilege role/worker proof.
+- current_result: `CONDITIONAL_PASS`; focused `8/45`, full `249/1,720/108`,
+  E2E `6/6`, PostgreSQL `22/188/0`; sentinel `MATCH`. The four fresh critic
+  attempts returned no report, so this item is not promoted to `DONE`.
+- blockers: frozen `P2-CRITIC` report unavailable, D4/D5 not proven, global
+  formatting debt and Node-target mismatch remain; production and real effects
+  stay `NO_GO`.
+- next_action: commission a responsive fresh critic, then reassess the
+  quality-bar verdict and separately execute D4/D5 when authorized.
+- evidence: `docs/phase2/PHASE_2_RESULT.json`,
+  `docs/phase2/evidence/EVIDENCE_MANIFEST.json`,
+  `docs/phase2/evidence/FINAL_SENTINEL.json`.
+
+# AAA-21-R2 — controlled repair task — 2026-09-14
+
+- status: `IN_PROGRESS`; owner: `cvg-operational-harness`; mode: controlled
+  BUILD + independent AUDIT.
+- scope: bounded retry/dead-letter, safe tenant/auth-scoped cancellation,
+  neutral worker concurrency and graceful stop, state invariants, focused
+  HTTP/worker/failure tests, and evidence refresh.
+- dependencies: `AAA-21-R1`, `docs/phase2/TASK.md`, `SPEC.md`, and frozen
+  `QUALITY_BAR.md`.
+- acceptance: R2 acceptance in `docs/phase2/TASK.md`; live PostgreSQL,
+  process restart, RLS and D3–D5 remain environment-gated and cannot be
+  inferred from memory tests.
+- next_action: implement only the registered neutral controlled slice; keep
+  `PHASE_2_RESULT.json`/production `NO_GO` until fresh audit integration.
+
+# AAA-21-R1 — durable approval pause/resume repair — 2026-09-13
+
+- status: `AUDIT_COMPLETE_CONTROLLED / FINAL_CRITIC_PENDING`; owner: `cvg-operational-harness`; mode: controlled BUILD with independent AUDIT.
+- objective: bind `WAITING_APPROVAL` to the existing durable approval authority, expose authenticated decision/resume, and preserve tenant/policy/effect-journal invariants across restart-equivalent processing.
+- acceptance: registered in `docs/phase2/TASK.md`; no production or real-effect authorization; PostgreSQL D3–D5 remains mandatory before any release verdict.
+- next_action: record the fresh critic verdict; then obtain live PostgreSQL D3–D5 evidence and address the existing baseline debt.
+- evidence target: `docs/phase2/evidence/AAA-21-R1-*` plus updated phase2 report/manifest after audit.
+
+# AAA-21-PHASE2-DURABLE-EXECUTION-SPINE — final backlog status — 2026-09-13
+
+- status: `FAIL / REPAIR_REQUIRED`; owner: `cvg-operational-harness`; mode: controlled BUILD + independent AUDIT completed.
+- delivered: neutral HTTP submission, identity/idempotency, queue/outbox adapter, worker claim/recovery/heartbeat/fence token, public factory, synthetic effect journal, SQL migration/RLS shape, causal execution audit payload, reports and evidence sentinel.
+- blockers: authenticated durable approval pause/resume; real PostgreSQL migration/RLS/grant/restart/concurrency/fault proof; fresh approval critic after repair; global baseline debt remains.
+- next_action: register a new repair task under the CVG pipeline; no `DONE`, production release, or sensitive action is authorized by this entry.
+- evidence: `docs/phase2/PHASE_2_RESULT.json` (`FAIL`), `docs/phase2/PRODUCTION_READINESS_MATRIX.md` (`NO_GO`), `docs/phase2/evidence/FINAL_SENTINEL.json` (`MATCH` consistency only).
+
+# AAA-21-PHASE2-DURABLE-EXECUTION-SPINE — Phase 2 backlog item — 2026-09-13
+
+- status: `IN_PROGRESS`; owner: `cvg-operational-harness`; mode: controlled BUILD + independent AUDIT.
+- scope: canonical neutral HTTP submission, durable execution identity/state/queue, lease-fenced worker, public `createOperationalHarness` invocation, governed Runtime V1 outcome, audit/telemetry/effect evidence.
+- dependencies: Phase 0/1 neutral packages; pre-flight and frozen quality bar in `docs/phase2/`.
+- acceptance: `docs/phase2/QUALITY_BAR.md`; production remains `NO_GO` regardless of local result.
+- next_action: implement the neutral execution-spine contract and in-memory proof; then integrate PostgreSQL/API/worker and execute the frozen audit matrix.
+- limits: no real data/provider/channel/effect, no RAG/MCP/V2 loop, no deploy, no production release; PostgreSQL currently environment-blocked.
+
+# REF-20260913-PHASE-0-1 — CVG Operational Harness Phase 0/1 — 2026-09-13
+
+- status: `IN_PROGRESS`; stage `BUILD` controlado; origem: master prompt anexado + `docs/harness-audit/`.
+- acceptance: baseline/provenance/identity; neutral contracts; canonical factory; explicit orchestrator; governed single-pass Runtime V1; tool/policy/approval/model/audit/observability/state/knowledge/channel boundaries; dependency-direction tests; basic demo; docs/ADRs/report; no external effects.
+- gate: `SPEC_APPROVED_CONTROLLED_BUILD` em `docs/02_spec/0127_harness_refoundation.md`; Discovery/PRD gates específicos em `docs/00_discovery/0016_harness_refoundation.md` e `docs/01_prd/0027_harness_refoundation.md`.
+- evidence: `docs/refoundation/BASELINE_FREEZE.md`, `BASELINE.json`, `QUALITY_BAR.json`, `PHASE_0_1_TASK.md`, `PACKAGE_CLASSIFICATION.md`.
+- progress: contracts, descriptor-safe orchestrator, governed factory/runtime, bounded deadlines, demo, architecture tests, identity, provenance, package classification, architecture docs and ADRs implemented; focused `13/13`, typecheck/lint/build/evals and isolated package build PASS; full test delta recorded.
+- status: `CONDITIONAL_PASS`; report published at `docs/refoundation/PHASE_0_1_REPORT.md`; score `7.0/10`; production `NO-GO`.
+- next_action: open separately gated `PHASE-2/AAA-21` for durable HTTP→SQL→worker→runtime composition, then obtain a complete fresh post-fix audit.
+- limits: `AAA-21` continua lane separada; produção, dados reais, canais/providers, Docker, RAG institucional e ações sensíveis continuam `NO-GO`.
+
+# PROD-20260913 — rodada 4 — 2026-09-13
+
+- D02 (draft-only), D03 (alvos de laboratório), D04 (integrações reais bloqueadas), D05-3/4 (retenção/TTL aprovados) registradas; D05-SIG adiada. [Pacote](../02_spec/prod20260913_decision_packet.md).
+- **PROD-04 `VERIFIED`**: ApprovalStore durável com CAS SQL sob FOR UPDATE, migration 0015, revisão fresca PASS; gates 248 arquivos/1.775 testes/0 skips e PostgreSQL 20/174/0.
+- Próxima ação: AAA-21 (fronteira/composição HTTP→SQL→worker→kernel→efeito falso→audit), depois PROD-07/08/09. D04=A mantém AAA-37/38/39 bloqueados; produção NO-GO. [Relatório](../04_audit/0563_prod_round3_2026-09-13.md).
+
+# PROD-20260913 — rodada 3 — 2026-09-13
+
+- M1 encerrado com crítico fresco **PASS**; D01 registrada (opção C); [contrato de composição v2](../02_spec/aaa_composition_contract.md) congelado; AAA-19/20 `VERIFIED`; WAVE3-01 P1 corrigido e verificado.
+- `READY`: AAA-21 (composição) e PROD-04 (ApprovalStore durável; SPEC rota A + migration 0015). Próxima execução: PROD-04 → AAA-21 → PROD-07/08/09.
+- Gates finais: 247 arquivos/1.764 testes/0 skips; PostgreSQL 19/163/0; typecheck/build/startup PASS. D02–D05 seguem PENDING; produção NO-GO. [Relatório](../04_audit/0563_prod_round3_2026-09-13.md).
+
+# PROD-20260913 — reauditoria M1 round2 — 13/09/2026
+
+- status: `WAITING_HUMAN_APPROVAL` para D01–D05; lote técnico com revisão `CONDITIONAL PASS`, produto `NO-GO`.
+- last_completed_action: oito achados reproduzidos (seis P1/dois P2) corrigidos; readiness, sessão/formulário, tarefa+audit/replay, cleanup e preflight. Regressão independente:69 testes e77 perturbações de grants; sentinel2.659 arquivos limpo. Qualificação Node22: npm test1.645 passes/88 skips condicionais; cobertura1.733 testes sem skips, PostgreSQL163 sem skips, typecheck/lint/build/startup e E2E6/6; npm ci + build limpo PASS.
+- next_action: obter revisão com contexto novo para fechar M1; registrar D01 no pacote de decisões para iniciar ADR/PROD-04/AAA-06/21. Preparar contratos PROD-07/08/09 conforme dependências; seguir D03–D05 para operação/homologação/release.
+- Tarefas PROD-02/03/05/06 e AAA-22: `REVIEW`; histórico VERIFIED anterior preservado, não promovido nos bytes novos. PROD-14: `REVIEW`, pacote preparado, decisões PENDING.
+- [Relatório atual](04_audit/0562_prod_m1_reaudit_2026-09-13.md), [pacote D01–D05](02_spec/prod20260913_decision_packet.md), [evidência](04_audit/evidence/PROD-20260913/reaudit-round2/manifest.json).
+- Limites: crítico final independente dos builders mas sem contexto totalmente novo; Docker sem permissão, nenhum restore físico/SLO aprovado/mutação integral/holdout/homologação/signoff novo. Nenhuma nota global AAA/State of Art. O baseline2525/2531 do registro anterior era pré-BUILD M1.
+
+# PROD-20260913 — execução do lote M1 — 2026-09-13
+
+- [Contrato M1](../02_spec/prod20260913_m1_corrections_contract.md) congelado `7cff313d…`; [PROD-01](04_audit/evidence/PROD-20260913/PROD-01/manifest.json) revalidou o baseline (0 fontes de produto alteradas vs auditoria) e o mapa 80/80+156/156.
+- `VERIFIED` no [delta](03_build/tracking/production_delta_backlog.json): PROD-01/02/03/05/06, com [revisão](../04_audit/evidence/PROD-20260913/independent-review/REVIEW.md), [resposta](../04_audit/evidence/PROD-20260913/independent-review/RESPONSE.md) e [revalidação](../04_audit/evidence/PROD-20260913/independent-review/revalidation.md) independentes. PROD-04 `BLOCKED` por D01/AAA-06. AAA-22 segue `REVIEW` (D13-04 verificado; composição consumer pendente).
+- Próximos passos: `PROD-14` (decisões D01–D05), `PROD-04` após D01, `PROD-07/08/09` (console/jornadas) e comprovação de composição AAA-06/21. Nenhuma capacidade real ou autorização de produção foi criada.
+
+# PLAN-PROD-20260913 — plano para produção — 2026-09-13
+
+- Entrega de planejamento `COMPLETED`. [Backlog consolidado](BACKLOG_PRODUCAO.md): 42 IDs AAA existentes + 14 IDs PROD complementares. Status AAA preservados no JSON existente; status PROD no [JSON delta](03_build/tracking/production_delta_backlog.json). Pré-requisitos novos de fechamento são cumulativos, sem renumerar histórico.
+- Cobertura planejada: D13-01..09, A01..20, 80 critérios e 156 linhas de requisitos identificados. Mapeamento não é prova de implementação. [Plano](PLANO_EXECUTIVO_PRODUCAO.md), [roadmap](ROADMAP_PRODUCAO.md), [validação](04_audit/evidence/PLAN-PROD-20260913/validation.json).
+- `next_action`: PROD-01 — revalidar candidato e preparar contratos/revisão das correções P1; conferir autorização aplicável antes de código. Programa PLANNED; nenhum BUILD/qualificação/release concedido por estes documentos.
+
+# AUD-20260913-DOCS — comparação docs × implementação — 2026-09-13
+
+- Task de auditoria: `COMPLETED`; artefato canônico [relatório 0560](04_audit/0560_docs_implementation_audit_2026-09-13.md). Código preservado; sem BUILD ou gate de produção concedido.
+- Achados novos/atuais D13-01..09 registrados no relatório com fonte, prioridade, responsável sugerido e aceite. D13-01 atomicidade SQL e D13-02 estado UI: P1, pendentes de correção revisada. D13-03 composição/D01, D13-04 readiness e D13-05 ApprovalStore durável permanecem impeditivos da qualificação integrada.
+- `next_action`: registrar/revisar task de correção D13-01 (mutação de jornada + audit na mesma transação), incluindo reprodução preservada e teste rollback/replay; executar BUILD somente no gate aplicável. D13-02 é frente independente possível. Tasks AAA não recebem DONE por esta auditoria.
+- Nota61/100; produção20/100 e NO-GO. Evidências e limites no relatório; não herdar o PASS histórico de P1 para código posterior.
+
+# AAA-20260912 — próxima tarefa do Agente 3
+
+- status: `IN_PROGRESS`; last_completed_action: verificação isolada da imagem runtime Node22 registrada em AAA-14, ainda REVIEW; nenhum resultado novo de imagem alegado.
+- next_action: **Agente 3 / imagem runtime AAA-14**, [prompt](04_audit/evidence/AAA/AAA-14/runtime-image-assignment/next-task-agent-3.md). Build explícito target runtime, instalação prod-only e smoke sintético; se Docker indisponível, preservar bloqueio sem equiparar fallback à imagem. Evidências somente, sem alterar produto/publicar imagem.
+- coordenação: Agente 1 mantém cobertura crítica AAA-07; Agente 2 mantém mutação dirigida AAA-12. Ensaio AAA-13 aprovado permanece histórico daquele snapshot; sem full certify novo ou gates/DONE concedidos.
+
+# AAA-20260912 — próxima tarefa do Agente 2
+
+- status: `IN_PROGRESS`; last_completed_action: tarefa de mutação dirigida AAA-12 registrada após cobertura aprovada; seleção deve ser congelada antes da execução, conforme AAA-04 v2 §9.1.
+- next_action: **Agente 2 / guards críticos do canal**, [prompt](04_audit/evidence/AAA/AAA-12/mutation-assignment/next-task-agent-2.md). Mutantes somente em cópia isolada; origem permite testes/evidências próprios. Nenhum resultado de mutação ainda medido ou aprovado.
+- coordenação: Agente 1 mantém cobertura crítica AAA-07; Agente 3 aguarda atribuição. AAA-12 REVIEW, sem DONE/G_QUALITY/SQL/AAA-21; não repetir cobertura já aceita como tarefa nova.
+
+# AAA-20260912 — auditoria das três entregas / próxima ação única — 2026-09-12
+
+- status: `IN_PROGRESS`; last_completed_action: AAA-07 C6-F01/F02 fechados; AAA-12 subset/branches críticos medidos aprovados; AAA-13 ensaio isolado aprovado. Três tasks em REVIEW, sem DONE. [Parecer](04_audit/evidence/AAA/coordinator-batch-review/REVIEW.md).
+- evidência independente: hashes AAA07 3/3, testes canal4/4+pinados14/14, ensaio52/52; approval+canal153 PASS; canal isolado105 PASS e coverage98,39/96,18/96,11/99,61; probe C6 exit0; verifier do snapshot exit0/27hashes. Full certify e suites globais não reexecutados.
+- next_action: **somente Agente 1 / cobertura crítica AAA-07**, [prompt](04_audit/evidence/AAA/coordinator-batch-review/next-task-agent-1.md). Agentes 2/3 aguardam atribuição do coordenador, sem repetir entregas aceitas nem iniciar outra task. AAA-09 não iniciada.
+- limites: shared-before/after têm metadados diferentes, linhas de hashes iguais. Snapshot Node24 não qualifica árvore atual/Node22 alvo. Cobertura global/mutação/durabilidade/composição/gates externos continuam pendentes; nenhum gate de produção ou G_QUALITY concedido.
+
+# AAA-20260912 — aceite AAA12-C4-F01 / cobertura do canal — 2026-09-12
+
+- status: `IN_PROGRESS`; last_completed_action: C4-F01 fechado independentemente; 14 hashes/digest 70311445… conferidos, canal 7/57 PASS; probe de 6 versões rejeita sem alterar bytes/permitir claim. AAA-12 **REVIEW**, sem DONE.
+- next_action: somente **Agente 2 / cobertura comportamental AAA-12**, [prompt](04_audit/evidence/AAA/AAA-12/review-coordinator-c4/next-task-agent-2.md), testes/evidências próprios e código do produto preservado. Frentes 1/3 mantidas.
+- evidência: [parecer](04_audit/evidence/AAA/AAA-12/review-coordinator-c4/REVIEW.md), checks/logs/probe adjacentes. Subset functions 79,61% FAIL e branches críticos abaixo da barra permanecem abertos; PASS global não compensa. Coverage e suites globais não reexecutados nesta auditoria focada.
+- limites: sem SQL/migrations/AAA-21, durabilidade física, produção ou gate concedido; nenhum código do produto alterado pelo coordenador.
+
+# AAA-20260912 — aceite AAA-13 R4 / ensaio isolado — 2026-09-12
+
+- status: `IN_PROGRESS`; last_completed_action: R4 aprovado no recorte corrigido; C5-F01/F02 fechados, C3-F01 continua fechado. 3 hashes conferidos; 37/37 checks + R1/R2 do coordenador PASS (39/39 no harness estendido); histórico 27 hashes PASS. AAA-13 **REVIEW**, sem DONE/qualificação atual.
+- next_action: somente **Agente 3 / ensaio integrado AAA-13**, [prompt](04_audit/evidence/AAA/AAA-13/review-coordinator-r4/next-task-agent-3.md). Full certify autorizado exclusivamente em cópia consistente/isolada com dependências sintéticas, seguido do verificador; sem editar produto/certificados compartilhados. Frentes 1/2 preservadas.
+- evidência: [parecer](04_audit/evidence/AAA/AAA-13/review-coordinator-r4/REVIEW.md), hashes/logs/reprodução adjacentes. 37 checks incluem 9 helpers e 28 CLI; C0 sintético não comprova integração do produtor completo. Chaos obrigatório conferido com suíte real.
+- limites: full certify, suites globais, Docker e benchmark não executados nesta auditoria. Nenhuma autoridade de produção, signoff ou G_QUALITY inferida. Débitos declarados dos demais parsers permanecem registrados.
+
+# AAA-20260912 — auditoria AAA-07 lifecycle — 2026-09-12
+
+- status: `IN_PROGRESS`; last_completed_action: 4 hashes conferidos e pacote 4/42 PASS. AAA-07 **REWORK** por AAA07-C6-F01/F02 P1: sweep antigo modifica reserva nova; token liberado pode ser reutilizado para EXECUTING. Probes públicos sintéticos, zero efeitos.
+- next_action: somente **Agente 1 / fencing entre gerações AAA-07**, [prompt](04_audit/evidence/AAA/AAA-07/review-coordinator/next-task-agent-1.md). AAA-09 aguarda correção revisada. Frentes 2/3 preservadas.
+- evidência: [parecer](04_audit/evidence/AAA/AAA-07/review-coordinator/REVIEW.md), hashes/logs/probe no mesmo diretório. Suítes globais do executor não reexecutadas nesta revisão; coverage crítica 84,48% abaixo da barra congelada 95%, sem dispensa. Store local não prova durabilidade.
+- limites: nenhum código de produto ou artefato antigo alterado pelo coordenador; sem SQL/ação real/commit/push/deploy, gate ou DONE.
+
+# AAA-20260912 — auditoria AAA-13 rework R3 — 2026-09-12
+
+- status: `IN_PROGRESS`; last_completed_action: três hashes conferidos, self-test 19/19 PASS, histórico 27 hashes PASS. AAA13-C3-F01 fechado no recorte de evidência ausente.
+- AAA-13: **REWORK** por AAA13-C5-F01/F02 P1. CLI público aceita coverage sem pct e chaos com 14 assertions skipped; ambos exit 0 sem failures em fixtures isoladas. [Parecer](04_audit/evidence/AAA/AAA-13/review-coordinator-rework-r3/REVIEW.md).
+- next_action: somente **Agente 3 / validação dos resultados brutos AAA-13**, [prompt](04_audit/evidence/AAA/AAA-13/review-coordinator-rework-r3/next-task-agent-3.md). Frentes 1/2 e locks preservados. Nova hipótese com RED executado, sem relaxar barra/limite de tentativas.
+- limites: nenhum produto/certificado compartilhado alterado nesta revisão; full certify, Docker e suites globais não executados. Nenhum gate, DONE ou qualificação atual concedido.
+
+# AAA-20260912 — auditoria AAA-12 canonicalização/versionamento — 2026-09-12
+
+- status: `IN_PROGRESS`; last_completed_action: candidato 8d49cb2a… conferido (13 hashes/digest), regressão canal 6/51 PASS. Core canonicalização corrigido; **AAA-12 REWORK** por AAA12-C4-F01 P2: versão explícita malformada interpretada como legado permite reserva/mutação/claim na API pública do journal com caller legado.
+- next_action: somente **Agente 2 / AAA12-C4-F01**, [prompt](04_audit/evidence/AAA/AAA-12/review-coordinator-hash-version/next-task-agent-2.md). Corrigir ausência vs versão inválida, preservar bytes e provar falha fechada. Frentes 1/3 não redistribuídas.
+- limites: gateway shared atual rejeita esses registros, sem envio externo na prova; subset coverage FAIL preservado, global PASS não o compensa. SQL/migrations/actor/AAA-21 continuam fora do recorte. Nenhum gate ou DONE concedido.
+- evidência: [parecer](04_audit/evidence/AAA/AAA-12/review-coordinator-hash-version/REVIEW.md), probe/log/checks no mesmo diretório. Suites completas/PostgreSQL não reexecutadas na revisão focada; código do produto não alterado pelo coordenador.
+
+# AAA-20260912 — aceite do rework AAA-08 / próximo AAA-07 — 2026-09-12
+
+- status: `IN_PROGRESS`; last_completed_action: AAA08-C1-F01 fechado; correção funcional aprovada independentemente. Cinco hashes conferidos, 6 arquivos/62 testes PASS; probe de aceite DENY/action_capability_mismatch/0 nos três casos, exit 0. AAA-08 REVIEW de qualificação integral, sem DONE.
+- contrato: AAA-03 rev2 + adendo AAA03-R-ACT-v1 aprovados e congelados tecnicamente por hash; AAA-03 VERIFIED documental. Coverage/qualificação integrada e negação de adapter real (AAA-09/T-19) não foram declaradas concluídas.
+- next_action: somente **Agente 1 / AAA-07 lifecycle de aprovação local**, [prompt](04_audit/evidence/AAA/AAA-08/review-coordinator-rework/next-task-agent-1.md). Insumos AAA-03/04/05 disponíveis; READY restrito a fixture sintética/correção local, sem autoridade para SQL/BUILD real/produção. Outras frentes preservadas.
+- evidência: [parecer](04_audit/evidence/AAA/AAA-08/review-coordinator-rework/REVIEW.md), checks/log/probe no mesmo diretório. Suíte global do autor mantida como histórica; sem reexecução de gates globais nesta auditoria focada, nenhum código de produto alterado pelo coordenador.
+
+# AAA-20260912 — revisão independente AAA-05 v3 — 2026-09-12
+
+- status: `IN_PROGRESS`; last_completed_action: v3 `cebeddab…` aprovada tecnicamente, **AAA-05 VERIFIED documental**, C2-F01/F02/F03 fechados no contrato. Congelamento técnico por hash registrado; nenhuma aprovação humana, SQL, produção ou DONE concedida.
+- validação: hashes de artefatos e v1/v2 conferidos, patch reproduz bytes exatos da v3 em cópia descartável, prettier do contrato PASS; 12 hashes AAA-12 intactos. Gap de canonicalização de código permanece aberto; suíte produto não reexecutada para revisão documental.
+- next_action: somente **Agente 2 / AAA-12 canonicalização e versão de hash**, [prompt](04_audit/evidence/AAA/AAA-05/review-coordinator-v3/next-task-agent-2.md). Recorte de rework local e locks registrados, sem SQL/migrations/composição. Agentes 1/3 preservam suas tarefas vigentes.
+- evidência: [parecer](04_audit/evidence/AAA/AAA-05/review-coordinator-v3/REVIEW.md), checks.json e log de formato no mesmo diretório. Dependências/gates completos seguem exigidos para promoção; nenhuma autorização inferida por status.
+
+# AAA-20260912 — auditoria do handoff Agente 3 — 2026-09-12
+
+- status: `IN_PROGRESS`; last_completed_action: auditoria direta das quatro entregas. **AAA-13 REWORK**, AAA13-C3-F01 P1: CLI público qualificou fixture sem gates executados/logs/artefatos; N1–N9 passaram apesar do contraexemplo.
+- AAA-04 v2: VERIFIED documental e congelamento técnico por hash, condições F01/F02 atendidas; nenhuma aprovação humana/G_SPEC/produção concedida. AAA-14: REVIEW, licenças isoladas 372/21 internos/0 bloqueadas; imagem NOT_RUN. AAA-15: REVIEW, prettier do arquivo PASS e equivalência AST completa revalidada; gate global pendente.
+- next_action: somente **Agente 3 / rework AAA-13**, [prompt](04_audit/evidence/AAA/AAA-13/review-coordinator-r3/next-task-agent-3.md). Agentes 1/2 preservam AAA-08 e AAA-05 v3 respectivamente. Não iniciar full certify antes de correção revisada e janela estável.
+- evidência: [parecer](04_audit/evidence/AAA/AAA-13/review-coordinator-r3/REVIEW.md), probe CLI isolado, hashes, logs de barra/licenças/histórico/AST no mesmo diretório. Docker, full certify, audit de rede atual e suites completas não reexecutados. Nenhum arquivo de produto/certificado anterior alterado pelo coordenador.
+
+# AAA-20260912 — auditoria do retorno Agente 1 / rodada 2 — 2026-09-12
+
+- status: `IN_PROGRESS`; last_completed_action: hashes AAA-08 conferidos, suíte policy 3/29 PASS e reprodução F15 DENY/0 reexecutadas. Novo contraexemplo: modify + draft + action confirm/reschedule/cancel retorna ALLOW com 1 ferramenta falsa por caso. **AAA-08 REWORK**, AAA08-C1-F01 P1.
+- next_action: somente **Agente 1 / rework AAA-08**, [prompt](04_audit/evidence/AAA/AAA-08/review-coordinator-r2/next-task-agent-1.md). Outras frentes preservadas; Agente 2 continua AAA-05 v3. Coordenador integra registros comuns após o retorno.
+- reconciliação: AAA-03 rev2 `9df1a05f…` já tem APPROVE independente estático; AAA-04 v2 já publicada, 6 hashes conferidos, revisão específica pendente. Não transferir parecer de v1 nem inventar freeze/BUILD. AAA-05 permanece REWORK; aprovação local AAA-16 já registrada não equivale a DONE.
+- evidência: [parecer](04_audit/evidence/AAA/AAA-08/review-coordinator-r2/REVIEW.md), logs/probes/checks no mesmo diretório. Suíte completa, coverage e gates globais não reexecutados nesta auditoria; números anteriores permanecem históricos. Nenhum código de produto alterado, nenhum efeito real ou gate concedido.
+
+# AAA-20260912 — auditoria do retorno Agente 2 / v2 — 2026-09-12
+
+- status: `IN_PROGRESS`; last_completed_action: auditoria direta de AAA-05 v2 e handoffs; **AAA-05 REWORK** por C2-F01..F03. Probe executado comprova divergência de hashes com metadata válida; release ausente na porta e plano SQL divergente das decisões existentes.
+- AAA-12: REVIEW, APPROVE independente limitado ao host-local; 12 hashes intactos e errata do digest reproduzida (AAA12-R3-F01 fechado). AAA12-R3-F02 aberto, critério persistido em AAA-21; cobertura/canonicalização pendentes. AAA-16: REVIEW, APPROVE independente funcional local confirmado no log 84/84 exit 0; promoção depende dos gates/dependências existentes.
+- next_action: **somente Agente 2 / AAA-05 v3 documental**, conforme [prompt](04_audit/evidence/AAA/AAA-05/review-coordinator-v2/next-task-agent-2.md). Outras frentes não redistribuídas. O coordenador integra registros; executor entrega evidência própria.
+- evidência: [parecer](04_audit/evidence/AAA/AAA-05/review-coordinator-v2/REVIEW.md), probe executado e checks.json no mesmo diretório. Suítes completas não reexecutadas nesta rodada documental; logs independentes inspecionados. Nenhum código do produto alterado, nenhum gate ou DONE concedido. Fsync desligado não comprova durabilidade física; produção permanece NO-GO.
+
+# AAA-20260912 — recebimento documentado da frente 2 — 2026-09-12
+
+- status: `IN_PROGRESS`; last_completed_action: manifestos AAA-05/12/16 recebidos e hashes declarados conferidos; três entregas `IMPLEMENTED`, revisão independente pendente, promoção bloqueada. Não equivale a DONE ou fechamento de achados.
+- next_action: Agente 3 revisa as três entregas; Agente 1 revisa AAA-04 e integra contratos/pareceres; Agente 2 prepara respostas e desenho SQL. Instruções vigentes: [adendo e prompts 0327](03_build/0327_aaa_round2_coordination.md).
+- coordenação: migration 0012 reservada ao Agente 2 para planejamento; paths/task dos adapters SQL e gates ainda necessários. Integração outbox/postgres/runtime permanece com Agente 1. Registros comuns retornam ao owner Agente 1 após esta atualização solicitada pelo usuário.
+- limites: journal single-host sem fsync; PG 84/84 reportado em cluster descartável com fsync desligado; cobertura crítica abaixo da barra. Testes do produto não reexecutados neste recebimento. Nenhum gate, nota AAA ou autorização de produção concedido.
+- evidências: `docs/04_audit/evidence/AAA-20260912-AGENT2-RECEIPT/manifest.json`. Os registros abaixo são históricos e preservados.
+
+# AAA-20260912 — rodada 2: estado reconciliado — 2026-09-12
+
+- fonte canônica: [JSON](03_build/tracking/aaa_program_backlog.json); ledger: [execução](03_build/tracking/aaa_execution_ledger.json); instruções/prompts: [0327](03_build/0327_aaa_round2_coordination.md).
+- AAA-01: VERIFIED para baseline histórico, sem qualificar working tree atual. AAA-03: REVIEW com APPROVE técnico condicionado; AAA-04: REVIEW com manifesto presente; AAA-05: REVIEW para reconciliação; AAA-16: REVIEW da prova 84/84; AAA-12: BLOCKED para promoção até contratos/dependências/aceite, sem descarte do código produzido.
+- próximos responsáveis: Agente 1 revisa AAA-04 e coordena 03/05; Agente 2 entrega mapping e manifestos 12/16; Agente 3 revisa hashes finais e evidência, avança 14/15/13 após gates. Suas alterações exigem outro revisor.
+- prontidão granular: AAA-08 exige 03/04; AAA-07 exige 03/04/05; AAA-09 exige 07/08/04; AAA-10 exige também 05/16; AAA-11 segue 10/04. Nenhum gate BUILD ou final concedido pela atualização de status.
+- configuração corrente: três agentes, revisão alternada, recurso compartilhado com owner único. Planejamento original de quatro slots permanece baseline.
+- achados permanecem abertos até fechamento específico. Snapshot, logs e pareceres históricos preservados.
+
+# AAA-20260912 — rodada 2: revisão, reconciliação e AAA-08 — 2026-09-12
+
+- `AAA-04` revisada independentemente pelo agent-1: `APPROVE_WITH_CONDITIONS` (F01 cobertura/mutação e F02 performance exigem barra v2; escopo de AAA-08 liberado). Evidência: `docs/04_audit/evidence/AAA/AAA-04/review-agent-1/`.
+- `AAA-03` revisão 2 `9df1a05f…`: reconciliada com AAA-05 (identidade de operação, payload, journal, outbox, exemplos de retry/colisão) e condições do parecer fechadas; revisão final pendente.
+- `AAA-08` implementada e em `REVIEW`: draft×real separados, `confirm`/`reschedule` negadas, `modify` restrito a draft; reprodução F15 `ALLOW`+1 → `DENY`+0; suíte 176 arquivos/895 testes PASS. Evidência: `docs/04_audit/evidence/AAA/AAA-08/`.
+- `AAA-05`/`AAA-12`/`AAA-16` entregues pelo agent-2 (`IMPLEMENTED`, revisão pendente); decisões de migration/ownership `D05-1`/`D05-2` e composição `idempotencyKey=operationKey` no [ledger](03_build/tracking/aaa_execution_ledger.json). `AAA-07` aguarda AAA-05; `AAA-10` aguarda AAA-16 + handoff. Produção e integrações externas seguem `NO-GO`.
+
+# AAA-20260912 — rodada 1: baseline e contratos — 2026-09-12
+
+- status: `IN_PROGRESS`; `AAA-01` e `AAA-03` em `REVIEW`; nenhum código de produto alterado.
+- `AAA-01`: candidato pinado (858 arquivos, digest `9ed0777a…`), `reproduce.mjs` idêntico à auditoria (`cdb6032a…`), typecheck/lint/`npm test` PASS, `format:check` FAIL (F13), PostgreSQL 58 PASS/26 skips (F14); 15/15 achados `OPEN`. Evidência: `docs/04_audit/evidence/AAA/AAA-01/manifest.json`.
+- `AAA-03`: contrato `docs/02_spec/aaa_execution_contract.md` (sha256 `b8da48a6…`) com proposta imutável, estados de aprovação com reserva/incerteza, matriz de crash, journal de efeito, limites e separação draft×real. Evidência: `docs/04_audit/evidence/AAA/AAA-03/manifest.json`.
+- coordenação e bloqueios: [aaa_execution_ledger.json](03_build/tracking/aaa_execution_ledger.json). `AAA-04`/`AAA-05`/`AAA-16` sem artefato atual; `AAA-07`–`AAA-11` bloqueadas por dependência. Produção e integrações externas seguem `NO-GO`.
+
+### Adendo 2026-09-12T20:37Z — execução concorrente detectada
+
+- Agent 2 iniciou AAA-05 (`docs/02_spec/aaa_data_api_contract.md` PROPOSTO), AAA-12 (journal do canal) e AAA-16 (PostgreSQL descartável em `/tmp/opencode/aaa-agent2-pg16`, porta 55432; 84/84 testes PASS exit 0). Tudo aguarda revisão independente; a integração com o `operationKey`/`EffectJournalPort` do AAA-03 precisa ser reconciliada antes de congelar.
+- Agent 1 re-hasheou `runtime.ts`, `approval-engine`, `policy-engine` e `persistence/outbox-postgres` sem alteração; o `certification/license-report.json` gerado por `licenses:check` foi restaurado.
+
+# AAA-20260912 — planejamento executivo multiagente
+
+- entrega documental: `COMPLETED`; programa de implementação: planejado, nenhum BUILD executado nesta rodada.
+- origem: pedido do usuário para plano executivo, roadmap e backlog de todos os itens da auditoria 0558, visando qualidade State of Art/Triplo AAA demonstrada.
+- fonte canônica: [42 tasks e DAG](03_build/tracking/aaa_program_backlog.json); [visão detalhada 0326](03_build/0326_aaa_backlog.md), [plano 0324](03_build/0324_aaa_executive_plan.md), [roadmap 0325](03_build/0325_aaa_roadmap.md).
+- cobertura: 20/20 áreas e 15/15 achados; seis fases/sprints; lead + dois builders + crítico fresco, com ownership e gates explícitos.
+- próximo item: `AAA-01`, revalidação read-only; preparar AAA-02/03/04 e SPECs antes de BUILD. Todos os gates novos de implementação/externos/humanos continuam não concedidos.
+- rastreabilidade: P10-B01–B10, RF-011/REM-02 e limites REM-29 mapeados; histórico preservado. Status mutável das tasks pertence somente ao JSON canônico.
+
+# AUD-20260912-001 — auditoria de código atual
+
+- status: `COMPLETED` para a entrega da auditoria; 15 achados abertos, sem BUILD de correções.
+- autorização: pedido do usuário para auditoria completa com notas de 0–100; escopo de inspeção, verificações sintéticas, relatório e atualização operacional.
+- task: auditar API/worker/web/pacotes, rastrear entrypoints e invariantes, executar gates disponíveis e registrar evidência; dependência: sistema controlado funcional; aceite: notas justificadas, reprodução dos achados e limitações explícitas.
+- resultado: `60/100` consolidado (média 60,45), produção `20/100`; `NO_GO_PRODUCTION_AND_NEW_EXTERNAL_EFFECTS`.
+- evidência canônica e critérios de fechamento: [relatório 0558](04_audit/0558_code_audit_2026-09-12.md), [evidência 0559](04_audit/0559_code_audit_evidence_2026-09-12.json).
+- próxima lane proposta: F01/F02 binding e estado de aprovação; F03/F04 idempotência; F15 separação draft/ação real. Definir contratos e registrar tasks antes do BUILD.
+- demais achados: F05 limites, F06 readiness, F07 observabilidade, F08 composição/identidade, F09 jornadas PostgreSQL, F10 worker contínuo, F11 certificado versus candidato, F12 dependências/licenças, F13 formato, F14 suficiência de testes/evals/operação.
+- gates externos/humanos anteriores continuam obrigatórios; este relatório não libera dados reais, integrações reais, piloto ou produção.
+
+# OPS-20260912-002 — Full local CVG chain
+
+- status: `COMPLETED_CONTROLLED`; entrega: `Evolution API -> Gateway -> Connect Desk -> Agent Secretary`, sem Chatwoot.
+- aceite observado: HMAC Gateway/Desk, persistência e IDs correlacionados, invocação Secretary bem-sucedida e serviços bindados somente em loopback.
+- próximo gate: conexão de um número exclusivamente de teste via QR; para piloto/produção real continuam pendentes TLS/IdP, PostgreSQL RLS, backup/RPO-RTO, observabilidade central, fonte institucional, revisão LGPD/security e signoff humano.
+
+# OPS-20260912 — Local production simulation
+
+- id: `OPS-20260912-001_DOCKER_LOCKFILE_AND_RUNTIME`
+- status: `COMPLETED_CONTROLLED`
+- owner: `runtime/supply-chain`
+- entrega: imagem Docker reproduzivel da Secretary e smoke integrado na suite local isolada.
+- aceite: `npm ci` deterministico, build Docker PASS, `/live` e `/ready` observados no runtime; capacidades externas e sensiveis permanecem desligadas.
+- evidencia: lockfile deterministico, imagem API/web construida, `/live` e `/ready` observados, suite integral 172/864 PASS e fluxo sintetico Desk -> adapter HMAC -> Secretary PASS.
+- proximo gate: TLS/IdP, PostgreSQL e RPO/RTO, provider/canal/fonte institucional e signoff humano continuam obrigatorios antes de piloto ou producao real.
+
 # PHASE 10 — backlog de produção assurance — 2026-09-11
 
 - status: `READY_FOR_NEXT_STEP`; itens rastreáveis em `docs/10_phase10/PHASE10_BACKLOG.json`.

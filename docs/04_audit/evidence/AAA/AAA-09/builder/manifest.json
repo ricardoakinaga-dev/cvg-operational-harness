@@ -1,0 +1,105 @@
+{
+  "taskId": "AAA-09",
+  "program": "AAA-20260912",
+  "title": "Vincular ferramenta ao payload final aprovado",
+  "status": "IMPLEMENTED_PENDING_REVIEW",
+  "observedAt": "2026-09-12T22:45:00-03:00",
+  "executor": "builder agent (agent-runtime lane)",
+  "authority": "user instruction 2026-09-12: controlled local corrections with negative regressions; no production, no real actions, synthetic fixtures only",
+  "gate": {
+    "G_SPEC": "aaa_execution_contract.md revision 2 (PROPOSED_NOT_FROZEN); task executed under the explicit local BUILD authorization of this round",
+    "BUILD": "CONTROLLED_LOCAL_ONLY; no commit/push/deploy; no npm install; no real provider/channel/IdP"
+  },
+  "candidateBinding": {
+    "head": "512bc11e80fbf7c7b8baf6263aacc811ff829309",
+    "changedByThisTask": [
+      "packages/agent-runtime/src/proposal.ts sha256 2f7456250b454232f0966360ef56dc34cc78c312743f590765bf8d28ef230272 (new)",
+      "packages/agent-runtime/src/runtime.ts sha256 5c3123f60f670dcb1abc23b678a4f8f3b609ac06ff98e65944f4bba6de246be6",
+      "packages/agent-runtime/src/contracts.ts sha256 28598fd33a53ce6370f025ff75e6f8be8e7a4e38fcdb53ba6343818066c7e1a2",
+      "packages/agent-runtime/src/index.ts sha256 37575ddaea0133eb5549dd0c278abf531f3bea232133c2cd441f20f151fea689 (added one allowed line: export * from './proposal.ts'; the effect-journal export line belongs to the concurrent AAA-10 lane)",
+      "packages/agent-runtime/src/__tests__/runtime-binding.test.ts sha256 4c031d26578a9333bd8339ef672513695c5d7ee59066afb99cebc06f08739d82 (new)",
+      "packages/agent-runtime/src/__tests__/agent-runtime.test.ts sha256 02dcad32aa7b29f879c7cfc1fee0dc1c0c6c0492e5985832c981c363d1bf207e (legacy journey updated)",
+      "packages/agent-runtime/src/__tests__/capability-action-binding.test.ts sha256 fb8374c2a6ba968098ca83fb2b3f1f9f1b219dc934cb26fd78353e1910279dd8 (harness declares controlled_fake scope)"
+    ],
+    "artifact": "docs/04_audit/evidence/AAA/AAA-09/builder/changed-hashes.txt",
+    "limitation": "The tree is shared with a concurrent AAA-10 lane (effect-journal.ts/test, persistence adapters). Full-tree candidateId is therefore not frozen; the hashes above pin the AAA-09 artifacts observed after all gates ran."
+  },
+  "implementation": {
+    "proposal": "Immutable ExecutionProposal per contract section 3: createDomainId('prop'), schemaVersion aaa-proposal-v1, section-2 proposalHash (sha256 of canonicalizeJson over identity fields + payload), canonical deep clone deep-frozen, createdAt/expiresAt ISO with default 15 min TTL, verifyExecutionProposalHash/isExecutionProposalExpired/canonicalPayloadEquals helpers.",
+    "requestTurn": "REQUIRE_APPROVAL without approvalId now calls the model, maps gateway schema_invalid to structured_output_invalid, freezes the model structured output (or {text}) into the proposal, persists proposalId/proposalHash/proposalPayload/capability/dataClassification/policyVersion/promptVersion/action/resource/tenant through approvals.request, and returns approval_required with approvalId. No tool and no outbox in this turn.",
+    "executionTurn": "approvalId present: policy must still be REQUIRE_APPROVAL and the stored policyVersion unchanged (else policy_changed); loads the approval, revalidates tenant/action/resource/agent/agentVersion/capability/dataClassification; rejects missing proposal fields; canonical-compares caller approvalPayload and recomputes the section-2 hash against the stored proposalHash (payload_mismatch on mutation/adulteration); rejects expired approvals (proposal_expired); reserves with payload+proposalHash, marks EXECUTING, executes the tool with payload = record.proposalPayload only (never the model), confirms with effect_confirmed evidence + executionRef, then enqueues outbox. A confirmed effect whose outbox fails returns executed/outbox_pending instead of a false denial.",
+    "failureHandling": "ToolExecutionError.certainty='no_effect' -> approvals.release (back to APPROVED) and denied with the error code; effect_started/unknown -> markUncertain and denied/effect_uncertain with no automatic retry; replay of an EXECUTED approval -> already_executed.",
+    "allowPath": "ALLOW keeps model -> tool -> outbox and never marks executed on tool or outbox failure.",
+    "legacyRemoval": "approvals.verifyAndConsume no longer appears anywhere in runtime.ts; the governed path reserves/confirms.",
+    "effectScopes": "GovernedAgentRuntimeOptions.effectScopes?: Partial<Record<Capability,'controlled_fake'|'real_authorized'>> and realEffectAuthorizations?: readonly string[] (empty default). real_authorized without an entry, or high-risk-write with no declaration, denies real_effect_not_authorized before the executor (T-19).",
+    "legacyTestUpdates": [
+      "agent-runtime.test.ts: the old assertion that the request turn stored input.approvalPayload and that a caller payload could execute is forbidden by contract section 3; the test now asserts the proposal payload is the frozen model output, a divergent caller approvalPayload is denied payload_mismatch, and execution/replay use the stored proposal. Harness also declares appointment.cancel as controlled_fake (T-19).",
+      "capability-action-binding.test.ts: harness declares appointment.cancel as controlled_fake so the existing 'cancel behind approval' assertion remains the tested behavior under T-19."
+    ]
+  },
+  "tests": {
+    "T-01": "PASS — tool receives exactly the approved payload A; later model output B is never requested (provider call count stays 1). runtime-binding.test.ts",
+    "T-02": "PASS — mutated proposalPayload and adulterated proposalHash both deny payload_mismatch; divergent caller approvalPayload denies payload_mismatch; tool never called. runtime-binding.test.ts",
+    "T-16_static": "PASS — runtime.ts contains no verifyAndConsume; reserve/confirm present. runtime-binding.test.ts + T-16-static-proof.txt",
+    "T-16_pre_effect": "PASS — proven pre-effect tool failure releases the approval back to APPROVED, never EXECUTED; ambiguous failure marks UNCERTAIN with no retry. runtime-binding.test.ts",
+    "T-19": "PASS — undeclared high-risk and real_authorized-without-authorization both deny real_effect_not_authorized with zero executor (and zero model) calls; already-approved proposal blocked when scope unauthorized; controlled_fake remains executable. runtime-binding.test.ts",
+    "proposal_immutability": "PASS — source mutation does not change the frozen canonical copy; deep freeze enforced; section-2 hash matches an independent reference computation; default TTL 15 min. runtime-binding.test.ts",
+    "proposal_expired": "PASS — execution after expiresAt denies proposal_expired with no tool/outbox. runtime-binding.test.ts",
+    "structured_output_invalid": "PASS — invalid structured output denies structured_output_invalid with no approval record, tool or outbox. runtime-binding.test.ts"
+  },
+  "checks": [
+    {
+      "command": "npx vitest run packages/agent-runtime/src/__tests__/runtime-binding.test.ts --no-file-parallelism --maxWorkers=2 (RED)",
+      "exitCode": 1,
+      "result": "suite failed to load (../proposal.ts missing); failure expected before the fix",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-09/builder/RED.log"
+    },
+    {
+      "command": "npx vitest run packages/agent-runtime --no-file-parallelism --maxWorkers=2",
+      "exitCode": 0,
+      "result": "4 files | 70 tests PASS (17 AAA-09 binding tests + 41 concurrent AAA-10 journal tests + 12 pre-existing)",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-09/builder/GREEN.log"
+    },
+    {
+      "command": "npx vitest run packages/agent-runtime/src/__tests__/runtime-binding.test.ts --no-file-parallelism --maxWorkers=2",
+      "exitCode": 0,
+      "result": "1 file | 17 tests PASS",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-09/builder/green-binding-only.log"
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-09/builder/typecheck.log"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-09/builder/lint.log"
+    },
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "result": "192 files passed | 4 skipped; 1113 tests passed | 46 skipped",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-09/builder/full-test.log"
+    },
+    {
+      "command": "grep -n 'verifyAndConsume' packages/agent-runtime/src/runtime.ts",
+      "exitCode": 1,
+      "result": "no match (expected); reserve/confirm at runtime.ts:654/734",
+      "artifact": "docs/04_audit/evidence/AAA/AAA-09/builder/T-16-static-proof.txt"
+    }
+  ],
+  "limitations": [
+    "No effect journal, operationKey, budget/deadline hardening or cancellation was implemented; those belong to AAA-10/AAA-11.",
+    "proposal_expired is evaluated against the approval record expiresAt (persisted from the proposal TTL); the full ExecutionProposal object is not stored in the approval record because approval-engine is out of scope.",
+    "The execution-turn hash revalidation uses the execution request agentProfile because the approval record does not persist agentProfile; a divergent profile fails closed as payload_mismatch.",
+    "Approval/capability in the execution turn are revalidated against the record when present; the approval record persists them only for proposals created by this runtime.",
+    "If approvals.confirm fails after a confirmed tool effect, the runtime marks UNCERTAIN and returns effect_confirmation_failed; completing the confirmation requires the AAA-10 journal/recovery path.",
+    "outbox failure after a confirmed effect returns outcome executed with reason outbox_pending and outboxPending=true; durable outbox retry is AAA-10/AAA-12 scope.",
+    "Full-tree typecheck/test numbers moved above the declared baseline because a concurrent AAA-10 lane added effect-journal tests; zero failures observed on the shared tree.",
+    "No independent review yet; builder cannot self-approve."
+  ],
+  "nextAction": "AAA-10 inserts the effect journal/operationKey between reserve and tool using the same approvalId; AAA-11 adds budgets/cancel. Independent review of AAA-09 against F01/F02/F15, T-01/T-02/T-16/T-19."
+}

@@ -1,0 +1,24 @@
+# Phase 3 Evidence Graph
+
+Requirement → implementation → test → evidence → conclusion.
+
+| Requirement | Implementation | Test | Evidence | Conclusion |
+| --- | --- | --- | --- | --- |
+| Multi-step iterative execution | `IterativeGovernedRuntime.runLoop` | `P3-LOOP-001`, `P3-WORKER-001` | 5-step trajectory `TOOL→MODEL→TOOL→VERIFY→RESPOND`; `steps ≥ 4`; 2 tool calls | PASS |
+| Replan after observation | `dispatchReplan`; REPLAN decision | `P3-LOOP-003`, `P3-EVAL-005` | `runtime.replanned` audit; changed next action | PASS |
+| Knowledge sufficiency + semantic retry | `dispatchKnowledge`, sufficiency observation | `P3-KNOWLEDGE-001` | queries `['infectious','condition-X causes']`, second accepted | PASS |
+| Tool chain | tool governance path | `P3-LOOP-001` | availability → reserve, journal CONFIRMED | PASS |
+| Waiting user durable | `ASK_USER` pause + `provideUserInput` | `P3-PAUSE-001`, `P3-WORKER-003`, `P3-CRASH-002` | WAITING_USER → QUEUED → SUCCEEDED across a fresh pool | PASS |
+| Waiting approval durable | approval pause + `resolveApproval` | `P3-PAUSE-002`, `P3-WORKER-004` | one effect across pause/resume; no duplicate | PASS |
+| Checkpoint restart | checkpoint before/after step | `P3-CHECKPOINT-001/002/007` | resume skips completed steps; decision reused; final write failure degrades the claim | PASS |
+| Effect crash safety | journal + deterministic operation key | `P3-CHECKPOINT-002`, effect journal tests | replayed result, one executor call | PASS |
+| Budget exhaustion | runtime budget checks | `P3-BUDGET-001/002/003` | MAX_STEPS / MAX_MODEL_CALLS / MAX_COST / MAX_DURATION | PASS |
+| Loop detection | loop signature ring + cycle closure + non-idempotent guard | `P3-LOOP-DETECT-001..005`, `P3-EVAL-007` | identical repeats stop at the threshold; non-idempotent tools stop before a second effect; A/B cycles stop on closure | PASS |
+| Policy denial mid-loop | policy gate before every effect | `P3-POLICY-001`, `P3-GOV-003`, `P3-EVAL-008` | denied/unsupported policy never executes | PASS |
+| Invalid orchestrator output | validation + sanitize | `P3-GOV-001`, `P3-ORCH-004/005` | zero effect; authority fields stripped | PASS |
+| Grounding | claims/evidence + claimed-effect guard | `P3-GROUNDING-001..006`, `P3-EVAL-010` | unsupported claim revised; false success refused (even with a tool id or a prior read); claimed effect accepted | PASS |
+| Tenant isolation | RLS + tenant context | `P3-TENANT-001` | cross-tenant steps/checkpoints null/empty | PASS |
+| Runtime V1 compatibility | runtime registry | `P3-COMPAT-001/002`, P3-WORKER-005 | both profiles through one factory | PASS |
+| Terminal finality | terminal checkpoint rejection | `P3-CHECKPOINT-004` | STATE_CONFLICT, no new step | PASS |
+| Post-effect recovery | checkpoint after effect | `P3-RESILIENCE-001` | response failure did not repeat the effect | PASS |
+| Trajectory audit | `readExecutionTrajectory`, step ledger | `P3-COMPAT-004`, P3-WORKER-001/002 | payload-free trajectory | PASS |

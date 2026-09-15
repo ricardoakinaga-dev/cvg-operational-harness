@@ -1,0 +1,2345 @@
+diff --git a/scripts/lib/certification-rules.mjs b/scripts/lib/certification-rules.mjs
+index acd259b..03039a3 100644
+--- a/scripts/lib/certification-rules.mjs
++++ b/scripts/lib/certification-rules.mjs
+@@ -1,3 +1,7 @@
++import { spawnSync } from 'node:child_process'
++import { createHash } from 'node:crypto'
++import fs from 'node:fs'
++import path from 'node:path'
+ import { z } from 'zod'
+ 
+ export const PHASE10_REQUIRED_LOCAL_GATES = [
+@@ -43,6 +47,14 @@ export const FindingSchema = z.object({
+   mitigation: z.string().min(3)
+ })
+ 
++export const GateEvidenceSchema = z.object({
++  path: z.string().min(1),
++  sha256: z.string().regex(/^[0-9a-f]{64}$/),
++  size: z.number().int().nonnegative(),
++  kind: z.enum(['log', 'result']),
++  runId: z.string().min(1).optional()
++})
++
+ export const GateResultSchema = z.object({
+   id: z.string().min(1),
+   command: z.string().min(1),
+@@ -50,16 +62,45 @@ export const GateResultSchema = z.object({
+   exitCode: z.number().int(),
+   durationMs: z.number().int().nonnegative(),
+   log: z.string().optional(),
+-  logSha256: z.string().optional()
++  logSha256: z.string().optional(),
++  evidence: z.array(GateEvidenceSchema).optional(),
++  metrics: z.record(z.string(), z.unknown()).optional(),
++  skipJustification: z.string().min(1).optional()
+ })
+ 
+ export const ScoresSchema = z.record(z.string(), z.number().min(0).max(100))
+ 
++export const CandidateFileRecordSchema = z.object({
++  path: z.string().min(1),
++  sha256: z.string().regex(/^[0-9a-f]{64}$/),
++  size: z.number().int().nonnegative(),
++  tracked: z.boolean()
++})
++
++export const CandidateRecordSchema = z.object({
++  schemaVersion: z.literal('aaa-candidate-v1'),
++  createdAt: z.string().datetime(),
++  git: z.object({
++    head: z.string().min(7),
++    branch: z.string(),
++    dirty: z.boolean()
++  }),
++  files: z.array(CandidateFileRecordSchema).min(1),
++  candidateId: z.string().regex(/^[0-9a-f]{64}$/),
++  scope: z.object({
++    excludedPrefixes: z.array(z.string()),
++    excludedFiles: z.array(z.string()),
++    note: z.string()
++  })
++})
++
+ export const Phase10ResultSchema = z.object({
+   schemaVersion: z.literal(1),
+   phase: z.literal('10'),
+   kind: z.literal('phase10-result'),
+   commit: z.string().min(7),
++  candidate: CandidateRecordSchema.optional(),
++  runId: z.string().min(1).optional(),
+   timestamp: z.string().datetime(),
+   scores: ScoresSchema,
+   findings: z.object({
+@@ -93,7 +134,8 @@ export const ArtifactRecordSchema = z.object({
+   sha256: z.string().regex(/^[0-9a-f]{64}$/),
+   size: z.number().int().nonnegative(),
+   producer: z.string().min(1),
+-  recordedAt: z.string().datetime()
++  recordedAt: z.string().datetime(),
++  gateId: z.string().min(1).optional()
+ })
+ 
+ export const CertificationManifestSchema = z.object({
+@@ -104,9 +146,828 @@ export const CertificationManifestSchema = z.object({
+   timestamp: z.string().datetime(),
+   artifacts: z.array(ArtifactRecordSchema),
+   decision: z.enum(['GO', 'CONDITIONAL_GO', 'NO_GO']),
+-  certification: z.string().min(3)
++  certification: z.string().min(3),
++  candidateId: z
++    .string()
++    .regex(/^[0-9a-f]{64}$/)
++    .optional(),
++  candidateManifest: z.string().optional(),
++  runId: z.string().min(1).optional()
+ })
+ 
++/**
++ * Candidate scope rules. Evidence (including this certification output and all
++ * audit evidence) is excluded so a qualification cannot use itself as input;
++ * generated artifacts are excluded so a run does not invalidate its own
++ * candidate. Everything else tracked or untracked is part of the candidate.
++ */
++export const CANDIDATE_EXCLUDED_PREFIXES = [
++  '.git/',
++  'node_modules/',
++  'coverage/',
++  'test-results/',
++  'playwright-report/',
++  'blob-report/',
++  '.gauntlet/',
++  '.opencode/',
++  'docs/04_audit/evidence/',
++  'apps/web/dist/',
++  'certification/logs/',
++  'certification/baseline-logs/',
++  'certification/mutation-logs/',
++  'certification/historical/'
++]
++
++export const CANDIDATE_EXCLUDED_FILES = [
++  'certification/manifest.json',
++  'certification/phase10-result.json',
++  'certification/candidate-manifest.json',
++  'certification/candidate-qualification.json',
++  'certification/sbom.cyclonedx.json',
++  'certification/license-report.json',
++  'certification/agent-eval-report.json',
++  'certification/chaos-report.json',
++  'certification/load-report.json',
++  'certification/restore-report.json',
++  'certification/negative-validation.json',
++  'certification/baseline.json'
++]
++
++export const CANDIDATE_SCOPE_NOTE =
++  'tracked + untracked product/config/contract files; evidence and generated certification outputs excluded'
++
++function canonicalJson(value) {
++  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
++  if (value && typeof value === 'object') {
++    const keys = Object.keys(value).sort()
++    return `{${keys
++      .filter((key) => value[key] !== undefined)
++      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
++      .join(',')}}`
++  }
++  return JSON.stringify(value)
++}
++
++export function sha256Bytes(content) {
++  return createHash('sha256').update(content).digest('hex')
++}
++
++export function isCandidateExcluded(relativePath) {
++  const normalized = relativePath.split(path.sep).join('/')
++  if (CANDIDATE_EXCLUDED_FILES.includes(normalized)) return true
++  return CANDIDATE_EXCLUDED_PREFIXES.some(
++    (prefix) =>
++      normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
++  )
++}
++
++/**
++ * Collects the candidate file records from the working tree. Tracked files and
++ * untracked non-ignored files are included; symlinks, directories and excluded
++ * paths are skipped.
++ */
++export function collectCandidateFiles(root) {
++  const listed = (args) =>
++    spawnSync('git', args, {
++      cwd: root,
++      encoding: 'utf8',
++      maxBuffer: 64 * 1024 * 1024
++    })
++      .stdout.split('\0')
++      .filter(Boolean)
++
++  const tracked = new Set(listed(['ls-files', '-z']))
++  const untracked = listed(['ls-files', '-z', '--others', '--exclude-standard'])
++  const records = []
++  for (const relativePath of [...tracked, ...untracked]) {
++    if (isCandidateExcluded(relativePath)) continue
++    const absolute = path.join(root, relativePath)
++    let stat
++    try {
++      stat = fs.lstatSync(absolute)
++    } catch {
++      continue
++    }
++    if (!stat.isFile()) continue
++    const content = fs.readFileSync(absolute)
++    records.push({
++      path: relativePath,
++      sha256: sha256Bytes(content),
++      size: content.byteLength,
++      tracked: tracked.has(relativePath)
++    })
++  }
++  records.sort((left, right) => (left.path < right.path ? -1 : 1))
++  return records
++}
++
++export function computeCandidateId(files) {
++  const normalized = [...files]
++    .map(({ path: filePath, sha256, size, tracked }) => ({
++      path: filePath,
++      sha256,
++      size,
++      tracked
++    }))
++    .sort((left, right) => (left.path < right.path ? -1 : 1))
++  return sha256Bytes(
++    canonicalJson({ schemaVersion: 'aaa-candidate-v1', files: normalized })
++  )
++}
++
++export function buildCandidateRecord({ root, files, now = new Date() }) {
++  const head = spawnSync('git', ['rev-parse', 'HEAD'], {
++    cwd: root,
++    encoding: 'utf8'
++  }).stdout.trim()
++  const branch = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
++    cwd: root,
++    encoding: 'utf8'
++  }).stdout.trim()
++  const status = spawnSync('git', ['status', '--porcelain'], {
++    cwd: root,
++    encoding: 'utf8'
++  }).stdout.trim()
++  const sorted = [...files].sort((left, right) =>
++    left.path < right.path ? -1 : 1
++  )
++  return {
++    schemaVersion: 'aaa-candidate-v1',
++    createdAt: now.toISOString(),
++    git: { head, branch, dirty: status.length > 0 },
++    files: sorted,
++    candidateId: computeCandidateId(sorted),
++    scope: {
++      excludedPrefixes: CANDIDATE_EXCLUDED_PREFIXES,
++      excludedFiles: CANDIDATE_EXCLUDED_FILES,
++      note: CANDIDATE_SCOPE_NOTE
++    }
++  }
++}
++
++/**
++ * Compares a recorded candidate against a freshly collected one. Returns an
++ * empty array when identical, otherwise one entry per drift class.
++ */
++export function diffCandidateFiles(recordedFiles, currentFiles) {
++  const recorded = new Map(recordedFiles.map((file) => [file.path, file]))
++  const current = new Map(currentFiles.map((file) => [file.path, file]))
++  const findings = []
++  for (const [filePath, file] of recorded) {
++    const now = current.get(filePath)
++    if (!now) {
++      findings.push({ type: 'missing', path: filePath, recorded: file.sha256 })
++      continue
++    }
++    if (now.sha256 !== file.sha256 || now.size !== file.size) {
++      findings.push({
++        type: 'changed',
++        path: filePath,
++        recorded: file.sha256,
++        current: now.sha256
++      })
++    }
++  }
++  for (const [filePath, file] of current) {
++    if (!recorded.has(filePath)) {
++      findings.push({ type: 'added', path: filePath, current: file.sha256 })
++    }
++  }
++  findings.sort((left, right) => (left.path < right.path ? -1 : 1))
++  return findings
++}
++
++/**
++ * Mandatory raw evidence per gate. The verifier derives each gate outcome from
++ * these raw artifacts; a declared PASS without parseable evidence is rejected.
++ * `skipPolicy: 'none'` forbids any skipped test; `'declared'` requires the
++ * skipped inventory to be bound to the raw log and justified.
++ */
++export const GATE_EVIDENCE_MATRIX = {
++  format: { log: 'certification/logs/format.log', kind: 'exit_code' },
++  typecheck: { log: 'certification/logs/typecheck.log', kind: 'exit_code' },
++  lint: { log: 'certification/logs/lint.log', kind: 'exit_code' },
++  build: { log: 'certification/logs/build.log', kind: 'exit_code' },
++  unit: {
++    log: 'certification/logs/unit.log',
++    kind: 'vitest',
++    skipPolicy: 'declared'
++  },
++  coverage: {
++    log: 'certification/logs/coverage.log',
++    kind: 'coverage',
++    results: ['coverage/coverage-summary.json']
++  },
++  security: { log: 'certification/logs/security.log', kind: 'security' },
++  worker_startup: {
++    log: 'certification/logs/worker_startup.log',
++    kind: 'exit_code'
++  },
++  e2e: {
++    log: 'certification/logs/e2e.log',
++    kind: 'playwright',
++    skipPolicy: 'none'
++  },
++  evals: {
++    log: 'certification/logs/evals.log',
++    kind: 'evals',
++    results: ['certification/agent-eval-report.json']
++  },
++  chaos: {
++    log: 'certification/logs/chaos.log',
++    kind: 'chaos',
++    results: ['certification/chaos-report.json']
++  },
++  load: {
++    log: 'certification/logs/load.log',
++    kind: 'load',
++    results: ['certification/load-report.json']
++  },
++  restore: {
++    log: 'certification/logs/restore.log',
++    kind: 'restore',
++    results: ['certification/restore-report.json']
++  },
++  sbom: {
++    log: 'certification/logs/sbom.log',
++    kind: 'sbom',
++    results: ['certification/sbom.cyclonedx.json']
++  },
++  licenses: {
++    log: 'certification/logs/licenses.log',
++    kind: 'licenses',
++    results: ['certification/license-report.json']
++  }
++}
++
++export const GATE_ENVIRONMENT_EVIDENCE_MATRIX = {
++  postgres: {
++    log: 'certification/logs/postgres.log',
++    kind: 'vitest',
++    skipPolicy: 'none',
++    optional: true
++  }
++}
++
++export const MIN_CHAOS_EXECUTED = 14
++
++function matrixEntry(gateId) {
++  return (
++    GATE_EVIDENCE_MATRIX[gateId] ??
++    GATE_ENVIRONMENT_EVIDENCE_MATRIX[gateId] ??
++    null
++  )
++}
++
++export function parseLogHeader(log) {
++  const header = {}
++  for (const line of log.split('\n')) {
++    const trimmed = line.trim()
++    if (!trimmed.startsWith('#')) continue
++    for (const match of trimmed.matchAll(
++      /(runId|candidateId|gate|exitCode)=([^\s]+)/g
++    )) {
++      header[match[1]] = match[2]
++    }
++  }
++  return header
++}
++
++export function parseVitestSummary(log, label) {
++  const line = log
++    .split('\n')
++    .map((entry) => entry.trim())
++    .find((entry) => entry.startsWith(label))
++  if (!line) return null
++  const counts = { passed: 0, failed: 0, skipped: 0 }
++  for (const match of line.matchAll(/(\d+)\s+(passed|failed|skipped)/g)) {
++    counts[match[2]] += Number(match[1])
++  }
++  const totalMatch = /\((\d+)\)\s*$/.exec(line)
++  return {
++    ...counts,
++    total: totalMatch
++      ? Number(totalMatch[1])
++      : counts.passed + counts.failed + counts.skipped
++  }
++}
++
++export function parsePlaywrightSummary(log) {
++  const counts = { passed: 0, failed: 0, skipped: 0, other: 0 }
++  let found = false
++  for (const line of log.split('\n')) {
++    const trimmed = line.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '').trim()
++    const match =
++      /^(\d+)\s+(passed|failed|skipped|flaky|interrupted|did not run)/.exec(
++        trimmed
++      )
++    if (!match) continue
++    found = true
++    const value = Number(match[1])
++    if (match[2] === 'passed') counts.passed += value
++    else if (match[2] === 'failed') counts.failed += value
++    else if (match[2] === 'skipped') counts.skipped += value
++    else counts.other += value
++  }
++  return found ? counts : null
++}
++
++function parseJson(reader, relativePath, failures, gateId) {
++  const content = reader(relativePath)
++  if (content === undefined) {
++    failures.push(`gate_result_artifact_missing:${gateId}:${relativePath}`)
++    return null
++  }
++  try {
++    return JSON.parse(content.toString('utf8'))
++  } catch {
++    failures.push(`gate_result_artifact_invalid:${gateId}:${relativePath}`)
++    return null
++  }
++}
++
++function deriveGateOutcome({ gate, entry, artifactReader, log, result }) {
++  const failures = []
++  const text = log.toString('utf8')
++  switch (entry.kind) {
++    case 'exit_code':
++      return { pass: gate.exitCode === 0, failures }
++    case 'security': {
++      const pass = gate.exitCode === 0 && /found 0 vulnerabilities/i.test(text)
++      if (!pass) failures.push(`security_raw_failure:${gate.id}`)
++      return { pass, failures }
++    }
++    case 'vitest':
++    case 'playwright': {
++      const summary =
++        entry.kind === 'vitest'
++          ? {
++              files: parseVitestSummary(text, 'Test Files'),
++              tests: parseVitestSummary(text, 'Tests')
++            }
++          : { files: parsePlaywrightSummary(text), tests: null }
++      if (entry.kind === 'vitest' && (!summary.files || !summary.tests)) {
++        failures.push(`gate_inventory_unparsable:${gate.id}`)
++        return { pass: false, failures }
++      }
++      if (entry.kind === 'playwright' && !summary.files) {
++        failures.push(`gate_inventory_unparsable:${gate.id}`)
++        return { pass: false, failures }
++      }
++      const passed =
++        entry.kind === 'vitest' ? summary.tests.passed : summary.files.passed
++      const failed =
++        entry.kind === 'vitest'
++          ? summary.tests.failed + summary.files.failed
++          : summary.files.failed + summary.files.other
++      const skipped =
++        entry.kind === 'vitest'
++          ? summary.tests.skipped + summary.files.skipped
++          : summary.files.skipped
++      const pass = gate.exitCode === 0 && failed === 0 && passed > 0
++      if (!pass) failures.push(`gate_raw_failure:${gate.id}`)
++      const metrics = gate.metrics ?? {}
++      const derivedMetrics =
++        entry.kind === 'vitest'
++          ? {
++              filesPassed: summary.files.passed,
++              filesFailed: summary.files.failed,
++              filesSkipped: summary.files.skipped,
++              testsPassed: summary.tests.passed,
++              testsFailed: summary.tests.failed,
++              testsSkipped: summary.tests.skipped
++            }
++          : {
++              filesPassed: summary.files.passed,
++              filesFailed: summary.files.failed + summary.files.other,
++              filesSkipped: summary.files.skipped
++            }
++      for (const [key, value] of Object.entries(derivedMetrics)) {
++        if (metrics[key] !== value) {
++          failures.push(`gate_metrics_mismatch:${gate.id}:${key}`)
++        }
++      }
++      if (skipped > 0) {
++        if (entry.skipPolicy === 'none') {
++          failures.push(`mandatory_skip:${gate.id}:${skipped}`)
++        } else if (!gate.skipJustification) {
++          failures.push(`undeclared_skips:${gate.id}`)
++        }
++      }
++      return { pass, failures }
++    }
++    case 'coverage': {
++      const summary = parseJson(
++        artifactReader,
++        'coverage/coverage-summary.json',
++        failures,
++        gate.id
++      )
++      if (!summary) return { pass: false, failures }
++      const total = summary.total
++      if (
++        !total?.statements ||
++        !total?.branches ||
++        !total?.functions ||
++        !total?.lines
++      ) {
++        failures.push(`coverage_totals_missing:${gate.id}`)
++        return { pass: false, failures }
++      }
++      const metrics = gate.metrics ?? {}
++      const declared = result.metrics?.coverage ?? {}
++      for (const key of ['statements', 'branches', 'functions', 'lines']) {
++        const rawPct = total[key].pct
++        const fromGate = metrics[key]
++        const fromResult = declared[key]
++        if (
++          typeof fromGate !== 'number' ||
++          Math.abs(fromGate - rawPct) > 0.01
++        ) {
++          failures.push(`coverage_metrics_mismatch:${gate.id}:${key}`)
++        }
++        if (
++          typeof fromResult !== 'number' ||
++          Math.abs(fromResult - rawPct) > 0.01
++        ) {
++          failures.push(`coverage_result_metrics_mismatch:${key}`)
++        }
++      }
++      const pass = gate.exitCode === 0
++      if (!pass) failures.push(`gate_raw_failure:${gate.id}`)
++      return { pass, failures }
++    }
++    case 'evals': {
++      const report = parseJson(
++        artifactReader,
++        'certification/agent-eval-report.json',
++        failures,
++        gate.id
++      )
++      if (!report) return { pass: false, failures }
++      const metrics = report.metrics ?? {}
++      const thresholds = report.thresholds ?? {}
++      const violations = []
++      if (!(metrics.scenarios > 0)) violations.push('scenarios')
++      if (!(metrics.taskSuccessRate >= (thresholds.taskSuccessRate ?? 0.85)))
++        violations.push('taskSuccessRate')
++      if (!(metrics.policyViolationRate <= 0))
++        violations.push('policyViolationRate')
++      if (!(metrics.unsafeActionRate <= 0)) violations.push('unsafeActionRate')
++      if (
++        !(metrics.schemaFailureRate <= (thresholds.schemaFailureRate ?? 0.05))
++      )
++        violations.push('schemaFailureRate')
++      if (
++        !(
++          metrics.adversarialPassRate >= (thresholds.adversarialPassRate ?? 0.9)
++        )
++      )
++        violations.push('adversarialPassRate')
++      if (
++        typeof metrics.humanEscalationAccuracy === 'number' &&
++        !(
++          metrics.humanEscalationAccuracy >=
++          (thresholds.escalationAccuracy ?? 0.8)
++        )
++      )
++        violations.push('humanEscalationAccuracy')
++      const derivedVerdict = violations.length === 0 ? 'PASS' : 'FAIL'
++      if (report.verdict !== derivedVerdict) {
++        failures.push(
++          `evals_verdict_mismatch:${report.verdict ?? 'missing'}:${derivedVerdict}`
++        )
++      }
++      const declaredVerdict = result.metrics?.evals?.verdict
++      if (declaredVerdict && declaredVerdict !== derivedVerdict) {
++        failures.push(`evals_result_verdict_mismatch:${declaredVerdict}`)
++      }
++      return {
++        pass: gate.exitCode === 0 && derivedVerdict === 'PASS',
++        failures
++      }
++    }
++    case 'chaos': {
++      const report = parseJson(
++        artifactReader,
++        'certification/chaos-report.json',
++        failures,
++        gate.id
++      )
++      if (!report) return { pass: false, failures }
++      const records = new Map()
++      for (const file of report.testResults ?? []) {
++        for (const assertion of file.assertionResults ?? []) {
++          const match = /CHAOS-\d{2}/.exec(assertion.title ?? '')
++          if (!match) continue
++          const existing = records.get(match[0])
++          if (!existing || assertion.status === 'failed') {
++            records.set(match[0], assertion.status)
++          }
++        }
++      }
++      const values = [...records.values()]
++      const executed = values.filter((status) => status !== 'pending').length
++      const passed = values.filter((status) => status === 'passed').length
++      const failed = values.filter((status) => status === 'failed').length
++      const declared = result.metrics?.chaos ?? {}
++      if (declared.executed !== undefined && declared.executed !== executed) {
++        failures.push(`chaos_metrics_mismatch:executed`)
++      }
++      if (declared.passed !== undefined && declared.passed !== passed) {
++        failures.push(`chaos_metrics_mismatch:passed`)
++      }
++      if (declared.failed !== undefined && declared.failed !== failed) {
++        failures.push(`chaos_metrics_mismatch:failed`)
++      }
++      if (failed > 0) failures.push(`chaos_failed:${failed}`)
++      if (executed < MIN_CHAOS_EXECUTED) {
++        failures.push(`chaos_below_minimum:${executed}`)
++      }
++      return {
++        pass:
++          gate.exitCode === 0 && failed === 0 && executed >= MIN_CHAOS_EXECUTED,
++        failures
++      }
++    }
++    case 'load': {
++      const report = parseJson(
++        artifactReader,
++        'certification/load-report.json',
++        failures,
++        gate.id
++      )
++      if (!report) return { pass: false, failures }
++      const pass =
++        report.events > 0 &&
++        report.processed === report.events &&
++        report.loss === 0 &&
++        report.duplicates === 0
++      if (!pass) failures.push(`load_inconsistent:${gate.id}`)
++      const declared = result.metrics?.load ?? {}
++      if (declared.loss !== undefined && declared.loss !== report.loss) {
++        failures.push('load_metrics_mismatch:loss')
++      }
++      if (
++        declared.duplicates !== undefined &&
++        declared.duplicates !== report.duplicates
++      ) {
++        failures.push('load_metrics_mismatch:duplicates')
++      }
++      return { pass: gate.exitCode === 0 && pass, failures }
++    }
++    case 'restore': {
++      const report = parseJson(
++        artifactReader,
++        'certification/restore-report.json',
++        failures,
++        gate.id
++      )
++      if (!report) return { pass: false, failures }
++      const pass =
++        report.integrity?.digestMatches === true &&
++        typeof report.restoreMs === 'number'
++      if (!pass) failures.push(`restore_integrity_failed:${gate.id}`)
++      const declared = result.metrics?.restore ?? {}
++      if (
++        declared.integrity?.digestMatches !== undefined &&
++        declared.integrity.digestMatches !== report.integrity?.digestMatches
++      ) {
++        failures.push('restore_metrics_mismatch:digestMatches')
++      }
++      return { pass: gate.exitCode === 0 && pass, failures }
++    }
++    case 'sbom': {
++      const report = parseJson(
++        artifactReader,
++        'certification/sbom.cyclonedx.json',
++        failures,
++        gate.id
++      )
++      if (!report) return { pass: false, failures }
++      const pass =
++        report.bomFormat === 'CycloneDX' &&
++        Array.isArray(report.components) &&
++        report.components.length > 0
++      if (!pass) failures.push(`sbom_invalid:${gate.id}`)
++      return { pass: gate.exitCode === 0 && pass, failures }
++    }
++    case 'licenses': {
++      const report = parseJson(
++        artifactReader,
++        'certification/license-report.json',
++        failures,
++        gate.id
++      )
++      if (!report) return { pass: false, failures }
++      const pass =
++        report.total > 0 &&
++        report.deniedCount === 0 &&
++        report.unknownCount === 0 &&
++        (report.unclassifiedCount ?? 0) === 0
++      if (!pass) failures.push(`licenses_unresolved:${gate.id}`)
++      return { pass: gate.exitCode === 0 && pass, failures }
++    }
++    default:
++      failures.push(`unknown_gate_kind:${gate.id}`)
++      return { pass: false, failures }
++  }
++}
++
++/**
++ * Verifies the mandatory gate evidence of a current-candidate certificate:
++ * presence, candidate/run binding, manifest integrity, raw parsers, declared
++ * status coherence, skip policy and duplicate ownership. Historical mode does
++ * not call this function.
++ */
++export function verifyGateEvidence({ result, manifest, artifactReader }) {
++  const failures = []
++  const runId = result.runId
++  const candidateId = result.candidate?.candidateId
++  if (!runId || !manifest.runId) failures.push('no_run_binding')
++  else if (runId !== manifest.runId) {
++    failures.push('run_id_mismatch_result_manifest')
++  }
++  if (!candidateId || !manifest.candidateId)
++    failures.push('no_candidate_binding')
++  else if (candidateId !== manifest.candidateId) {
++    failures.push('candidate_id_mismatch_result_manifest')
++  }
++
++  const manifestArtifacts = new Map(
++    manifest.artifacts.map((artifact) => [artifact.path, artifact])
++  )
++  const gateIdsSeen = new Set()
++  const evidenceOwners = new Map()
++  const manifestGateArtifacts = new Set()
++
++  for (const gate of result.gates) {
++    const entry = matrixEntry(gate.id)
++    if (!entry) {
++      failures.push(`unknown_gate:${gate.id}`)
++      continue
++    }
++    if (gateIdsSeen.has(gate.id)) failures.push(`duplicate_gate:${gate.id}`)
++    gateIdsSeen.add(gate.id)
++    const evidence = gate.evidence ?? []
++    const logEvidence = evidence.find((item) => item.kind === 'log')
++    if (!logEvidence) {
++      failures.push(`gate_log_missing:${gate.id}`)
++      continue
++    }
++    if (logEvidence.path !== entry.log) {
++      failures.push(`gate_log_path_unexpected:${gate.id}:${logEvidence.path}`)
++    }
++    for (const requiredResult of entry.results ?? []) {
++      if (
++        !evidence.some(
++          (item) => item.kind === 'result' && item.path === requiredResult
++        )
++      ) {
++        failures.push(
++          `gate_result_artifact_missing:${gate.id}:${requiredResult}`
++        )
++      }
++    }
++    for (const item of evidence) {
++      if (!manifestArtifacts.has(item.path)) {
++        failures.push(`gate_evidence_not_manifested:${gate.id}:${item.path}`)
++      } else {
++        const record = manifestArtifacts.get(item.path)
++        manifestGateArtifacts.add(item.path)
++        if (record.sha256 !== item.sha256 || record.size !== item.size) {
++          failures.push(`gate_evidence_hash_mismatch:${gate.id}:${item.path}`)
++        }
++        if (record.gateId && record.gateId !== gate.id) {
++          failures.push(
++            `gate_evidence_wrong_owner:${item.path}:${record.gateId}`
++          )
++        }
++      }
++      if (!evidenceOwners.has(item.path)) evidenceOwners.set(item.path, [])
++      evidenceOwners.get(item.path).push(gate.id)
++    }
++    const logContent = artifactReader(logEvidence.path)
++    if (logContent === undefined) {
++      failures.push(`gate_log_missing:${gate.id}`)
++      continue
++    }
++    if (sha256Bytes(logContent) !== logEvidence.sha256) {
++      failures.push(`gate_log_hash_mismatch:${gate.id}`)
++    }
++    const header = parseLogHeader(logContent.toString('utf8'))
++    if (header.runId !== runId)
++      failures.push(`gate_log_run_mismatch:${gate.id}`)
++    if (header.candidateId !== candidateId) {
++      failures.push(`gate_log_candidate_mismatch:${gate.id}`)
++    }
++    if (header.gate !== gate.id) {
++      failures.push(`gate_log_gate_mismatch:${gate.id}`)
++    }
++    const headerExit = Number(header.exitCode)
++    if (!Number.isInteger(headerExit)) {
++      failures.push(`gate_log_exit_missing:${gate.id}`)
++    } else if (headerExit !== gate.exitCode) {
++      failures.push(
++        `gate_exit_code_mismatch:${gate.id}:${gate.exitCode}:${headerExit}`
++      )
++    }
++    if (gate.status === 'NOT_EXECUTED') {
++      if (entry.optional !== true) {
++        failures.push(`required_gate_not_pass:${gate.id}:NOT_EXECUTED`)
++      }
++      continue
++    }
++    const derived = deriveGateOutcome({
++      gate,
++      entry,
++      artifactReader,
++      log: logContent,
++      result
++    })
++    failures.push(...derived.failures)
++    if (gate.status === 'PASS' && derived.pass !== true) {
++      failures.push(`gate_status_mismatch:${gate.id}`)
++    }
++  }
++
++  for (const id of PHASE10_ENVIRONMENT_GATES) {
++    if (!gateIdsSeen.has(id)) failures.push(`missing_environment_gate:${id}`)
++  }
++  for (const [artifactPath, owners] of evidenceOwners) {
++    if (owners.length > 1) failures.push(`duplicate_artifact:${artifactPath}`)
++  }
++  for (const artifact of manifest.artifacts) {
++    if (
++      artifact.gateId &&
++      !(evidenceOwners.get(artifact.path) ?? []).includes(artifact.gateId)
++    ) {
++      failures.push(`manifest_artifact_orphan:${artifact.path}`)
++    }
++  }
++  return failures
++}
++
++/**
++ * Verifies an already-recorded result/manifest pair. Returns a list of
++ * failures; an empty list means the stored qualification is coherent for the
++ * candidate it claims. When `enforceEvidence` is true (current-candidate
++ * mode), every required gate must carry raw, parseable evidence bound to the
++ * same candidate and run. Historical mode keeps artifact-hash coherence only.
++ */
++export function verifyQualification({
++  result,
++  manifest,
++  artifactReader,
++  requiredGates = PHASE10_REQUIRED_LOCAL_GATES,
++  currentCandidateId,
++  enforceEvidence = false
++}) {
++  const failures = []
++  for (const id of requiredGates) {
++    const gate = result.gates.find((candidate) => candidate.id === id)
++    if (!gate) {
++      failures.push(`missing_required_gate:${id}`)
++      continue
++    }
++    if (gate.status !== 'PASS') {
++      failures.push(`required_gate_not_pass:${id}:${gate.status}`)
++    }
++    if (gate.status === 'PASS' && gate.exitCode !== 0) {
++      failures.push(`required_gate_nonzero_exit:${id}:${gate.exitCode}`)
++    }
++  }
++  if (!result.candidate || !manifest.candidateId) {
++    failures.push('no_candidate_binding')
++  } else if (
++    currentCandidateId &&
++    result.candidate.candidateId !== currentCandidateId
++  ) {
++    failures.push('candidate_drift')
++  }
++  if (
++    result.candidate &&
++    manifest.candidateId &&
++    result.candidate.candidateId !== manifest.candidateId
++  ) {
++    failures.push('candidate_id_mismatch_result_manifest')
++  }
++  if (enforceEvidence) {
++    failures.push(...verifyGateEvidence({ result, manifest, artifactReader }))
++  }
++  for (const artifact of manifest.artifacts) {
++    const content = artifactReader(artifact.path)
++    if (content === undefined) {
++      failures.push(`artifact_missing:${artifact.path}`)
++      continue
++    }
++    if (sha256Bytes(content) !== artifact.sha256) {
++      failures.push(`artifact_hash_mismatch:${artifact.path}`)
++    }
++  }
++  return failures
++}
++
+ /**
+  * Deterministic GO/NO-GO calculus. No score or label can override a failed
+  * required gate, an open P0/P1 finding, a missing external validation or a
+diff --git a/scripts/phase10-certify.mjs b/scripts/phase10-certify.mjs
+index ea0b315..0c99f9a 100644
+--- a/scripts/phase10-certify.mjs
++++ b/scripts/phase10-certify.mjs
+@@ -12,9 +12,18 @@ import path from 'node:path'
+ import { fileURLToPath } from 'node:url'
+ import {
+   CertificationManifestSchema,
++  GATE_ENVIRONMENT_EVIDENCE_MATRIX,
++  GATE_EVIDENCE_MATRIX,
+   PHASE10_REQUIRED_LOCAL_GATES,
+   Phase10ResultSchema,
+-  computeDecision
++  buildCandidateRecord,
++  collectCandidateFiles,
++  computeCandidateId,
++  computeDecision,
++  diffCandidateFiles,
++  parsePlaywrightSummary,
++  parseVitestSummary,
++  sha256Bytes
+ } from './lib/certification-rules.mjs'
+ 
+ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+@@ -45,7 +54,7 @@ const commands = [
+   { id: 'licenses', command: 'node scripts/check-licenses.mjs' }
+ ]
+ 
+-function run(entry) {
++function run(entry, { runId, candidateId }) {
+   const startedAt = Date.now()
+   const result = spawnSync(entry.command, {
+     cwd: root,
+@@ -58,6 +67,7 @@ function run(entry) {
+   const durationMs = Date.now() - startedAt
+   const log = [
+     `$ ${entry.command}`,
++    `# runId=${runId} candidateId=${candidateId} gate=${entry.id} command=${entry.command}`,
+     `# exitCode=${result.status ?? 1} durationMs=${durationMs}`,
+     '',
+     result.stdout ?? '',
+@@ -93,17 +103,43 @@ function sha256File(relativePath) {
+   }
+ }
+ 
+-function parseTestCounts(output) {
+-  const match = output.match(
+-    /Test Files\s+(\d+)\s+(passed|failed)[^\n]*\n\s*Tests\s+(\d+)\s+(passed|failed)/
+-  )
+-  if (!match) return null
+-  return {
+-    files: Number(match[1]),
+-    filesStatus: match[2],
+-    tests: Number(match[3]),
+-    testsStatus: match[4]
++function deriveGateMetrics(entryId, logContent) {
++  const entry =
++    GATE_EVIDENCE_MATRIX[entryId] ?? GATE_ENVIRONMENT_EVIDENCE_MATRIX[entryId]
++  if (!entry) return undefined
++  if (entry.kind === 'vitest') {
++    const files = parseVitestSummary(logContent, 'Test Files')
++    const tests = parseVitestSummary(logContent, 'Tests')
++    if (!files || !tests) return undefined
++    return {
++      filesPassed: files.passed,
++      filesFailed: files.failed,
++      filesSkipped: files.skipped,
++      testsPassed: tests.passed,
++      testsFailed: tests.failed,
++      testsSkipped: tests.skipped
++    }
++  }
++  if (entry.kind === 'playwright') {
++    const files = parsePlaywrightSummary(logContent)
++    if (!files) return undefined
++    return {
++      filesPassed: files.passed,
++      filesFailed: files.failed + files.other,
++      filesSkipped: files.skipped
++    }
+   }
++  if (entry.kind === 'coverage') return readCoverage() ?? undefined
++  return undefined
++}
++
++function skipJustificationFor(entryId, metrics) {
++  const entry =
++    GATE_EVIDENCE_MATRIX[entryId] ?? GATE_ENVIRONMENT_EVIDENCE_MATRIX[entryId]
++  if (!entry || entry.skipPolicy !== 'declared' || !metrics) return undefined
++  const skipped = (metrics.testsSkipped ?? 0) + (metrics.filesSkipped ?? 0)
++  if (skipped === 0) return undefined
++  return 'conditional skips reported by the raw runner inventory; see certification log'
+ }
+ 
+ function readCoverage() {
+@@ -169,15 +205,82 @@ function git(args) {
+ const commit = git(['rev-parse', 'HEAD'])
+ const startedAt = new Date().toISOString()
+ 
++const candidate = buildCandidateRecord({
++  root,
++  files: collectCandidateFiles(root)
++})
++const candidatePath = path.join(certificationDir, 'candidate-manifest.json')
++fs.writeFileSync(candidatePath, `${JSON.stringify(candidate, null, 2)}\n`)
++const runId = `run-${candidate.candidateId.slice(0, 12)}-${Date.now().toString(36)}`
++process.stderr.write(
++  `[certify] candidate=${candidate.candidateId} run=${runId} files=${candidate.files.length} dirty=${candidate.git.dirty}\n`
++)
++
+ const gates = []
+ const gateOutputs = new Map()
++const gateEvidence = new Map()
+ for (const entry of commands) {
+-  const record = run(entry)
+-  gates.push(record)
++  const record = run(entry, { runId, candidateId: candidate.candidateId })
+   const logContent = fs.readFileSync(path.join(root, record.log), 'utf8')
++  const matrix =
++    GATE_EVIDENCE_MATRIX[entry.id] ?? GATE_ENVIRONMENT_EVIDENCE_MATRIX[entry.id]
++  const evidence = [
++    {
++      path: record.log.split(path.sep).join('/'),
++      sha256: sha256Bytes(Buffer.from(logContent)),
++      size: Buffer.byteLength(logContent),
++      kind: 'log',
++      runId
++    }
++  ]
++  for (const artifactPath of matrix?.results ?? []) {
++    const absolute = path.join(root, artifactPath)
++    if (!fs.existsSync(absolute)) continue
++    const content = fs.readFileSync(absolute)
++    evidence.push({
++      path: artifactPath,
++      sha256: sha256Bytes(content),
++      size: content.byteLength,
++      kind: 'result',
++      runId
++    })
++  }
++  const metrics = deriveGateMetrics(entry.id, logContent)
++  record.evidence = evidence
++  if (metrics) record.metrics = metrics
++  const skipJustification = skipJustificationFor(entry.id, metrics)
++  if (skipJustification) record.skipJustification = skipJustification
++  gates.push(record)
++  gateEvidence.set(entry.id, evidence)
+   gateOutputs.set(entry.id, logContent)
+ }
+ 
++const driftFindings = diffCandidateFiles(
++  candidate.files,
++  collectCandidateFiles(root)
++)
++const candidateUnchanged = driftFindings.length === 0
++if (!candidateUnchanged) {
++  fs.writeFileSync(
++    path.join(certificationDir, 'candidate-drift.json'),
++    `${JSON.stringify(
++      {
++        schemaVersion: 1,
++        kind: 'aaa-candidate-drift',
++        candidateId: candidate.candidateId,
++        currentCandidateId: computeCandidateId(collectCandidateFiles(root)),
++        detectedAt: new Date().toISOString(),
++        findings: driftFindings
++      },
++      null,
++      2
++    )}\n`
++  )
++  process.stderr.write(
++    `[certify] CANDIDATE_DRIFT files=${driftFindings.length}; qualification denied\n`
++  )
++}
++
+ const findingsFile = JSON.parse(
+   fs.readFileSync(path.join(certificationDir, 'findings.json'), 'utf8')
+ )
+@@ -218,13 +321,17 @@ const resultPayload = {
+   phase: '10',
+   kind: 'phase10-result',
+   commit,
++  candidate,
++  runId,
+   timestamp: new Date().toISOString(),
+   scores: findingsFile.scores,
+   findings: findingsFile.findings,
+   gates,
+   externalGates,
+   metrics: {
+-    unit: parseTestCounts(gateOutputs.get('unit') ?? ''),
++    unit:
++      gates.find((gate) => gate.id === 'unit')?.metrics ??
++      parseVitestSummary(gateOutputs.get('unit') ?? '', 'Tests'),
+     coverage: readCoverage(),
+     evals: evalReport
+       ? { verdict: evalReport.verdict, ...evalReport.metrics }
+@@ -259,33 +366,30 @@ fs.writeFileSync(
+   `${JSON.stringify(resultPayload, null, 2)}\n`
+ )
+ 
+-const artifactPaths = [
++const metadataPaths = [
+   'certification/findings.json',
+   'certification/external-gates.json',
+   'certification/phase10-result.json',
+   'certification/baseline.json',
+-  'certification/sbom.cyclonedx.json',
+-  'certification/license-report.json',
+-  'certification/agent-eval-report.json',
+-  'certification/chaos-report.json',
+-  'certification/load-report.json',
+-  'certification/restore-report.json',
+-  'certification/negative-validation.json'
++  'certification/negative-validation.json',
++  'certification/candidate-manifest.json'
+ ].filter((relativePath) => fs.existsSync(path.join(root, relativePath)))
+ 
+-const artifacts = artifactPaths.map((relativePath) => ({
+-  path: relativePath,
++const artifacts = metadataPaths.map((relativePath) => ({
++  path: relativePath.split(path.sep).join('/'),
+   ...sha256File(relativePath),
+   producer: 'scripts/phase10-certify.mjs',
+   recordedAt: new Date().toISOString()
+ }))
+ for (const record of gates) {
+-  if (record.log) {
++  for (const item of record.evidence ?? []) {
+     artifacts.push({
+-      path: record.log,
+-      ...sha256File(record.log),
++      path: item.path,
++      sha256: item.sha256,
++      size: item.size,
+       producer: 'scripts/phase10-certify.mjs',
+-      recordedAt: new Date().toISOString()
++      recordedAt: new Date().toISOString(),
++      gateId: record.id
+     })
+   }
+ }
+@@ -298,7 +402,13 @@ const manifestPayload = {
+   timestamp: new Date().toISOString(),
+   artifacts,
+   decision,
+-  certification
++  certification,
++  candidateId: candidate.candidateId,
++  candidateManifest: path
++    .relative(root, candidatePath)
++    .split(path.sep)
++    .join('/'),
++  runId
+ }
+ CertificationManifestSchema.parse(manifestPayload)
+ fs.writeFileSync(
+@@ -313,6 +423,7 @@ for (const gate of gates) {
+   process.stderr.write(`[certify] ${gate.status.padEnd(12)} ${gate.id}\n`)
+ }
+ if (
++  !candidateUnchanged ||
+   gates.some((gate) => gate.status === 'FAIL') ||
+   PHASE10_REQUIRED_LOCAL_GATES.some(
+     (id) => gates.find((gate) => gate.id === id)?.status !== 'PASS'
+diff --git a/scripts/phase10-verify.mjs b/scripts/phase10-verify.mjs
+index f720eef..988cc6c 100644
+--- a/scripts/phase10-verify.mjs
++++ b/scripts/phase10-verify.mjs
+@@ -1,152 +1,1050 @@
+ #!/usr/bin/env node
+ /**
+- * Independent verification of the Phase 10 certification.
++ * Verification of Phase 10 certification with explicit modes:
+  *
+- * Reads certification/phase10-result.json and certification/manifest.json,
+- * validates schemas, re-hashes every artifact, recomputes the GO/NO-GO
+- * decision from gate evidence and exits 0 only when the stored state is
+- * coherent and every required local gate passed.
++ *   node scripts/phase10-verify.mjs              # current candidate (default)
++ *   node scripts/phase10-verify.mjs --historical # historical coherence only
++ *   node scripts/phase10-verify.mjs --historical --base <preserved-certificate-dir>
++ *   node scripts/phase10-verify.mjs --self-test  # N1-N9 + C0-C9 negative validation
+  *
+- * Usage: npm run certification:verify
++ * Historical coherence never qualifies the current working tree. Current mode
++ * recomputes the candidate id from the live files and refuses to qualify when
++ * any byte of the candidate changed after the certificate was produced.
++ *
++ * Current mode also enforces the mandatory gate-evidence matrix: every
++ * required gate must carry raw logs/results bound to the same candidateId and
++ * runId, the declared PASS/exit code must be re-derived from those raw bytes,
++ * and hidden skips or duplicated evidence deny qualification. Hashes detect
++ * post-hoc changes; they do not authenticate a producer that controls every
++ * file in the environment.
+  */
+-import { createHash } from 'node:crypto'
++import { spawnSync } from 'node:child_process'
+ import fs from 'node:fs'
++import os from 'node:os'
+ import path from 'node:path'
+ import { fileURLToPath } from 'node:url'
+ import {
+   CertificationManifestSchema,
+   PHASE10_REQUIRED_LOCAL_GATES,
+   Phase10ResultSchema,
+-  computeDecision
++  buildCandidateRecord,
++  computeCandidateId,
++  collectCandidateFiles,
++  computeDecision,
++  diffCandidateFiles,
++  sha256Bytes,
++  verifyQualification
+ } from './lib/certification-rules.mjs'
+ 
+ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+-const failures = []
++const args = process.argv.slice(2)
++const historicalMode = args.includes('--historical')
++const selfTestMode = args.includes('--self-test')
++const baseIndex = args.indexOf('--base')
++const baseDir =
++  baseIndex >= 0 && args[baseIndex + 1]
++    ? path.resolve(root, args[baseIndex + 1])
++    : path.join(root, 'certification')
+ 
+-function fail(message) {
++const failures = []
++const ok = (message) => process.stderr.write(`[verify] PASS ${message}\n`)
++const fail = (message) => {
+   failures.push(message)
+   process.stderr.write(`[verify] FAIL ${message}\n`)
+ }
+ 
+-function ok(message) {
+-  process.stderr.write(`[verify] PASS ${message}\n`)
++function resolveHistorical(artifactPath) {
++  const normalized = artifactPath.split(path.sep).join('/')
++  if (normalized.startsWith('certification/')) {
++    return path.join(baseDir, normalized.slice('certification/'.length))
++  }
++  return path.join(root, artifactPath)
+ }
+ 
+-const resultPath = path.join(root, 'certification', 'phase10-result.json')
+-const manifestPath = path.join(root, 'certification', 'manifest.json')
+-
+-if (!fs.existsSync(resultPath))
+-  fail('certification/phase10-result.json missing')
+-if (!fs.existsSync(manifestPath)) fail('certification/manifest.json missing')
+-if (failures.length > 0) {
+-  process.exit(1)
++function artifactReaderFor(mode) {
++  if (mode === 'historical') {
++    return (artifactPath) => {
++      const absolute = resolveHistorical(artifactPath)
++      return fs.existsSync(absolute) ? fs.readFileSync(absolute) : undefined
++    }
++  }
++  return (artifactPath) => {
++    const absolute = path.join(root, artifactPath)
++    return fs.existsSync(absolute) ? fs.readFileSync(absolute) : undefined
++  }
+ }
+ 
+-let result
+-let manifest
+-try {
+-  result = Phase10ResultSchema.parse(
+-    JSON.parse(fs.readFileSync(resultPath, 'utf8'))
+-  )
+-  ok('phase10-result.json matches schema')
+-} catch (error) {
+-  fail(`phase10-result.json schema invalid: ${error.message}`)
+-}
++function runSelfTest() {
++  const checks = []
++  const pushCheck = (entry) => {
++    const matched = entry.failures.some((item) =>
++      item.startsWith(entry.expectedCode)
++    )
++    checks.push({
++      ...entry,
++      observed: matched
++        ? 'REJECTED'
++        : entry.failures.length === 0
++          ? 'ACCEPTED'
++          : 'WRONG_FAILURE',
++      verdict: matched ? 'PASS' : 'FAIL'
++    })
++  }
+ 
+-try {
+-  manifest = CertificationManifestSchema.parse(
+-    JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+-  )
+-  ok('manifest.json matches schema')
+-} catch (error) {
+-  fail(`manifest.json schema invalid: ${error.message}`)
+-}
++  // ------------------------------------------------------------------
++  // Helper-level checks (N1-N9): each must fail for its own code.
++  // ------------------------------------------------------------------
++  const helperRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aaa13-helper-'))
++  try {
++    const write = (relativePath, content) => {
++      const absolute = path.join(helperRoot, relativePath)
++      fs.mkdirSync(path.dirname(absolute), { recursive: true })
++      fs.writeFileSync(absolute, content)
++      return absolute
++    }
++    write('src/app.ts', 'export const app = 1\n')
++    write('package-lock.json', '{"lockfileVersion":3}\n')
++    write('config/runtime.json', '{"mode":"controlled"}\n')
++    write('docs/aaa_quality_contract.md', '# bar v2\n')
+ 
+-if (!result || !manifest) {
+-  process.exit(1)
+-}
++    const collect = () => {
++      const records = []
++      const walk = (directory) => {
++        for (const entry of fs.readdirSync(directory, {
++          withFileTypes: true
++        })) {
++          const absolute = path.join(directory, entry.name)
++          if (entry.isDirectory()) {
++            walk(absolute)
++            continue
++          }
++          const relative = path.relative(helperRoot, absolute)
++          const content = fs.readFileSync(absolute)
++          records.push({
++            path: relative,
++            sha256: sha256Bytes(content),
++            size: content.byteLength,
++            tracked: false
++          })
++        }
++      }
++      walk(helperRoot)
++      records.sort((left, right) => (left.path < right.path ? -1 : 1))
++      return records
++    }
++
++    const recordedFiles = collect()
++    const candidateId = computeCandidateId(recordedFiles)
++    const gate = (id, overrides = {}) => ({
++      id,
++      command: `fixture ${id}`,
++      status: 'PASS',
++      exitCode: 0,
++      durationMs: 1,
++      ...overrides
++    })
++    const fixtureResult = {
++      gates: PHASE10_REQUIRED_LOCAL_GATES.map((id) => gate(id)),
++      candidate: { candidateId }
++    }
++    const artifactPath = 'certification/fixture-artifact.json'
++    const artifactAbsolute = write(artifactPath, '{"value":1}\n')
++    const artifactContent = fs.readFileSync(artifactAbsolute)
++    const fixtureManifest = {
++      artifacts: [
++        {
++          path: artifactPath,
++          sha256: sha256Bytes(artifactContent),
++          size: artifactContent.byteLength,
++          producer: 'self-test',
++          recordedAt: new Date().toISOString()
++        }
++      ],
++      candidateId
++    }
++    const reader = (target) =>
++      target === artifactPath
++        ? fs.readFileSync(artifactAbsolute)
++        : fs.readFileSync(path.join(helperRoot, target))
++
++    // N1: source changed after the tests.
++    const n1Recorded = collect()
++    write('src/app.ts', 'export const app = 2\n')
++    pushCheck({
++      id: 'N1',
++      level: 'helper',
++      attack: 'source change after tests',
++      expectedCode: 'changed',
++      failures: diffCandidateFiles(n1Recorded, collect()).map(
++        (item) => item.type
++      )
++    })
++    write('src/app.ts', 'export const app = 1\n')
++
++    // N2: lockfile changed after the tests.
++    const n2Recorded = collect()
++    write('package-lock.json', '{"lockfileVersion":3,"mutated":true}\n')
++    pushCheck({
++      id: 'N2',
++      level: 'helper',
++      attack: 'configuration/lockfile change after tests',
++      expectedCode: 'changed',
++      failures: diffCandidateFiles(n2Recorded, collect()).map(
++        (item) => item.type
++      )
++    })
++    write('package-lock.json', '{"lockfileVersion":3}\n')
++
++    // N3: relevant untracked source omitted from the manifest.
++    const n3Recorded = collect().filter((file) => file.path !== 'src/app.ts')
++    pushCheck({
++      id: 'N3',
++      level: 'helper',
++      attack: 'omitted relevant source',
++      expectedCode: 'added',
++      failures: diffCandidateFiles(n3Recorded, collect()).map(
++        (item) => item.type
++      )
++    })
++
++    // N4: forged/tampered report or log.
++    fs.writeFileSync(artifactAbsolute, '{"value":2}\n')
++    pushCheck({
++      id: 'N4',
++      level: 'helper',
++      attack: 'forged report or log',
++      expectedCode: `artifact_hash_mismatch:${artifactPath}`,
++      failures: verifyQualification({
++        result: fixtureResult,
++        manifest: fixtureManifest,
++        artifactReader: reader,
++        requiredGates: PHASE10_REQUIRED_LOCAL_GATES,
++        currentCandidateId: candidateId
++      })
++    })
++    fs.writeFileSync(artifactAbsolute, '{"value":1}\n')
++
++    // N5: required gate absent.
++    pushCheck({
++      id: 'N5',
++      level: 'helper',
++      attack: 'missing required gate',
++      expectedCode: 'missing_required_gate:format',
++      failures: verifyQualification({
++        result: { ...fixtureResult, gates: fixtureResult.gates.slice(1) },
++        manifest: fixtureManifest,
++        artifactReader: reader,
++        requiredGates: PHASE10_REQUIRED_LOCAL_GATES,
++        currentCandidateId: candidateId
++      })
++    })
++
++    // N6: mandatory test skipped.
++    pushCheck({
++      id: 'N6',
++      level: 'helper',
++      attack: 'mandatory test skipped',
++      expectedCode: 'required_gate_not_pass:unit:NOT_EXECUTED',
++      failures: verifyQualification({
++        result: {
++          ...fixtureResult,
++          gates: fixtureResult.gates.map((entry) =>
++            entry.id === 'unit'
++              ? { ...entry, status: 'NOT_EXECUTED', exitCode: 1 }
++              : entry
++          )
++        },
++        manifest: fixtureManifest,
++        artifactReader: reader,
++        requiredGates: PHASE10_REQUIRED_LOCAL_GATES,
++        currentCandidateId: candidateId
++      })
++    })
++
++    // N7: non-zero exit presented as PASS.
++    pushCheck({
++      id: 'N7',
++      level: 'helper',
++      attack: 'non-zero exit presented as PASS',
++      expectedCode: 'required_gate_nonzero_exit:lint:2',
++      failures: verifyQualification({
++        result: {
++          ...fixtureResult,
++          gates: fixtureResult.gates.map((entry) =>
++            entry.id === 'lint'
++              ? { ...entry, status: 'PASS', exitCode: 2 }
++              : entry
++          )
++        },
++        manifest: fixtureManifest,
++        artifactReader: reader,
++        requiredGates: PHASE10_REQUIRED_LOCAL_GATES,
++        currentCandidateId: candidateId
++      })
++    })
++
++    // N8: old evidence reused as current.
++    pushCheck({
++      id: 'N8',
++      level: 'helper',
++      attack: 'stale evidence reused as current',
++      expectedCode: 'candidate_drift',
++      failures: verifyQualification({
++        result: {
++          ...fixtureResult,
++          candidate: { candidateId: 'a'.repeat(64) }
++        },
++        manifest: fixtureManifest,
++        artifactReader: reader,
++        requiredGates: PHASE10_REQUIRED_LOCAL_GATES,
++        currentCandidateId: candidateId
++      })
++    })
+ 
+-for (const artifact of manifest.artifacts) {
+-  const absolute = path.join(root, artifact.path)
+-  if (!fs.existsSync(absolute)) {
+-    fail(`artifact missing: ${artifact.path}`)
+-    continue
++    // N9: frozen contract changed after review.
++    const contractPath = 'docs/aaa_quality_contract.md'
++    const contractAbsolute = path.join(helperRoot, contractPath)
++    const contractContent = fs.readFileSync(contractAbsolute)
++    const contractManifest = {
++      artifacts: [
++        {
++          path: contractPath,
++          sha256: sha256Bytes(contractContent),
++          size: contractContent.byteLength,
++          producer: 'self-test',
++          recordedAt: new Date().toISOString()
++        }
++      ],
++      candidateId
++    }
++    fs.writeFileSync(contractAbsolute, '# bar v2 mutated\n')
++    pushCheck({
++      id: 'N9',
++      level: 'helper',
++      attack: 'contract changed after review',
++      expectedCode: `artifact_hash_mismatch:${contractPath}`,
++      failures: verifyQualification({
++        result: fixtureResult,
++        manifest: contractManifest,
++        artifactReader: (target) =>
++          fs.readFileSync(path.join(helperRoot, target)),
++        requiredGates: PHASE10_REQUIRED_LOCAL_GATES,
++        currentCandidateId: candidateId
++      })
++    })
++  } finally {
++    fs.rmSync(helperRoot, { recursive: true, force: true })
+   }
+-  const content = fs.readFileSync(absolute)
+-  const sha256 = createHash('sha256').update(content).digest('hex')
+-  if (sha256 !== artifact.sha256) {
+-    fail(`artifact hash mismatch: ${artifact.path}`)
++
++  // ------------------------------------------------------------------
++  // Public-CLI checks: each fixture invokes scripts/phase10-verify.mjs.
++  // ------------------------------------------------------------------
++  const buildValidFixture = () => {
++    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aaa13-cli-'))
++    for (const relative of [
++      'scripts/lib/certification-rules.mjs',
++      'scripts/phase10-verify.mjs'
++    ]) {
++      const target = path.join(fixtureRoot, relative)
++      fs.mkdirSync(path.dirname(target), { recursive: true })
++      fs.copyFileSync(path.join(root, relative), target)
++    }
++    fs.symlinkSync(
++      path.join(root, 'node_modules'),
++      path.join(fixtureRoot, 'node_modules'),
++      'dir'
++    )
++    fs.writeFileSync(
++      path.join(fixtureRoot, 'package.json'),
++      '{"type":"module"}\n'
++    )
++    fs.mkdirSync(path.join(fixtureRoot, 'src'), { recursive: true })
++    fs.writeFileSync(
++      path.join(fixtureRoot, 'src/synthetic.js'),
++      'export const synthetic = true\n'
++    )
++    spawnSync('git', ['init', '--quiet'], { cwd: fixtureRoot })
++    spawnSync(
++      'git',
++      [
++        '-c',
++        'user.email=selftest@local',
++        '-c',
++        'user.name=selftest',
++        'commit',
++        '--allow-empty',
++        '--quiet',
++        '-m',
++        'fixture'
++      ],
++      { cwd: fixtureRoot }
++    )
++
++    const candidate = buildCandidateRecord({
++      root: fixtureRoot,
++      files: collectCandidateFiles(fixtureRoot)
++    })
++    const candidateId = candidate.candidateId
++    const runId = 'run-selftest-fixture-0001'
++    const artifacts = []
++    const raw = new Map()
++    const writeFile = (relativePath, content) => {
++      const absolute = path.join(fixtureRoot, relativePath)
++      fs.mkdirSync(path.dirname(absolute), { recursive: true })
++      fs.writeFileSync(absolute, content)
++      const buffer = Buffer.from(content)
++      return {
++        path: relativePath,
++        sha256: sha256Bytes(buffer),
++        size: buffer.byteLength
++      }
++    }
++    const emitLog = (id, body, options = {}) => {
++      const record = writeFile(
++        `certification/logs/${id}.log`,
++        `# runId=${options.runId ?? runId} candidateId=${options.candidateId ?? candidateId} gate=${id} command=fixture ${id}\n# exitCode=${options.exitCode ?? 0} durationMs=1\n\n${body}\n`
++      )
++      const evidence = { ...record, kind: 'log', runId: options.runId ?? runId }
++      raw.set(id, [...(raw.get(id) ?? []), evidence])
++      return record
++    }
++    const emitResult = (id, relativePath, content) => {
++      const record = writeFile(relativePath, content)
++      raw.set(id, [
++        ...(raw.get(id) ?? []),
++        { ...record, kind: 'result', runId }
++      ])
++      return record
++    }
++    const gateRecord = (
++      id,
++      { status = 'PASS', exitCode = 0, metrics, skipJustification } = {}
++    ) => ({
++      id,
++      command: `fixture ${id}`,
++      status,
++      exitCode,
++      durationMs: 1,
++      evidence: raw.get(id) ?? [],
++      ...(metrics ? { metrics } : {}),
++      ...(skipJustification ? { skipJustification } : {})
++    })
++
++    emitLog('format', 'fixture ok')
++    emitLog('typecheck', 'fixture ok')
++    emitLog('lint', 'fixture ok')
++    emitLog('build', 'fixture ok')
++    emitLog('unit', ' Test Files  1 passed (1)\n      Tests  5 passed (5)\n')
++    emitLog('coverage', 'coverage complete')
++    emitResult(
++      'coverage',
++      'coverage/coverage-summary.json',
++      JSON.stringify({
++        total: {
++          statements: { pct: 95 },
++          branches: { pct: 96 },
++          functions: { pct: 97 },
++          lines: { pct: 98 }
++        }
++      })
++    )
++    emitLog('security', 'found 0 vulnerabilities\n')
++    emitLog('worker_startup', '{"event":"worker.startup_smoke_passed"}\n')
++    emitLog('e2e', 'Running 1 test using 1 worker\n\n  1 passed (0.1s)\n')
++    emitLog('evals', '{"event":"evals.completed","verdict":"PASS"}\n')
++    emitResult(
++      'evals',
++      'certification/agent-eval-report.json',
++      JSON.stringify({
++        verdict: 'PASS',
++        metrics: {
++          scenarios: 10,
++          taskSuccessRate: 0.98,
++          policyViolationRate: 0,
++          unsafeActionRate: 0,
++          schemaFailureRate: 0,
++          adversarialPassRate: 1,
++          humanEscalationAccuracy: 1
++        },
++        thresholds: {
++          taskSuccessRate: 0.85,
++          policyViolationRate: 0,
++          unsafeActionRate: 0,
++          schemaFailureRate: 0.05,
++          adversarialPassRate: 0.9,
++          escalationAccuracy: 0.8
++        }
++      })
++    )
++    emitLog('chaos', 'JSON report written\n')
++    emitResult(
++      'chaos',
++      'certification/chaos-report.json',
++      JSON.stringify({
++        testResults: [
++          {
++            assertionResults: Array.from({ length: 14 }, (_, index) => ({
++              title: `CHAOS-${String(index + 1).padStart(2, '0')} fixture`,
++              status: 'passed'
++            }))
++          }
++        ]
++      })
++    )
++    emitLog('load', '{"event":"load.completed"}\n')
++    emitResult(
++      'load',
++      'certification/load-report.json',
++      JSON.stringify({
++        events: 10000,
++        processed: 10000,
++        loss: 0,
++        duplicates: 0
++      })
++    )
++    emitLog('restore', '{"event":"restore.completed"}\n')
++    emitResult(
++      'restore',
++      'certification/restore-report.json',
++      JSON.stringify({ integrity: { digestMatches: true }, restoreMs: 10 })
++    )
++    emitLog('sbom', '{"event":"sbom.generated"}\n')
++    emitResult(
++      'sbom',
++      'certification/sbom.cyclonedx.json',
++      JSON.stringify({
++        bomFormat: 'CycloneDX',
++        specVersion: '1.5',
++        components: [{ name: 'fixture', version: '1.0.0' }]
++      })
++    )
++    emitLog('licenses', '{"event":"licenses.checked"}\n')
++    emitResult(
++      'licenses',
++      'certification/license-report.json',
++      JSON.stringify({
++        schemaVersion: 2,
++        total: 10,
++        deniedCount: 0,
++        unknownCount: 0,
++        unclassifiedCount: 0
++      })
++    )
++    emitLog('postgres', '', { exitCode: 1 })
++
++    const metrics = {
++      coverage: { statements: 95, branches: 96, functions: 97, lines: 98 },
++      chaos: { executed: 14, passed: 14, failed: 0, notExecuted: 0 },
++      evals: { verdict: 'PASS' },
++      load: { events: 10000, processed: 10000, loss: 0, duplicates: 0 },
++      restore: { integrity: { digestMatches: true }, restoreMs: 10 }
++    }
++    const gates = [
++      gateRecord('format'),
++      gateRecord('typecheck'),
++      gateRecord('lint'),
++      gateRecord('build'),
++      gateRecord('unit', {
++        metrics: {
++          filesPassed: 1,
++          filesFailed: 0,
++          filesSkipped: 0,
++          testsPassed: 5,
++          testsFailed: 0,
++          testsSkipped: 0
++        }
++      }),
++      gateRecord('coverage', {
++        metrics: { statements: 95, branches: 96, functions: 97, lines: 98 }
++      }),
++      gateRecord('security'),
++      gateRecord('worker_startup'),
++      gateRecord('e2e', {
++        metrics: { filesPassed: 1, filesFailed: 0, filesSkipped: 0 }
++      }),
++      gateRecord('evals'),
++      gateRecord('chaos'),
++      gateRecord('load'),
++      gateRecord('restore'),
++      gateRecord('sbom'),
++      gateRecord('licenses'),
++      gateRecord('postgres', { status: 'NOT_EXECUTED', exitCode: 1 })
++    ]
++    for (const record of raw.values()) {
++      for (const item of record) {
++        artifacts.push({
++          path: item.path,
++          sha256: item.sha256,
++          size: item.size,
++          producer: 'self-test',
++          recordedAt: new Date().toISOString(),
++          gateId: [...raw.entries()].find(([, list]) =>
++            list.includes(item)
++          )?.[0]
++        })
++      }
++    }
++    const findings = { P0: [], P1: [], P2: [] }
++    const externalGates = {
++      modelProvider: 'NOT_VALIDATED',
++      channel: 'NOT_VALIDATED',
++      externalIdentity: 'NOT_VALIDATED',
++      humanSignoff: 'NOT_VALIDATED'
++    }
++    const decision = computeDecision({ gates, findings, externalGates })
++    const result = {
++      schemaVersion: 1,
++      phase: '10',
++      kind: 'phase10-result',
++      commit: candidate.git.head,
++      candidate,
++      runId,
++      timestamp: new Date().toISOString(),
++      scores: {},
++      findings,
++      gates,
++      externalGates,
++      metrics,
++      certification: decision.certification,
++      decision: decision.decision,
++      remainingBlockers: decision.blockers
++    }
++    const manifest = {
++      schemaVersion: 1,
++      phase: '10',
++      kind: 'phase10-manifest',
++      commit: candidate.git.head,
++      timestamp: result.timestamp,
++      artifacts,
++      decision: result.decision,
++      certification: result.certification,
++      candidateId,
++      runId
++    }
++    return { fixtureRoot, candidateId, runId, result, manifest, artifacts }
+   }
+-  if (content.byteLength !== artifact.size) {
+-    fail(`artifact size mismatch: ${artifact.path}`)
++
++  const persist = (state) => {
++    fs.mkdirSync(path.join(state.fixtureRoot, 'certification'), {
++      recursive: true
++    })
++    fs.writeFileSync(
++      path.join(state.fixtureRoot, 'certification/phase10-result.json'),
++      JSON.stringify(state.result)
++    )
++    fs.writeFileSync(
++      path.join(state.fixtureRoot, 'certification/manifest.json'),
++      JSON.stringify(state.manifest)
++    )
+   }
+-}
+-ok(`verified ${manifest.artifacts.length} artifact hashes`)
+-
+-const recomputed = computeDecision({
+-  gates: result.gates,
+-  findings: result.findings,
+-  externalGates: result.externalGates
+-})
+-if (recomputed.decision !== result.decision) {
+-  fail(
+-    `decision mismatch: stored ${result.decision}, recomputed ${recomputed.decision}`
++
++  const runCli = (state) => {
++    persist(state)
++    const observed = spawnSync(
++      process.execPath,
++      ['scripts/phase10-verify.mjs'],
++      { cwd: state.fixtureRoot, encoding: 'utf8' }
++    )
++    return {
++      exitCode: observed.status,
++      stderr: observed.stderr ?? '',
++      failures: (observed.stderr ?? '')
++        .split('\n')
++        .filter((line) => line.startsWith('[verify] FAIL '))
++        .map((line) => line.slice('[verify] FAIL '.length))
++    }
++  }
++
++  const rewriteEvidence = (state, relativePath, content) => {
++    const absolute = path.join(state.fixtureRoot, relativePath)
++    fs.writeFileSync(absolute, content)
++    const buffer = Buffer.from(content)
++    const sha256 = sha256Bytes(buffer)
++    const size = buffer.byteLength
++    for (const record of state.result.gates) {
++      for (const item of record.evidence ?? []) {
++        if (item.path === relativePath) {
++          item.sha256 = sha256
++          item.size = size
++        }
++      }
++    }
++    for (const artifact of state.manifest.artifacts) {
++      if (artifact.path === relativePath) {
++        artifact.sha256 = sha256
++        artifact.size = size
++      }
++    }
++  }
++
++  const cliCases = []
++  const runCliCase = (id, attack, expectedCode, prepare) => {
++    const state = buildValidFixture()
++    try {
++      prepare(state)
++      const observed = runCli(state)
++      pushCheck({
++        id,
++        level: 'cli',
++        attack,
++        expectedCode,
++        failures: observed.failures,
++        exitCode: observed.exitCode
++      })
++      cliCases.push({
++        id,
++        exitCode: observed.exitCode,
++        stderr: observed.stderr
++      })
++    } finally {
++      fs.rmSync(state.fixtureRoot, { recursive: true, force: true })
++    }
++  }
++
++  // Positive control: the same fixture without mutation must qualify.
++  const positiveState = buildValidFixture()
++  try {
++    const observed = runCli(positiveState)
++    const accepted =
++      observed.exitCode === 0 &&
++      /current candidate qualified/.test(observed.stderr)
++    checks.push({
++      id: 'C0',
++      level: 'cli',
++      attack: 'complete valid evidence control',
++      expectedCode: 'current candidate qualified',
++      observed: accepted ? 'ACCEPTED' : 'REJECTED',
++      failures: observed.failures,
++      exitCode: observed.exitCode,
++      verdict: accepted ? 'PASS' : 'FAIL'
++    })
++    cliCases.push({
++      id: 'C0',
++      exitCode: observed.exitCode,
++      stderr: observed.stderr
++    })
++  } finally {
++    fs.rmSync(positiveState.fixtureRoot, { recursive: true, force: true })
++  }
++
++  // C1: probe scenario — gates declared PASS, no evidence, empty manifest.
++  runCliCase(
++    'C1',
++    'declared PASS with no evidence and empty manifest',
++    'gate_log_missing:format',
++    (state) => {
++      for (const record of state.result.gates) delete record.evidence
++      state.manifest.artifacts = []
++    }
+   )
+-} else {
+-  ok(`decision is coherent: ${result.decision}`)
+-}
+-if (recomputed.certification !== result.certification) {
+-  fail(
+-    `certification mismatch: stored ${result.certification}, recomputed ${recomputed.certification}`
++
++  // C2: required gate log removed.
++  runCliCase(
++    'C2',
++    'required gate log removed',
++    'gate_log_missing:unit',
++    (state) => {
++      const unit = state.result.gates.find((record) => record.id === 'unit')
++      fs.rmSync(path.join(state.fixtureRoot, 'certification/logs/unit.log'))
++      unit.evidence = []
++      state.manifest.artifacts = state.manifest.artifacts.filter(
++        (artifact) => artifact.path !== 'certification/logs/unit.log'
++      )
++    }
++  )
++
++  // C3: PASS declared while the raw runner data shows failure.
++  runCliCase(
++    'C3',
++    'PASS declared with raw failure data',
++    'gate_status_mismatch:unit',
++    (state) => {
++      rewriteEvidence(
++        state,
++        'certification/logs/unit.log',
++        `# runId=${state.runId} candidateId=${state.candidateId} gate=unit command=fixture unit\n# exitCode=0 durationMs=1\n\n Test Files  1 passed (1)\n      Tests  5 failed (5)\n`
++      )
++    }
+   )
+-} else {
+-  ok(`certification is coherent: ${result.certification}`)
+-}
+ 
+-for (const id of PHASE10_REQUIRED_LOCAL_GATES) {
+-  const gate = result.gates.find((candidate) => candidate.id === id)
+-  if (!gate) {
+-    fail(`required gate missing: ${id}`)
+-    continue
++  // C4: mandatory skip hidden behind a PASS declaration.
++  runCliCase('C4', 'hidden mandatory skip', 'mandatory_skip:e2e:1', (state) => {
++    rewriteEvidence(
++      state,
++      'certification/logs/e2e.log',
++      `# runId=${state.runId} candidateId=${state.candidateId} gate=e2e command=fixture e2e\n# exitCode=0 durationMs=1\n\nRunning 2 tests using 1 worker\n\n  1 skipped\n  1 passed (0.1s)\n`
++    )
++    const e2e = state.result.gates.find((record) => record.id === 'e2e')
++    e2e.metrics = { filesPassed: 1, filesFailed: 0, filesSkipped: 1 }
++  })
++
++  // C5: declared exit code diverges from the raw log header.
++  runCliCase(
++    'C5',
++    'divergent exit code',
++    'gate_exit_code_mismatch:unit:0:7',
++    (state) => {
++      rewriteEvidence(
++        state,
++        'certification/logs/unit.log',
++        `# runId=${state.runId} candidateId=${state.candidateId} gate=unit command=fixture unit\n# exitCode=7 durationMs=1\n\n Test Files  1 passed (1)\n      Tests  5 passed (5)\n`
++      )
++    }
++  )
++
++  // C6: evidence produced by another run (stale run binding).
++  runCliCase(
++    'C6',
++    'evidence bound to another run',
++    'gate_log_run_mismatch:unit',
++    (state) => {
++      rewriteEvidence(
++        state,
++        'certification/logs/unit.log',
++        `# runId=run-other-9999 candidateId=${state.candidateId} gate=unit command=fixture unit\n# exitCode=0 durationMs=1\n\n Test Files  1 passed (1)\n      Tests  5 passed (5)\n`
++      )
++    }
++  )
++
++  // C7: manifest bound to a different candidate than the result.
++  runCliCase(
++    'C7',
++    'candidate divergence between result and manifest',
++    'candidate_id_mismatch_result_manifest',
++    (state) => {
++      state.manifest.candidateId = 'b'.repeat(64)
++    }
++  )
++
++  // C8: duplicated gate declaration.
++  runCliCase(
++    'C8',
++    'duplicate gate declaration',
++    'duplicate_gate:unit',
++    (state) => {
++      const unit = state.result.gates.find((record) => record.id === 'unit')
++      state.result.gates.push({ ...unit, evidence: [...unit.evidence] })
++    }
++  )
++
++  // C9: the same raw artifact assigned to two gates.
++  runCliCase(
++    'C9',
++    'artifact owned by two gates',
++    'duplicate_artifact:certification/logs/unit.log',
++    (state) => {
++      const unit = state.result.gates.find((record) => record.id === 'unit')
++      const lint = state.result.gates.find((record) => record.id === 'lint')
++      lint.evidence.push({ ...unit.evidence[0] })
++    }
++  )
++
++  const verdict = checks.every((check) => check.verdict === 'PASS')
++    ? 'PASS'
++    : 'FAIL'
++  const output = {
++    schemaVersion: 2,
++    kind: 'aaa-negative-validation',
++    generatedAt: new Date().toISOString(),
++    confidenceLimit:
++      'Hashes and run bindings detect post-hoc changes and mixed runs; they do not authenticate a producer that controls every file in the environment. Independent qualification requires a separate environment/process or human authority.',
++    checks,
++    cliCases: cliCases.map((entry) => ({
++      id: entry.id,
++      exitCode: entry.exitCode
++    })),
++    verdict
+   }
+-  if (gate.status !== 'PASS') {
+-    fail(`required gate not PASS: ${id} (${gate.status})`)
++  fs.writeFileSync(
++    path.join(root, 'certification', 'negative-validation.json'),
++    `${JSON.stringify(output, null, 2)}\n`
++  )
++  for (const check of checks) {
++    process.stderr.write(
++      `[verify] ${check.verdict === 'PASS' ? 'PASS' : 'FAIL'} ${check.id} (${check.level}) ${check.attack}\n`
++    )
+   }
++  process.stderr.write(`[verify] self-test verdict ${verdict}\n`)
++  process.exitCode = verdict === 'PASS' ? 0 : 1
+ }
+ 
+-const executedChaos = result.metrics?.chaos?.executed ?? 0
+-const failedChaos = result.metrics?.chaos?.failed ?? 0
+-if (failedChaos > 0) fail(`chaos scenarios failed: ${failedChaos}`)
+-if (executedChaos < 14) {
+-  fail(`chaos executed scenarios below minimum: ${executedChaos}`)
+-}
++function runStandardVerification() {
++  const resultPath = historicalMode
++    ? resolveHistorical('certification/phase10-result.json')
++    : path.join(root, 'certification', 'phase10-result.json')
++  const manifestPath = historicalMode
++    ? resolveHistorical('certification/manifest.json')
++    : path.join(root, 'certification', 'manifest.json')
+ 
+-const evalVerdict = result.metrics?.evals?.verdict
+-if (evalVerdict !== 'PASS') {
+-  fail(`agent eval verdict is ${evalVerdict ?? 'missing'}`)
+-}
++  if (!fs.existsSync(resultPath))
++    fail('certification/phase10-result.json missing')
++  if (!fs.existsSync(manifestPath)) fail('certification/manifest.json missing')
++  if (failures.length > 0) return
+ 
+-const load = result.metrics?.load
+-if (!load || load.loss !== 0 || load.duplicates !== 0) {
+-  fail(
+-    `load check inconsistent: loss=${load?.loss}, duplicates=${load?.duplicates}`
+-  )
+-}
+-const restore = result.metrics?.restore
+-if (!restore || restore.integrity?.digestMatches !== true) {
+-  fail('restore integrity check missing or failing')
+-}
++  let result
++  let manifest
++  try {
++    result = Phase10ResultSchema.parse(
++      JSON.parse(fs.readFileSync(resultPath, 'utf8'))
++    )
++    ok('phase10-result.json matches schema')
++  } catch (error) {
++    fail(`phase10-result.json schema invalid: ${error.message}`)
++  }
++  try {
++    manifest = CertificationManifestSchema.parse(
++      JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
++    )
++    ok('manifest.json matches schema')
++  } catch (error) {
++    fail(`manifest.json schema invalid: ${error.message}`)
++  }
++  if (!result || !manifest) {
++    process.exitCode = 1
++    return
++  }
+ 
+-if (result.decision === 'GO') {
+-  fail('GO requires validated external gates and human signoff; not satisfied')
+-}
++  const reader = artifactReaderFor(historicalMode ? 'historical' : 'current')
++  const bound = Boolean(result.candidate) && Boolean(manifest.candidateId)
++  let currentCandidateId
++  if (bound) {
++    currentCandidateId = computeCandidateId(collectCandidateFiles(root))
++    if (result.candidate.candidateId !== currentCandidateId) {
++      fail(
++        `CANDIDATE_DRIFT recorded ${result.candidate.candidateId}, current ${currentCandidateId}`
++      )
++      const driftPath = path.join(
++        root,
++        'certification',
++        'candidate-manifest.json'
++      )
++      if (fs.existsSync(driftPath)) {
++        try {
++          const recorded = JSON.parse(fs.readFileSync(driftPath, 'utf8'))
++          const differences = diffCandidateFiles(
++            recorded.files,
++            collectCandidateFiles(root)
++          )
++          for (const difference of differences.slice(0, 20)) {
++            process.stderr.write(
++              `[verify] drift ${difference.type} ${difference.path}\n`
++            )
++          }
++        } catch {
++          // recorded candidate manifest unreadable; the drift failure stands
++        }
++      }
++    }
++  }
+ 
+-if (failures.length > 0) {
+-  process.stderr.write(`[verify] ${failures.length} failure(s)\n`)
+-  process.exit(1)
++  const qualificationFailures = verifyQualification({
++    result,
++    manifest,
++    artifactReader: reader,
++    requiredGates: PHASE10_REQUIRED_LOCAL_GATES,
++    currentCandidateId,
++    enforceEvidence: bound && !historicalMode
++  })
++  for (const entry of qualificationFailures) {
++    if (entry === 'no_candidate_binding') continue
++    fail(entry)
++  }
++  if (!qualificationFailures.some((entry) => entry.startsWith('artifact_'))) {
++    ok(`verified ${manifest.artifacts.length} artifact hashes`)
++  }
++
++  const recomputed = computeDecision({
++    gates: result.gates,
++    findings: result.findings,
++    externalGates: result.externalGates
++  })
++  if (recomputed.decision !== result.decision) {
++    fail(
++      `decision mismatch: stored ${result.decision}, recomputed ${recomputed.decision}`
++    )
++  } else {
++    ok(`decision is coherent: ${result.decision}`)
++  }
++  if (recomputed.certification !== result.certification) {
++    fail(
++      `certification mismatch: stored ${result.certification}, recomputed ${recomputed.certification}`
++    )
++  } else {
++    ok(`certification is coherent: ${result.certification}`)
++  }
++
++  for (const id of PHASE10_REQUIRED_LOCAL_GATES) {
++    const gateResult = result.gates.find((candidate) => candidate.id === id)
++    if (!gateResult) {
++      fail(`required gate missing: ${id}`)
++      continue
++    }
++    if (gateResult.status !== 'PASS') {
++      fail(`required gate not PASS: ${id} (${gateResult.status})`)
++    }
++  }
++
++  const executedChaos = result.metrics?.chaos?.executed ?? 0
++  const failedChaos = result.metrics?.chaos?.failed ?? 0
++  if (failedChaos > 0) fail(`chaos scenarios failed: ${failedChaos}`)
++  if (executedChaos < 14) {
++    fail(`chaos executed scenarios below minimum: ${executedChaos}`)
++  }
++
++  const evalVerdict = result.metrics?.evals?.verdict
++  if (evalVerdict !== 'PASS') {
++    fail(`agent eval verdict is ${evalVerdict ?? 'missing'}`)
++  }
++
++  const load = result.metrics?.load
++  if (!load || load.loss !== 0 || load.duplicates !== 0) {
++    fail(
++      `load check inconsistent: loss=${load?.loss}, duplicates=${load?.duplicates}`
++    )
++  }
++  const restore = result.metrics?.restore
++  if (!restore || restore.integrity?.digestMatches !== true) {
++    fail('restore integrity check missing or failing')
++  }
++  if (result.decision === 'GO') {
++    fail(
++      'GO requires validated external gates and human signoff; not satisfied'
++    )
++  }
++
++  if (!bound) {
++    process.stderr.write(
++      '[verify] LEGACY_MANIFEST_NO_CANDIDATE_BINDING: historical hashes checked; this does not qualify the current candidate\n'
++    )
++    if (!historicalMode) {
++      failures.push(
++        'current qualification requires a certificate with candidate binding'
++      )
++    }
++  } else if (historicalMode) {
++    process.stderr.write(
++      `[verify] HISTORICAL_COHERENCE candidate=${result.candidate.candidateId} (not current qualification)\n`
++    )
++  }
++
++  if (failures.length > 0) {
++    process.stderr.write(`[verify] ${failures.length} failure(s)\n`)
++    process.exitCode = 1
++    return
++  }
++  if (historicalMode) {
++    process.stderr.write(
++      `[verify] certification historically coherent: ${result.decision} / ${result.certification}\n`
++    )
++  } else {
++    process.stderr.write(
++      `[verify] current candidate qualified: ${result.candidate.candidateId}\n`
++    )
++  }
+ }
+ 
+-process.stderr.write(
+-  `[verify] certification coherent: ${result.decision} / ${result.certification}\n`
+-)
+-process.exit(0)
++if (selfTestMode) {
++  runSelfTest()
++} else {
++  runStandardVerification()
++}

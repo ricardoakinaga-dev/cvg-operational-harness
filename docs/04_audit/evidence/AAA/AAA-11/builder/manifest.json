@@ -1,0 +1,157 @@
+{
+  "program": "AAA-20260912",
+  "task": "AAA-11",
+  "lane": "builder",
+  "title": "Per-turn budget, deadline, cost, cancellation and late responses",
+  "status": "IMPLEMENTED",
+  "productGateGranted": false,
+  "generatedAt": "2026-09-13T02:25:00Z",
+  "scope": "packages/agent-runtime only: per-turn counters reset per runTurn; budgeted stages model.generate/tool.execute/outbox.enqueue denied before start (steps_budget_exceeded, model_calls_exhausted, tool_calls_exhausted, loop_cost_exceeded); deadlineAt check before each stage and after each await; cooperative cancellation via GovernedTurnInput.cancelSignal propagated to modelGateway.generate(signal) and ToolInvocation.signal with turn_cancelled; late results discarded; all spans closed on success/error/timeout/cancel. Journal/proposal semantics from AAA-09/10 preserved.",
+  "contractRefs": [
+    "docs/02_spec/aaa_execution_contract.md §1 F05, §5, §9, §12 T-09/T-10/T-11"
+  ],
+  "environment": {
+    "node": "v24.20.0 (local); target engines >=22 <23",
+    "syntheticDataOnly": true,
+    "noInstall": true,
+    "noCommitPushDeploy": true,
+    "model": "opencode-go/deepseek-v4.1-flash"
+  },
+  "changedFiles": {
+    "packages/agent-runtime/src/runtime.ts": "ea1c8ccde446686f68b541e780f52138fab2201d684b0821af57acbf57e34f10",
+    "packages/agent-runtime/src/contracts.ts": "49220c11e5cff2fac7936513ca1dfa2333f944e6d06a480dc09f035f8a16baba",
+    "packages/agent-runtime/src/__tests__/runtime-limits.test.ts": "106c6314c76e4a6fdd365aa5fd98d3b55008f2a11c6c1cdd8c1d07c7396ecf03"
+  },
+  "unchangedByThisLane": [
+    "packages/agent-runtime/src/effect-journal.ts",
+    "packages/agent-runtime/src/proposal.ts",
+    "packages/agent-runtime/src/index.ts",
+    "packages/model-gateway/** (signal support already existed; no file touched)",
+    "packages/approval-engine/**",
+    "packages/persistence/**",
+    "packages/channel-gateway/**",
+    "package.json",
+    "docs/99_runtime_state.md, docs/20_master_execution_log.md, docs/30_backlog_master.md and shared tracking files"
+  ],
+  "publicSurface": {
+    "GovernedTurnInput": {
+      "cancelSignal": "optional AbortSignal; cooperative cancellation for the turn"
+    },
+    "ToolInvocation": {
+      "signal": "optional AbortSignal, same instance passed to the tool executor"
+    },
+    "GovernedTurnResult": {
+      "effectConfirmed": "optional boolean (honest effect state on denied outcomes)",
+      "outboxPending": "optional boolean (outbox stage not executed)"
+    }
+  },
+  "behavior": {
+    "counters": "steps/modelCalls/toolCalls/costUsd are local to runTurn; limits apply only to the receiving turn and are not inherited",
+    "budgetedStages": "policy.evaluate/approval/journal do not consume maxSteps; model.generate increments modelCalls, tool.execute increments toolCalls, outbox.enqueue only consumes a step",
+    "stepDenial": "before starting any budgeted stage, steps >= maxSteps -> denied steps_budget_exceeded with no stage start",
+    "callDenial": "modelCalls >= maxModelCalls -> model_calls_exhausted (0 = no call); toolCalls >= maxToolCalls -> tool_calls_exhausted (0 = no call)",
+    "deadline": "deadlineAt = startedAt + maxDurationMs; checked before each stage and after each await; expiry -> loop_deadline_exceeded, no confirm/execute after deadline",
+    "cost": "model cost accumulated; checked after the model and before tool/outbox -> loop_cost_exceeded with no effect",
+    "cancellation": "cancelSignal checked before each stage and after each await -> turn_cancelled; late dependency result discarded (no tool/outbox); effect may have started -> journal/approval UNCERTAIN, never invented success",
+    "lateResponses": "after deadline/cancel a late model/tool result cannot feed proposal, tool or outbox",
+    "lateModelAfterCancel": "post-await stop check discards the result before proposal/tool/outbox; requestId/effects count zero",
+    "spanClosure": "openSpans tracked; endSpan on normal paths; finish closes any remaining child as error before ending agent.turn; top-level safety net closes open children and root then rethrows on unexpected exceptions",
+    "outboxDeniedAfterEffect": "denied with the limit reason plus effectConfirmed=true and outboxPending=true, never a denial suggesting absence of effect",
+    "journalBoundaries": "stop after markEffectStarted/tool -> journal.markUncertain + approval.markUncertain; stop after confirmEffect -> denied with effectConfirmed true and outboxPending true (journal CONFIRMED preserved)",
+    "replay": "AAA-10 replay semantics unchanged"
+  },
+  "commands": [
+    {
+      "command": "npx vitest run packages/agent-runtime/src/__tests__/runtime-limits.test.ts --no-file-parallelism --maxWorkers=2 (with AAA-11 enforcement neutralized)",
+      "exitCode": 1,
+      "result": "1 file failed; 13 failed | 3 passed (16)",
+      "log": "red-focused.log"
+    },
+    {
+      "command": "npx vitest run packages/agent-runtime --no-file-parallelism --maxWorkers=2",
+      "exitCode": 0,
+      "result": "6 files passed; 98 passed",
+      "log": "green-focused.log"
+    },
+    {
+      "command": "npx vitest run packages/agent-runtime/src/__tests__/runtime-limits.test.ts --no-file-parallelism --maxWorkers=2 --reporter=verbose",
+      "exitCode": 0,
+      "result": "1 file passed; 16 passed",
+      "log": "green-limits-verbose.log"
+    },
+    {
+      "command": "npx vitest run packages/agent-runtime/src/__tests__/runtime-limits.test.ts --reporter=verbose -t \"span closure\"",
+      "exitCode": 0,
+      "result": "1 passed | 15 skipped",
+      "log": "span-closure.log"
+    },
+    {
+      "command": "npx vitest run packages/model-gateway --no-file-parallelism --maxWorkers=2",
+      "exitCode": 0,
+      "result": "3 files passed; 45 passed",
+      "log": "model-gateway-focused.log"
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "clean",
+      "log": "typecheck.log"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "clean",
+      "log": "lint.log"
+    },
+    {
+      "command": "npx prettier --check packages/agent-runtime/src/contracts.ts packages/agent-runtime/src/runtime.ts packages/agent-runtime/src/__tests__/runtime-limits.test.ts",
+      "exitCode": 0,
+      "result": "All matched files use Prettier code style"
+    },
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "result": "195 files passed | 4 skipped (199); 1148 passed | 56 skipped (1204); zero failures",
+      "log": "full-npm-test.log"
+    }
+  ],
+  "baseline": {
+    "reference": "current worktree before this lane (AAA-10 wiring manifest full-npm-test.log): 194 files passed | 4 skipped; 1132 passed | 56 skipped",
+    "thisLaneDelta": "+1 test file (runtime-limits.test.ts, 16 tests), +16 passed, 0 failures",
+    "taskBaseline": "task states baseline 1132 pass / 56 skip; zeros failures"
+  },
+  "tests": {
+    "T-09": "AAA-11 T-09: per-turn maxSteps > denies steps_budget_exceeded when maxSteps=1 and never starts tool/outbox (PASS)",
+    "T-10": "AAA-11 T-10: deadline with a dependency that ignores AbortSignal > ends the turn honestly after a slow tool, with no late outbox (PASS)",
+    "T-11a": "AAA-11 T-11: cooperative cancellation > denies turn_cancelled when the model ignores an abort mid-turn (PASS)",
+    "T-11b": "AAA-11 T-11: cooperative cancellation > denies turn_cancelled and marks the approval/journal UNCERTAIN when the tool ignores the abort (PASS)",
+    "maxModelCalls0": "AAA-11 budget call limits > denies model_calls_exhausted for maxModelCalls=0 without calling the model (PASS)",
+    "maxToolCalls0": "AAA-11 budget call limits > denies tool_calls_exhausted for maxToolCalls=0 without executing the tool (PASS)",
+    "deadlineBetweenStages": "AAA-11 deadline and cost boundaries > denies loop_deadline_exceeded between model and tool and starts no effect (PASS)",
+    "costAfterModel": "AAA-11 deadline and cost boundaries > denies loop_cost_exceeded after the model and before the tool (PASS)",
+    "perTurnReset": "AAA-11 per-turn limit semantics > resets counters for the next turn and applies limits only to the receiving turn; does not inherit limits from a previous turn (PASS)",
+    "lateModelAfterCancel": "AAA-11 late responses after deadline or cancellation > discards a late model result after cancellation and never triggers tool/outbox (PASS)",
+    "spanClosure": "AAA-11 span closure > closes root and child spans for success, policy denial, outbox failure and deadline (PASS)",
+    "signalPropagation": "AAA-11 signal propagation > forwards the cancellation signal to the model gateway; forwards the cancellation signal to the tool invocation (PASS)",
+    "outboxStageDenied": "AAA-11 outbox stage after an executed effect > denies steps_budget_exceeded without starting the outbox and flags the confirmed effect (PASS)",
+    "T18Regression": "runtime-journal.test.ts > AAA-10 T-18 (maxToolCalls=0 denies before reservation, approval stays APPROVED) (PASS)"
+  },
+  "artifacts": {
+    "tMatrix": "T-matrix.md",
+    "spanClosureProof": "span-closure.md",
+    "commands": "commands.log",
+    "hashes": "changed-hashes.txt",
+    "limitations": "limitations.md",
+    "red": "red-focused.log",
+    "green": "green-focused.log",
+    "greenVerbose": "green-limits-verbose.log",
+    "fullSuite": "full-npm-test.log"
+  },
+  "notCoveredHere": [
+    "PostgreSQL/AAA-16 durable proof (out of scope for this lane)",
+    "Channel outbound composition/idempotency (AAA-12)",
+    "Hard preemption of a dependency that ignores AbortSignal (cooperative only)",
+    "Production, real provider/channel/IdP, real data, commit/push/deploy",
+    "Independent review / G_QUALITY / product gate (not granted by the builder)"
+  ]
+}

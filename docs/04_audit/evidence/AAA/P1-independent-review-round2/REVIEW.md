@@ -1,0 +1,256 @@
+# P1 Independent Review — Round 2 + Round-5 Closure — candidates `911f0498…` / `328d6a38…` (AAA-07..AAA-17)
+
+> **Closure update (2026-09-13):** the round-2 verdicts below bound candidate `911f0498…`. A fix for the P1-2R finding was implemented and a new frozen candidate `328d6a38…` (856 files, round-5 rehearsal) exists. The focused closure re-verification is in **§0**; P1-2R is **CLOSED** and **AAA-07 is VERIFIED on `328d6a38…`**. Sections §1–§12 below are the historical round-2 record on `911f0498…` and remain preserved.
+
+- Program: `AAA-20260912`. Reviewer role: **independent reviewer, fresh context** (did not build AAA-07..AAA-17; no builder rationale inherited).
+- Independence level: **I1 — same model family, fresh context**. All verdicts below were re-executed from the frozen workspace sources; builder/critic evidence was treated as claims.
+- Reviewed candidate: `911f049888a45ab206770c29c07a492b4294905225ce0d722f7a193e694da9d4` (855 files, round-4 rehearsal snapshot).
+- Snapshot: `/tmp/opencode/aaa13-rehearsal-20260913T052107Z/repo`; rehearsal manifest: `docs/04_audit/evidence/AAA/AAA-13/integration-rehearsal/rehearsal-20260913T052107Z/manifest.json`.
+- Workspace: `/home/ricardo/cvg-agent-secretary-v2`, HEAD `512bc11e80fbf7c7b8baf6263aacc811ff829309`, branch `main`, 119 dirty entries, Node `v24.20.0` (target is Node 22 — declared host limitation), npm `11.19.0`.
+- Write scope honored: only `/tmp/opencode/p1-review2-20260913T053543Z/` and `docs/04_audit/evidence/AAA/P1-independent-review-round2/`. No product, contract, tracking or prior-evidence file was edited; no commit/push/deploy. The required `licenses:check` idempotence run left `certification/license-report.json` byte-identical (`55787d37…` before and after) — no write occurred.
+- Successor of `docs/04_audit/evidence/AAA/P1-independent-review/REVIEW.md` (round 1, bound to a prior candidate). **Round-2 critic findings P1-1/P1-2/P2-1/P2-2/P2-3 are explicitly adjudicated in §7.**
+
+## 0. Round-5 closure re-verification — candidate `328d6a38…` (P1-2R)
+
+Focused re-verification of the P1-2R finding against the fix package `docs/04_audit/evidence/AAA/AAA-07/sweep-legacy-fix/` and the new frozen candidate `328d6a384658e75dc241db08d59072cbc4c8c4c430bc7d48063653443f092f67` (round-5 rehearsal `rehearsal-20260913T062303Z`, 856 files). Write scope for this closure: `/tmp/opencode/p1-review3-20260913T063517Z/` and this evidence directory only; no product file was edited.
+
+### 0.1 Binding and drift — **NO DRIFT**
+
+| Check | Result |
+| --- | --- |
+| Snapshot list `snapshot-files.sha256` (856 entries) vs current tree | 856 present, **0 differing, 0 missing** (`commands/round5/drift/summary.txt`) |
+| Judged product sources `packages/**` + `apps/**` | **486/486 byte-identical** to the frozen list (`commands/round5/drift/judged-product-current.sha256`) |
+| Independent `candidateId` recomputation on current tree | `328d6a38…`, 856 files (`commands/round5/candidate-recompute.log`) |
+| Same recomputation on the frozen snapshot | `328d6a38…`, 856 files |
+| Fix file `packages/agent-runtime/src/runtime.ts` | `1fe73b1da50d5fd8d42eddd1dfd301e3404b634da2d944fff5aa883464dfb78c` = the fix package post-hash (`AAA-07/sweep-legacy-fix/changed-hashes.txt`) |
+| Round-5 rehearsal raw logs | `certify.exit=0`, `verify.exit=0`, `selftest.exit=0`; **16/16 gates PASS**, `verificationFailures=[]`, 0 skips per gate; verifier `current candidate qualified: 328d6a38…`, 27 artifact hashes; `SHA256SUMS` **75/75 OK**; shared `scripts/`+`certification/` non-mutated (`shared-*` identical `036e4de3…`, empty diff) |
+
+### 0.2 Gate set re-run (round 5)
+
+| # | Command | Exit | Observed result | Log |
+| - | ------- | ---- | --------------- | --- |
+| 1 | `npm test` | **0** | Test Files 230 passed \| 4 skipped (234); Tests 1585 passed \| 57 skipped (1642); 204.59s (+1 file/+8 tests vs round 4 = the new `runtime-legacy-rearm` suite) | `commands/round5/npm-test.log` |
+| 2 | `npm run typecheck` | **0** | clean | `commands/round5/typecheck.log` |
+| 3 | `npm run lint` | **0** | clean | `commands/round5/lint.log` |
+| 4 | `TEST_DATABASE_URL=… npm run test:postgres` | **0** | 14 files / 123 tests, **0 skipped** | `commands/round5/test-postgres.log` |
+| 5 | Scoped `npx prettier --check …` | **0** | `All matched files use Prettier code style!` | `commands/round5/prettier.log` |
+| 6 | `npm run licenses:check` x2 | **0 / 0** | total 372 / internal 21 / denied 0 / unclassified 0; report sha256 `55787d37…` stable before/run1/run2 | `commands/round5/licenses-check-*.log`, `license-report.*.sha256` |
+| 7 | `npm run audit:security` | **0** | `found 0 vulnerabilities` | `commands/round5/audit-security.log` |
+| 8 | `git diff --check` | **0** | clean | `commands/round5/git-diff-check.log` |
+| 9 | Focused fix suites (`runtime-legacy-rearm`, `runtime-execution-recovery`, `runtime-sweep-operation-key`, `runtime-journal`) | **0** | 4 files / **109 passed (109)** | `commands/round5/new-fix-suites.log` |
+
+### 0.3 Exact reviewer probes re-run (same frozen bytes)
+
+- `probes/p12-sweep-operation-key.ts` sha256 `6aee5cee2d6c081563e27365235e927f24d2ba659772bb22b942bf53df8da5d7` — copied byte-identical from this evidence directory, `npx tsx`, **exit 0**, crash child `status=99`, summary `failed: 0, falsified: false`. Decisive row: `legacy-crash+active-lease+changed-key-B` -> **`denied/operation_uncertain`, approval `EXECUTING`, journal A `EFFECT_STARTED` unchanged, journal B absent, tool 0, outbox 0**. Raw: `raw/round5/p12-sweep-operation-key.log`.
+- `probes/p12-legacy-active-repro.ts` sha256 `0e25394e835d5d8612109d220ab6a2a2cb0251aa27bfc310b3ee3ef3a0545c90` — **exit 0**, `effectsLogGrew: false`, child crash `99`; `persisted` -> `denied/operation_in_progress` tool 0 journal A `EFFECT_STARTED`; `legacy` and `legacy-absent-key` -> **`denied/operation_uncertain`, tool 0, journal A `EFFECT_STARTED`, no journal B, no outbox**. Raw: `raw/round5/p12-legacy-active-repro.log`.
+- Method note (transparency): the first re-run of the sweep probe reused the stale scratch dir `/tmp/opencode/p1-review2-20260913T053543Z/p12-crash` (the probe hardcodes its workdir and does not clean the journal), so the crash child found an old `UNCERTAIN` record and exited 98. The scratch dir was removed and the exact probe bytes were re-run from an empty journal; the raw log published here is the clean run. Same disclosure as the builder's `sweep-legacy-fix/limitations.md`.
+
+### 0.4 Fresh closure probe (independent code)
+
+`probes/p12r-closure-probe.ts` (new, own harness) — real child crash (exit 99, `effectsLogGrew: false`), 7 variants, all `ok:true`, exit 0 (`raw/round5/p12r-closure-probe.log`):
+
+| Variant | Outcome | Approval | Tool | Journal A | Journal B |
+| ------- | ------- | -------- | ---- | --------- | --------- |
+| legacy active + changed key B | `denied/operation_uncertain` | `EXECUTING` | 0 | `EFFECT_STARTED` unchanged | absent |
+| legacy active + absent key | `denied/operation_uncertain` | `EXECUTING` | 0 | `EFFECT_STARTED` unchanged | absent |
+| legacy expired + changed key B | `denied/operation_uncertain` | `UNCERTAIN` | 0 | `EFFECT_STARTED` -> `UNCERTAIN` (lease sweep) | absent |
+| legacy expired + absent key | `denied/operation_uncertain` | `UNCERTAIN` | 0 | `EFFECT_STARTED` -> `UNCERTAIN` | absent |
+| persisted active + changed key B | `denied/operation_in_progress` | `EXECUTING` | 0 | `EFFECT_STARTED` unchanged | absent |
+| persisted `EXECUTING` + absent journal | `denied/operation_uncertain` | `EXECUTING` | 0 | — | absent |
+| positive control: persisted + proven absent + never executing | `executed` after sweep `{released:1}` | `EXECUTED` | **1** | `CONFIRMED` | absent (outbox key A) |
+
+### 0.5 New fix regression suite
+
+`packages/agent-runtime/src/__tests__/runtime-legacy-rearm.test.ts` (8 tests) covers the same matrix: legacy active changed/absent key deny without re-execution; legacy expired sweep path; legacy lookup failure; persisted proven-absent re-arm; persisted `EFFECT_STARTED`, persisted `EXECUTING` without record and foreign-proposal records all deny. All pass (see 0.2 #9).
+
+### 0.6 P1-2R disposition — **CLOSED**
+
+The legacy keyless recovery path now resolves durable identity before touching the journal and denies `operation_uncertain` without mutation; expired records are marked `UNCERTAIN`; persisted-key cases re-arm only on proven absence/never-executing, else `operation_in_progress`/`operation_uncertain`; `CONFIRMED` still replays. Contract `docs/02_spec/aaa_execution_contract.md:118` is now honored on the active-lease path **and** the expired path. AAA-07 verdict on `328d6a38…`: **VERIFIED** (the round-2 `REWORK` applied only to `911f0498…`). No P1 remains open on this path.
+
+### 0.7 New finding P2-8 (inherited, confirmed on this candidate)
+
+The fix package declares the **multi-generation legacy corner** out of scope (`sweep-legacy-fix/limitations.md`). `probes/p12r-multigen-corner.ts` reproduces it on `328d6a38…`: keyless approval, expired reservation, journal under the derived proposal key `EFFECT_FAILED` (older generation) while caller key A holds `EFFECT_STARTED`; the tenant-wide sweep releases `{released:1, uncertain:0}` to `APPROVED` on the derived no-effect record, then a retry executes the tool once under the derived key (tool 1, derived `CONFIRMED`), while the possibly-started A record is later lease-swept to `UNCERTAIN`. Severity P2: pre-fix keyless approvals only, requires that exact two-generation journal shape, and is only closable with a journal list-by-`proposalHash` API (or per-generation key recorded upstream). Not a P1 for the fix scope; recorded so it is not silently dropped. Raw: `raw/round5/p12r-multigen-corner.log`.
+
+## 1. Candidate binding and drift check — **NO DRIFT**
+
+| Check | Result |
+| --- | --- |
+| Snapshot list `snapshot-files.sha256` (855 entries) vs current tree | 855 present, **0 differing, 0 missing** (`commands/drift/summary.txt`) |
+| Judged product sources `packages/**` + `apps/**` | **485/485 byte-identical** to the frozen list (`commands/judged-product-current.sha256`) |
+| `candidate-manifest.json` (producer) vs `snapshot-files.sha256` | 855/855 same path+hash, 0 mismatches |
+| Independent `candidateId` recomputation (own driver importing `scripts/lib/certification-rules.mjs`) on current tree | `911f0498…`, 855 files |
+| Same independent recomputation on the frozen snapshot | `911f0498…`, 855 files |
+| Re-check at end of review (after every command/probe) | still `911f0498…`, 855 files (`commands/candidate-recompute-final.log`) |
+
+The rehearsal candidate **is** the current working tree; no judged byte differs. Verdicts below bind to this candidate; any byte change expires them. (Round-5 closure binding for `328d6a38…` is in §0; this section remains the historical round-4 binding.)
+
+## 2. Required executable checks
+
+| # | Command | Exit | Observed result | Log |
+| - | ------- | ---- | --------------- | --- |
+| 1 | `npm test` | **0** | Test Files 229 passed \| 4 skipped (233); Tests 1577 passed \| 57 skipped (1634); 220.87s. (The 4/57 skips are the PostgreSQL-dependent files disabled without `TEST_DATABASE_URL`; with the URL the round-4 rehearsal raw `unit.log` shows 0 skips.) | `commands/npm-test.log` |
+| 2 | `npm run typecheck` | **0** | `tsc -p tsconfig.typecheck.json --noEmit` clean | `commands/typecheck.log` |
+| 3 | `npm run lint` | **0** | `eslint .` clean | `commands/lint.log` |
+| 4 | `TEST_DATABASE_URL=postgres://ricardo@127.0.0.1:55432/cvg_aaa16_test npm run test:postgres` | **0** | Test Files 14 passed (14); Tests 123 passed (123); **0 skipped** | `commands/test-postgres.log` |
+| 5 | `npx prettier --check packages apps tests scripts docs/02_spec docs/03_build/tracking docs/01_prd` | **0** | `All matched files use Prettier code style!` | `commands/prettier.log` |
+| 6 | `npm run licenses:check` run 1 | **0** | `total 372, internal 21, denied 0, unclassified 0, invalidExceptions 0`; report sha256 `55787d37…` | `commands/licenses-check-1.log` |
+| 7 | `npm run licenses:check` run 2 | **0** | same classification; report sha256 `55787d37…` — **stable before/run1/run2** | `commands/licenses-check-2.log`, `commands/license-report.*.sha256` |
+
+Additional executed checks (not substitutes for the above):
+
+| # | Command | Exit | Observed result | Log |
+| - | ------- | ---- | --------------- | --- |
+| 8 | `npm run audit:security` | **0** | `found 0 vulnerabilities` | `commands/audit-security.log` |
+| 9 | `git diff --check` | **0** | no whitespace errors | `commands/git-diff-check.log` |
+| 10 | Verbose PostgreSQL migration-smoke + tenant-isolation | **0** | 2 files / 22 passed (0 skipped): checksum-drift and missing-checksum fail closed, non-BYPASSRLS isolation, context reset | `commands/test-postgres-isolation-verbose.log` |
+| 11 | Verbose PostgreSQL effect-journal + channel + journeys | **0** | 3 files / **39 passed (39), 0 skipped** | `commands/test-postgres-journal-verbose.log` |
+| 12 | New P1-2/policy suites (runtime-sweep-operation-key, approval-operation-key, execution-contract-matrix, policy-engine-branch-hardening) | **0** | 4 files / 33 passed (33) | `commands/new-p12-suites.log` |
+| 13 | Focused coverage `packages/policy-engine` (report to /tmp) | **0** | **branches 97.84% (136/139) ≥ 95%**, statements 98.77 (161/163), functions 100 (30/30), lines 99.34 (152/153); 5 files / 54 tests | `commands/coverage-policy-engine.log` |
+| 14 | `docker version` | **1** | daemon permission denied — Docker image remains unverifiable on this host | `commands/docker-version.log` |
+
+## 3. P1-2 adversarial adjudication (required)
+
+**Required scenario (crash → EFFECT_STARTED → TTL expiry → sweep → retry with changed/absent key) is FIXED on this candidate.** A residual variant was found (P1-2R, §8).
+
+### 3.1 Method
+
+`probes/p12-sweep-operation-key.ts` runs 9 scenarios plus a **real child-process crash** (`exit 99`): a governed execution turn with caller `idempotencyKey=A` reaches `journal.markEffectStarted`, the tool performs a synthetic effect, the process dies before `confirmEffect`; the parent rebuilds the approval store from the raw crashed record and the on-disk `FileEffectJournal`, advances the clock past TTL, runs `sweepExpiredApprovals`, then retries the same approval with key `B`/absent. Raw output: `probes/p12-sweep-operation-key.log`.
+
+### 3.2 Raw results (verbatim fields)
+
+| Scenario | Outcome | Approval after | Journal A | Journal B | Tool calls | Invariant |
+| -------- | ------- | -------------- | --------- | --------- | ---------- | --------- |
+| REAL CRASH child (exit 99 after effect, before confirm; record persisted `operationKey=A`; journal `EFFECT_STARTED`) + sweep + retry key B | `denied/operation_uncertain` | `UNCERTAIN` | `UNCERTAIN` | absent | **0** (effects.log unchanged: 7 -> 7 bytes) | **PASS** |
+| persisted key + TTL + explicit sweep + key B | `denied/operation_uncertain` | `UNCERTAIN` | `UNCERTAIN` | absent | 0 | **PASS** |
+| persisted key + TTL + absent key | `denied/operation_uncertain` | `UNCERTAIN` | `UNCERTAIN` | — | 0 | **PASS** |
+| persisted key + active lease + key B | `denied/operation_in_progress` | `EXECUTING` (not APPROVED) | `EFFECT_STARTED` | absent | 0 | **PASS** |
+| legacy (no persisted key) + TTL + explicit sweep + key B | `denied/operation_uncertain`, sweep `{released:0,uncertain:1}` | `UNCERTAIN` | `UNCERTAIN` | absent | 0 | **PASS** |
+| legacy + TTL + key B (turn-start sweep only) | `denied/operation_uncertain` | `UNCERTAIN` | `UNCERTAIN` | absent | 0 | **PASS** |
+| legacy, no key, empty journal + TTL + sweep | sweep `{released:0,uncertain:1}` | `UNCERTAIN` | — | — | 0 | **PASS** |
+| **Positive control**: persisted key + journal proven absent + never EXECUTING | sweep `{released:1,uncertain:0}` -> retry key B `executed` | `EXECUTED` | `CONFIRMED` | absent | **1** | **PASS** (outbox `idempotencyKey` = persisted A) |
+| **legacy + active lease + key B (no sweep, lease unexpired)** | **`executed`** | **`EXECUTED`** | **`EFFECT_STARTED` (orphaned)** | **`CONFIRMED`** | **1 (re-execution)** | **FAIL -> P1-2R** |
+
+`probes/p12-legacy-active-repro.ts` reproduces the last row from the **same real crash state**, comparing only the persisted-key difference:
+
+```
+persisted : denied/operation_in_progress, tool 0, journal A EFFECT_STARTED, no journal B
+legacy    : executed, tool 1, journal A EFFECT_STARTED (orphaned), journal B CONFIRMED, outbox under B
+legacy-absent-key: executed, tool 1, journal A EFFECT_STARTED (orphaned), outbox under proposal-derived key
+```
+
+Raw: `probes/p12-legacy-active-repro.log` (both probe scripts exit 1 because they flag the failing invariant; every other scenario in the same run passes).
+
+### 3.3 Adjudication
+
+- The P1-2 fix works exactly as designed **for TTL-expired reservations**: the persisted `operationKey` is authoritative (`packages/agent-runtime/src/runtime.ts:1174`), the sweep consults it (`runtime.ts:232-296`) and ambiguity (`EFFECT_STARTED`/`UNCERTAIN`/`CONFIRMED`/binding mismatch/lookup failure/legacy absence) goes to `UNCERTAIN`, never `APPROVED` (`runtime.ts:185-222`). Required scenario: **VERIFIED**.
+- Residual **P1-2R**: on the *active-lease* recovery path (`#recoverActiveReservation`, `runtime.ts:2185-2231`, reached via `runtime.ts:1250-1261`), a legacy approval without a persisted key resolves the journal key from the **changed caller key** (`runtime.ts:1174`), finds no record under that new key, releases the possibly-started effect to `APPROVED` (`journal:<key>:rearmed`) and re-executes. The sweep helper already refuses this inference (`runtime.ts:199-205`), but the recovery path does not. Contract `docs/02_spec/aaa_execution_contract.md:118` ("a recuperação só devolve para `APPROVED` com prova de ausência de efeito; na dúvida, `UNCERTAIN`") is violated.
+- **CLOSED in round-5 candidate `328d6a38…`** via `#denyRecoveryUncertain` in both recovery helpers (`AAA-07/sweep-legacy-fix/runtime-p12r.diff`): keyless records are denied `operation_uncertain` without mutation (expired ones marked `UNCERTAIN`); persisted cases require proof. Re-verified by the exact probes and a fresh closure probe — see §0.
+
+## 4. F01/F02/F03/F04/F05/T-19 re-run (round-1 style, re-executed)
+
+Sources: `probes/round1-style/` — byte-identical copies of the round-1 review probes (integrity: `commands/round1-probe-copy-integrity.txt`), executed by this review with `npx tsx` against the frozen sources. Raw logs: `raw/`. All 8 probes exit 0.
+
+| Probe | Claim | Raw result | Falsified? |
+| ----- | ----- | ---------- | ---------- |
+| F01 | payload binding: tool receives approved payload only; divergent caller payload denied | no-journal control `denied/durability_required`, tool 0; execution tool payload `{"text":"APPROVED_PAYLOAD"}`, providerCalls 1; caller B `denied/payload_mismatch`, tool 0, approval untouched | **No** |
+| F02 | no false EXECUTED: pre-effect tool failure keeps honest state; model failure zero approvals | 1st `denied/adapter_precheck_failed`, approval `APPROVED`, journal `EFFECT_FAILED`, outbox 0; retry `executed`, journal `CONFIRMED`, tool 2 total; model failure `denied/provider_unavailable`, 0 approvals, tool 0 | **No** |
+| F03 | at-most-one effect under crash/concurrency: replay no duplicate | turn 1 `executed/outbox_pending`, tool 1; new runtime + `FileEffectJournal` replay `idempotent_replay`, tool still 1; concurrent reserve `[in_progress,reserved]`; reuse with different proposal `idempotency_key_reuse` | **No** |
+| F04 | channel single send under concurrency + hash_version/actor | two concurrent sends: providerSends **1**, fulfilled 2; replay `ext_1`; conflict `idempotency_key_reuse`; legacy version `hash_algorithm_mismatch`; actorless/terminal `reconciliation_required` | **No** |
+| F05 | budget/deadline/cancel with zero pending spans | `steps_budget_exceeded`, `loop_deadline_exceeded`, `turn_cancelled`; each: tool 0, outbox 0, **pendingSpans 0** | **No** |
+| T-19 | `real_effect_not_authorized` with zero calls | declared-unauthorized, undeclared high-risk, medium declared-unauthorized all `denied/real_effect_not_authorized`, tool 0; declared+authorized reaches `approval_required` | **No** |
+| AAA-07 | reserve/CAS/TTL sweep/fencing/terminal immutability | `RESERVED`->`EXECUTING`->`EXECUTED`; sweep `{released:1}` / `{uncertain:1}`; no failures | **No** |
+| AAA-08 | draft x real matrix + F15 | real modify `resource_type_not_allowed`; draft modify `ALLOW`; confirm/reschedule `capability_not_granted`; missing context `insufficient_context`; smuggling `action_capability_mismatch`; F15 runtime `policy_denied`, tool 0 | **No** |
+
+T-16 static check: `grep verifyAndConsume packages/agent-runtime/src/runtime.ts` -> no match (the legacy API remains only in `packages/platform/**` for old consumers, per contract `aaa_execution_contract.md:111`).
+
+## 5. Policy matrix spot-check + coverage (P2-1)
+
+`probes/policy-matrix-spotcheck.ts` (fresh code, real `PolicyEngine`, 5 profiles x 5 roles):
+
+- `appointment.confirm`: **25/25 `DENY:capability_not_granted`**; `appointment.reschedule`: **25/25 `DENY:capability_not_granted`** — denied in every profile/role.
+- `appointment.modify` on real `appointment`: **25/25 `DENY:resource_type_not_allowed`**.
+- Positive control: `appointment.modify` on `appointment_draft` (secretary/Supervisor) -> **ALLOW**; `appointment.confirm` on the same draft -> `DENY:resource_type_not_allowed`.
+- Focused coverage: branches **97.84% (136/139)** ≥ 95% floor; `engine.ts` 98.16% branches, `grants.ts` 83.33% branches (the latter limited by one unreachable defensive branch, per AAA-34 limitation).
+
+## 6. Migrations 0012/0013/0014 and PostgreSQL gate
+
+- All three migrations are **additive**: `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `ALTER TABLE ... ADD CONSTRAINT ... NOT VALID`, no `DROP TABLE/COLUMN`, `TRUNCATE`, `DELETE`, `UPDATE` or column-type rewrite. Each table has `ENABLE` + `FORCE ROW LEVEL SECURITY`, a tenant-isolation policy and `REVOKE ALL ... FROM PUBLIC` (`0012:65-75`, `0013:65-74`, `0014:93-123`).
+- Checksums are computed and enforced on apply (`packages/persistence/src/postgres.ts:543-592`); missing/mismatched checksum throws. Raw tests: `fails closed when an applied migration has no trusted checksum` and `...checksum has drifted` PASS in `commands/test-postgres-isolation-verbose.log`.
+- `defaultPostgresMigrations` includes 0012/0013/0014 (`postgres.ts:117-119`). `0014` is applied additively over a `0013` database while preserving prior data (journeys test, raw `commands/test-postgres-journal-verbose.log`).
+- Gate: `npm run test:postgres` -> 14 files / 123 tests, **0 skips**, exit 0.
+
+## 7. Round-2 critic findings adjudication
+
+| Finding | Adjudication | Evidence |
+| ------- | ------------ | -------- |
+| **P1-1** review not bound to the frozen candidate | **CLOSED by this review**: bound to `911f0498…`; 855/855 snapshot files and 485/485 judged product sources identical; candidateId recomputed independently and re-checked after all commands. | §1 |
+| **P1-2** TTL sweep duplicate-effect path with changed caller key | **FIXED for the required TTL scenario** (sweep + retry with changed/absent key -> `UNCERTAIN`/denied, tool 0, incl. real process crash). **Residual P1-2R open** on the legacy active-lease path (round-2 verdict; **closed in round 5 — see §0**). | §3, §8 |
+| **P2-1** policy critical branches | **CLOSED**: focused `packages/policy-engine` branches 97.84% ≥ 95%; matrix spot-check passes (confirm/reschedule denied everywhere, modify draft-only, real resource denied). | §5 |
+| **P2-2** tracking stale | **CLOSED**: `aaa_execution_ledger.json` updated `2026-09-13T05:19:41.056Z` with the P1-2 remediation entry; `aaa_program_backlog.json` tasks AAA-07..17 are `REVIEW` and every declared `expectedEvidence` path exists (round-1 P2-5 also fixed); both tracking JSONs pass the required prettier command. The round-4 rehearsal entry is intentionally pending coordinator persistence after this review. | §2, `aaa_execution_ledger.json`, `aaa_program_backlog.json` |
+| **P2-3** timestamp errata | **CLOSED**: `manifest-errata.md` registered for `sweep-callsite` (`observedAt` `+00:00` form, effective UTC window recorded); the successor package uses UTC `Z` only (`2026-09-13T05:13:37Z`) and all later packages use `Z`. | `AAA-07/sweep-callsite/manifest-errata.md`, `AAA-07/sweep-duplicate-fix/manifest.json` |
+
+## 8. Findings
+
+**P0: none.**
+
+### P1-2R — legacy active-lease recovery can duplicate an effect with a changed/absent caller key (P1) — **CLOSED in round 5**
+
+**Disposition:** closed on candidate `328d6a38…` (fix package `AAA-07/sweep-legacy-fix`). Exact reviewer probes re-run exit 0 with the tool never executing and journal A unchanged, and a fresh closure probe confirms the full variant matrix; AAA-07 is now **VERIFIED**. Details and raw output in **§0**. The round-2 evidence below documents the finding as it existed on `911f0498…` and is preserved.
+
+- Where: `packages/agent-runtime/src/runtime.ts:1174` (key resolution) + `runtime.ts:2185-2231` (`#recoverActiveReservation` releases/rearms on absent journal under the derived key) + `runtime.ts:2047-2067` (same asymmetry in `#recoverExpiredReservation`, shielded in practice by the turn-start sweep at `runtime.ts:600`). Contrast the safe rule at `runtime.ts:185-222`.
+- Trigger: approval record persisted **without** `operationKey` (pre-P1-2-fix state, e.g. surviving in the approval store across the upgrade), crash after `journal.markEffectStarted` under caller key A, retry of the same approval with a *different* or absent caller key **while the reservation lease is still active**. The recovery path treats "no record under the derived key B" as proof of absence, releases to `APPROVED` and re-executes.
+- Observed: `executed`; approval `EXECUTED`; tool re-executed (real synthetic effect appended); original journal record A left orphaned `EFFECT_STARTED`; new record B `CONFIRMED`. Repro: `probes/p12-legacy-active-repro.ts` + `probes/p12-sweep-operation-key.ts` (scenario `legacy-crash+active-lease+changed-key-B`).
+- Contract violated: `docs/02_spec/aaa_execution_contract.md:118` (only proven absence returns to `APPROVED`; doubt -> `UNCERTAIN`).
+- Reachability: migration-only (current code always persists `operationKey` at reserve: `runtime.ts:1228-1241`, `2206-2219`) and bounded by the reservation TTL window. Impact if reached: duplicate real effect, the exact P1-2 class.
+- Recommendation: in both recovery helpers, treat a record with `record.operationKey === undefined` as `UNCERTAIN` (or deny `operation_uncertain`) unless the journal lookup under the derived key returns positive no-effect proof (`RESERVED`/`ABANDONED`/`EFFECT_FAILED` with matching `proposalHash`); never release/rearm on mere absence for keyless records.
+
+### P2-7 — rehearsal chaos metric divergence remains declared, not resolved (P2, inherited)
+
+`phase10-result.metrics.chaos.executed=16` while `chaos-report.json` holds 20 tests / 10 suites PASS; the round-4 rehearsal documents this as a legacy aggregation artifact (`rehearsal-20260913T052107Z/limitations.md`). Raw `chaos.log` shows no failures/skips. Not a P1 deliverable; recorded so it is not silently normalized.
+
+### P2-8 — multi-generation legacy corner in the tenant-wide sweep (P2, inherited, confirmed in round 5)
+
+- Where: tenant-wide sweep evidence path (`packages/agent-runtime/src/runtime.ts:185-296`) reached from `sweepExpiredApprovals`; journal has no list-by-`proposalHash` API.
+- Trigger (pre-fix keyless approval only): an older generation left a no-effect record (`EFFECT_FAILED`) under the derived proposal key while a newer generation left `EFFECT_STARTED` under caller key A. The sweep uses the derived no-effect record as proof, releases the approval to `APPROVED`, and a retry adds one execution under the derived key while the A record is later lease-swept to `UNCERTAIN`.
+- Confirmed on `328d6a38…` by `probes/p12r-multigen-corner.ts`: sweep `{released:1, uncertain:0}`, retry `executed`, tool 1, derived `CONFIRMED`, A `EFFECT_STARTED` before the sweep -> `UNCERTAIN` after (`raw/round5/p12r-multigen-corner.log`).
+- Declared out of scope by `AAA-07/sweep-legacy-fix/limitations.md` (needs a journal list-by-`proposalHash` API or per-generation key recorded upstream). Not a P1 for the P1-2R fix scope; carried forward so it is not silently dropped.
+
+## 9. Per-task verdicts (criteria mapping on the frozen candidate)
+
+Legend: **VERIFIED** = acceptance criteria executed and passed; **APPROVE_WITH_CONDITIONS** = deliverable verified with a condition before candidate qualification; **REWORK** = acceptance not fully met on this candidate.
+
+| Task | Verdict | Criteria mapping (re-executed evidence) |
+| ---- | ------- | --------------------------------------- |
+| **AAA-07** Approval lifecycle + reserve/recovery | **VERIFIED** (round 5, `328d6a38…`; round-2 verdict on `911f0498…` was `REWORK` for P1-2R) | "falha de modelo/tool/outbox não produz sucesso fictício" PASS (F02, P1-2 crash: `UNCERTAIN`, no invented success); "replay não duplica consumo" PASS (F03, replay `idempotent_replay`, tool 1); "expiração e troca de tenant rejeitadas" PASS (sweep/TTL `UNCERTAIN`, cross-tenant `not_found`/`tenant_mismatch`); **"at-most-once" now PASS on the legacy active-lease path** — exact probes exit 0, tool 0, denial `operation_uncertain`, journal A unchanged; closure matrix in §0. P1-2 TTL fix verified. |
+| **AAA-08** Policy draft x real | **VERIFIED** | confirm/reschedule denied in 25/25 profile x role combos; modify real denied 25/25; modify draft ALLOW (positive control); missing context/smuggling denied; runtime F15 `policy_denied` tool 0; policy branches 97.84% (≥95%). |
+| **AAA-09** Payload binding / T-19 | **VERIFIED** | F01: tool received exactly the approved payload, provider not re-called, caller B `payload_mismatch` tool 0; F02 honest state; T-19 `real_effect_not_authorized` tool 0 in all unauthorized cases; `runtime.ts` free of `verifyAndConsume`. |
+| **AAA-10** Durable intent + idempotency + SQL | **VERIFIED** | F03 same-key replay no duplicate; concurrent reserve `in_progress`/`reserved`; key reuse denied; PostgreSQL runtime+channel effect journals 0 skips; migrations 0013 additive/checksummed/forced RLS. (P1-2R concerns changed-key recovery in AAA-07, not same-key journal semantics.) |
+| **AAA-11** Budgets/deadline/cancel | **VERIFIED** | F05: `maxSteps=1`/deadline/cancel all denied before tool, outbox 0, **pendingSpans 0** in all three. |
+| **AAA-12** Channel race + hash_version + actor + SQL | **VERIFIED** | F04 `providerSends 1` under `Promise.all`; replay preserves `ext_1`; conflict `idempotency_key_reuse`; legacy version `hash_algorithm_mismatch`; actorless/terminal `reconciliation_required`; channel PostgreSQL suite passes without skips. |
+| **AAA-13** Certificate -> candidate binding (round 4) | **VERIFIED** | Raw logs: producer `certify.exit=0`, 16/16 gates `PASS`, `verificationFailures=[]`, 0 skips per gate (`gate-matrix.json`, `analyze.log`); verifier `verify.exit=0`, 27 artifact hashes, `current candidate qualified: 911f0498…`; self-test `37/37 PASS`; `SHA256SUMS` **70/70 OK**; shared `scripts/`+`certification/` 96 files non-mutated (`shared-*` identical `036e4de3…`, empty diff); candidateId independently recomputed. Round-1 conditions C-2 (drift) and C-3 (N1–N9) are closed. |
+| **AAA-14** Dependencies/image/supply chain | **APPROVE_WITH_CONDITIONS** | `licenses:check` 372 total / 21 internal / 0 denied / 0 unclassified, **idempotent** across two runs (`55787d37…` stable, fixes round-1 P2-6); `audit:security` 0 vulnerabilities; `check-licenses.mjs` matches the remediation hash. Condition: Docker image build/smoke `NOT_RUN` (daemon permission denied, declared); target Node 22 typecheck not re-run in this round. |
+| **AAA-15** Format gate | **VERIFIED** | Required candidate-scope prettier command exit 0 (tracking JSONs included — round-1 P2-3 closed); `git diff --check` exit 0; whole-tree `npm test` green; focused API tests included in the full run. |
+| **AAA-16** PostgreSQL gate 0 skips | **VERIFIED** | `test:postgres` 14 files / 123 tests / **0 skips**; verbose isolation shows non-BYPASSRLS role isolation, pool context reset, checksum fail-closed. |
+| **AAA-17** Journeys PostgreSQL | **VERIFIED** | 17 journeys tests PASS (memory/Postgres parity, `0014` applied additively over `0013` preserving data, forced RLS, draft-only `confirmation_blocked`, expiry without invented confirmation, cross-tenant fail-closed, idempotent tasks/handoffs). |
+
+## 10. Not verified (and why)
+
+1. **Docker image build/smoke (AAA-14)** — daemon permission denied (`commands/docker-version.log`); static Dockerfile inspection from round 1 remains the only evidence.
+2. **Producer/verifier end-to-end re-execution by this reviewer** — AAA-13 was verified from the raw logs and by independently recomputing the candidate and all 70 recorded hashes; a fresh full certify was not re-run (writes certification outputs outside the allowed write scope and takes ~10 min in the isolated copy).
+3. **Full suite / typecheck on target Node 22** — host Node 24.20.0; Node-22 evidence remains the round-1 focused typecheck and the declared release limitation.
+4. **Mutation testing and the AAA-34 critical-path denominator** — declared P4/AAA-34 items (`NOT_RUN` in the rehearsal).
+5. **Physical durability / RPO-RTO, external gates (provider/channel/identity), human signoff** — out of controlled scope; production remains `NO-GO`.
+
+Round-5 closure limitations: the fix regression suite and probes run on host Node 24.20.0 (target Node 22 not re-run); the round-5 rehearsal was verified from its raw logs (full certify not re-executed by this reviewer); the P2-8 multi-generation corner requires a journal list-by-`proposalHash` API to close and is explicitly out of scope of the fix package.
+
+## 11. Artifact hashes judged by this review
+
+- Product sources: `commands/judged-product-current.sha256` — **485 files** under `packages/**` + `apps/**`, all equal to `commands/judged-product-snapshot.sha256` (frozen list).
+- Snapshot list: `snapshot-files.sha256` sha256 `18fc541ec063b558c38fd5c36fd36298fd59b66095d4acc9a33f9faa11284aec` (855 lines).
+- Contracts/tooling: `aaa_execution_contract.md` `9df1a05f…`, `aaa_data_api_contract.md` `cebeddab…`, `aaa_quality_contract.md` `aec32401…`, `aaa_program_backlog.json` `d7700e44…`, `aaa_execution_ledger.json` `2db2a487…`, `package.json` `1b093cef…`, `package-lock.json` `a5ccf03b…`, `Dockerfile` `5b637f8a…`, `phase10-certify.mjs` `46b024c8…`, `phase10-verify.mjs` `24825421…`, `certification-rules.mjs` `1d1edc9d…` (`commands/contract-hashes.sha256`).
+- Evidence cited: `commands/cited-evidence-hashes.sha256` (round-4 rehearsal manifest `46cf0db0…`, gate-matrix `47e0fd0e…`, round-3 coordinator review, round-1 review, AAA-34 policy summary, AAA-14/15/16/17 manifests, `certification/license-report.json` `55787d37…`).
+- Round-5 closure additions: `commands/round5/drift/judged-product-current.sha256` — **486/486** product sources equal to the frozen `328d6a38…` list; candidate recomputation `commands/round5/candidate-recompute.log`; `runtime.ts` `1fe73b1d…`; round-5 rehearsal manifest/gate-matrix/`SHA256SUMS` 75/75 in `AAA-13/integration-rehearsal/rehearsal-20260913T062303Z/`; probe sources `probes/p12r-closure-probe.ts`, `probes/p12r-multigen-corner.ts`, `probes/p12-sweep-operation-key.ts` (`6aee5cee…`), `probes/p12-legacy-active-repro.ts` (`0e25394e…`).
+
+## 12. Reviewer declaration
+
+I did not build AAA-07..AAA-17. All verdicts were reached by executing commands and adversarial probes against the frozen candidate sources; builder and prior critic claims were treated as claims. No product, contract, tracking or prior evidence file was modified; no commit, push or deploy. This review grants no G_QUALITY, Gate, production, State of Art or Triplo AAA status. **Round-2 original:** because P1-2R was open (P1) on `911f0498…`, the P1 deliverable set was not fully approvable. **Round-5 closure:** P1-2R is closed on `328d6a38…` (AAA-07 VERIFIED, no P1 open); remaining known limitation is P2-8 (multi-generation legacy corner, out of scope) plus the inherited P2-7 chaos metric divergence and the AAA-14 Docker `NOT_RUN` condition. Machine-readable version: `review.json`.

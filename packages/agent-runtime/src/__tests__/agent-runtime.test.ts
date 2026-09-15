@@ -10,7 +10,8 @@ import type { ModelProfile } from '@cvg/model-gateway'
 import { PolicyEngine, type PolicyDocument } from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import { GovernedAgentRuntime } from '../runtime.ts'
-import type { GovernedTurnInput } from '../contracts.ts'
+import { InMemoryEffectJournal } from '../effect-journal.ts'
+import type { GovernedTurnInput, ToolInvocation } from '../contracts.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
 const NOW = new Date('2026-09-11T12:00:00.000Z')
@@ -85,7 +86,10 @@ function buildHarness(
     }
   })
   const audit = new HashChainedAuditLedger()
-  const toolExecutor = vi.fn(async () => ({ result: { ok: true } }))
+  const fallbackTool: (
+    invocation: ToolInvocation
+  ) => Promise<{ result: unknown }> = async () => ({ result: { ok: true } })
+  const toolExecutor = vi.fn(fallbackTool)
   const outbox = vi.fn(async (event: { idempotencyKey: string }) => ({
     eventId: `evt_${event.idempotencyKey}`
   }))
@@ -97,7 +101,9 @@ function buildHarness(
     audit,
     toolExecutor,
     outbox,
-    clock: () => NOW
+    clock: () => NOW,
+    effectJournal: new InMemoryEffectJournal({ clock: () => NOW }),
+    effectScopes: { 'appointment.cancel': 'controlled_fake' }
   })
   return { runtime, approvals, telemetry, audit, toolExecutor, outbox, prompts }
 }
@@ -125,7 +131,6 @@ function turnInput(
       schemaName: 'AgentDecision',
       schema: z.object({ intent: z.string(), proposed: z.array(z.string()) })
     },
-    approvalPayload: { slotId: 'slot_1' },
     ...overrides
   }
 }
@@ -199,16 +204,29 @@ describe('governed agent runtime', () => {
     )
   })
 
-  it('binds approval to the exact payload and cannot be replayed', async () => {
+  // AAA-09 contract section 3: the request turn freezes the model structured
+  // output into the proposal; the execution turn uses exclusively the stored
+  // proposal payload (caller-supplied approvalPayload only revalidates).
+  // AAA-10: a retry with the same approval replays the durable journal record
+  // instead of executing the tool again.
+  it('binds approval to the exact frozen proposal payload and replays without repeating the tool', async () => {
     const harness = buildHarness()
     const requested = await harness.runtime.runTurn(
       turnInput({
         capability: 'appointment.cancel',
-        action: 'appointment.cancel',
-        approvalPayload: { appointmentId: 'apt_1', reason: 'pedido do tutor' }
+        action: 'appointment.cancel'
       })
     )
+    expect(requested.outcome).toBe('approval_required')
     const approvalId = requested.approvalId ?? ''
+    const approvedPayload = harness.approvals.get(
+      TENANT,
+      approvalId
+    ).proposalPayload
+    expect(approvedPayload).toEqual({
+      intent: 'schedule',
+      proposed: ['appointment.create']
+    })
     harness.approvals.submit(TENANT, approvalId, 'op_1')
     harness.approvals.approve(TENANT, approvalId, { approverId: 'op_2' })
 
@@ -227,23 +245,29 @@ describe('governed agent runtime', () => {
       turnInput({
         capability: 'appointment.cancel',
         action: 'appointment.cancel',
-        approvalId,
-        approvalPayload: { appointmentId: 'apt_1', reason: 'pedido do tutor' }
+        approvalId
       })
     )
     expect(executed.outcome).toBe('executed')
+    expect(harness.toolExecutor).toHaveBeenCalledTimes(1)
+    expect(harness.toolExecutor.mock.calls[0]?.[0]?.payload).toEqual({
+      intent: 'schedule',
+      proposed: ['appointment.create']
+    })
     expect(harness.approvals.get(TENANT, approvalId).status).toBe('EXECUTED')
 
     const replayed = await harness.runtime.runTurn(
       turnInput({
         capability: 'appointment.cancel',
         action: 'appointment.cancel',
-        approvalId,
-        approvalPayload: { appointmentId: 'apt_1', reason: 'pedido do tutor' }
+        approvalId
       })
     )
-    expect(replayed.outcome).toBe('denied')
-    expect(replayed.reason).toBe('already_executed')
+    expect(replayed.outcome).toBe('executed')
+    expect(replayed.reason).toBe('idempotent_replay')
+    expect(replayed.replayed).toBe(true)
+    expect(replayed.resultDigest).toBeDefined()
+    expect(harness.toolExecutor).toHaveBeenCalledTimes(1)
   })
 
   it('blocks every side effect while human takeover is active', async () => {

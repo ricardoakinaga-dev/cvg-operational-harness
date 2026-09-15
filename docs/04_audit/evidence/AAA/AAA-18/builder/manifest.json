@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 1,
+  "kind": "aaa-task-builder-evidence",
+  "taskId": "AAA-18",
+  "title": "Conectar jornadas PostgreSQL às rotas públicas",
+  "program": "AAA-20260912",
+  "generatedAt": "2026-09-13T07:11:14Z",
+  "status": "IMPLEMENTED_PENDING_REVIEW",
+  "builder": "builder-lane",
+  "scope": {
+    "goal": "Wire PostgresJourneyRepository into the public journey routes preserving auth/tenant/error behavior; fail startup closed when a postgres journey adapter cannot be constructed; run migration 0014 at postgres startup; prove HTTP behavior and restart reads against the disposable fixture.",
+    "fixtures": "synthetic only; disposable PostgreSQL 127.0.0.1:55432/cvg_aaa16_test; operational port 5432 never used",
+    "public_api": "unchanged route paths, envelopes and status codes",
+    "safety": "draft-only journeys; no real confirmation/reschedule/cancel; no clinical, financial or production action"
+  },
+  "files_changed": [
+    {
+      "path": "apps/api/src/server.ts",
+      "sha256": "b080544350b88745f3a8f02b943b015ea5773bca778b05b71c123c92748ad551",
+      "changes": [
+        "createPersistence(config, journeyRepository) now returns a concrete PostgresJourneyRepository for postgres and postgres-pool instead of journeys: null",
+        "createPostgresJourneyRepository fails startup with an explicit error when pool/client cannot carry tenant-scoped operations (no cast hiding a missing adapter)",
+        "singleConnectionPool adapts a checked-out direct client to the PostgresPoolLike contract used by withTenantContext",
+        "all journey route handlers await the port uniformly (owner/patient search, drafts create/list, link, slots, appointment drafts, journey tasks)",
+        "POSTGRES_AUTO_MIGRATE now always runs runPostgresMigrations (checksum-guarded set including 0014_journeys) instead of the initial-only runner for non-RLS postgres",
+        "new optional BuildServerOptions.journeyRepository override (JourneyRepositoryPort | null) for controlled tests; null keeps routes fail-closed"
+      ]
+    },
+    {
+      "path": "apps/api/src/__tests__/journeys-api-postgres.test.ts",
+      "sha256": "1625c74fdea5a4e603af14ce00777c189fcaec5cec4f990003f7302e8d31093d",
+      "added": true
+    },
+    {
+      "path": "apps/api/src/__tests__/journey-routes-coverage.test.ts",
+      "sha256": "78487f597542b541792e99dbc82c5e432ca25f136b1369c8614af1d382c497a3",
+      "changes": [
+        "existing unavailable-repository test now passes journeyRepository: null explicitly; same intent, same assertions (postgres mode with no journey repository fails closed with invalid_action)"
+      ]
+    }
+  ],
+  "not_modified": [
+    "package.json",
+    "tracking files",
+    "agent-runtime, channel-gateway, approval-engine",
+    "packages/persistence (AAA-17 artifacts reused as-is)",
+    "migration 0014_journeys.sql"
+  ],
+  "migration": {
+    "number": "0014",
+    "name": "0014_journeys",
+    "already_registered_in": "packages/persistence/src/postgres.ts#defaultPostgresMigrations",
+    "startup_path": "POSTGRES_AUTO_MIGRATE=true -> runPostgresMigrations (checksum guard) in both RLS and legacy postgres modes",
+    "startup_proof_test": "journeys-api-postgres.test.ts > applies migration 0014 during postgres startup before serving journeys"
+  },
+  "factory_modes": {
+    "memory": "new JourneyRepository(db) — unchanged test/local default",
+    "postgres-pool": "new PostgresJourneyRepository(pool) — tenant-scoped withTenantContext + RLS path",
+    "postgres": "new PostgresJourneyRepository(singleConnectionPool(client)) — legacy direct-client controlled mode",
+    "override": "options.journeyRepository wins for controlled tests; null exposes the fail-closed unavailable state",
+    "fail_closed": "createPostgresJourneyRepository throws before the server is built when the configured postgres adapter lacks pool.connect or client.query"
+  },
+  "gates": [
+    {
+      "command": "TEST_DATABASE_URL=… npx vitest run apps/api/src/__tests__/journeys-api-postgres.test.ts --no-file-parallelism --testTimeout=60000",
+      "exitCode": 0,
+      "result": "1 file / 8 passed / 0 failed / 0 skipped",
+      "log": "GREEN-focused.log"
+    },
+    {
+      "command": "TEST_DATABASE_URL=… npx vitest run <new + journeys-api + journey-routes-coverage + postgres-persistence-mode> --no-file-parallelism --testTimeout=60000",
+      "exitCode": 0,
+      "result": "4 files / 38 passed / 0 failed / 0 skipped",
+      "log": "GREEN-focused-api.log"
+    },
+    {
+      "command": "TEST_DATABASE_URL=… npm run test:postgres",
+      "exitCode": 0,
+      "result": "14 files / 123 passed / 0 failed / 0 skipped",
+      "log": "GREEN-postgres.log"
+    },
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "result": "230 passed | 5 skipped (235 files); 1585 passed | 65 skipped (1650); zero failures",
+      "log": "GREEN-full-suite.log",
+      "note": "task baseline 1585 pass / 57 skip; +8 conditional skips are the new suite without TEST_DATABASE_URL"
+    },
+    {
+      "command": "TEST_DATABASE_URL=… npm test",
+      "exitCode": 0,
+      "result": "235 files / 1650 passed / 0 failed / 0 skipped",
+      "log": "GREEN-full-suite-with-url.log"
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "no errors",
+      "log": "typecheck.log"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "no errors (global)",
+      "log": "lint-global.log"
+    },
+    {
+      "command": "npx eslint apps/api/src/server.ts apps/api/src/__tests__/journeys-api-postgres.test.ts apps/api/src/__tests__/journey-routes-coverage.test.ts",
+      "exitCode": 0,
+      "result": "no errors (scoped)",
+      "log": "lint-scoped.log"
+    },
+    {
+      "command": "RED before wiring: TEST_DATABASE_URL=… npx vitest run apps/api/src/__tests__/journeys-api-postgres.test.ts --no-file-parallelism --testTimeout=60000",
+      "exitCode": 1,
+      "result": "6 failed / 1 passed: postgres journey routes returned invalid_action, unusable pool accepted at startup (RED collected 7 tests; the 8th startup-migration test was authored after this capture and its GREEN is in the focused and full-with-url runs)",
+      "log": "RED-focused.log"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "no whitespace errors"
+    }
+  ],
+  "test_counts": {
+    "new_suite_with_url": { "files": 1, "passed": 8, "failed": 0, "skipped": 0 },
+    "focused_api_with_url": { "files": 4, "passed": 38, "failed": 0, "skipped": 0 },
+    "test_postgres_with_url": { "files": 14, "passed": 123, "failed": 0, "skipped": 0 },
+    "full_suite_without_url": {
+      "files_passed": 230,
+      "files_skipped": 5,
+      "tests_passed": 1585,
+      "tests_skipped": 65,
+      "failures": 0
+    },
+    "full_suite_with_url": {
+      "files_passed": 235,
+      "files_skipped": 0,
+      "tests_passed": 1650,
+      "tests_skipped": 0,
+      "failures": 0
+    }
+  },
+  "acceptance_checklist": {
+    "factory_uses_concrete_repository": "createPersistence returns PostgresJourneyRepository for postgres and postgres-pool; journeys: null placeholder removed from the factory",
+    "no_cast_hiding_missing_adapter": "createPostgresJourneyRepository validates pool.connect/client.query and throws 'PostgreSQL journey persistence requires …' at startup; no 'as unknown as' for journeys",
+    "memory_mode_preserved": "memory mode still constructs JourneyRepository; all pre-existing memory journey tests unchanged and passing",
+    "routes_work_over_http_on_postgres": "8/8 new tests; full owner/patient/link/slots/appointment/task journey over postgres-pool, plus direct-client adapter path",
+    "auth_preserved": "missing identity 401 and invalid role 401 asserted over postgres",
+    "tenant_isolation_preserved": "cross-tenant owner list, patient draft and link denied (not_found / not listed); owner search cannot surface another tenant candidate ids",
+    "validation_errors_preserved": "invalid phone validation_failed 400, invalid candidateId validation_failed 400, unknown patient draft 404, stale slot conflict 409",
+    "approval_boundary_preserved": "appointment drafts remain awaiting_approval/confirmationBlocked=true; no confirm route (404)",
+    "migration_0014_at_startup": "startup test verifies 0014 checksum row after POSTGRES_AUTO_MIGRATE and serves journeys afterwards",
+    "restart_reads": "second app + second pool over the same schema reads owner/patient/appointment state and verifies the row directly",
+    "unavailable_repository_fails_closed": "route-level test with journeyRepository: null returns invalid_action 400 on all journey routes; startup test rejects unusable adapters"
+  },
+  "restart_read_evidence": {
+    "test": "journeys-api-postgres.test.ts > reads created journey state back after a server restart",
+    "steps": [
+      "first buildServer over firstPool creates owner draft, linked patient, appointment draft and reads slots",
+      "firstApp.close() and firstPool.end()",
+      "new secondPool over the same schema and new secondApp",
+      "secondApp lists owner (draft), patient (linked) and appointment (awaiting_approval, confirmationBlocked=true, same slot) state",
+      "direct SQL count on journey_appointment_drafts = 1"
+    ]
+  },
+  "evidence": {
+    "commands": "COMMANDS.md",
+    "limitations": "LIMITATIONS.md",
+    "logs": [
+      "RED-focused.log",
+      "GREEN-focused.log",
+      "GREEN-focused-api.log",
+      "GREEN-postgres.log",
+      "GREEN-full-suite.log",
+      "GREEN-full-suite-with-url.log",
+      "typecheck.log",
+      "lint-global.log",
+      "lint-scoped.log"
+    ]
+  },
+  "limitations_ref": "LIMITATIONS.md",
+  "boundaries": {
+    "commit": false,
+    "push": false,
+    "deploy": false,
+    "npm_install": false,
+    "real_patient_data": false,
+    "real_confirmation": false,
+    "operational_database": false
+  }
+}

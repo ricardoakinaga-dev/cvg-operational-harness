@@ -1,0 +1,187 @@
+
+ RUN  v4.1.11 /home/ricardo/cvg-agent-secretary-v2
+
+ ❯ packages/persistence/src/__tests__/journeys-postgres.test.ts (24 tests | 2 failed) 949ms
+     × audits journey tasks once with trusted actor and session context 8ms
+       × audits journey tasks once with trusted actor and session context 14ms
+ ❯ packages/persistence/src/__tests__/journey-task-atomicity.test.ts (6 tests | 5 failed) 356ms
+     × destroys client on success when cleanup verification is absent or dirty 8ms
+     × destroys client on failure when cleanup verification is absent or dirty 4ms
+     × reuses verified clean client after failure 1ms
+     × rolls back task on rejected audit and retries with one trusted event 15ms
+     × concurrent same-key insert returns winner without aborted-transaction recovery 14ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/persistence/src/__tests__/journey-task-atomicity.test.ts > transaction cleanup verification > destroys client on success when cleanup verification is absent or dirty
+AssertionError: promise resolved "'result'" instead of rejecting
+
+- Expected:
+Error {
+  "message": "rejected promise",
+}
+
++ Received:
+"result"
+
+ ❯ packages/persistence/src/__tests__/journey-task-atomicity.test.ts:21:10
+     19|         if (path === 'failure') throw new Error('callback failure')
+     20|         return 'result'
+     21|       })).rejects.toThrow(path === 'failure' ? 'callback failure' : 'c…
+       |          ^
+     22|       expect(release).toHaveBeenCalledExactlyOnceWith(expect.any(Error…
+     23|     }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  packages/persistence/src/__tests__/journey-task-atomicity.test.ts > transaction cleanup verification > destroys client on failure when cleanup verification is absent or dirty
+AssertionError: expected "vi.fn()" to be called once with arguments: [ Any<Error> ]
+
+Received:
+
+  1st vi.fn() call:
+
+  [
+-   Any<Error>,
++   undefined,
+  ]
+
+
+Number of calls: 1
+
+ ❯ packages/persistence/src/__tests__/journey-task-atomicity.test.ts:22:23
+     20|         return 'result'
+     21|       })).rejects.toThrow(path === 'failure' ? 'callback failure' : 'c…
+     22|       expect(release).toHaveBeenCalledExactlyOnceWith(expect.any(Error…
+       |                       ^
+     23|     }
+     24|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  packages/persistence/src/__tests__/journey-task-atomicity.test.ts > transaction cleanup verification > reuses verified clean client after failure
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ packages/persistence/src/__tests__/journey-task-atomicity.test.ts:35:90
+     33|     if (path === 'failure') await expect(pending).rejects.toThrow('cal…
+     34|     else await expect(pending).resolves.toBe(42)
+     35|     expect(query.mock.calls.some((call) => String(call[0]).includes('c…
+       |                                                                                          ^
+     36|     expect(release).toHaveBeenCalledExactlyOnceWith(undefined)
+     37|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+ FAIL  packages/persistence/src/__tests__/journey-task-atomicity.test.ts > journey task atomicity PostgreSQL > rolls back task on rejected audit and retries with one trusted event
+AssertionError: promise resolved "{ …(9) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "createdAt": 2026-09-13T15:00:25.539Z,
++   "description": "synthetic",
++   "id": "task_0cfd03a1-dfe2-4efa-9d9b-94150339decd",
++   "idempotencyKey": "rollback",
++   "priority": "medium",
++   "sessionId": "sess_f32995c4-9abd-40da-a8f3-f2d85784b32a",
++   "source": "journey-r3",
++   "status": "open",
++   "title": "synthetic",
+  }
+
+ ❯ packages/persistence/src/__tests__/journey-task-atomicity.test.ts:65:62
+     63|     await admin.query(`CREATE TRIGGER reject_task_audit BEFORE INSERT …
+     64|     try {
+     65|       await expect(repo.createJourneyTask(input('rollback'))).rejects.…
+       |                                                              ^
+     66|       expect((await admin.query('SELECT id FROM tasks')).rows).toHaveL…
+     67|       expect((await admin.query('SELECT id FROM audit_events')).rows).…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+ FAIL  packages/persistence/src/__tests__/journey-task-atomicity.test.ts > journey task atomicity PostgreSQL > concurrent same-key insert returns winner without aborted-transaction recovery
+error: current transaction is aborted, commands ignored until end of transaction block
+ ❯ node_modules/pg/lib/client.js:631:17
+ ❯ PostgresRuntimeRepository.createTask packages/persistence/src/postgres.ts:2950:24
+    2948|     } catch (error) {
+    2949|       if (isUniqueViolation(error)) {
+    2950|         const winner = await this.client.query<(typeof existing.rows)[…
+       |                        ^
+    2951|           `SELECT tasks.id, tasks.session_id, tasks.title, tasks.descr…
+    2952|            FROM tasks
+ ❯ withTenantTransaction packages/persistence/src/tenant-scoped-postgres.ts:176:20
+ ❯ packages/persistence/src/__tests__/journey-task-atomicity.test.ts:90:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯
+
+ FAIL  packages/persistence/src/__tests__/journeys-postgres.test.ts > journey contract (in-memory) > audits journey tasks once with trusted actor and session context
+AssertionError: expected null to match object { actorType: 'Operator', …(3) }
+
+- Expected:
+{
+  "actorId": "operator.synthetic",
+  "actorType": "Operator",
+  "correlationId": "corr_00000000-0000-4000-8000-000000000901",
+  "payload": {
+    "conversationId": "conv_3acf3483-7cd6-4962-b322-9c82e6587394",
+    "resourceId": "task_e9142f7c-183b-4d84-a268-80107a18daae",
+    "sessionId": "sess_0aba04d6-2d55-4137-a6b0-c15cd73898b0",
+  },
+}
+
++ Received:
+null
+
+ ❯ packages/persistence/src/__tests__/journeys-postgres.test.ts:196:21
+    194|       const task = await harness.repository.createJourneyTask(input)
+    195|       const event = await harness.latestJourneyAudit(tenantA, 'journey…
+    196|       expect(event).toMatchObject({ ...input.auditContext, payload: { …
+       |                     ^
+    197|       expect((await harness.repository.createJourneyTask({ ...input, a…
+    198|       expect(await harness.latestJourneyAudit(tenantA, 'journey_task_c…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/7]⎯
+
+ FAIL  packages/persistence/src/__tests__/journeys-postgres.test.ts > journey PostgreSQL persistence > journey contract (postgres parity) > audits journey tasks once with trusted actor and session context
+AssertionError: expected null to match object { actorType: 'Operator', …(3) }
+
+- Expected:
+{
+  "actorId": "operator.synthetic",
+  "actorType": "Operator",
+  "correlationId": "corr_00000000-0000-4000-8000-000000000901",
+  "payload": {
+    "conversationId": "conv_482910e5-3a91-4627-a2a7-02c64b7defa4",
+    "resourceId": "task_cb01de85-291d-4bda-b544-684023f991be",
+    "sessionId": "sess_c08e4878-6366-4148-9bfc-1e143114e237",
+  },
+}
+
++ Received:
+null
+
+ ❯ packages/persistence/src/__tests__/journeys-postgres.test.ts:196:21
+    194|       const task = await harness.repository.createJourneyTask(input)
+    195|       const event = await harness.latestJourneyAudit(tenantA, 'journey…
+    196|       expect(event).toMatchObject({ ...input.auditContext, payload: { …
+       |                     ^
+    197|       expect((await harness.repository.createJourneyTask({ ...input, a…
+    198|       expect(await harness.latestJourneyAudit(tenantA, 'journey_task_c…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/7]⎯
+
+
+ Test Files  2 failed (2)
+      Tests  7 failed | 23 passed (30)
+   Start at  12:00:21
+   Duration  3.95s (transform 723ms, setup 0ms, import 1.04s, tests 1.31s, environment 1.36s)
+

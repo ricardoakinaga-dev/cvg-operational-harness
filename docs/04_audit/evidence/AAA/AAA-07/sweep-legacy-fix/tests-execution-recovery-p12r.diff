@@ -1,0 +1,228 @@
+--- /tmp/opencode/aaa13-rehearsal-20260913T052107Z/repo/packages/agent-runtime/src/__tests__/runtime-execution-recovery.test.ts	2026-09-13 02:21:13.356241837 -0300
++++ packages/agent-runtime/src/__tests__/runtime-execution-recovery.test.ts	2026-09-13 03:01:24.500211344 -0300
+@@ -228,7 +228,20 @@
+     .digest('hex')}`
+ }
+ 
+-function reserveBinding(harness: Harness, approvalId: string, ttlMs: number) {
++function persistedOperationKeyFor(
++  harness: Harness,
++  approvalId: string
++): string {
++  const stored = harness.approvals.get(TENANT, approvalId)
++  return expectedDerivedOperationKey(stored.proposalHash ?? '')
++}
++
++function reserveBinding(
++  harness: Harness,
++  approvalId: string,
++  ttlMs: number,
++  options: { operationKey?: string; executing?: boolean } = {}
++) {
+   const stored = harness.approvals.get(TENANT, approvalId)
+   const reservation = harness.approvals.reserve({
+     tenantId: TENANT,
+@@ -241,13 +254,18 @@
+     agentVersion: 'v1',
+     policyVersion: stored.policyVersion,
+     capability: 'appointment.cancel',
+-    ttlMs
+-  })
+-  harness.approvals.markExecuting({
+-    tenantId: TENANT,
+-    approvalId,
+-    reservationId: reservation.reservationId
++    ttlMs,
++    ...(options.operationKey !== undefined
++      ? { operationKey: options.operationKey }
++      : {})
+   })
++  if (options.executing ?? true) {
++    harness.approvals.markExecuting({
++      tenantId: TENANT,
++      approvalId,
++      reservationId: reservation.reservationId
++    })
++  }
+   return { stored, reservation }
+ }
+ 
+@@ -933,7 +951,7 @@
+ })
+ 
+ describe('reservation recovery and lease fencing', () => {
+-  it('recovers from a journal read failure and executes with a fresh attempt', async () => {
++  it('fails closed when the journal lookup fails during recovery', async () => {
+     const inner = new InMemoryEffectJournal({ clock: () => NOW })
+     const store = new InMemoryApprovalStore()
+     const harness = buildHarness({
+@@ -943,13 +961,16 @@
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    reserveBinding(harness, approvalId, 60_000)
++    reserveBinding(harness, approvalId, 60_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId)
++    })
+ 
+     const result = await harness.runtime.runTurn(turnInput({ approvalId }))
+ 
+-    expect(result.outcome).toBe('executed')
+-    expect(harness.toolExecutor).toHaveBeenCalledTimes(1)
+-    expect(harness.approvals.get(TENANT, approvalId).status).toBe('EXECUTED')
++    expect(result.outcome).toBe('denied')
++    expect(result.reason).toBe('operation_uncertain')
++    expect(harness.toolExecutor).not.toHaveBeenCalled()
++    expect(harness.outbox).not.toHaveBeenCalled()
+   })
+ 
+   it('turns an UNCERTAIN journal record into an honest approval UNCERTAIN', async () => {
+@@ -1036,7 +1057,9 @@
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    const { stored } = reserveBinding(harness, approvalId, 60_000)
++    const { stored } = reserveBinding(harness, approvalId, 60_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId)
++    })
+     const operationKey = expectedDerivedOperationKey(stored.proposalHash ?? '')
+     await inner.reserve({
+       tenantId: TENANT,
+@@ -1071,7 +1094,9 @@
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    const { stored } = reserveBinding(harness, approvalId, 1_000)
++    const { stored } = reserveBinding(harness, approvalId, 1_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId)
++    })
+     const operationKey = expectedDerivedOperationKey(stored.proposalHash ?? '')
+     await inner.reserve({
+       tenantId: TENANT,
+@@ -1133,7 +1158,10 @@
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    reserveBinding(harness, approvalId, 60_000)
++    reserveBinding(harness, approvalId, 60_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId),
++      executing: false
++    })
+     vi.spyOn(harness.approvals, 'reserve').mockImplementation(() => {
+       throw new ApprovalError(
+         'already_reserved',
+@@ -1158,7 +1186,10 @@
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    const { stored } = reserveBinding(harness, approvalId, 60_000)
++    const { stored } = reserveBinding(harness, approvalId, 60_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId),
++      executing: false
++    })
+     const operationKey = expectedDerivedOperationKey(stored.proposalHash ?? '')
+     await inner.reserve({
+       tenantId: TENANT,
+@@ -1199,7 +1230,9 @@
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    const { stored } = reserveBinding(harness, approvalId, 60_000)
++    const { stored } = reserveBinding(harness, approvalId, 60_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId)
++    })
+     const operationKey = expectedDerivedOperationKey(stored.proposalHash ?? '')
+     await inner.reserve({
+       tenantId: TENANT,
+@@ -1244,7 +1277,9 @@
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    const { stored } = reserveBinding(harness, approvalId, 60_000)
++    const { stored } = reserveBinding(harness, approvalId, 60_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId)
++    })
+     const operationKey = expectedDerivedOperationKey(stored.proposalHash ?? '')
+     await seedJournal(
+       inner,
+@@ -1286,7 +1321,9 @@
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    const { stored } = reserveBinding(harness, approvalId, 60_000)
++    const { stored } = reserveBinding(harness, approvalId, 60_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId)
++    })
+     const operationKey = expectedDerivedOperationKey(stored.proposalHash ?? '')
+     await seedJournal(
+       inner,
+@@ -2061,17 +2098,19 @@
+     expect(harness.outbox).not.toHaveBeenCalled()
+   })
+ 
+-  it('completes a journal replay through the re-arm reserve path', async () => {
++  it('completes a journal replay through the recovery reserve path', async () => {
+     const inner = new InMemoryEffectJournal({ clock: () => NOW })
+     const store = new InMemoryApprovalStore()
+     const harness = buildHarness({
+       effectScopes: FAKE_CANCEL_SCOPE,
+-      journal: new StaticGetJournal(inner, undefined),
++      journal: inner,
+       store
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    const { stored } = reserveBinding(harness, approvalId, 60_000)
++    const { stored } = reserveBinding(harness, approvalId, 60_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId)
++    })
+     const operationKey = expectedDerivedOperationKey(stored.proposalHash ?? '')
+     await seedJournal(
+       inner,
+@@ -2267,7 +2306,10 @@
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    reserveBinding(harness, approvalId, 1_000)
++    reserveBinding(harness, approvalId, 1_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId),
++      executing: false
++    })
+     now = new Date(now.getTime() + 2_000)
+     vi.spyOn(harness.approvals, 'releaseExpired').mockImplementation(() => ({
+       released: 0,
+@@ -2293,7 +2335,10 @@
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    reserveBinding(harness, approvalId, 1_000)
++    reserveBinding(harness, approvalId, 1_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId),
++      executing: false
++    })
+     now = new Date(now.getTime() + 2_000)
+     vi.spyOn(harness.approvals, 'releaseExpired').mockImplementation(() => ({
+       released: 0,
+@@ -2323,7 +2368,10 @@
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    reserveBinding(harness, approvalId, 60_000)
++    reserveBinding(harness, approvalId, 60_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId),
++      executing: false
++    })
+     vi.spyOn(harness.approvals, 'reserve').mockImplementation(() => {
+       throw new ApprovalError(
+         'already_reserved',
+@@ -2348,7 +2396,9 @@
+     })
+     const approvalId = await requestApproval(harness)
+     approveApproval(harness, approvalId)
+-    const { stored } = reserveBinding(harness, approvalId, 60_000)
++    const { stored } = reserveBinding(harness, approvalId, 60_000, {
++      operationKey: persistedOperationKeyFor(harness, approvalId)
++    })
+     const operationKey = expectedDerivedOperationKey(stored.proposalHash ?? '')
+     await seedJournal(
+       inner,

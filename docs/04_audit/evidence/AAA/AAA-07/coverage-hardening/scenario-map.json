@@ -1,0 +1,207 @@
+{
+  "schemaVersion": 1,
+  "taskId": "AAA-07",
+  "rework": "critical-coverage",
+  "file": "packages/approval-engine/src/__tests__/approval-critical-coverage.test.ts",
+  "totalNewTests": 36,
+  "entries": [
+    {
+      "test": "constructs default clock and id factory and records a valid request",
+      "invariant": "default options must produce a usable engine",
+      "assertion": "approvalId starts with appr_; expiresAt-requestedAt=15min; singleUse true",
+      "branches": "engine.ts:119,120"
+    },
+    {
+      "test": "persists every optional request field exactly once",
+      "invariant": "optional request metadata is preserved",
+      "assertion": "promptVersion/reason/proposalId/dataClassification/capability/proposalPayload persisted",
+      "branches": "engine.ts:153,164,167,176"
+    },
+    {
+      "test": "denies submit from an actor other than the requesting operator",
+      "invariant": "only the requester may submit",
+      "assertion": "not_authorized; status REQUESTED; only approval.requested emitted",
+      "branches": "engine.ts:199"
+    },
+    {
+      "test": "records an approval reason and reviews only PENDING records",
+      "invariant": "reject is PENDING-only and reason is recorded",
+      "assertion": "reject on APPROVED -> invalid_state + unchanged; approve reason -> decisionReason",
+      "branches": "engine.ts:250,288"
+    },
+    {
+      "test": "cancels a PENDING approval with the requester identity and one event",
+      "invariant": "cancel PENDING path executes and emits once",
+      "assertion": "CANCELLED + cancelledAt + single approval.cancelled",
+      "branches": "engine.ts:331-335"
+    },
+    {
+      "test": "lists a tenant without status filter and keeps the result cloned",
+      "invariant": "list without status and defensive cloning",
+      "assertion": "tenant isolation; mutating result does not change store",
+      "branches": "engine.ts:1187"
+    },
+    {
+      "test": "rejects consumption of an approval already marked EXPIRED",
+      "invariant": "legacy consumption fails closed on EXPIRED",
+      "assertion": "expireStale -> EXPIRED; verifyAndConsume -> expired",
+      "branches": "engine.ts:363"
+    },
+    {
+      "test": "matches a resource without id and consumes non-single-use with executionRef",
+      "invariant": "resource without id matches; reusable consumption persists ref",
+      "assertion": "executionRef set; executionCount increments; persisted ref reused",
+      "branches": "engine.ts:384,430,439"
+    },
+    {
+      "test": "fails closed when the single-use consumption CAS loses",
+      "invariant": "single-use CAS loss is already_executed",
+      "assertion": "status APPROVED; executionCount 0; executedAt absent",
+      "branches": "engine.ts:414"
+    },
+    {
+      "test": "fails closed when the reusable consumption CAS loses",
+      "invariant": "reusable CAS loss is invalid_state",
+      "assertion": "executionCount stays 0",
+      "branches": "engine.ts:434"
+    },
+    {
+      "test": "derives the consumption timestamp defensively when the store drops it",
+      "invariant": "missing executedAt falls back to clock",
+      "assertion": "consumption.executedAt = clock",
+      "branches": "engine.ts:439"
+    },
+    {
+      "test": "rejects a reservation whose agent diverges from the approved proposal",
+      "invariant": "binding revalidation includes agent identity",
+      "assertion": "proposal_mismatch; no reservation fields; executionCount unchanged",
+      "branches": "engine.ts:1018"
+    },
+    {
+      "test": "reserves without payload using the matching proposal hash",
+      "invariant": "proposalHash alone can bind a reservation",
+      "assertion": "generation 1; status RESERVED",
+      "branches": "engine.ts:1001 (else)"
+    },
+    {
+      "test": "supports reservations for resources without id",
+      "invariant": "resource without id is valid",
+      "assertion": "reservation.resource.type preserved",
+      "branches": "engine.ts:981"
+    },
+    {
+      "test": "fails closed when the reservation CAS loses",
+      "invariant": "reservation CAS loss is already_reserved",
+      "assertion": "status APPROVED; no token/generation",
+      "branches": "engine.ts:539"
+    },
+    {
+      "test": "fails closed when marking EXECUTING loses the CAS",
+      "invariant": "markExecuting CAS loss is invalid_state",
+      "assertion": "status RESERVED; executingAt absent",
+      "branches": "engine.ts:585"
+    },
+    {
+      "test": "propagates a non-fencing store failure while fencing generation conflicts",
+      "invariant": "generic store errors are rethrown, not treated as fencing",
+      "assertion": "toThrow(store unavailable); status RESERVED",
+      "branches": "engine.ts:139 (else)"
+    },
+    {
+      "test": "confirms only reserved or executing approvals",
+      "invariant": "confirm requires reservation state",
+      "assertion": "invalid_state; status APPROVED",
+      "branches": "engine.ts:631"
+    },
+    {
+      "test": "accepts non-confirmed evidence in markUncertain and rejects confirmed evidence",
+      "invariant": "uncertainty evidence discriminates outcomes",
+      "assertion": "confirmed -> invalid_proof; possibly_started -> UNCERTAIN + reason",
+      "branches": "engine.ts:87 (else),756"
+    },
+    {
+      "test": "rejects malformed reconciliation evidence before touching state",
+      "invariant": "reconcile requires typed evidence",
+      "assertion": "invalid_proof; status unchanged",
+      "branches": "engine.ts:808"
+    },
+    {
+      "test": "each: fails closed when reconciliation with effect_confirmed/no_effect loses the CAS",
+      "invariant": "both reconcile outcomes use CAS",
+      "assertion": "invalid_state; status UNCERTAIN; executionCount 0",
+      "branches": "engine.ts:833,859"
+    },
+    {
+      "test": "each: fails closed when release/fail/markUncertain loses the CAS",
+      "invariant": "terminal transitions use CAS",
+      "assertion": "invalid_state; status RESERVED; no released/failed/uncertain timestamps",
+      "branches": "engine.ts:688,727,778"
+    },
+    {
+      "test": "fails closed when confirmation loses the CAS",
+      "invariant": "confirm CAS loss is invalid_state",
+      "assertion": "status RESERVED; executionCount 0; executionRef absent",
+      "branches": "engine.ts:648"
+    },
+    {
+      "test": "sweeps expired reservations using the engine clock when now is omitted",
+      "invariant": "sweep default clock fallback",
+      "assertion": "released 1; status APPROVED",
+      "branches": "engine.ts:895"
+    },
+    {
+      "test": "skips reserved records without a persisted expiry instead of guessing",
+      "invariant": "no expiry means no sweep decision",
+      "assertion": "released/uncertain 0; status RESERVED",
+      "branches": "engine.ts:903"
+    },
+    {
+      "test": "treats a reservation without expiry as alive for markExecuting",
+      "invariant": "missing expiry is defensive not expired",
+      "assertion": "EXECUTING + executingAt set",
+      "branches": "engine.ts:1077"
+    },
+    {
+      "test": "rejects reserve resume for a partial reservation missing durable fields",
+      "invariant": "resume cannot fabricate a reservation view",
+      "assertion": "invalid_state",
+      "branches": "engine.ts:1113"
+    },
+    {
+      "test": "releases a legacy reservation without token and emits the reduced event",
+      "invariant": "legacy record without token still sweeps safely",
+      "assertion": "released 1; APPROVED; event without reservationId",
+      "branches": "engine.ts:932"
+    },
+    {
+      "test": "marks a legacy reservation UNCERTAIN without token when proof is unknown",
+      "invariant": "ambiguous proof keeps honest uncertainty",
+      "assertion": "uncertain 1; UNCERTAIN; event without reservationId",
+      "branches": "engine.ts:957"
+    },
+    {
+      "test": "reconciles a legacy UNCERTAIN record without token and emits the reduced event",
+      "invariant": "legacy UNCERTAIN reconcilable with confirmation",
+      "assertion": "EXECUTED; event without reservationId",
+      "branches": "engine.ts:848"
+    },
+    {
+      "test": "reconciles a legacy UNCERTAIN record to FAILED with absence proof",
+      "invariant": "legacy UNCERTAIN reconcilable to FAILED",
+      "assertion": "FAILED + confirmationEvidenceRef",
+      "branches": "engine.ts:874"
+    },
+    {
+      "test": "resumes a legacy reservation without generation as generation zero",
+      "invariant": "missing generation reads as 0",
+      "assertion": "generation 0; same reservationId",
+      "branches": "engine.ts:1134"
+    },
+    {
+      "test": "does not expire records when the sweep CAS loses",
+      "invariant": "expireStale honors CAS and retries later",
+      "assertion": "first sweep 0 + REQUESTED; second sweep 1 + EXPIRED",
+      "branches": "engine.ts:147 (else)"
+    }
+  ]
+}

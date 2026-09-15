@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   apiClient,
   type JourneyAppointmentDraftView,
@@ -43,20 +43,31 @@ export function JourneysPanel({
     useState<JourneyAppointmentDraftView | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const generationRef = useRef(0)
+  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
+    generationRef.current += 1
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     setPhone('')
     setOwnerName('')
     setOwnerMatches([])
     setOwnerCandidateId(null)
     setOwnerDraft(null)
+    setPatientName('Bolt')
     setPatientMatches([])
     setPatientDraft(null)
     setSlots([])
     setSelectedSlot(null)
     setAppointmentDraft(null)
     setMessage(null)
-  }, [identityKey])
+    setBusy(null)
+    return () => {
+      controller.abort()
+    }
+  }, [identityKey, selectedSessionId])
 
   const usableIdentity =
     identity && identity.operatorId.trim() && identity.tenantId
@@ -68,23 +79,36 @@ export function JourneysPanel({
     Boolean(selectedSessionId) &&
     (identity?.role === 'Operator' || identity?.role === 'Admin')
 
-  const run = async (action: string, operation: () => Promise<void>) => {
+  const run = async (
+    action: string,
+    operation: (signal: AbortSignal, generation: number) => Promise<void>
+  ) => {
+    const generation = generationRef.current
+    const signal = abortRef.current?.signal
+    if (!signal) return
     setBusy(action)
     setMessage(null)
     try {
-      await operation()
+      await operation(signal, generation)
     } catch (error) {
+      if (generation !== generationRef.current) return
+      if (isAbortError(error)) return
       setMessage(error instanceof Error ? error.message : 'Falha na jornada.')
     } finally {
-      setBusy(null)
+      if (generation === generationRef.current) setBusy(null)
     }
   }
 
   const searchOwner = (event: FormEvent) => {
     event.preventDefault()
     if (!usableIdentity) return
-    void run('owner-search', async () => {
-      const result = await apiClient.searchJourneyOwners(usableIdentity, phone)
+    void run('owner-search', async (signal, generation) => {
+      const result = await apiClient.searchJourneyOwners(
+        usableIdentity,
+        phone,
+        signal
+      )
+      if (generation !== generationRef.current) return
       setOwnerMatches(result.matches)
       setOwnerCandidateId(
         result.matches.length === 1 ? result.matches[0]!.id : null
@@ -101,13 +125,15 @@ export function JourneysPanel({
 
   const createOwner = () => {
     if (!usableIdentity) return
-    void run('owner-create', async () => {
+    void run('owner-create', async (signal, generation) => {
       const draft = await apiClient.createJourneyOwnerDraft({
         identity: usableIdentity,
         phone,
         ...(ownerName.trim() ? { name: ownerName.trim() } : {}),
-        idempotencyKey: emptyKey()
+        idempotencyKey: emptyKey(),
+        signal
       })
+      if (generation !== generationRef.current) return
       setOwnerDraft(draft)
       setOwnerCandidateId(
         draft.candidateIds.length === 1 ? draft.candidateIds[0]! : null
@@ -120,13 +146,15 @@ export function JourneysPanel({
 
   const searchPatient = () => {
     if (!usableIdentity || !ownerDraft) return
-    void run('patient-search', async () => {
+    void run('patient-search', async (signal, generation) => {
       const result = await apiClient.searchJourneyPatients({
         identity: usableIdentity,
         ownerDraftId: ownerDraft.id,
         ...(ownerCandidateId ? { ownerCandidateId } : {}),
-        ...(patientName.trim() ? { name: patientName.trim() } : {})
+        ...(patientName.trim() ? { name: patientName.trim() } : {}),
+        signal
       })
+      if (generation !== generationRef.current) return
       setPatientMatches(result.matches)
       setMessage(
         result.matches.length > 1
@@ -138,14 +166,16 @@ export function JourneysPanel({
 
   const createPatient = () => {
     if (!usableIdentity || !ownerDraft || !ownerCandidateId) return
-    void run('patient-create', async () => {
+    void run('patient-create', async (signal, generation) => {
       const draft = await apiClient.createJourneyPatientDraft({
         identity: usableIdentity,
         ownerDraftId: ownerDraft.id,
         ownerCandidateId,
         name: patientName,
-        idempotencyKey: emptyKey()
+        idempotencyKey: emptyKey(),
+        signal
       })
+      if (generation !== generationRef.current) return
       setPatientDraft(draft)
       setPatientMatches([])
       setMessage(
@@ -161,12 +191,14 @@ export function JourneysPanel({
       patientDraft.candidateIds.length !== 1
     )
       return
-    void run('patient-link', async () => {
+    void run('patient-link', async (signal, generation) => {
       const linked = await apiClient.linkJourneyPatient({
         identity: usableIdentity,
         patientDraftId: patientDraft.id,
-        candidateId: patientDraft.candidateIds[0]!
+        candidateId: patientDraft.candidateIds[0]!,
+        signal
       })
+      if (generation !== generationRef.current) return
       setPatientDraft(linked)
       setMessage(
         'Pet vinculado ao rascunho. A agenda ainda exige aprovação humana.'
@@ -176,8 +208,9 @@ export function JourneysPanel({
 
   const loadSlots = () => {
     if (!usableIdentity) return
-    void run('slots', async () => {
-      const result = await apiClient.listJourneySlots(usableIdentity)
+    void run('slots', async (signal, generation) => {
+      const result = await apiClient.listJourneySlots(usableIdentity, signal)
+      if (generation !== generationRef.current) return
       setSlots(result.slots)
       setSelectedSlot(result.slots[0]?.id ?? null)
       setMessage(
@@ -194,13 +227,15 @@ export function JourneysPanel({
       !selectedSlot
     )
       return
-    void run('appointment-create', async () => {
+    void run('appointment-create', async (signal, generation) => {
       const draft = await apiClient.createJourneyAppointmentDraft({
         identity: usableIdentity,
         patientDraftId: patientDraft.id,
         slot: selectedSlot,
-        idempotencyKey: emptyKey()
+        idempotencyKey: emptyKey(),
+        signal
       })
+      if (generation !== generationRef.current) return
       setAppointmentDraft(draft)
       setMessage(
         'Sugestão de horário persistida; confirmação, cancelamento e reagendamento estão bloqueados.'
@@ -210,14 +245,16 @@ export function JourneysPanel({
 
   const createTask = () => {
     if (!usableIdentity || !selectedSessionId) return
-    void run('task-create', async () => {
+    void run('task-create', async (signal, generation) => {
       await apiClient.createJourneyTask({
         identity: usableIdentity,
         sessionId: selectedSessionId,
         title: 'Revisar jornada sintética',
         description: 'Validar rascunhos e assumir handoff se necessário.',
-        idempotencyKey: emptyKey()
+        idempotencyKey: emptyKey(),
+        signal
       })
+      if (generation !== generationRef.current) return
       setMessage('Tarefa operacional criada para a sessão selecionada.')
     })
   }
@@ -432,5 +469,14 @@ export function JourneysPanel({
         </div>
       )}
     </section>
+  )
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    (error as { name?: unknown }).name === 'AbortError'
   )
 }

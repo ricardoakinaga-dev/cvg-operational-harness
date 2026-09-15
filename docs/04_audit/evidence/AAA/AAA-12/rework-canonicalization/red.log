@@ -1,0 +1,150 @@
+
+ RUN  v4.1.11 /home/ricardo/cvg-agent-secretary-v2
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts (9 tests | 7 failed) 56ms
+     × runtime and channel agree on the full projection with integer-like metadata keys 17ms
+     × new records persist the shared hash version in memory and in the file round-trip 2ms
+     × a legacy record without hashVersion is read as legacy-local-v1 and never replayed under a new algorithm 2ms
+     × zero sends when hash bytes are equal but versions differ 9ms
+     × every persisted state fails closed on an unknown version without mutating the record 2ms
+     × rejects an unknown requested version without creating a record 1ms
+     × legacy records remain usable under the legacy version 4ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > runtime and channel agree on the full projection with integer-like metadata keys
+AssertionError: expected 'd957bb3f5a58b965a535901655da322359f4f…' to be '0f52a3896190011cfff98bd0e8933a3cfdf9d…' // Object.is equality
+
+Expected: "0f52a3896190011cfff98bd0e8933a3cfdf9d48dc4dc04eeae37a01234ad8143"
+Received: "d957bb3f5a58b965a535901655da322359f4f632d433522fcb12b8680fcd2ddd"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:138:41
+    136|   it('runtime and channel agree on the full projection with integer-li…
+    137|     const parsed = withMetadata({ '2': 'two', '10': 'ten' })
+    138|     expect(hashOutboundPayload(parsed)).toBe(runtimeHash(parsed))
+       |                                         ^
+    139|   })
+    140|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > new records persist the shared hash version in memory and in the file round-trip
+AssertionError: expected undefined to be 'shared-rfc8785-subset-v1' // Object.is equality
+
+- Expected:
+"shared-rfc8785-subset-v1"
+
++ Received:
+undefined
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:166:27
+    164|     const memoryRecord: ChannelEffectRecord = memoryOutcome.record
+    165|     const memoryVersion: string = memoryRecord.hashVersion
+    166|     expect(memoryVersion).toBe(SHARED)
+       |                           ^
+    167|
+    168|     const directory = await temporaryDirectory()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > a legacy record without hashVersion is read as legacy-local-v1 and never replayed under a new algorithm
+AssertionError: expected undefined to be 'legacy-local-v1' // Object.is equality
+
+- Expected:
+"legacy-local-v1"
+
++ Received:
+undefined
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:226:57
+    224|
+    225|     const journal = new FileChannelEffectJournal({ directory })
+    226|     expect((await journal.find(identity))?.hashVersion).toBe(LEGACY)
+       |                                                         ^
+    227|
+    228|     const adapter = new CountingAdapter()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > zero sends when hash bytes are equal but versions differ
+AssertionError: promise resolved "{ …(4) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "accepted": true,
++   "channel": "whatsapp",
++   "externalId": "counted_msg_hash_1",
++   "sentAt": "2026-09-12T12:00:00.000Z",
+  }
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:267:6
+    265|     await expect(
+    266|       gateway.dispatch(parsed, { takeoverActive: false })
+    267|     ).rejects.toMatchObject({ code: 'hash_algorithm_mismatch', retryab…
+       |      ^
+    268|     expect(adapter.sent).toHaveLength(0)
+    269|     expect(await readFile(path, 'utf8')).toBe(bytesBefore)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > every persisted state fails closed on an unknown version without mutating the record
+AssertionError: PENDING: expected 'conflict' to be 'version_mismatch' // Object.is equality
+
+Expected: "version_mismatch"
+Received: "conflict"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:305:38
+    303|         leaseMs: 1_000
+    304|       })
+    305|       expect(outcome.outcome, state).toBe('version_mismatch')
+       |                                      ^
+    306|       expect(await readFile(path, 'utf8'), state).toBe(bytesBefore)
+    307|     }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > rejects an unknown requested version without creating a record
+AssertionError: expected 'reserved' to be 'version_mismatch' // Object.is equality
+
+Expected: "version_mismatch"
+Received: "reserved"
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:321:29
+    319|       leaseMs: 1_000
+    320|     })
+    321|     expect(outcome.outcome).toBe('version_mismatch')
+       |                             ^
+    322|     expect(await journal.find(identity)).toBeUndefined()
+    323|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/7]⎯
+
+ FAIL  packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts > AAA-12 hash canonicalization and versioning > legacy records remain usable under the legacy version
+AssertionError: expected undefined to be 'legacy-local-v1' // Object.is equality
+
+- Expected:
+"legacy-local-v1"
+
++ Received:
+undefined
+
+ ❯ packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts:349:40
+    347|     })
+    348|     expect(outcome.outcome).toBe('reserved')
+    349|     expect(outcome.record.hashVersion).toBe(LEGACY)
+       |                                        ^
+    350|   })
+    351| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/7]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  7 failed | 2 passed (9)
+   Start at  18:50:21
+   Duration  1.20s (transform 159ms, setup 0ms, import 261ms, tests 56ms, environment 707ms)
+

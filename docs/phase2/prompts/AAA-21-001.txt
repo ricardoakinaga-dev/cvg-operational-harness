@@ -1,0 +1,1065 @@
+# MASTER PROMPT — CVG OPERATIONAL HARNESS
+# PHASE 2 — DURABLE EXECUTION SPINE & CANONICAL RUNTIME COMPOSITION
+# AAA-21
+
+## 0. CONTEXTO
+
+Você está trabalhando no repositório brownfield:
+
+CVG Operational Harness
+
+Este repositório nasceu de uma cópia isolada do:
+
+cvg-agent-secretary-v2
+
+O produto original CVG Agent Secretary NÃO deve ser modificado.
+
+A Phase 0/1 — Repository Refoundation + Core Boundary Extraction foi
+concluída com:
+
+CONDITIONAL_PASS — 7.0/10
+
+Estado conhecido:
+
+- identidade raiz alterada para CVG Operational Harness;
+- @cvg/harness-contracts criado;
+- @cvg/harness-orchestrator criado;
+- @cvg/harness criado;
+- Runtime V1 explicitado como single-pass governado;
+- budgets e deadlines preservados;
+- policy preservada;
+- approval preservado;
+- audit preservado;
+- stop reasons explicitados;
+- Tool descriptors não expõem execute() ao Orchestrator;
+- core desacoplado do domínio Secretary;
+- legacy Secretary preservado em lane própria;
+- demo agent sintético existente;
+- Model Gateway preservado;
+- baseline brownfield preservada.
+
+Gates da Phase 0/1:
+
+- nova suíte: 13/13 PASS;
+- evals: 8/8 PASS;
+- typecheck: PASS;
+- lint: PASS;
+- build: PASS;
+- isolated build: PASS;
+- workspace resolution: PASS;
+- public import: PASS;
+- regressão completa:
+  - 1681 pass;
+  - 12 fail;
+  - 105 skip;
+  - 8 errors;
+- falhas existentes pertencem à mesma área do baseline;
+- nenhuma nova regressão conhecida.
+
+Produção permanece:
+
+NO-GO.
+
+---
+
+# 1. MISSÃO
+
+Construir e provar a primeira EXECUTION SPINE CANÔNICA E DURÁVEL do
+CVG Operational Harness.
+
+O objetivo desta fase é demonstrar, por evidência executável, o fluxo:
+
+HTTP
+  ↓
+VALIDATION
+  ↓
+DURABLE PERSISTENCE
+  ↓
+WORK QUEUE / OUTBOX
+  ↓
+WORKER
+  ↓
+CANONICAL HARNESS COMPOSITION
+  ↓
+RUNTIME V1
+  ↓
+POLICY
+  ↓
+APPROVAL, quando necessário
+  ↓
+MODEL GATEWAY
+  ↓
+TOOL EXECUTION
+  ↓
+EFFECT JOURNAL
+  ↓
+RESULT PERSISTENCE
+  ↓
+AUDIT
+  ↓
+TELEMETRY
+  ↓
+DURABLE TERMINAL STATE
+
+Esta Phase 2 NÃO tem como objetivo tornar o Harness cognitivamente mais
+inteligente.
+
+NÃO construir ainda:
+
+- Runtime V2;
+- iterative reasoning;
+- LLM planner;
+- autonomous replanning;
+- agentic RAG;
+- full Skill Runtime;
+- multi-agent orchestration;
+- MCP runtime completo.
+
+O objetivo é:
+
+MAKE EXECUTION REAL, DURABLE, REPLAY-SAFE AND OBSERVABLE.
+
+---
+
+# 2. PRINCÍPIO CENTRAL
+
+A Phase 0/1 respondeu:
+
+"Temos uma engine independente?"
+
+A Phase 2 deve responder:
+
+"Essa engine consegue executar trabalho real de forma durável e governada?"
+
+O Harness só poderá evoluir para um Runtime V2 iterativo depois que a
+resposta for demonstravelmente SIM.
+
+---
+
+# 3. REGRA DE VERDADE
+
+Prioridade de evidência:
+
+REAL EXECUTION
+>
+INTEGRATION TEST
+>
+CONTRACT TEST
+>
+UNIT TEST
+>
+SOURCE INSPECTION
+>
+DOCUMENTATION
+>
+ASSUMPTION
+
+Não declare comportamento como provado apenas porque:
+
+- existe uma interface;
+- existe um mock;
+- existe um teste unitário;
+- existe documentação;
+- existe uma função com nome correto.
+
+Para claims de durabilidade, exigir execução com persistence real sempre
+que o ambiente permitir.
+
+---
+
+# 4. PRE-FLIGHT
+
+Antes de alterar código:
+
+1. capture:
+   - git rev-parse HEAD;
+   - git status --short;
+   - git diff --stat;
+   - git diff;
+2. preserve o worktree atual;
+3. NÃO execute reset;
+4. NÃO descarte mudanças;
+5. NÃO sobrescreva evidências da Phase 0/1;
+6. identifique todos os arquivos já modificados;
+7. registre o estado.
+
+Crie:
+
+docs/phase2/PRE_FLIGHT.md
+
+e:
+
+docs/phase2/PRE_FLIGHT.json
+
+---
+
+# 5. BASELINE DE GATES
+
+Execute antes das mudanças:
+
+npm run typecheck
+npm run lint
+npm run build
+npm test
+npm run test:evals
+
+Se PostgreSQL real estiver disponível:
+
+npm run test:postgres
+
+Registre:
+
+PASS
+FAIL
+SKIP
+ENVIRONMENT_BLOCKED
+
+Nunca transforme ENVIRONMENT_BLOCKED em PASS.
+
+Produza:
+
+docs/phase2/BASELINE.md
+
+---
+
+# 6. CLASSIFICAR DÍVIDA DO BASELINE
+
+Existem atualmente:
+
+12 FAIL
+8 ERRORS
+105 SKIPS
+
+na regressão completa conhecida.
+
+Classifique cada falha/erro em:
+
+KNOWN_BASELINE_DEBT
+ENVIRONMENT_DEPENDENT
+REAL_DEFECT
+OBSOLETE_TEST
+UNKNOWN
+
+Não corrija automaticamente todos.
+
+Não esconda.
+
+Não use skip adicional para fazer o gate ficar verde.
+
+Crie:
+
+docs/phase2/BASELINE_DEBT_REGISTER.md
+
+Cada entrada:
+
+ID
+test
+classification
+baseline evidence
+current evidence
+impact
+phase2 blocker?
+recommended action
+
+---
+
+# 7. DEFINIR O EXECUTION ENVELOPE CANÔNICO
+
+Toda execução deve possuir identidade explícita.
+
+Defina ou consolide contrato canônico:
+
+ExecutionRequest
+
+Campos mínimos conceituais:
+
+executionId
+requestId
+tenantId
+agentId
+agentVersion
+conversationId
+sessionId
+correlationId
+idempotencyKey
+capability
+action
+resource
+input
+dataClassification
+createdAt
+executionBudget
+
+Não duplique tipos já existentes.
+
+Reutilize @cvg/harness-contracts quando adequado.
+
+---
+
+# 8. EXECUTION IDENTITY
+
+Defina claramente diferença entre:
+
+requestId
+executionId
+correlationId
+traceId
+idempotencyKey
+conversationId
+sessionId
+
+Documente lifecycle de cada um.
+
+Exemplo conceitual:
+
+requestId
+= requisição de entrada
+
+executionId
+= execução durável
+
+correlationId
+= correlação entre componentes
+
+traceId
+= observabilidade
+
+idempotencyKey
+= identidade semântica da operação
+
+conversationId
+= conversa
+
+sessionId
+= sessão
+
+Não permita que sejam tratados como sinônimos.
+
+Crie:
+
+docs/phase2/EXECUTION_IDENTITY.md
+
+---
+
+# 9. CANONICAL HTTP INGESTION
+
+Crie ou consolide UM caminho HTTP canônico para submissão de execução.
+
+Exemplo conceitual:
+
+POST /v1/executions
+
+O endpoint deve:
+
+1. autenticar/identificar quando aplicável;
+2. validar schema;
+3. normalizar input;
+4. estabelecer tenant;
+5. criar/validar idempotency key;
+6. persistir execution request;
+7. enfileirar trabalho duravelmente;
+8. responder SEM executar diretamente todo o agente no request thread.
+
+Resposta conceitual:
+
+202 Accepted
+
+{
+  "executionId": "...",
+  "status": "QUEUED"
+}
+
+Não force exatamente esta API se contratos existentes justificarem melhor
+design.
+
+Mas deve existir UMA entrada canônica documentada.
+
+---
+
+# 10. NÃO EXECUTAR O HARNESS DIRETAMENTE NO HTTP
+
+Regra arquitetural:
+
+HTTP ingestion NÃO deve ser a autoridade de execução do agente.
+
+Fluxo desejado:
+
+HTTP
+ ↓
+persist
+ ↓
+enqueue
+ ↓
+return 202
+
+Depois:
+
+worker
+ ↓
+claim
+ ↓
+execute.
+
+Isso permite:
+
+- crash recovery;
+- retry;
+- backpressure;
+- replay safety;
+- horizontal workers;
+- auditabilidade.
+
+---
+
+# 11. EXECUTION STATE MACHINE
+
+Crie uma state machine explícita para execução durável.
+
+Estados mínimos conceituais:
+
+RECEIVED
+QUEUED
+CLAIMED
+RUNNING
+WAITING_APPROVAL
+WAITING_USER
+SUCCEEDED
+FAILED_RETRYABLE
+FAILED_TERMINAL
+CANCELLED
+
+Se o modelo atual justificar nomenclatura diferente, documente.
+
+Defina transições válidas.
+
+Exemplo:
+
+RECEIVED
+→ QUEUED
+→ CLAIMED
+→ RUNNING
+→ SUCCEEDED
+
+ou:
+
+RUNNING
+→ WAITING_APPROVAL
+
+ou:
+
+RUNNING
+→ FAILED_RETRYABLE
+→ QUEUED
+
+Proíba transições impossíveis.
+
+Crie testes.
+
+---
+
+# 12. TERMINAL STATES
+
+Defina claramente estados terminais.
+
+Exemplo:
+
+SUCCEEDED
+FAILED_TERMINAL
+CANCELLED
+
+WAITING_APPROVAL não é terminal.
+
+FAILED_RETRYABLE não é terminal.
+
+A persistência deve saber distinguir:
+
+"acabou"
+
+de:
+
+"está pausado"
+
+de:
+
+"precisa tentar novamente".
+
+---
+
+# 13. POSTGRES AS DURABLE AUTHORITY
+
+Quando disponível, PostgreSQL deve ser a autoridade durável desta Phase.
+
+Não use memória do processo como fonte da verdade para:
+
+execution state
+claim ownership
+effect journal
+idempotency
+terminal result
+outbox
+
+Pode haver caches, mas não autoridade exclusiva.
+
+Reutilize a persistence existente sempre que possível.
+
+Evite criar segundo sistema de persistence paralelo.
+
+---
+
+# 14. EXECUTION RECORD
+
+Crie ou consolide registro durável de execução.
+
+Campos conceituais:
+
+execution_id
+tenant_id
+agent_id
+agent_version
+state
+attempt
+idempotency_key
+correlation_id
+created_at
+updated_at
+claimed_at
+completed_at
+last_error
+stop_reason
+result_reference
+
+Use migrations seguras.
+
+Não destrua tabelas existentes.
+
+---
+
+# 15. IDEMPOTENCY
+
+Prove idempotência de entrada.
+
+Duas submissões semanticamente iguais com a mesma:
+
+tenantId + idempotencyKey
+
+NÃO podem criar dois efeitos independentes.
+
+Defina comportamento explícito:
+
+first request
+→ creates execution
+
+duplicate request
+→ returns existing execution
+
+ou comportamento equivalente.
+
+Teste concorrência.
+
+Não teste apenas sequencialmente.
+
+---
+
+# 16. WORK QUEUE / OUTBOX
+
+Reutilize outbox existente quando apropriado.
+
+Não introduza Redis/Kafka/NATS apenas por moda.
+
+O requisito é:
+
+durable work handoff.
+
+Pode ser implementado usando:
+
+PostgreSQL queue pattern
+ou
+existing durable outbox
+
+se semanticamente correto.
+
+Documente a decisão em ADR.
+
+---
+
+# 17. WORKER CLAIMING
+
+Implemente claiming seguro.
+
+Objetivos:
+
+- dois workers não executam o mesmo job simultaneamente;
+- claim possui ownership;
+- claim pode expirar;
+- crash não deixa trabalho perdido;
+- stale claim pode ser recuperado.
+
+Considere:
+
+SELECT ... FOR UPDATE SKIP LOCKED
+
+ou mecanismo existente equivalente.
+
+Não force implementação se já houver solução melhor.
+
+---
+
+# 18. LEASE / FENCING
+
+Para efeitos de maior risco, avalie lease/fencing.
+
+Se necessário, implemente:
+
+lease owner
+lease generation/fencing token
+lease expiration
+
+Um worker antigo que perdeu lease NÃO deve conseguir publicar efeito
+posteriormente como se ainda fosse proprietário.
+
+Se não for necessário nesta fase, documente por que.
+
+---
+
+# 19. CANONICAL WORKER PATH
+
+Deve existir UM caminho oficial:
+
+claim execution
+→ load durable state
+→ create canonical harness
+→ invoke Runtime V1
+→ persist outcome
+→ publish audit
+→ publish telemetry
+→ ack/finish.
+
+Evite múltiplos bootstraps divergentes.
+
+---
+
+# 20. CANONICAL HARNESS COMPOSITION
+
+Utilize a factory pública criada na Phase 0/1.
+
+Exemplo:
+
+createOperationalHarness(...)
+
+O Worker NÃO deve montar manualmente internals divergentes.
+
+Prove que a execução passa pela API pública do Harness.
+
+---
+
+# 21. RUNTIME V1 INTEGRATION
+
+O Runtime V1 continua:
+
+single-pass
+governed
+budgeted
+deadline-aware.
+
+NÃO o transforme em Runtime V2 nesta fase.
+
+O Runtime V1 deve receber um execution envelope durável e produzir um
+outcome explícito.
+
+---
+
+# 22. POLICY BEFORE EFFECT
+
+Nenhum efeito externo governado deve ocorrer sem:
+
+execution
+ ↓
+policy evaluation
+ ↓
+ALLOW
+
+ou:
+
+REQUIRE_APPROVAL
+ ↓
+valid approval
+ ↓
+execution.
+
+DENY deve produzir:
+
+- stop reason;
+- durable state;
+- audit evidence;
+- zero unauthorized effect.
+
+---
+
+# 23. APPROVAL PAUSE/RESUME
+
+Prove que approval não precisa manter um processo vivo.
+
+Fluxo desejado:
+
+worker
+ ↓
+runtime
+ ↓
+REQUIRE_APPROVAL
+ ↓
+persist WAITING_APPROVAL
+ ↓
+worker termina
+
+posteriormente:
+
+approval recorded
+ ↓
+execution requeued
+ ↓
+new worker
+ ↓
+reload state
+ ↓
+resume safely.
+
+Não dependa de Promise em memória aguardando humano.
+
+---
+
+# 24. EFFECT JOURNAL
+
+Antes ou junto de qualquer side effect relevante, registre identidade
+durável do efeito.
+
+Objetivo:
+
+se worker cair depois do efeito externo e antes de persistir sucesso,
+o retry NÃO pode duplicar silenciosamente o efeito.
+
+Cada efeito deve possuir algo equivalente a:
+
+effectId
+executionId
+toolId
+operation
+idempotencyKey
+state
+attempt
+startedAt
+completedAt
+externalReference
+
+Reutilize effect journal existente.
+
+---
+
+# 25. EXACTLY-ONCE SEMANTICS — NÃO FAÇA CLAIM FALSO
+
+Não declare "exactly once" genericamente.
+
+Sistemas distribuídos tornam isso uma afirmação perigosa.
+
+Prefira demonstrar:
+
+at-least-once processing
++
+idempotent effects
++
+effect journal
++
+deduplication
+
+ou semântica equivalente.
+
+Documente exatamente a garantia obtida.
+
+---
+
+# 26. TOOL EXECUTION BOUNDARY
+
+Fluxo obrigatório:
+
+Orchestrator descriptor
+ ↓
+Runtime decision
+ ↓
+Policy
+ ↓
+Approval
+ ↓
+Tool Registry
+ ↓
+Tool implementation.
+
+O Orchestrator não recebe execute().
+
+O Model não recebe execute().
+
+O HTTP handler não recebe execute().
+
+A autoridade de execução permanece na lane governada.
+
+---
+
+# 27. SYNTHETIC SIDE-EFFECT TOOL
+
+Crie uma Tool sintética específica para integração Phase 2.
+
+Exemplo:
+
+synthetic.counter.increment
+
+ou:
+
+synthetic.record.create
+
+Ela deve produzir efeito durável em tabela de teste.
+
+Objetivo:
+
+provar:
+
+- execução;
+- idempotência;
+- crash;
+- retry;
+- effect journal.
+
+NÃO use WhatsApp real.
+
+NÃO use agenda real.
+
+NÃO use dados clínicos.
+
+NÃO use produção.
+
+---
+
+# 28. MODEL PROVIDER FOR INTEGRATION
+
+Use provider determinístico/fake controlado para os testes de integração.
+
+Ele deve permitir cenários:
+
+SUCCESS
+MODEL_TIMEOUT
+MODEL_FAILURE
+STRUCTURED_OUTPUT_INVALID
+
+Não dependa de API externa para certificação básica.
+
+Providers reais serão certificados posteriormente.
+
+---
+
+# 29. CRASH MATRIX
+
+Crie uma matriz de falhas.
+
+No mínimo simule crash:
+
+A. antes de persistir request;
+B. depois de persistir request, antes de enqueue;
+C. depois de enqueue, antes do claim;
+D. depois do claim, antes do runtime;
+E. durante model call;
+F. depois do model result;
+G. antes do tool effect;
+H. depois do tool effect, antes de registrar sucesso;
+I. depois do effect journal, antes do execution terminal state;
+J. antes de audit flush;
+K. depois do terminal state.
+
+Para cada ponto determine:
+
+work lost?
+duplicate possible?
+recoverable?
+retry safe?
+audit complete?
+
+Produza:
+
+docs/phase2/CRASH_MATRIX.md
+
+---
+
+# 30. CRASH INJECTION
+
+Quando tecnicamente viável, implemente fault injection controlada.
+
+Exemplo:
+
+PHASE2_FAULT_POINT=AFTER_TOOL_EFFECT
+
+Somente para test environment.
+
+Nunca habilitada em produção por padrão.
+
+Os testes devem matar/interromper o fluxo e reiniciar Worker quando possível.
+
+---
+
+# 31. WORKER RESTART PROOF
+
+Prove:
+
+submit
+→ persist
+→ worker claim
+→ injected crash
+→ worker restart
+→ reclaim
+→ completion
+
+sem:
+
+- trabalho perdido;
+- efeito duplicado;
+- state corruption.
+
+Essa é uma das evidências centrais da Phase 2.
+
+---
+
+# 32. CONCURRENT WORKERS
+
+Execute teste com pelo menos dois workers concorrentes.
+
+Prove que:
+
+1 execution
+≠
+2 simultaneous effects.
+
+Registre:
+
+claim owner
+attempt
+effect count.
+
+---
+
+# 33. DUPLICATE HTTP REQUEST
+
+Teste:
+
+100 requests concorrentes
+
+com mesma:
+
+tenant
++
+idempotency key.
+
+Critério:
+
+uma única execução semântica/effect authority.
+
+Não necessariamente 100 responses idênticas, mas nenhuma duplicação
+semântica indevida.
+
+---
+
+# 34. TENANT ISOLATION
+
+Prove que:
+
+Tenant A
+
+não pode:
+
+- claim execution de B;
+- consultar execution de B;
+- deduplicar incorretamente contra B;
+- reutilizar approval de B;
+- consultar effect journal de B.
+
+Idempotency namespace deve incluir tenant.
+
+---
+
+# 35. EXECUTION QUERY API
+
+Crie ou consolide endpoint:
+
+GET /v1/executions/:id
+
+ou equivalente.
+
+Deve retornar estado durável.
+
+Não exponha:
+
+- secrets;
+- raw prompts sensíveis;
+- internal stack traces;
+- cross-tenant data.
+
+---
+
+# 36. RETRY CLASSIFICATION
+
+Separe:
+
+TECHNICAL_RETRY
+
+de:
+
+SEMANTIC_RETRY.
+
+Phase 2 implementa principalmente:
+
+TECHNICAL_RETRY.
+
+Exemplos:
+
+database temporary failure
+provider timeout
+network transient failure
+worker crash.
+
+Não confunda isso com:
+
+"resposta insuficiente, pense novamente".
+
+Isso pertence ao Runtime V2 futuro.
+
+---
+
+# 37. RETRY POLICY
+
+Defina:
+
+maxAttempts
+backoff
+retryable errors
+non-retryable errors
+dead-letter/terminal behavior.
+
+Exemplo:
+
+MODEL_TIMEOUT → retryable
+POLICY_DENIED → terminal
+INVALID_INPUT → terminal
+DB_CONNECTION_TEMPORARY → retryable
+APPROVAL_REQUIRED → waiting, not retry.
+
+---
+
+# 38. FAILURE TAXONOMY
+
+Padronize erros da execution spine.
+
+No mínimo:
+
+INVALID_REQUEST
+AUTHENTICATION_FAILED
+AUTHORIZATION_FAILED
+POLICY_DENIED
+APPROVAL_REQUIRED
+MODEL_TIMEOUT
+MODEL_FAILED
+TOOL_TIMEOUT
+TOOL_FAILED

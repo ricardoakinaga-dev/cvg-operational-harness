@@ -37,6 +37,20 @@ export type ProcessOutboxEventResult =
   | OutboxHandoffResult
   | null
 
+export type ClaimedOutboxEventResult = Exclude<ProcessOutboxEventResult, null>
+
+export interface CompleteClaimedOutboxEventInput {
+  tenantId: TenantId
+  workerId: string
+  adapter: DurableOutboxAdapter
+  event: OutboxEventRecord
+  effect?: OutboxEffect
+  /** The adapter rechecks this inside its ack boundary before any effect. */
+  takeoverActive?: OutboxTakeoverCheck
+  /** Used only when an effect intentionally returns no value. */
+  result?: unknown
+}
+
 /**
  * Claims one event and delegates the only execution of its local effect to
  * the adapter's at-least-once `ack` protocol. The PostgreSQL adapter commits
@@ -55,6 +69,19 @@ export async function processOutboxEvent(
   })
   if (!event) return null
 
+  return completeClaimedOutboxEvent({ ...input, event })
+}
+
+/**
+ * Executes the controlled dispatch and durable acknowledgement for an event
+ * that was already claimed (and whose lease belongs to `workerId`). The
+ * continuous worker uses this seam to heartbeat the lease while the handler
+ * runs without claiming the same event twice.
+ */
+export async function completeClaimedOutboxEvent(
+  input: CompleteClaimedOutboxEventInput
+): Promise<ClaimedOutboxEventResult> {
+  const event = input.event
   if (await isTakeoverActive(input.takeoverActive)) {
     await input.adapter.fail({
       tenantId: input.tenantId,

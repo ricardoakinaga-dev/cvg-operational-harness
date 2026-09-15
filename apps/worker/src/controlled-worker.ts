@@ -87,7 +87,7 @@ export function createControlledWorker(
   return { processNext, drain }
 }
 
-function createControlledDispatch(
+export function createControlledDispatch(
   handlers: ControlledWorkerHandlers
 ): OutboxEffect {
   if (

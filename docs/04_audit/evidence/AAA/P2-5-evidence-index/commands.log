@@ -1,0 +1,106 @@
+# P2-5 remediation — commands and exit codes
+
+- date (UTC): 2026-09-13 (run window ~03:30-03:33 UTC)
+- cwd: /home/ricardo/cvg-agent-secretary-v2
+- scope: docs/04_audit/evidence only; no commit, push, deploy or product code
+- note: the generator script lives outside the repo temporarily
+  (`/tmp/opencode/gen-p2-5-index.mjs`) and is not part of the deliverable; the
+  reproducible validator is `validate-index.mjs` in this directory.
+
+## 1. Generate the four task-root indexes (all 56 builder files + 1 cross-task ref)
+
+    node /tmp/opencode/gen-p2-5-index.mjs
+
+exit code: 0
+output:
+
+    generated docs/04_audit/evidence/AAA/AAA-09/manifest.json files=10 crossTaskRefs=0 generatedAt=2026-09-13T03:31:37.754Z
+    generated docs/04_audit/evidence/AAA/AAA-10/manifest.json files=19 crossTaskRefs=1 generatedAt=2026-09-13T03:31:37.754Z
+    generated docs/04_audit/evidence/AAA/AAA-11/manifest.json files=14 crossTaskRefs=0 generatedAt=2026-09-13T03:31:37.754Z
+    generated docs/04_audit/evidence/AAA/AAA-17/manifest.json files=13 crossTaskRefs=0 generatedAt=2026-09-13T03:31:37.754Z
+
+## 2. Format the four manifests with prettier (required)
+
+    node_modules/.bin/prettier --write docs/04_audit/evidence/AAA/AAA-09/manifest.json docs/04_audit/evidence/AAA/AAA-10/manifest.json docs/04_audit/evidence/AAA/AAA-11/manifest.json docs/04_audit/evidence/AAA/AAA-17/manifest.json
+
+exit code: 0
+output: all four reported `(unchanged)` — already prettier-compliant
+
+    node_modules/.bin/prettier --check docs/04_audit/evidence/AAA/AAA-09/manifest.json docs/04_audit/evidence/AAA/AAA-10/manifest.json docs/04_audit/evidence/AAA/AAA-11/manifest.json docs/04_audit/evidence/AAA/AAA-17/manifest.json
+
+exit code: 0
+output: `All matched files use Prettier code style!`
+
+## 3. Validate structure, existence and sha256 of every referenced file
+
+    node docs/04_audit/evidence/AAA/P2-5-evidence-index/validate-index.mjs > docs/04_audit/evidence/AAA/P2-5-evidence-index/validation-output.log 2>&1
+
+exit code: 0
+result (from validation-output.log):
+
+    summary:
+      manifests=4 indexed_files=56 cross_task_refs=1 sha256_ok=57 failures=0 warnings=0
+    RESULT: PASS
+
+Supporting greps over validation-output.log:
+
+    grep -c '^\[PASS\]' docs/04_audit/evidence/AAA/P2-5-evidence-index/validation-output.log
+    -> 61
+
+    grep -E '^\[(FAIL|WARN)\]' docs/04_audit/evidence/AAA/P2-5-evidence-index/validation-output.log
+    -> no matches (grep exit 1; no failure or warning lines)
+
+## 4. Validator formatting (cosmetic, evidence-excluded path)
+
+    node_modules/.bin/prettier --check docs/04_audit/evidence/AAA/P2-5-evidence-index/validate-index.mjs
+
+exit code: 1 (initial file not formatted)
+
+    node_modules/.bin/prettier --write docs/04_audit/evidence/AAA/P2-5-evidence-index/validate-index.mjs
+
+exit code: 0
+
+    node_modules/.bin/prettier --check docs/04_audit/evidence/AAA/AAA-09/manifest.json docs/04_audit/evidence/AAA/AAA-10/manifest.json docs/04_audit/evidence/AAA/AAA-11/manifest.json docs/04_audit/evidence/AAA/AAA-17/manifest.json docs/04_audit/evidence/AAA/P2-5-evidence-index/validate-index.mjs
+
+exit code: 0 (final check: `All matched files use Prettier code style!`)
+
+## 5. Evidence that no pre-existing file was modified
+
+Only the four new root manifests have mtimes newer than the session start
+(2026-09-13 03:30:00 UTC) inside the four task roots:
+
+    find docs/04_audit/evidence/AAA/AAA-09 docs/04_audit/evidence/AAA/AAA-10 docs/04_audit/evidence/AAA/AAA-11 docs/04_audit/evidence/AAA/AAA-17 -type f -newermt "@$(date -u -d '2026-09-13 03:30:00' +%s)"
+
+exit code: 0
+output:
+
+    docs/04_audit/evidence/AAA/AAA-09/manifest.json
+    docs/04_audit/evidence/AAA/AAA-10/manifest.json
+    docs/04_audit/evidence/AAA/AAA-11/manifest.json
+    docs/04_audit/evidence/AAA/AAA-17/manifest.json
+
+    git status --porcelain -- docs/04_audit/evidence/AAA/AAA-09 docs/04_audit/evidence/AAA/AAA-10 docs/04_audit/evidence/AAA/AAA-11 docs/04_audit/evidence/AAA/AAA-17 docs/04_audit/evidence/AAA/P2-5-evidence-index
+
+exit code: 0
+output: the five directories are untracked (`??`); no tracked product or
+evidence file shows as modified in this scope.
+
+## 6. Hashes of the new index files themselves (for the note)
+
+    sha256sum docs/04_audit/evidence/AAA/AAA-09/manifest.json docs/04_audit/evidence/AAA/AAA-10/manifest.json docs/04_audit/evidence/AAA/AAA-11/manifest.json docs/04_audit/evidence/AAA/AAA-17/manifest.json docs/04_audit/evidence/AAA/P2-5-evidence-index/validate-index.mjs
+
+exit code: 0
+output:
+
+    5acb559a8a0ec83b23ecdf12f53c315677ed81947db96403f16f6bc109202900  docs/04_audit/evidence/AAA/AAA-09/manifest.json
+    5970b5c6f83efade70075f8b368f526d07dea8401e90dfa8b605680f4af7afef  docs/04_audit/evidence/AAA/AAA-10/manifest.json
+    cb9a35ad7f880580a430c546867bf014b986846f0c90106ac25a8f8b1d496ca1  docs/04_audit/evidence/AAA/AAA-11/manifest.json
+    32863012251cbf7d89db992c0c752fde506686c9d9fe3bfaa2676b5bb8a8c1df  docs/04_audit/evidence/AAA/AAA-17/manifest.json
+    d900508181c9bb5e823f4198e23b2d32cfe504e5dece44b70a3555465915a8c2  docs/04_audit/evidence/AAA/P2-5-evidence-index/validate-index.mjs
+
+## 7. Final validation rerun on the frozen state
+
+    node docs/04_audit/evidence/AAA/P2-5-evidence-index/validate-index.mjs > docs/04_audit/evidence/AAA/P2-5-evidence-index/validation-output.log 2>&1
+
+exit code: 0
+result: `manifests=4 indexed_files=56 cross_task_refs=1 sha256_ok=57 failures=0 warnings=0` / `RESULT: PASS`

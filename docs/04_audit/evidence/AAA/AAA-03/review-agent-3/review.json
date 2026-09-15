@@ -1,0 +1,83 @@
+{
+  "reviewId": "AAA-03-REVIEW-AGENT-3",
+  "taskId": "AAA-03",
+  "program": "AAA-20260912",
+  "verdict": "APPROVE",
+  "verdictScope": "contract text revision sha256 db75899f6b730fa04b642da8cdc6d65e747a7c7e62e22673bf038a52163d66f8 only; no freeze, implementation or BUILD approved",
+  "reviewer": "agent-3 (quality front); did not author AAA-03",
+  "reviewedAt": "2026-09-12T20:40:00+00:00",
+  "artifact": {
+    "path": "docs/02_spec/aaa_execution_contract.md",
+    "sha256": "db75899f6b730fa04b642da8cdc6d65e747a7c7e62e22673bf038a52163d66f8",
+    "statusAtReview": "PROPOSED_NOT_FROZEN / DRAFT_FOR_INDEPENDENT_REVIEW"
+  },
+  "identityNote": "Transient hash divergence observed and resolved during review; see hash-consistency.txt. All sources now agree on db75899f.",
+  "criteria": [
+    {
+      "criterion": "Máquinas de estados e matriz crash/falha/retry explícitas",
+      "result": "PASS",
+      "evidence": "sections 4-5-6 cover RESERVED/EXECUTING/EXECUTED plus FAILED/UNCERTAIN/reconciliation with per-boundary effect counts"
+    },
+    {
+      "criterion": "Nenhum efeito externo antes de autorização",
+      "result": "PASS",
+      "evidence": "journal reserve before tool; durability_required fails closed without journal; approval CAS before journal"
+    },
+    {
+      "criterion": "Contrato revisado e hash congelado para builders",
+      "result": "PARTIAL",
+      "evidence": "review done (this document); freeze hash not yet recorded as frozen and binding conditions below must be attached"
+    }
+  ],
+  "adjudicatedQuestions": {
+    "Q1_budgeted_stages": "CONFIRM; add explicit per-turn budget semantics",
+    "Q2_cancel_scope": "CONFIRM WITH CONDITION; prove real-adapter denial until AAA-21 or switch to DENY",
+    "Q3_capability_names": "CONFIRM; keep names and narrow semantics",
+    "Q4_legacy_verifyAndConsume": "CONFIRM WITH CONDITION; mandatory governed-path regression, current caller packages/agent-runtime/src/runtime.ts:204",
+    "Q5_reservation_ttl": "CONFIRM WITH CONDITION; parameterized, clock-injectable, PostgreSQL proof in AAA-16"
+  },
+  "findings": [
+    {
+      "id": "AAA03-R3-F01",
+      "severity": "P2",
+      "criterionAffected": "cross-front idempotency mapping",
+      "location": "docs/02_spec/aaa_execution_contract.md §8 / docs/02_spec/aaa_data_api_contract.md §1",
+      "reproduction": "compare operationKey definition with channel operationIdentity",
+      "observed": "runtime derives operationKey from proposalHash; channel journal keys by (tenantId, channel, operationKind, idempotencyKey); mapping is implicit",
+      "impact": "a runtime retry could produce a new channel identity and duplicate a send once adapters are composed",
+      "priority": "P1",
+      "confidence": "high",
+      "closeWith": "frozen mapping rule plus regression in AAA-10/AAA-12"
+    },
+    {
+      "id": "AAA03-R3-F02",
+      "severity": "P1",
+      "criterionAffected": "F02 governed consumption",
+      "location": "packages/agent-runtime/src/runtime.ts:204",
+      "reproduction": "grep verifyAndConsume non-test callers",
+      "observed": "governed runtime currently calls verifyAndConsume",
+      "impact": "contract rule alone does not prevent the audited false EXECUTED until the regression exists",
+      "priority": "P1",
+      "confidence": "high",
+      "closeWith": "mandatory regression in AAA-07/AAA-09 BUILD"
+    },
+    {
+      "id": "AAA03-R3-F03",
+      "severity": "P3",
+      "criterionAffected": "reservation recovery",
+      "location": "docs/02_spec/aaa_execution_contract.md §4",
+      "reproduction": "inspect releaseExpired rules",
+      "observed": "stuck RESERVED depends on periodic sweep not yet scheduled",
+      "impact": "approval can remain stuck if no worker/turn triggers the sweep",
+      "priority": "P3",
+      "confidence": "medium",
+      "closeWith": "schedule/test sweep scenario in AAA-07/AAA-10"
+    }
+  ],
+  "limitations": [
+    "Static prose review; no runnable schema",
+    "Approval does not survive byte changes to the contract",
+    "Not human signoff; does not freeze or authorize BUILD"
+  ],
+  "nextAction": "Lead attaches binding conditions to the freeze, pins db75899f and registers the freeze in the ledger; re-review only if bytes change"
+}

@@ -212,7 +212,15 @@ describe('api PostgreSQL persistence mode', () => {
       '0008_session_agent_version_pin',
       '0009_release_candidate_validator_integrity',
       '0010_outbox_durability',
-      '0011_outbox_payload_redaction'
+      '0011_outbox_payload_redaction',
+      '0012_channel_effect_journal',
+      '0013_runtime_effect_journal',
+      '0014_journeys',
+      '0015_runtime_approval_store',
+      '0016_operational_execution_spine',
+      '0017_runtime_approval_execution_binding',
+      '0018_operational_execution_invariants',
+      '0019_iterative_execution_steps'
     ] as const
     const rows: Array<{
       version: string
@@ -615,7 +623,8 @@ describe('api PostgreSQL persistence mode', () => {
           return queryResult(
             names.flatMap((table_name) => [
               { table_name, column_name: 'tenant_id' },
-              ...(table_name === 'outbox_effects' ||
+              ...(table_name === 'runtime_approvals' ||
+              table_name === 'outbox_effects' ||
               table_name === 'outbox_attempts' ||
               table_name === 'outbox_quarantine'
                 ? []
@@ -658,12 +667,14 @@ describe('api PostgreSQL persistence mode', () => {
             roles: '{public}',
             cmd: 'ALL',
             qual:
+              tablename === 'runtime_approvals' ||
               tablename === 'outbox_effects' ||
               tablename === 'outbox_attempts' ||
               tablename === 'outbox_quarantine'
                 ? "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
                 : "tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')",
             with_check:
+              tablename === 'runtime_approvals' ||
               tablename === 'outbox_effects' ||
               tablename === 'outbox_attempts' ||
               tablename === 'outbox_quarantine'
@@ -1246,6 +1257,11 @@ describe('api PostgreSQL persistence mode', () => {
         'platform_knowledge_sources',
         'platform_release_candidates',
         'audit_evidence_checkpoints',
+        'runtime_approvals',
+        'operational_executions',
+        'operational_execution_outbox',
+        'operational_execution_events',
+        'operational_effect_journal',
         'webhook_replay_events'
       ]
 

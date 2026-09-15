@@ -1,0 +1,68 @@
+{
+  "program": "AAA-20260912",
+  "task": "AAA-10",
+  "scope": "durable runtime ports: EffectState/EffectRecord/EffectJournalPort, InMemoryEffectJournal (ephemeral), FileEffectJournal (single-host durable), and registration/exports. runtime.ts wiring intentionally out of scope (separate lane).",
+  "status": "IMPLEMENTED",
+  "productGateGranted": false,
+  "generatedAt": "2026-09-13T01:45:28Z",
+  "environment": {
+    "node": "v24.20.0 (local); target engines >=22 <23",
+    "postgres": "PostgreSQL 16.15 on 127.0.0.1:55432/cvg_aaa16_test (disposable fixture)",
+    "syntheticDataOnly": true
+  },
+  "artifacts": {
+    "packages/agent-runtime/src/effect-journal.ts": "ecdcab69a263e8950dab5d8d6f4bc6a6ee791d5a003d2a5393559df87137c0a1",
+    "packages/agent-runtime/src/__tests__/effect-journal.test.ts": "ec257b14e13905dc24db9593fdb58c02075d78ce997e128d47f1bb8415b45e94",
+    "packages/agent-runtime/src/index.ts": "adds only `export * from './effect-journal.ts'` on top of the existing barrel",
+    "packages/persistence/src/effect-journal-postgres.ts": "52fff73760970384250684f85819132072cf66eb1fa51355a252dd70879146e1"
+  },
+  "semantics": {
+    "reserve": "atomic insert-if-absent keyed by (tenantId, operationKey); same key + different proposalHash throws EffectJournalError(idempotency_key_reuse) with no mutation; CONFIRMED replays; EFFECT_STARTED reports in_progress; UNCERTAIN reports uncertain; EFFECT_FAILED/ABANDONED re-arm a new attempt (AAA-03 E-1) while CONFIRMED never transitions",
+    "fencing": "markEffectStarted/confirmEffect/failEffect/markUncertain require matching attemptId (attempt_mismatch); terminal CONFIRMED/EFFECT_FAILED are immutable to transition methods",
+    "releaseExpired": "never executes effects; RESERVED -> ABANDONED, EFFECT_STARTED -> UNCERTAIN; returns transition count",
+    "reconcile": "explicit only, requires actorId + evidenceRef + outcome effect_confirmed|no_effect; UNCERTAIN -> CONFIRMED or ABANDONED; never automatic"
+  },
+  "commands": [
+    {
+      "command": "npx vitest run packages/agent-runtime/src/__tests__/effect-journal.test.ts --no-file-parallelism",
+      "result": "1 file passed, 41 tests passed, exit 0",
+      "log": "green-focused.log"
+    },
+    {
+      "command": "npx vitest run packages/agent-runtime/src/__tests__/effect-journal.test.ts --no-file-parallelism (before implementation)",
+      "result": "1 file failed, toBeResolved import error, exit 1 (RED)",
+      "log": "red-focused.log"
+    },
+    {
+      "command": "TEST_DATABASE_URL=postgres://ricardo@127.0.0.1:55432/cvg_aaa16_test npm run test:postgres",
+      "result": "13 files passed, 105 tests passed, exit 0 (includes both new SQL test files)",
+      "log": "../AAA-12/sql-adapter/green-test-postgres.log"
+    },
+    {
+      "command": "npm run typecheck",
+      "result": "exit 0",
+      "log": "gates.log"
+    },
+    {
+      "command": "npm run lint",
+      "result": "exit 0",
+      "log": "gates.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "exit 0",
+      "log": "gates.log"
+    },
+    {
+      "command": "npm test",
+      "result": "192 files passed | 4 skipped; 1113 tests passed | 46 skipped; exit 0",
+      "log": "full-npm-test.log"
+    }
+  ],
+  "limitations": "limitations.md",
+  "notCoveredHere": [
+    "packages/agent-runtime/src/runtime.ts wiring (reserve/confirm/reconcile composition) belongs to the AAA-10 wiring lane",
+    "no commit, push, deploy or production/operational database was touched",
+    "physical durability under power loss is not proven by the file adapter"
+  ]
+}

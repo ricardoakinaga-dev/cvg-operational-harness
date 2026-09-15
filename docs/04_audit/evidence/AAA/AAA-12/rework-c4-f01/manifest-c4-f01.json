@@ -1,0 +1,200 @@
+{
+  "schemaVersion": 1,
+  "taskId": "AAA-12",
+  "program": "AAA-20260912",
+  "round": "AAA12-C4-F01 — missing vs malformed hashVersion",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "authorization": "local controlled correction per review-coordinator-hash-version/next-task-agent-2.md; no SQL, no promotion, no DONE",
+  "finding": {
+    "id": "AAA12-C4-F01",
+    "severity": "P2",
+    "coverage": "explicit malformed/unknown persisted hashVersion must fail closed; only absent property is legacy-local-v1"
+  },
+  "candidateDigest": "70311445013852dcf65c8dcbf1534b266758406c79955ac3d9b7a4a4f3bc3238",
+  "candidateDigestDefinition": "sha256 over lines '<path>\\0<sha256>' for the 14 files sorted lexicographically, joined with '\\n' with no trailing newline",
+  "candidateDigestCommand": "python3 - <<'EOF'\nimport hashlib, json\nm = json.load(open('docs/04_audit/evidence/AAA/AAA-12/rework-c4-f01/manifest-c4-f01.json'))\nh = m['fileHashes']\nprint(hashlib.sha256('\\n'.join(f'{p}\\0{h[p]}' for p in sorted(h)).encode()).hexdigest())\nEOF",
+  "supersedes": "docs/04_audit/evidence/AAA/AAA-12/rework-canonicalization/manifest-rework.json (candidate 8d49cb2a..., preserved as history)",
+  "fileHashes": {
+    "packages/channel-gateway/src/errors.ts": "d428fa1da34d159471d03ebc87f103d4d751cfb2e09c74bbd92d59be43646d8d",
+    "packages/channel-gateway/src/effect-journal.ts": "9c423937d9cf2a58ac221948204e44ee38db4fb853575822db28b5788c68fef4",
+    "packages/channel-gateway/src/effect-journal-file.ts": "a3fac3c05419ae3fe2f3ae44a013046e52ea2f98839b6e22336cc9784e1fdabd",
+    "packages/channel-gateway/src/gateway.ts": "f638c5aacbda48bca01deddeb85cb56c52e330d51ac40c8a7110d03186fd5ec6",
+    "packages/channel-gateway/src/idempotency.ts": "53cd6354220771e2a32b7496512e3a64a44b6dd18c74f64159e3d1271104e4ce",
+    "packages/channel-gateway/src/index.ts": "d13bc8b401f41cec73ce675b994d4d200aa239f4e65239f21bf5f6cefc1f7541",
+    "packages/channel-gateway/src/adapters/evolution.ts": "78d6def08ee33969c7c348d9e7f4661ba585f7ad5ec9f613c57418d5ce5a0a10",
+    "packages/channel-gateway/src/adapters/chatwoot.ts": "def2d1def4f0cbe7ede46c9bb139865640713ce8d555cd29a5edc110fa4252fb",
+    "packages/channel-gateway/src/__tests__/channel-effect-race.test.ts": "5b1dce5d497e4b6721351112881ac9d338f57c769f8e5cf1665667a802170928",
+    "packages/channel-gateway/src/__tests__/channel-effect-journal.test.ts": "1f914464d297ef7fde1e1db5101445906fe5ef322cff0c0c14a22e393d7a973b",
+    "packages/channel-gateway/src/__tests__/channel-effect-journal-edges.test.ts": "a351d7f2ea4b5a97c617763361e386d682753b1c919d624e2a1dc8d633d5e9da",
+    "packages/channel-gateway/src/__tests__/channel-effect-hash-version.test.ts": "a6e9e599fe2bf0e97b5fae72d5a6206f2880fada620112b36002a1a82fc1bd02",
+    "packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts": "4369ed8acb909960f17a9e6364d00fd8c0783a8843e18214e503c41d0efab1e5",
+    "packages/chaos/src/__tests__/chaos-postgres.test.ts": "a122ae5179b6cabe18e99067beb60311c51ad8f19ee07aef14aa0cc5417c7418"
+  },
+  "probe": {
+    "source": "docs/04_audit/evidence/AAA/AAA-12/review-coordinator-hash-version/malformed-version-probe.mjs",
+    "reproduction": "probe-repro.log",
+    "result": "CONFIRMED_COUNTEREXAMPLE pre-fix (null/7/''/false/{} coerced to legacy, bytes changed, claimSend allowed)"
+  },
+  "red": {
+    "command": "npx vitest run packages/channel-gateway/src/__tests__/channel-effect-malformed-version.test.ts --no-file-parallelism --maxWorkers=1",
+    "exitCode": 1,
+    "result": "3 failed | 3 passed (6)",
+    "log": "red.log"
+  },
+  "green": {
+    "adversarial": {
+      "command": "npx vitest run channel-effect-malformed-version + channel-effect-hash-version",
+      "exitCode": 0,
+      "result": "2 files / 15 tests PASS",
+      "log": "green-c4.log"
+    },
+    "consumers": {
+      "command": "TEST_DATABASE_URL=... npx vitest run packages/channel-gateway packages/chaos --no-file-parallelism --maxWorkers=2",
+      "exitCode": 0,
+      "result": "10 files / 77 tests PASS",
+      "log": "green-consumers.log"
+    },
+    "fullSuite": {
+      "command": "npm test",
+      "exitCode": 0,
+      "result": "181 files passed | 4 skipped; 948 tests passed | 27 skipped",
+      "log": "full-npm-test.log"
+    },
+    "typecheck": {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "log": "typecheck.log"
+    },
+    "lint": {
+      "command": "npx eslint packages/channel-gateway",
+      "exitCode": 0,
+      "log": "lint-channel.log"
+    },
+    "format": {
+      "command": "npx prettier --check packages/channel-gateway",
+      "exitCode": 0,
+      "log": "format-check.log"
+    },
+    "coverageFull": {
+      "command": "npx vitest run --coverage --coverage.reportsDirectory=.../coverage-full ...",
+      "exitCode": 0,
+      "result": "86.66 statements / 81.77 branches / 90.01 functions / 87.74 lines",
+      "log": "coverage-full.log"
+    },
+    "coverageChannelSubset": {
+      "command": "npx vitest run packages/channel-gateway --coverage ...",
+      "exitCode": 1,
+      "result": "functions 79.61% no subset < 80% (gateway.ts 54.54% pre-existente); FAIL preservado e declarado; full-repo PASS nao oculta",
+      "log": "coverage-channel.log",
+      "perFile": {
+        "packages/channel-gateway/src/adapters/chatwoot.ts": {
+          "statements": 91.07,
+          "branches": 83.07,
+          "functions": 100,
+          "lines": 90.74
+        },
+        "packages/channel-gateway/src/adapters/evolution.ts": {
+          "statements": 91.66,
+          "branches": 78.72,
+          "functions": 80,
+          "lines": 93.61
+        },
+        "packages/channel-gateway/src/adapters/fake.ts": {
+          "statements": 88.88,
+          "branches": 95,
+          "functions": 66.66,
+          "lines": 94.11
+        },
+        "packages/channel-gateway/src/contracts.ts": {
+          "statements": 100,
+          "branches": 100,
+          "functions": 100,
+          "lines": 100
+        },
+        "packages/channel-gateway/src/effect-journal-file.ts": {
+          "statements": 89.3,
+          "branches": 89.13,
+          "functions": 83.87,
+          "lines": 92.14
+        },
+        "packages/channel-gateway/src/effect-journal.ts": {
+          "statements": 80.43,
+          "branches": 77.08,
+          "functions": 84.84,
+          "lines": 81.74
+        },
+        "packages/channel-gateway/src/errors.ts": {
+          "statements": 100,
+          "branches": 100,
+          "functions": 100,
+          "lines": 100
+        },
+        "packages/channel-gateway/src/gateway.ts": {
+          "statements": 84.25,
+          "branches": 77.21,
+          "functions": 54.54,
+          "lines": 84.76
+        },
+        "packages/channel-gateway/src/idempotency.ts": {
+          "statements": 82.6,
+          "branches": 93.75,
+          "functions": 66.66,
+          "lines": 84.21
+        },
+        "packages/channel-gateway/src/index.ts": {
+          "statements": 100,
+          "branches": 100,
+          "functions": 100,
+          "lines": 100
+        }
+      }
+    }
+  },
+  "requirementMap": [
+    {
+      "requirement": "somente propriedade ausente representa legacy-local-v1",
+      "test": "decideReserve treats only the absent property as legacy; file adapter absent happy path"
+    },
+    {
+      "requirement": "null/numero/booleano/objeto/array/vazia/whitespace/desconhecida falham fechado",
+      "test": "decideReserve matrix + file adapter rejects malformed persisted versions without mutating bytes"
+    },
+    {
+      "requirement": "falha antes de reserva, replay, takeover, claimSend, sem alterar bytes/revisao",
+      "test": "file adapter matrix + all mutating methods fail closed on a malformed version without mutation"
+    },
+    {
+      "requirement": "callers legacy e shared igualmente bloqueados para registros invalidos",
+      "test": "file matrix executa reserve com LEGACY e SHARED para cada valor/estado"
+    },
+    {
+      "requirement": "paridade memory/file em input invalido e transicoes validas",
+      "test": "memory and file agree on invalid input and valid version transitions"
+    },
+    {
+      "requirement": "gateway sem envio em nenhum estado com versao malformada",
+      "test": "gateway produces zero sends for every state with a malformed version"
+    },
+    {
+      "requirement": "preservar casos validos ausente/legacy/shared",
+      "test": "absent and explicit valid versions preserve the supported happy paths + suites anteriores"
+    },
+    {
+      "requirement": "nao apagar/reescrever registros nem migracao automatica",
+      "test": "assercoes byte-identical em todos os cenarios invalidos; leitura apenas normaliza ausencia"
+    }
+  ],
+  "limitations": [
+    "Fora do escopo: actor de reconciliacao, SQL/migrations 0012/0013, migracao automatica de registros legados, composicao AAA-21, campanha ampla de cobertura.",
+    "Cobertura do subset canal segue FAIL (functions 79.61%); gateway.ts 54.54% e debito pre-existente; nenhum limiar foi reduzido.",
+    "Durabilidade fisica/cross-host nao foi provada; journal de arquivo continua host-local e sem fsync.",
+    "find() expõe o valor malformado como esta (leitura apenas); mutacoes e reservas falham fechado.",
+    "Candidato anterior 8d49cb2a... superseded por esta correcao autorizada e preservado como historico."
+  ],
+  "notClaimed": [
+    "DONE",
+    "G_SPEC",
+    "coverage global substitui subset",
+    "SQL/AAA-21"
+  ]
+}

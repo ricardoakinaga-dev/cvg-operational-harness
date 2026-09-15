@@ -1,0 +1,153 @@
+{
+  "taskId": "AAA-07",
+  "program": "AAA-20260912",
+  "remediation": "P1-2",
+  "title": "Persistencia da operationKey efetiva na reserva de aprovacao e sweep TTL fail-closed",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "observedAt": "2026-09-13T05:13:37Z",
+  "capturedAtSource": "date -u +%Y-%m-%dT%H:%M:%SZ",
+  "timestampErrata": "The previous package (docs/04_audit/evidence/AAA/AAA-07/sweep-callsite/manifest.json) recorded observedAt as 2026-09-13T00:41:00+00:00, a numeric-offset form instead of the required UTC ISO Z form. This package uses UTC ISO timestamps with an explicit Z suffix only for every timestamp field; the value above was captured from the system clock.",
+  "executor": "builder agent (agent-runtime + approval-engine lane)",
+  "authority": "P1-2 remediation assignment derived from docs/04_audit/evidence/AAA/P1-independent-review/REVIEW.md (P1-2) and docs/04_audit/evidence/AAA/AAA-07/sweep-callsite/limitations.md; controlled local scope only.",
+  "finding": {
+    "id": "P1-2",
+    "source": "docs/04_audit/evidence/AAA/P1-independent-review/REVIEW.md (P1-2) + docs/04_audit/evidence/AAA/AAA-07/sweep-callsite/limitations.md",
+    "before": "When the execution turn supplied a caller idempotencyKey, the journal intent lived under operation_key = sha256({tenantId, callerIdempotencyKey}) but the approval did not persist that key. The TTL sweep recomputed the derived key, found no journal record, inferred no_effect, and released to APPROVED; a retry with a changed/absent key could re-execute the tool after a crash, producing a duplicate effect.",
+    "after": "ApprovalReserveInput/ApprovalRecord/ApprovalReservation carry an optional validated operationKey; ApprovalEngine.reserve persists the effective key on the reservation and exposes it; the governed runtime computes the key before reserve, passes it and reuses the persisted key for journal reserve/markEffectStarted/confirm and the outbox idempotencyKey. The TTL sweep consults the PERSISTED key: absent under a persisted key with a never-EXECUTING approval is no_effect; EFFECT_STARTED/UNCERTAIN/CONFIRMED, unverifiable binding, lookup failure or legacy approvals without a persisted key produce unknown and the engine keeps UNCERTAIN, never APPROVED."
+  },
+  "contract": [
+    "docs/02_spec/aaa_execution_contract.md section 4 (orphan reservation recovery: release to APPROVED only with proof of absence; doubt => UNCERTAIN)",
+    "docs/02_spec/aaa_execution_contract.md section 4 T-18",
+    "docs/02_spec/aaa_execution_contract.md section 7 (durable intent and effect journal)",
+    "docs/02_spec/aaa_execution_contract.md sections 8 and 8.1 (operationKey identity, E-1..E-4)"
+  ],
+  "changedFiles": [
+    {
+      "path": "packages/approval-engine/src/contracts.ts",
+      "sha256": "6b8ef7070e7ad14e5c4ced6a9fef372ad12bca41d777082acb4d25302a35e8da",
+      "change": [
+        "ApprovalReserveSchema: optional operationKey (trimmed, non-empty, max 200)",
+        "ApprovalReservation: optional operationKey exposed by reserve()",
+        "ApprovalRecord: optional operationKey persisted on the approval"
+      ]
+    },
+    {
+      "path": "packages/approval-engine/src/engine.ts",
+      "sha256": "7a2a01957c4c4781bc0cd9d3aabbbea0cab8c0a26fe88f29b46764a18a257c8f",
+      "change": [
+        "reserve(): rejects a diverging operationKey on an existing reservation with proposal_mismatch and no mutation",
+        "reserve(): persists the effective operationKey (request value, else the already persisted value) on fresh reservations",
+        "#toReservation(): exposes operationKey on the reservation view",
+        "releaseExpired semantics unchanged and verified: unknown/ambiguous/missing evidence transitions to UNCERTAIN, never releases"
+      ]
+    },
+    {
+      "path": "packages/agent-runtime/src/runtime.ts",
+      "sha256": "82b938441fb6d1dd264d0d34257f3c774171f14a0aafb1d2c86a5c3e97f886d5",
+      "change": [
+        "approvalSweepEvidence(): absent record is no_effect only for a persisted key with a never-EXECUTING approval; otherwise unknown; EFFECT_STARTED/UNCERTAIN/CONFIRMED -> unknown",
+        "approvalOperationKey(): persisted approval.operationKey wins; legacy records fall back to the derived candidate key and never convert absence into proof",
+        "collectApprovalSweepEvidence(): unverifiable proposal binding and lookup failures produce unknown/no evidence",
+        "#runExecutionTurn(): computes the operation key before approvals.reserve, resolves record.operationKey when present and persists it via the reserve input",
+        "#replayConfirmedEffect(): resolves the persisted operation key for replay lookups",
+        "#recoverActiveReservation(): passes the resolved operation key on re-reservation",
+        "journal reserve/markEffectStarted/confirmEffect and outbox idempotencyKey use the same resolved value"
+      ]
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts",
+      "sha256": "cf4e2e9ef2ceb7fe1ae46e18f2420c110c88ccdafd5eb0c999d69ec44cbff5b5",
+      "change": "7 new P1-2 regression tests: legacy changed-key retry (RED), persisted changed-key retry, persisted absent-key retry, positive release with persisted key, EFFECT_STARTED -> UNCERTAIN, legacy -> UNCERTAIN, persisted-key reuse for journal+outbox"
+    },
+    {
+      "path": "packages/approval-engine/src/__tests__/approval-operation-key.test.ts",
+      "sha256": "2a22507034c5f18d0c50309bb0dfa302d641665009c32c86f16a1a2fedba3778",
+      "change": "7 new engine tests: persistence/normalization, stability across CAS/generations, mismatch rejection, empty-key rejection, unknown never releases, no-effect release retains the key"
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/runtime-journal.test.ts",
+      "sha256": "162f64d59d942ac11278cabc091a30b7e7bd088ce3d00423d783eab6bddb6467",
+      "change": "Corrected two pre-existing assertions that encoded the P1-2 inference: legacy absent evidence now expects UNCERTAIN; the exported-helper release case now seeds a proven-absence RESERVED journal record (assertions not weakened)"
+    }
+  ],
+  "unchanged": [
+    "packages/persistence/**, packages/channel-gateway/**, packages/shared/**, docs/03_build/tracking/** (explicitly out of scope)",
+    "packages/agent-runtime/src/effect-journal.ts, contracts.ts, proposal.ts, index.ts",
+    "docs/99_runtime_state.md, docs/20_master_execution_log.md, docs/30_backlog_master.md (write scope excludes them; coordinator persists from this manifest)",
+    "No production call site of sweepExpiredApprovals was added; periodic worker wiring remains AAA-19"
+  ],
+  "red": {
+    "command": "npx vitest run packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts --no-file-parallelism --maxWorkers=2",
+    "exitCode": 1,
+    "result": "6 failed | 0 passed (6). The legacy caller-key scenario returned outcome 'executed' (tool re-executed) instead of denied/operation_uncertain; the persisted-key cases failed because ApprovalReserveSchema strict mode rejected the unknown operationKey field (invalid_request), proving the capability did not exist.",
+    "artifacts": ["red-focused.log", "red-focused.exit"]
+  },
+  "green": {
+    "focused": {
+      "command": "npx vitest run packages/agent-runtime packages/approval-engine --no-file-parallelism --maxWorkers=2",
+      "exitCode": 0,
+      "result": "19 files passed (19); 361 tests passed (361)",
+      "artifacts": ["green-focused.log", "green-focused.exit"]
+    },
+    "newSuites": {
+      "command": "npx vitest run packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts packages/approval-engine/src/__tests__/approval-operation-key.test.ts --no-file-parallelism --maxWorkers=2",
+      "exitCode": 0,
+      "result": "2 files passed (2); 14 tests passed (14)",
+      "artifacts": ["green-new-suites.log", "green-new-suites.exit"]
+    },
+    "full": {
+      "command": "npm test",
+      "exitCode": 0,
+      "result": "229 files passed | 4 skipped (233); 1577 tests passed | 57 skipped (1634); zero failures",
+      "artifacts": ["full-test.log", "full-test.exit"],
+      "baselineNote": "The assignment stated 1544 passed / 57 skipped. The current dirty tree measures 1563 passed / 57 skipped before this fix (1577 minus the 14 tests added here); the 19-test delta is consistent with concurrent AAA lanes present in the working tree. Declared discrepancy; zero failures."
+    }
+  },
+  "checks": [
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "typecheck.log"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "lint.log"
+    },
+    {
+      "command": "npx prettier --check packages/agent-runtime/src/runtime.ts packages/agent-runtime/src/__tests__/runtime-sweep-operation-key.test.ts packages/agent-runtime/src/__tests__/runtime-journal.test.ts packages/approval-engine/src/contracts.ts packages/approval-engine/src/engine.ts packages/approval-engine/src/__tests__/approval-operation-key.test.ts",
+      "exitCode": 0,
+      "result": "PASS (changed files only)",
+      "artifact": "format-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "git-diff-check.log"
+    }
+  ],
+  "guarantees": [
+    "A duplicate effect after crash + TTL with a caller idempotency key is now impossible through the governed runtime: the persisted key is authoritative for the journal, the sweep and the outbox.",
+    "Absent journal evidence is proof of no effect only under a persisted key with a never-EXECUTING approval; RESERVED/ABANDONED/EFFECT_FAILED records are proof; everything ambiguous (EFFECT_STARTED/UNCERTAIN/CONFIRMED, binding mismatch, lookup failure, legacy keyless absence) resolves to UNCERTAIN and never releases.",
+    "releaseExpired honors unknown as no release and transitions to UNCERTAIN; no test asserts a release under ambiguous evidence.",
+    "The operation key is persisted on reserve, exposed on the record/reservation, stable across CAS transitions and generations, and a divergent key is rejected without mutation.",
+    "The same resolved operation key feeds journal reserve/markEffectStarted/confirmEffect and the outbox idempotencyKey (R-ID-1/R-ID-5).",
+    "Sweep and recovery never execute an effect: the new suites assert toolExecutor and outbox are never called."
+  ],
+  "limitations": "see limitations.md",
+  "review": {
+    "status": "PENDING",
+    "reviewerRequirement": "critic that did not implement this remediation",
+    "requestedChecks": [
+      "challenge the absent-record proof rule for persisted keys (never-EXECUTING condition) and the legacy unknown fallback",
+      "verify the retry with a changed/absent caller key cannot execute the tool after markEffectStarted + TTL and that approval/journal end UNCERTAIN",
+      "confirm a later generation cannot rebind an approval to a different operationKey",
+      "confirm the two adjusted assertions in runtime-journal.test.ts are contract corrections, not weakened tests",
+      "confirm no file outside packages/agent-runtime/, packages/approval-engine/ and this evidence directory was touched"
+    ]
+  },
+  "nextAction": "Independent review; coordinator updates runtime state/backlog. Any byte change to the hashed files expires these verdicts."
+}

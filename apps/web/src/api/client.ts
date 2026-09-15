@@ -473,8 +473,14 @@ function requireAgentId(agentId: string): string {
   return normalizedAgentId
 }
 
-function operatorInit(identity: OperatorIdentity): RequestInit {
-  return { headers: operatorHeaders(identity) }
+function operatorInit(
+  identity: OperatorIdentity,
+  signal?: AbortSignal
+): RequestInit {
+  return {
+    headers: operatorHeaders(identity),
+    ...(signal ? { signal } : {})
+  }
 }
 
 export const apiClient = {
@@ -539,11 +545,12 @@ export const apiClient = {
 
   async searchJourneyOwners(
     identity: OperatorIdentity,
-    phone: string
+    phone: string,
+    signal?: AbortSignal
   ): Promise<{ matches: JourneyCandidateView[] }> {
     return request(
       `/v1/journeys/owners/search?phone=${encodeURIComponent(phone)}`,
-      operatorInit(identity)
+      operatorInit(identity, signal)
     )
   },
 
@@ -552,9 +559,11 @@ export const apiClient = {
     phone: string
     name?: string
     idempotencyKey: string
+    signal?: AbortSignal
   }): Promise<JourneyOwnerDraftView> {
     return request('/v1/journeys/owner-drafts', {
       method: 'POST',
+      ...(input.signal ? { signal: input.signal } : {}),
       headers: {
         'content-type': 'application/json',
         ...operatorHeaders(input.identity)
@@ -578,6 +587,7 @@ export const apiClient = {
     ownerDraftId?: string
     ownerCandidateId?: string
     name?: string
+    signal?: AbortSignal
   }): Promise<{ matches: JourneyCandidateView[] }> {
     const params = new URLSearchParams()
     if (input.ownerDraftId) params.set('ownerDraftId', input.ownerDraftId)
@@ -587,7 +597,7 @@ export const apiClient = {
     const suffix = params.toString() ? `?${params.toString()}` : ''
     return request(
       `/v1/journeys/patients/search${suffix}`,
-      operatorInit(input.identity)
+      operatorInit(input.identity, input.signal)
     )
   },
 
@@ -598,9 +608,11 @@ export const apiClient = {
     name: string
     species?: string
     idempotencyKey: string
+    signal?: AbortSignal
   }): Promise<JourneyPatientDraftView> {
     return request('/v1/journeys/patient-drafts', {
       method: 'POST',
+      ...(input.signal ? { signal: input.signal } : {}),
       headers: {
         'content-type': 'application/json',
         ...operatorHeaders(input.identity)
@@ -625,9 +637,11 @@ export const apiClient = {
     identity: OperatorIdentity
     patientDraftId: string
     candidateId: string
+    signal?: AbortSignal
   }): Promise<JourneyPatientDraftView> {
     return request(`/v1/journeys/patient-drafts/${input.patientDraftId}/link`, {
       method: 'POST',
+      ...(input.signal ? { signal: input.signal } : {}),
       headers: {
         'content-type': 'application/json',
         ...operatorHeaders(input.identity)
@@ -637,9 +651,10 @@ export const apiClient = {
   },
 
   async listJourneySlots(
-    identity: OperatorIdentity
+    identity: OperatorIdentity,
+    signal?: AbortSignal
   ): Promise<{ slots: JourneySlotView[] }> {
-    return request('/v1/journeys/slots', operatorInit(identity))
+    return request('/v1/journeys/slots', operatorInit(identity, signal))
   },
 
   async createJourneyAppointmentDraft(input: {
@@ -647,9 +662,11 @@ export const apiClient = {
     patientDraftId: string
     slot: string
     idempotencyKey: string
+    signal?: AbortSignal
   }): Promise<JourneyAppointmentDraftView> {
     return request('/v1/journeys/appointment-drafts', {
       method: 'POST',
+      ...(input.signal ? { signal: input.signal } : {}),
       headers: {
         'content-type': 'application/json',
         ...operatorHeaders(input.identity)
@@ -674,9 +691,11 @@ export const apiClient = {
     title: string
     description: string
     idempotencyKey: string
+    signal?: AbortSignal
   }): Promise<TaskView> {
     return request('/v1/journeys/tasks', {
       method: 'POST',
+      ...(input.signal ? { signal: input.signal } : {}),
       headers: {
         'content-type': 'application/json',
         ...operatorHeaders(input.identity)

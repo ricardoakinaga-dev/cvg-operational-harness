@@ -1,0 +1,319 @@
+
+ RUN  v4.1.11 /home/ricardo/cvg-agent-secretary-v2
+
+ ❯ apps/api/src/__tests__/identity-key-ring-rotation.test.ts (8 tests | 8 failed) 17ms
+     × accepts current and previous keys inside the bounded rotation window 4ms
+     × uses a default bounded window instead of accepting previous keys forever 1ms
+     × rejects previous keys at and after the bounded rotation window 0ms
+     × rejects revoked previous and current keys immediately 1ms
+     × requires a key identifier when a key ring is configured 1ms
+     × rejects unknown key identifiers and keys that do not match the signature 1ms
+     × rejects invalid rotation configuration 4ms
+     × still accepts static secrets without a key ring for legacy callers 4ms
+ ❯ apps/api/src/__tests__/identity-composition-wiring.test.ts (7 tests | 4 failed) 167ms
+     × rejects unknown identity modes and simulation mode in production startup 18ms
+     × builds a trusted resolver from the runtime key-ring environment 1ms
+     × never builds a resolver in simulation mode or without key material 0ms
+     × rejects an invalid runtime key ring without leaking its content 2ms
+ ❯ apps/api/src/__tests__/identity-trusted-resolver.test.ts (6 tests | 4 failed) 203ms
+     × does not fall back to simulation headers when no trusted resolver is configured 130ms
+     × authorizes only through the trusted resolver and ignores simulation-only headers 17ms
+     × rejects a trusted resolver identity that is not tenant-bound 14ms
+     × requires an identity for mutations in trusted mode even when the legacy flag is off 11ms
+ ❯ packages/shared/src/__tests__/auth-identity-mode.test.ts (3 tests | 3 failed) 8ms
+     × defaults to simulation only in test mode and fails closed otherwise 3ms
+     × accepts explicit modes and trims whitespace 0ms
+     × rejects unknown or malformed modes 3ms
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 19 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  apps/api/src/__tests__/identity-composition-wiring.test.ts > identity composition wiring > rejects unknown identity modes and simulation mode in production startup
+TypeError: Cannot read properties of undefined (reading 'family')
+ ❯ apps/api/src/__tests__/identity-composition-wiring.test.ts:153:6
+    151|         CVG_IDENTITY_MODE: 'trusted-resolver'
+    152|       })
+    153|     ).rejects.toThrow(/CVG_IDENTITY_MODE/)
+       |      ^
+    154|
+    155|     await expect(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-composition-wiring.test.ts > identity composition wiring > builds a trusted resolver from the runtime key-ring environment
+TypeError: createConfiguredOperatorIdentityResolver is not a function
+ ❯ apps/api/src/__tests__/identity-composition-wiring.test.ts:195:22
+    193|       })
+    194|     }
+    195|     const resolver = createConfiguredOperatorIdentityResolver(keyRingE…
+       |                      ^
+    196|     if (!resolver) throw new Error('Expected a configured resolver')
+    197|     const token = createTrustedOperatorIdentityToken(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-composition-wiring.test.ts > identity composition wiring > never builds a resolver in simulation mode or without key material
+TypeError: createConfiguredOperatorIdentityResolver is not a function
+ ❯ apps/api/src/__tests__/identity-composition-wiring.test.ts:214:7
+    212|   it('never builds a resolver in simulation mode or without key materi…
+    213|     expect(
+    214|       createConfiguredOperatorIdentityResolver({
+       |       ^
+    215|         NODE_ENV: 'test',
+    216|         CVG_IDENTITY_MODE: 'simulation',
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-composition-wiring.test.ts > identity composition wiring > rejects an invalid runtime key ring without leaking its content
+AssertionError: expected '(0 , __vite_ssr_import_3__.createConf…' to match /CVG_OPERATOR_IDENTITY_KEYRING/
+
+- Expected:
+/CVG_OPERATOR_IDENTITY_KEYRING/
+
++ Received:
+"(0 , __vite_ssr_import_3__.createConfiguredOperatorIdentityResolver) is not a function"
+
+ ❯ apps/api/src/__tests__/identity-composition-wiring.test.ts:247:21
+    245|     }
+    246|
+    247|     expect(message).toMatch(/CVG_OPERATOR_IDENTITY_KEYRING/)
+       |                     ^
+    248|     expect(message).not.toContain(SECRET)
+    249|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-key-ring-rotation.test.ts > identity key ring rotation > accepts current and previous keys inside the bounded rotation window
+TypeError: createLocalIdentityKeyRing is not a function
+ ❯ apps/api/src/__tests__/identity-key-ring-rotation.test.ts:43:18
+     41| describe('identity key ring rotation', () => {
+     42|   it('accepts current and previous keys inside the bounded rotation wi…
+     43|     const ring = createLocalIdentityKeyRing({
+       |                  ^
+     44|       current: ACTIVE,
+     45|       previous: [{ ...PREVIOUS, rotatedAt: NOW_SECONDS - 100 }],
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-key-ring-rotation.test.ts > identity key ring rotation > uses a default bounded window instead of accepting previous keys forever
+TypeError: createLocalIdentityKeyRing is not a function
+ ❯ apps/api/src/__tests__/identity-key-ring-rotation.test.ts:70:18
+     68|
+     69|   it('uses a default bounded window instead of accepting previous keys…
+     70|     const ring = createLocalIdentityKeyRing({
+       |                  ^
+     71|       current: ACTIVE,
+     72|       previous: [{ ...PREVIOUS, rotatedAt: NOW_SECONDS - 3_599 }]
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-key-ring-rotation.test.ts > identity key ring rotation > rejects previous keys at and after the bounded rotation window
+TypeError: createLocalIdentityKeyRing is not a function
+ ❯ apps/api/src/__tests__/identity-key-ring-rotation.test.ts:90:26
+     88|
+     89|   it('rejects previous keys at and after the bounded rotation window',…
+     90|     const boundaryRing = createLocalIdentityKeyRing({
+       |                          ^
+     91|       current: ACTIVE,
+     92|       previous: [{ ...PREVIOUS, rotatedAt: NOW_SECONDS - 600 }],
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-key-ring-rotation.test.ts > identity key ring rotation > rejects revoked previous and current keys immediately
+TypeError: createLocalIdentityKeyRing is not a function
+ ❯ apps/api/src/__tests__/identity-key-ring-rotation.test.ts:121:29
+    119|
+    120|   it('rejects revoked previous and current keys immediately', () => {
+    121|     const revokedPrevious = createLocalIdentityKeyRing({
+       |                             ^
+    122|       current: ACTIVE,
+    123|       previous: [{ ...PREVIOUS, rotatedAt: NOW_SECONDS - 10 }],
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-key-ring-rotation.test.ts > identity key ring rotation > requires a key identifier when a key ring is configured
+TypeError: createLocalIdentityKeyRing is not a function
+ ❯ apps/api/src/__tests__/identity-key-ring-rotation.test.ts:157:18
+    155|
+    156|   it('requires a key identifier when a key ring is configured', () => {
+    157|     const ring = createLocalIdentityKeyRing({ current: ACTIVE })
+       |                  ^
+    158|     const resolve = createTrustedOperatorIdentityResolver({
+    159|       keyRing: ring,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-key-ring-rotation.test.ts > identity key ring rotation > rejects unknown key identifiers and keys that do not match the signature
+TypeError: createLocalIdentityKeyRing is not a function
+ ❯ apps/api/src/__tests__/identity-key-ring-rotation.test.ts:174:18
+    172|
+    173|   it('rejects unknown key identifiers and keys that do not match the s…
+    174|     const ring = createLocalIdentityKeyRing({
+       |                  ^
+    175|       current: ACTIVE,
+    176|       previous: [{ ...PREVIOUS, rotatedAt: NOW_SECONDS - 10 }],
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-key-ring-rotation.test.ts > identity key ring rotation > rejects invalid rotation configuration
+AssertionError: expected [Function] to throw error matching /rotation window/ but got '(0 , __vite_ssr_import_2__.createLoca…'
+
+- Expected:
+/rotation window/
+
++ Received:
+"(0 , __vite_ssr_import_2__.createLocalIdentityKeyRing) is not a function"
+
+ ❯ apps/api/src/__tests__/identity-key-ring-rotation.test.ts:211:7
+    209|     expect(() =>
+    210|       createLocalIdentityKeyRing({ current: ACTIVE, rotationWindowSeco…
+    211|     ).toThrow(/rotation window/)
+       |       ^
+    212|     expect(() =>
+    213|       createLocalIdentityKeyRing({
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-key-ring-rotation.test.ts > identity key ring rotation > still accepts static secrets without a key ring for legacy callers
+AssertionError: expected [Function] to throw error matching /secret/ but got 'Cannot read properties of undefined (…'
+
+- Expected:
+/secret/
+
++ Received:
+"Cannot read properties of undefined (reading 'trim')"
+
+ ❯ apps/api/src/__tests__/identity-key-ring-rotation.test.ts:263:61
+    261|
+    262|     expect(resolve({ 'x-cvg-operator-token': token })).toEqual(IDENTIT…
+    263|     expect(() => createTrustedOperatorIdentityResolver({})).toThrow(/s…
+       |                                                             ^
+    264|   })
+    265| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-trusted-resolver.test.ts > trusted identity mode > does not fall back to simulation headers when no trusted resolver is configured
+AssertionError: expected 200 to be 401 // Object.is equality
+
+- Expected
++ Received
+
+- 401
++ 200
+
+ ❯ apps/api/src/__tests__/identity-trusted-resolver.test.ts:44:29
+     42|     await app.close()
+     43|
+     44|     expect(read.statusCode).toBe(401)
+       |                             ^
+     45|     expect((read.json() as Envelope<never>).error?.code).toBe('unautho…
+     46|     expect(mutation.statusCode).toBe(401)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-trusted-resolver.test.ts > trusted identity mode > authorizes only through the trusted resolver and ignores simulation-only headers
+AssertionError: expected 403 to be 200 // Object.is equality
+
+- Expected
++ Received
+
+- 200
++ 403
+
+ ❯ apps/api/src/__tests__/identity-trusted-resolver.test.ts:115:32
+    113|
+    114|     expect(denied.statusCode).toBe(401)
+    115|     expect(allowed.statusCode).toBe(200)
+       |                                ^
+    116|     expect((allowed.json() as Envelope<unknown[]>).success).toBe(true)
+    117|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-trusted-resolver.test.ts > trusted identity mode > rejects a trusted resolver identity that is not tenant-bound
+AssertionError: expected 200 to be 401 // Object.is equality
+
+- Expected
++ Received
+
+- 401
++ 200
+
+ ❯ apps/api/src/__tests__/identity-trusted-resolver.test.ts:134:33
+    132|     await app.close()
+    133|
+    134|     expect(response.statusCode).toBe(401)
+       |                                 ^
+    135|     expect((response.json() as Envelope<never>).error?.code).toBe('una…
+    136|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/19]⎯
+
+ FAIL  apps/api/src/__tests__/identity-trusted-resolver.test.ts > trusted identity mode > requires an identity for mutations in trusted mode even when the legacy flag is off
+AssertionError: expected 400 to be 401 // Object.is equality
+
+- Expected
++ Received
+
+- 401
++ 400
+
+ ❯ apps/api/src/__tests__/identity-trusted-resolver.test.ts:155:34
+    153|     await app.close()
+    154|
+    155|     expect(anonymous.statusCode).toBe(401)
+       |                                  ^
+    156|     expect((anonymous.json() as Envelope<never>).error?.code).toBe(
+    157|       'unauthorized'
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/19]⎯
+
+ FAIL  packages/shared/src/__tests__/auth-identity-mode.test.ts > operator identity mode contract > defaults to simulation only in test mode and fails closed otherwise
+TypeError: parseIdentityMode is not a function
+ ❯ packages/shared/src/__tests__/auth-identity-mode.test.ts:10:12
+      8| describe('operator identity mode contract', () => {
+      9|   it('defaults to simulation only in test mode and fails closed otherw…
+     10|     expect(parseIdentityMode(undefined, 'test')).toBe('simulation')
+       |            ^
+     11|     expect(parseIdentityMode('', 'test')).toBe('simulation')
+     12|     expect(parseIdentityMode(undefined, 'production')).toBe('trusted')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/19]⎯
+
+ FAIL  packages/shared/src/__tests__/auth-identity-mode.test.ts > operator identity mode contract > accepts explicit modes and trims whitespace
+TypeError: parseIdentityMode is not a function
+ ❯ packages/shared/src/__tests__/auth-identity-mode.test.ts:18:12
+     16|
+     17|   it('accepts explicit modes and trims whitespace', () => {
+     18|     expect(parseIdentityMode('simulation', 'production')).toBe('simula…
+       |            ^
+     19|     expect(parseIdentityMode(' trusted ', 'test')).toBe('trusted')
+     20|     expect(IdentityModeSchema.parse('trusted')).toBe('trusted')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/19]⎯
+
+ FAIL  packages/shared/src/__tests__/auth-identity-mode.test.ts > operator identity mode contract > rejects unknown or malformed modes
+AssertionError: expected [Function] to throw error matching /CVG_IDENTITY_MODE/ but got '(0 , __vite_ssr_import_1__.parseIdent…'
+
+- Expected:
+/CVG_IDENTITY_MODE/
+
++ Received:
+"(0 , __vite_ssr_import_1__.parseIdentityMode) is not a function"
+
+ ❯ packages/shared/src/__tests__/auth-identity-mode.test.ts:25:65
+     23|
+     24|   it('rejects unknown or malformed modes', () => {
+     25|     expect(() => parseIdentityMode('trusted-resolver', 'test')).toThro…
+       |                                                                 ^
+     26|       /CVG_IDENTITY_MODE/
+     27|     )
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/19]⎯
+
+
+ Test Files  4 failed (4)
+      Tests  19 failed | 5 passed (24)
+   Start at  12:59:04
+   Duration  4.88s (transform 787ms, setup 0ms, import 1.44s, tests 395ms, environment 2.52s)
+

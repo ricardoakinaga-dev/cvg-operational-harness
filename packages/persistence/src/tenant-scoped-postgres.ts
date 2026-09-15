@@ -146,6 +146,75 @@ export async function withTenantContext<T>(
   }
 }
 
+/**
+ * Runs a short transaction on one pool connection with the same session-local
+ * tenant context used by {@link withTenantContext}. The callback, its state
+ * mutations and any audit insert commit together; a failure rolls everything
+ * back and the tenant context is cleared before the connection returns to the
+ * pool. A connection whose context cleanup fails is destroyed instead of
+ * being reused with a dirty context.
+ */
+export async function withTenantTransaction<T>(
+  pool: PostgresPoolLike,
+  rawTenantId: TenantId,
+  operation: (client: PostgresPoolClient) => Promise<T>
+): Promise<T> {
+  const tenantId = TenantIdSchema.parse(rawTenantId)
+  const client = await pool.connect()
+  let released = false
+  const release = (error?: Error): void => {
+    if (released) return
+    released = true
+    client.release(error)
+  }
+  let cleanupFailure: Error | undefined
+  const clearTenantContext = async (): Promise<void> => {
+    try {
+      await client.query('SELECT set_config($1, $2, false)', [
+        CVG_TENANT_CONTEXT_SETTING,
+        ''
+      ])
+      const leaked = await client.query<{ tenant_id: string | null }>(
+        `SELECT NULLIF(current_setting($1, true), '') AS tenant_id`,
+        [CVG_TENANT_CONTEXT_SETTING]
+      )
+      if (leaked.rows.length !== 1 || leaked.rows[0]?.tenant_id !== null) {
+        throw new Error('PostgreSQL tenant context cleanup was not verified')
+      }
+    } catch (error) {
+      cleanupFailure = toError(error)
+      throw error
+    }
+  }
+  try {
+    await client.query('BEGIN')
+    await client.query('SELECT set_config($1, $2, false)', [
+      CVG_TENANT_CONTEXT_SETTING,
+      tenantId
+    ])
+    const result = await operation(client)
+    await clearTenantContext()
+    await client.query('COMMIT')
+    release()
+    return result
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK')
+    } catch (rollbackError) {
+      release(toError(rollbackError))
+      throw error
+    }
+    try {
+      await clearTenantContext()
+    } catch (cleanupError) {
+      release(toError(cleanupError))
+      throw error
+    }
+    release(cleanupFailure)
+    throw error
+  }
+}
+
 export class TenantScopedPostgresRuntimeRepository {
   constructor(private readonly pool: PostgresPoolLike) {}
 

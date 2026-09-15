@@ -1,0 +1,125 @@
+{
+  "taskId": "AAA-07",
+  "program": "AAA-20260912",
+  "title": "Lifecycle de aprovação com reserva, confirmação e recuperação",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "observedAt": "2026-09-12T22:20:00+00:00",
+  "executor": "agent-1 (approval front)",
+  "authority": "coordinator next-task 2026-09-12 (review-coordinator-rework/next-task-agent-1.md); controlled local scope only; no real/SQL BUILD, no human/production gate",
+  "inputs": {
+    "contract": "docs/02_spec/aaa_execution_contract.md rev2 sha256 9df1a05fdf36293d02e006917f191f0c96e8c1109e4a10d1e9fc49f5d9ef3ff7",
+    "addendum": "docs/04_audit/evidence/AAA/AAA-08/rework-aaa08-c1-f01/contract-addendum-proposal-action-binding.md approved as AAA03-R-ACT-v1 sha256 d67fc9155207659c6ee9c874c7ce17a2d187b5ea86b13c1b99144da24099b54f",
+    "dataContract": "docs/02_spec/aaa_data_api_contract.md v3 sha256 cebeddab (cited by coordinator)",
+    "review": "docs/04_audit/evidence/AAA/AAA-08/review-coordinator-rework/review.json"
+  },
+  "changedFiles": [
+    {
+      "path": "packages/approval-engine/src/contracts.ts",
+      "sha256": "83808b6d185663936455606fdea6dbc780bdb23b5352cb40f7dad69e11a95435",
+      "change": "new statuses RESERVED/EXECUTING/FAILED/UNCERTAIN; EffectEvidence schema; ApprovalReserveSchema; reservation/proposal fields on ApprovalRecord"
+    },
+    {
+      "path": "packages/approval-engine/src/engine.ts",
+      "sha256": "a0f4838695786ac44df1c8f0ae6ce9528d3467dd7d4ffba7071739e06fbadf36",
+      "change": "reserve/markExecuting/confirm/release/fail/markUncertain/reconcile/releaseExpired with CAS, fencing, binding revalidation, typed proofs and defensive cloning; legacy verifyAndConsume untouched"
+    },
+    {
+      "path": "packages/approval-engine/src/__tests__/approval-lifecycle.test.ts",
+      "sha256": "dff72c711ecea9db759465541f6115887e95092ac82369a984ed7683ed2ebc17",
+      "change": "new lifecycle regression suite (19 cases)"
+    },
+    {
+      "path": "packages/approval-engine/src/__tests__/approval-lifecycle-edges.test.ts",
+      "sha256": "56cfe365294ebd3c5b2c028d5d56b4a11dc97514a4aa080ec84cc3667993b207",
+      "change": "new fail-closed edge suite (10 cases) raising module branch coverage"
+    }
+  ],
+  "unchanged": [
+    "packages/approval-engine/src/store.ts sha256 c279bd43...",
+    "packages/approval-engine/src/index.ts sha256 8a2c0b9a...",
+    "legacy tests approval-engine.test.ts / approval-coverage.test.ts",
+    "runtime.ts, persistence, migrations, worker, package.json/lockfile, shared registries"
+  ],
+  "red": {
+    "command": "npx vitest run packages/approval-engine/src/__tests__/approval-lifecycle.test.ts",
+    "exitCode": 1,
+    "result": "18 failed | 1 passed before the lifecycle methods existed",
+    "artifact": "red-lifecycle.log"
+  },
+  "checks": [
+    {
+      "command": "npx vitest run packages/approval-engine/src/__tests__/",
+      "exitCode": 0,
+      "result": "4 files | 42 tests PASS",
+      "artifact": "green-focused-with-edges.log"
+    },
+    {
+      "command": "npx vitest run agent-runtime + policy-engine + chaos",
+      "exitCode": 0,
+      "result": "6 files | 62 tests PASS (legacy consumers preserved)",
+      "artifact": "cross-package-focused.log"
+    },
+    {
+      "command": "npm run test:coverage",
+      "exitCode": 0,
+      "result": "180 files PASS | 4 skipped; 942 tests PASS | 27 skipped; global 86.61/81.74/89.93/87.69 (thresholds 80 PASS)",
+      "artifact": "coverage-global.log"
+    },
+    {
+      "command": "module coverage: vitest --coverage --coverage.include='packages/approval-engine/src/**'",
+      "exitCode": 0,
+      "result": "93.41 statements / 85.30 branches / 95.16 functions / 94.44 lines (before edges: 87.72/76.99 → threshold fixed by tests, no bar reduction)",
+      "artifact": "coverage-approval-engine.log"
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "typecheck.log"
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "lint.log"
+    },
+    {
+      "command": "prettier --check (changed files)",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "green-focused-with-edges.log"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "PASS",
+      "artifact": "diff-stat.txt"
+    }
+  ],
+  "guarantees": [
+    "reserve yields RESERVED and executionCount 0; EXECUTED only after confirm with executionRef + effect_confirmed evidence",
+    "one reservation winner; loser and old tokens fail reservation_mismatch/already_reserved",
+    "release/fail require explicit no_effect evidence; missing/ambiguous/throwing evidence yields UNCERTAIN (no blind retry)",
+    "CAS on tenant + approvalId + expected status; fencing by reservationId; replay of the same confirmation does not double count",
+    "binding revalidated on reserve: tenant, action, resource, payload hash, proposalHash, agent/version, policy version, capability",
+    "defensive cloning: mutating returned records or input payloads never changes stored status/hash/payload"
+  ],
+  "limitations": [
+    "In-memory store and injected clock only; PostgreSQL durability/TTL proof belongs to AAA-16 and the durable journal to AAA-10",
+    "The old runtime still calls verifyAndConsume; AAA-07 alone does not close F02 until AAA-09 migrates (see handoff)",
+    "Approval-engine critical-branch coverage 84.48% (engine.ts) is below the proposed 95% critical-module target in AAA-04; recorded, not waived",
+    "No real action, provider/channel, SQL/migration, commit or deploy was executed"
+  ],
+  "review": {
+    "status": "PENDING",
+    "reviewerRequirement": "coordinator or another agent that did not implement AAA-07; no self-approval",
+    "requestedChecks": [
+      "replay reserve/confirm/fencing scenarios and confirm EXECUTED requires executionRef + typed proof",
+      "challenge the TTL sweep: no path may release without no_effect proof or execute an effect",
+      "verify tenant/proposal/agent/policy divergence and object mutation defenses",
+      "confirm legacy verifyAndConsume behavior unchanged and consumers green",
+      "confirm no shared registry, runtime, persistence, migration or frozen contract was modified"
+    ]
+  },
+  "nextAction": "Independent review; AAA-09 consumes the new API via handoff-agent-09.md; shared registries are integrated by the coordinator"
+}

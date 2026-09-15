@@ -1,0 +1,172 @@
+{
+  "taskId": "AAA-13",
+  "program": "AAA-20260912",
+  "title": "Vincular certificado ao candidato executado",
+  "status": "REVIEW",
+  "reviewStatus": "PENDING_INDEPENDENT_REVIEW",
+  "owner": "agent-3 (quality/certification)",
+  "observedAt": "2026-09-12T21:35:00Z",
+  "authority": "user brief 2026-09-12 controlled local corrections; G_SPEC human registration pending; no commit/deploy",
+  "finding": "AUD-20260912-F11",
+  "problemFixed": "The historical verifier re-hashed stored reports but never proved that the current sources correspond to the tested candidate (0558 F11).",
+  "changes": [
+    {
+      "path": "scripts/lib/certification-rules.mjs",
+      "sha256": "fdb816f636ae2e6754b04a42af61fe9726e0121bc755f8ec2539a380bc13774e",
+      "summary": "candidate schema (aaa-candidate-v1), scope exclusions, collectCandidateFiles, computeCandidateId, diffCandidateFiles, verifyQualification; result/manifest schemas accept optional candidate binding"
+    },
+    {
+      "path": "scripts/phase10-certify.mjs",
+      "sha256": "f95901f85016b3531ffcac1240390e23dbc7c49d8c2df0fcf5d4f41bbfd914d9",
+      "summary": "pins candidate at run start, writes certification/candidate-manifest.json, detects drift after gates (candidate-drift.json) and denies exit 0; result/manifest carry candidateId"
+    },
+    {
+      "path": "scripts/phase10-verify.mjs",
+      "sha256": "a60cdadbf936a06de01e23d28afd941f38a18148556bd8a6e32563d80d7f46ca",
+      "summary": "three modes: current candidate (recompute + drift denial), --historical --base (self-contained archive), --self-test (N1-N9 attacks)"
+    },
+    {
+      "path": "package.json",
+      "sha256": "410f0f8a332384034eeff4ce3d374a468ec4af5a7660e050a25478c8509810cb",
+      "summary": "scripts certification:verify (current), certification:verify:historical, certification:self-test"
+    },
+    {
+      "path": "certification/negative-validation.json",
+      "sha256": "cac011deb608cd727ca3d8a6b3bf87a171ef403f9c41f3559d574e658cbef02c",
+      "summary": "9/9 attacks rejected by executable self-test"
+    },
+    {
+      "path": "certification/logs/historical/2026-09-11-phase10/",
+      "sha256": null,
+      "summary": "Phase 10 certificate preserved byte-exact; historical mode verifies all 27 artifact hashes against it"
+    }
+  ],
+  "modes": {
+    "HISTORICAL_COHERENCE": "verifies stored artifact hashes against the preserved archive; never qualifies the current tree",
+    "CURRENT_CANDIDATE": "recomputes candidateId from the live working tree; any byte change denies qualification",
+    "HUMAN_RELEASE_AUTHORIZATION": "not automatable; no script produces it"
+  },
+  "candidateBinding": {
+    "schema": "aaa-candidate-v1",
+    "scope": "tracked + untracked relevant sources, config, manifests/lockfile, contracts; evidence and generated certification outputs excluded",
+    "exclusions": [
+      "node_modules/",
+      "coverage/",
+      "test-results/",
+      "playwright-report/",
+      "blob-report/",
+      "docs/04_audit/evidence/",
+      "apps/web/dist/",
+      "certification/logs/",
+      "certification/historical/",
+      "generated certification outputs (manifest, result, sbom, license/eval/chaos/load/restore/negative reports)"
+    ],
+    "dryRun": {
+      "candidateId": "cd60f817d61714557383981f9ab5f55dd63ec8460db43f2a19abef6583b40f8c",
+      "files": 793,
+      "dirty": true,
+      "head": "512bc11e80fbf7c7b8baf6263aacc811ff829309",
+      "driftWithinRun": 0,
+      "note": "snapshot at 2026-09-12T21:2x; not a certificate"
+    }
+  },
+  "negativeTests": {
+    "command": "npm run certification:self-test",
+    "exitCode": 0,
+    "verdict": "PASS",
+    "checks": [
+      {
+        "id": "N1",
+        "attack": "source change after tests",
+        "observed": "REJECTED"
+      },
+      {
+        "id": "N2",
+        "attack": "configuration/lockfile change",
+        "observed": "REJECTED"
+      },
+      {
+        "id": "N3",
+        "attack": "omitted relevant source",
+        "observed": "REJECTED"
+      },
+      { "id": "N4", "attack": "forged report or log", "observed": "REJECTED" },
+      { "id": "N5", "attack": "missing required gate", "observed": "REJECTED" },
+      {
+        "id": "N6",
+        "attack": "mandatory test skipped",
+        "observed": "REJECTED"
+      },
+      {
+        "id": "N7",
+        "attack": "non-zero exit presented as PASS",
+        "observed": "REJECTED"
+      },
+      {
+        "id": "N8",
+        "attack": "old evidence reused as current",
+        "observed": "REJECTED"
+      },
+      {
+        "id": "N9",
+        "attack": "contract changed after review",
+        "observed": "REJECTED"
+      }
+    ]
+  },
+  "validation": [
+    {
+      "check": "npm run certification:self-test",
+      "result": "PASS 9/9 attacks rejected",
+      "artifact": "self-test.log"
+    },
+    {
+      "check": "npm run certification:verify:historical",
+      "result": "PASS 27 historical hashes; CONDITIONAL_GO/AAA_CONTROLLED labeled historical-only",
+      "artifact": "historical-verify.log"
+    },
+    {
+      "check": "npm run certification:verify (current)",
+      "result": "exit 1: legacy certificate has no candidate binding and artifact hashes do not match the modified tree; current qualification correctly denied",
+      "artifact": "default-verify.log"
+    },
+    {
+      "check": "candidate collector dry run",
+      "result": "793 files in 0.26s; deploy/ and untracked contract included; evidence/generated/node_modules/coverage excluded; drift 0",
+      "artifact": "candidate-collector-dryrun.log"
+    },
+    {
+      "check": "npm run typecheck / npm run lint",
+      "result": "PASS",
+      "artifact": "typecheck.log, lint.log"
+    },
+    {
+      "check": "tracked-files format:check",
+      "result": "PASS (all tracked files prettier-clean)",
+      "artifact": "format-check-tracked.log"
+    },
+    {
+      "check": "npm run certify (full current certificate)",
+      "result": "NOT_RUN: needs a coordinated window (all gates, ~15 min) and a stable tree; any concurrent lane edit would be reported as CANDIDATE_DRIFT",
+      "artifact": null
+    }
+  ],
+  "review": {
+    "status": "PENDING",
+    "reviewerRequirement": "agent that did not implement AAA-13 (agent-1 or agent-2)",
+    "requestedChecks": [
+      "run npm run certification:self-test and confirm 9/9 attacks are rejected",
+      "run npm run certification:verify:historical and confirm the Phase 10 archive is coherent and labeled historical",
+      "confirm candidate scope does not exclude relevant untracked sources and does not include evidence",
+      "inspect phase10-certify candidate pinning and drift denial",
+      "confirm no certificate can be produced without executing the required gates"
+    ]
+  },
+  "limitations": [
+    "No full current certificate was generated; the legacy certificate remains historical and does not qualify the current tree",
+    "candidateId cd60f817 is a dry-run snapshot, not a qualification",
+    "Historical archive relocated to certification/logs/historical/ (prettier-ignored) to preserve bytes without editing .prettierignore",
+    "Format gate for the whole tree still flags other lanes' generated evidence and one policy-engine test file; tracked-file scope is green"
+  ],
+  "nextAction": "Independent review; then schedule a coordinated certify window on a frozen tree to produce the first CURRENT_CANDIDATE certificate"
+}

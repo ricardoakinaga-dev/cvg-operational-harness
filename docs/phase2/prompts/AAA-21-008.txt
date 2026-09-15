@@ -1,0 +1,1652 @@
+# 453. ONE EXECUTION, FUTURE MANY STEPS
+
+Mesmo que Runtime V1 execute apenas um ciclo lógico nesta Phase, o modelo
+de Execution NÃO deve impedir futuramente:
+
+one execution
+→ many reasoning/action steps.
+
+Não codifique invariants como:
+
+model_calls = 1 forever
+tool_calls = 1 forever.
+
+Esses limites devem ser orçamento/configuração do Runtime atual, não verdade
+arquitetural do Harness.
+
+---
+
+# 454. STEP HISTORY FUTURE COMPATIBILITY
+
+Prepare arquitetura para futura coleção de:
+
+ExecutionStep
+
+sem obrigatoriamente criar tabela/infra completa agora.
+
+Possíveis tipos futuros:
+
+MODEL
+TOOL
+KNOWLEDGE
+POLICY
+APPROVAL
+USER_INPUT
+VERIFY
+HANDOFF
+STOP.
+
+Documente compatibilidade.
+
+---
+
+# 455. STEP CHECKPOINT FUTURE COMPATIBILITY
+
+Runtime V2 poderá futuramente persistir:
+
+step completed
+→ checkpoint
+→ resume.
+
+Phase 2 deve garantir que Worker/Execution lifecycle não dependa da execução
+inteira ocorrer dentro de uma única função não retomável.
+
+---
+
+# 456. EXECUTION STATE != AGENT COGNITIVE STATE
+
+Diferencie:
+
+execution lifecycle state
+
+de:
+
+future cognitive state.
+
+Execution lifecycle:
+
+QUEUED
+RUNNING
+WAITING_APPROVAL
+SUCCEEDED
+etc.
+
+Cognitive state futuro:
+
+goal
+plan
+observations
+open questions
+evidence
+working memory.
+
+Não misture agora.
+
+---
+
+# 457. PERSISTENCE LAYERING
+
+Prepare persistence para suportar futuramente:
+
+execution metadata
+execution state
+agent checkpoint
+effect journal
+audit
+
+como conceitos separados.
+
+Não coloque tudo em um único JSON blob sem contrato.
+
+---
+
+# 458. JSONB DISCIPLINE
+
+JSONB pode ser usado quando fizer sentido.
+
+Mas não esconda toda arquitetura dentro de:
+
+payload JSONB
+state JSONB
+
+sem invariants ou schemas.
+
+Use campos estruturados para identidades/estado crítico.
+
+---
+
+# 459. SCHEMA EVOLUTION
+
+Quando usar JSON estruturado:
+
+inclua version quando necessário.
+
+Future migration precisa saber interpretar snapshot antigo.
+
+---
+
+# 460. SNAPSHOT VERSION
+
+Considere:
+
+snapshotVersion
+
+para ExecutionSnapshot futuro.
+
+Não é obrigatório se contratos atuais já possuem versioning suficiente.
+
+---
+
+# 461. RESULT VERSION
+
+Resultado persistido também pode necessitar schemaVersion.
+
+Avalie.
+
+---
+
+# 462. API VERSION
+
+Se endpoint público for criado:
+
+prefira versionamento explícito:
+
+/v1/...
+
+ou contrato equivalente.
+
+Não crie `/v2` sem necessidade.
+
+---
+
+# 463. BACKWARD COMPATIBILITY
+
+Como este Harness ainda não está em produção, mudanças incompatíveis são
+aceitáveis quando melhoram a arquitetura.
+
+Mesmo assim:
+
+documente breaking changes.
+
+---
+
+# 464. LEGACY COMPATIBILITY IS NOT CORE REQUIREMENT
+
+Não distorça o novo Harness apenas para manter APIs internas antigas da
+Secretary.
+
+Legacy pode receber adapter de compatibilidade.
+
+Core deve permanecer limpo.
+
+---
+
+# 465. COMPATIBILITY ADAPTER
+
+Quando necessário:
+
+legacy input
+→ compatibility adapter
+→ canonical ExecutionRequest.
+
+Não ensine o Core a entender formatos antigos.
+
+---
+
+# 466. PRODUCT-SPECIFIC TRANSFORMATION
+
+Qualquer transformação como:
+
+WhatsApp payload
+Chatwoot payload
+Secretary intent
+appointment semantics
+
+fica fora do Core.
+
+---
+
+# 467. DOMAIN EVENT VS HARNESS EVENT
+
+Diferencie futuramente:
+
+Harness events:
+
+execution.started
+tool.completed
+
+Domain events:
+
+appointment.created
+patient.updated.
+
+Harness não deve definir catálogo do domínio hospitalar.
+
+---
+
+# 468. DOMAIN EVENT TRANSPORT
+
+Se synthetic Tool produzir evento de domínio de teste:
+
+trate apenas como fixture.
+
+Não introduza hospital semantics.
+
+---
+
+# 469. EVENT NAMING
+
+Use naming consistente e documentado.
+
+Exemplo:
+
+execution.received
+execution.queued
+execution.started
+tool.completed.
+
+Evite mistura:
+
+ExecutionStarted
+execution_started
+EXECUTION.START
+
+sem motivo.
+
+---
+
+# 470. EVENT VERSIONING
+
+Eventos duráveis que cruzam processo devem poder evoluir.
+
+Use versioning quando relevante.
+
+Não overengineer eventos internos efêmeros.
+
+---
+
+# 471. OUTBOX EVENT VERSION
+
+Se Outbox carrega eventos duráveis, avalie:
+
+eventType
+eventVersion.
+
+---
+
+# 472. CONSUMER COMPATIBILITY
+
+Worker deve rejeitar/falhar claramente com versão de mensagem incompatível.
+
+Não interpretar silenciosamente formato desconhecido.
+
+---
+
+# 473. POISON MESSAGE
+
+Mensagem inválida:
+
+→ quarantine/terminal
+→ audit
+→ Worker continua.
+
+---
+
+# 474. SCHEMA VALIDATION ON QUEUE INPUT
+
+Mesmo dados vindos do próprio DB/outbox devem ser validados na boundary
+do consumer quando apropriado.
+
+Persisted data também pode estar stale/corrompida.
+
+---
+
+# 475. DATABASE CORRUPTION ASSUMPTION
+
+Não tente resolver corrupção física do PostgreSQL na aplicação.
+
+Mas detecte inconsistências lógicas quando possível.
+
+---
+
+# 476. INVARIANT VIOLATION
+
+Quando estado impossível for encontrado:
+
+não "conserte" silenciosamente.
+
+Produza:
+
+STATE_INVARIANT_VIOLATION
+
+ou equivalente.
+
+Audit/log.
+
+---
+
+# 477. FAIL CLOSED ON GOVERNANCE CORRUPTION
+
+Se policy/approval state estiver inconsistente:
+
+não execute efeito.
+
+---
+
+# 478. FAIL CLOSED ON TENANT AMBIGUITY
+
+Se tenant não puder ser determinado com segurança:
+
+não execute.
+
+---
+
+# 479. FAIL CLOSED ON TOOL IDENTITY AMBIGUITY
+
+Se Tool/version não puder ser resolvida deterministicamente:
+
+não execute.
+
+---
+
+# 480. FAIL CLOSED ON APPROVAL BINDING MISMATCH
+
+Mismatch de:
+
+action
+resource
+payload hash
+tenant
+version
+
+→ deny.
+
+---
+
+# 481. SAFE DEFAULTS
+
+Default de segurança deve favorecer:
+
+deny
+no effect
+wait for clarification/operator
+
+em vez de ação irreversível.
+
+---
+
+# 482. RETRY IS NOT ALWAYS SAFE
+
+Retry automatic só quando classificação indicar segurança suficiente.
+
+Especialmente Tools NON_IDEMPOTENT:
+
+não retry cegamente.
+
+---
+
+# 483. TOOL RETRY POLICY
+
+Tool descriptor ou runtime policy deve permitir distinguir:
+
+safe retry
+reconcile first
+manual intervention
+never retry.
+
+---
+
+# 484. MODEL RETRY POLICY
+
+Model calls geralmente são mais seguras para retry que external side effects,
+mas ainda devem respeitar:
+
+cost
+deadline
+attempt budget.
+
+---
+
+# 485. POLICY RETRY
+
+Policy decision não é "retryable error" por default.
+
+DENY é decisão.
+
+Infrastructure failure no Policy provider é outra categoria.
+
+---
+
+# 486. APPROVAL WAIT IS NOT FAILURE
+
+WAITING_APPROVAL não deve inflar:
+
+executions_failed_total.
+
+Use métrica própria.
+
+---
+
+# 487. WAITING_USER FUTURE SEMANTICS
+
+Mesma regra futura:
+
+WAITING_USER não é failure.
+
+---
+
+# 488. HUMAN_TAKEOVER SEMANTICS
+
+Human takeover também é outcome controlado, não necessariamente erro.
+
+---
+
+# 489. SUCCESS SEMANTICS
+
+Defina claramente o que significa SUCCEEDED nesta Phase:
+
+Runtime concluiu seu objetivo single-pass governado e seus efeitos obrigatórios
+foram confirmados conforme garantias disponíveis.
+
+Não use SUCCEEDED se effect outcome for UNKNOWN.
+
+---
+
+# 490. PARTIAL SUCCESS
+
+Avalie necessidade futura de:
+
+PARTIAL_SUCCESS.
+
+Não introduza se Runtime V1 não precisa.
+
+Mas documente caso de múltiplos efeitos futuros.
+
+---
+
+# 491. COMPENSATION
+
+Não implementar SAGA/compensating actions nesta fase sem necessidade.
+
+Mas documente que future multi-effect workflows podem exigir.
+
+---
+
+# 492. IRREVERSIBLE EFFECTS
+
+Tool descriptor pode futuramente indicar:
+
+reversible
+compensatable
+irreversible.
+
+Não obrigatório agora.
+
+---
+
+# 493. TOOL RISK MODEL
+
+Preserve/expanda risk classification já existente.
+
+Evite hardcode em UI/produto.
+
+---
+
+# 494. APPROVAL POLICY CAN EVOLVE
+
+Approval requirement deve vir da governança/policy e não ser atributo
+absoluto hardcoded exclusivamente na Tool.
+
+Tool pode declarar risk metadata.
+
+Policy decide.
+
+---
+
+# 495. POLICY INPUT
+
+Policy deve receber contexto suficiente:
+
+tenant
+operator
+agent
+capability
+action
+resource
+data classification
+risk
+execution context.
+
+Não passe conversa inteira sem necessidade.
+
+---
+
+# 496. POLICY OUTPUT
+
+Decision deve ser estruturada:
+
+ALLOW
+DENY
+REQUIRE_APPROVAL
+
+com:
+
+policyId
+version
+reason/code
+obligations quando suportado.
+
+---
+
+# 497. FUTURE POLICY OBLIGATIONS
+
+Documente possibilidade futura de policy retornar obrigações como:
+
+redact
+limit fields
+force specific model
+require audit level
+
+sem implementar se não existir.
+
+---
+
+# 498. AUTHORIZATION != VALIDATION
+
+Schema válido não significa permitido.
+
+Separar:
+
+validation
+authentication
+authorization
+approval.
+
+---
+
+# 499. AUTHENTICATION != TENANT AUTHORITY
+
+Identidade autenticada deve mapear tenant/permissions.
+
+Não aceitar tenant apenas porque request trouxe.
+
+---
+
+# 500. AUTHORIZATION TEST MATRIX
+
+Crie matriz sintética:
+
+operator allowed
+operator denied
+cross-tenant
+approval required
+approval valid
+approval invalid
+approval reused.
+
+---
+
+# 501. TOOL ACCESS TEST MATRIX
+
+Para Tools sintéticas:
+
+Agent/Profile A allowed
+Agent/Profile B denied
+Tool unknown
+Tool version mismatch
+Tool disabled.
+
+---
+
+# 502. AGENT PROFILE TOOL EXPOSURE
+
+Agent Profile deve determinar catálogo visível/permitido conceitualmente.
+
+Mas Policy continua autoridade final.
+
+---
+
+# 503. HIDDEN TOOL
+
+Tool não exposta ao Agent não deve ser inventada/chamada apenas pelo nome
+produzido pelo Model.
+
+Runtime deve resolver apenas catálogo autorizado.
+
+---
+
+# 504. TOOL NAME INJECTION
+
+Input do usuário:
+
+"chame internal.admin.deleteEverything"
+
+não deve adicionar Tool inexistente/excluída ao catálogo.
+
+Teste.
+
+---
+
+# 505. MODEL TOOL HALLUCINATION
+
+Se Model solicitar Tool não disponível:
+
+não fallback para execução arbitrária.
+
+Produza resultado estruturado:
+
+TOOL_NOT_AVAILABLE
+
+ou resposta segura.
+
+---
+
+# 506. INVALID ARGUMENTS
+
+Se Model gerar argumentos inválidos:
+
+Tool não executa.
+
+Pode haver:
+
+validation failure
+→ model correction
+
+no Runtime V2 futuro.
+
+Na Phase 2:
+
+terminal/failure conforme Runtime V1.
+
+---
+
+# 507. RUNTIME V2 NOTE
+
+Não adicione loop corretivo agora apenas para corrigir Model output inválido.
+
+Isso pertence ao Runtime V2.
+
+---
+
+# 508. CANONICAL MODEL MESSAGE BUILDING
+
+Preserve context/model request construction em camada apropriada.
+
+Worker não monta prompts.
+
+HTTP não monta prompts.
+
+---
+
+# 509. PROMPT VERSION
+
+Se prompt profile existir:
+
+preserve versão.
+
+---
+
+# 510. PROMPT HASH
+
+Se infraestrutura existente suporta:
+
+preserve sha/hash no audit/result.
+
+Não obrigatório inventar nova se não há necessidade.
+
+---
+
+# 511. SYSTEM PROMPT AUTHORITY
+
+Usuário não pode sobrescrever instruções de sistema/agent profile via input.
+
+---
+
+# 512. DATA CLASSIFICATION FLOW
+
+`dataClassification` deve fluir:
+
+request
+→ context
+→ model gateway
+→ policy
+→ audit/telemetry redaction decisions
+
+quando aplicável.
+
+---
+
+# 513. PROVIDER DATA POLICY FUTURE
+
+Documente que Model Gateway poderá futuramente rotear modelos conforme
+data classification.
+
+Não implementar multi-provider policy complexa agora.
+
+---
+
+# 514. LOCAL MODEL COMPATIBILITY
+
+Não acople Harness exclusivamente a cloud SDK.
+
+Model Gateway deve continuar compatível com provider local.
+
+---
+
+# 515. API PROVIDER COMPATIBILITY
+
+Da mesma forma, providers externos continuam adapters.
+
+---
+
+# 516. MODEL GATEWAY ROUTING
+
+Phase 2 não precisa implementar roteamento inteligente.
+
+Mas preserve interface.
+
+---
+
+# 517. MODEL FALLBACK
+
+Se já existir fallback, audite impacto de idempotency/cost.
+
+Não adicionar fallback cego.
+
+---
+
+# 518. MODEL FALLBACK AUDIT
+
+Se fallback ocorrer:
+
+registre provider/model efetivamente usado.
+
+---
+
+# 519. COST BUDGET ACROSS RETRIES
+
+Technical retries de model call consomem budget conforme política.
+
+Não resetar custo invisivelmente a cada attempt.
+
+---
+
+# 520. EXECUTION COST ACCUMULATION
+
+Future Runtime V2 exigirá custo acumulado multi-step.
+
+Phase 2 deve evitar modelar cost como campo exclusivo da única call.
+
+---
+
+# 521. TOOL COST FUTURE
+
+Tool pode futuramente possuir custo.
+
+Não obrigatório agora.
+
+---
+
+# 522. DEADLINE ACROSS RETRIES
+
+Deadline global da execution não deve reiniciar a cada technical retry, salvo
+semântica explícita.
+
+---
+
+# 523. RETRY BUDGET
+
+Retries devem respeitar:
+
+maxAttempts
+global deadline
+cost budget.
+
+---
+
+# 524. RESUME DEADLINE
+
+Approval pause pode exigir semântica diferente para deadline.
+
+Defina:
+
+deadline inclui tempo de espera?
+
+ou:
+
+active execution time?
+
+Faça decisão explícita.
+
+---
+
+# 525. APPROVAL TTL VS EXECUTION DEADLINE
+
+São conceitos diferentes.
+
+Documente.
+
+---
+
+# 526. QUEUE WAIT VS EXECUTION DURATION
+
+Telemetry deve diferenciar:
+
+queueWaitMs
+processingDurationMs
+totalElapsedMs.
+
+---
+
+# 527. APPROVAL WAIT METRIC
+
+Se possível:
+
+approval_wait_duration
+
+sem high-cardinality labels.
+
+---
+
+# 528. RETRY METRIC
+
+Registre:
+
+execution_retries_total
+por error code normalizado.
+
+---
+
+# 529. DEAD-LETTER METRIC
+
+Registre terminal retry exhaustion.
+
+---
+
+# 530. WORKER HEALTH METRIC
+
+Pelo menos:
+
+worker_active
+worker_claims
+worker_errors
+
+ou equivalente.
+
+---
+
+# 531. QUEUE DEPTH METRIC
+
+Quando barato.
+
+---
+
+# 532. LEASE RECOVERY METRIC
+
+stale_claim_recovered_total
+
+quando aplicável.
+
+---
+
+# 533. DUPLICATE PREVENTION METRIC
+
+idempotency_deduplicated_total
+
+effect_deduplicated_total
+
+quando útil.
+
+---
+
+# 534. AUDIT FAILURE METRIC
+
+Essencial se audit fail-closed/deferred.
+
+---
+
+# 535. TELEMETRY SELF-FAILURE
+
+Não gere cascata infinita tentando emitir métrica sobre falha da própria
+telemetry.
+
+---
+
+# 536. LOG CORRELATION FORMAT
+
+Padronize nomes de campos.
+
+Exemplo:
+
+execution_id
+correlation_id
+tenant_id
+attempt
+
+ou camelCase conforme convenção existente.
+
+Não misture.
+
+---
+
+# 537. STRUCTURED LOGGER CHILD CONTEXT
+
+Quando logger suportar, use child context por execution/attempt.
+
+---
+
+# 538. NO RAW REQUEST LOGGING
+
+Não logue request body inteiro por default.
+
+---
+
+# 539. NO RAW MODEL INPUT LOGGING
+
+Especialmente em produção futura.
+
+Test fixtures podem ser diferentes, mas explícitas.
+
+---
+
+# 540. NO RAW MODEL OUTPUT LOGGING
+
+Evite conteúdo sensível.
+
+Metadata é suficiente para observabilidade.
+
+---
+
+# 541. AUDIT VS CONTENT STORAGE
+
+Se produto futuro precisar armazenar conversa completa:
+
+isso pertence a conversation/domain persistence, não necessariamente Audit.
+
+---
+
+# 542. PHASE 2 DATA MODEL REVIEW
+
+Antes de finalizar, execute revisão específica do schema para garantir que
+não está acoplado a single-pass de forma destrutiva.
+
+---
+
+# 543. PHASE 2 PUBLIC API REVIEW
+
+Revise API pública para garantir que não expõe detalhes temporários da
+implementação.
+
+---
+
+# 544. PHASE 2 DEPENDENCY REVIEW
+
+Gere/inspecione graph final.
+
+---
+
+# 545. PHASE 2 SECURITY RE-REVIEW
+
+Após implementação, não antes apenas.
+
+Código final pode introduzir novos riscos.
+
+---
+
+# 546. PHASE 2 CONCURRENCY RE-REVIEW
+
+Especialmente após qualquer repair do crítico.
+
+---
+
+# 547. PHASE 2 MIGRATION RE-TEST
+
+Qualquer alteração de migration após teste PostgreSQL invalida prova antiga.
+
+Reexecute.
+
+---
+
+# 548. PHASE 2 FINAL GATE ORDER
+
+Execute em ordem:
+
+1. format
+2. typecheck
+3. lint
+4. build
+5. architecture tests
+6. unit/contract tests
+7. evals
+8. PostgreSQL integration
+9. concurrency tests
+10. fault injection
+11. process restart proof
+12. security checks
+13. evidence generation
+14. independent critic
+15. repairs if needed
+16. complete re-run of affected gates
+17. final sentinel.
+
+---
+
+# 549. DO NOT SHORT-CIRCUIT FINAL GATES
+
+Não finalize porque "a maior parte passou".
+
+Critical failure deve ser resolvido/classificado adequadamente.
+
+---
+
+# 550. TEST TIMEOUT DISCIPLINE
+
+Timeout deve refletir cenário realista.
+
+Não aumentar para 10 minutos apenas para esconder deadlock.
+
+---
+
+# 551. DEADLOCK DETECTION
+
+Se concurrency test trava:
+
+investigue locks/transações.
+
+Não classifique apenas como flaky.
+
+---
+
+# 552. DB CONNECTION LOSS
+
+Quando possível, simule perda/reconexão.
+
+Pelo menos documente recovery behavior.
+
+---
+
+# 553. POSTGRES RESTART
+
+Se ambiente de teste permitir e custo razoável:
+
+teste DB restart durante queue/workflow.
+
+Se não:
+
+NOT_PROVEN.
+
+Não obrigatório para PASS básico se demais durability proofs forem D4/D5
+conforme definição adotada.
+
+---
+
+# 554. BACKUP / RESTORE
+
+Fora do core Phase 2, mas necessário para Production GO.
+
+Marque NOT_PROVEN se não executado.
+
+---
+
+# 555. PRODUCTION PROVIDER CERTIFICATION
+
+Também fora do core Phase.
+
+Synthetic provider não certifica OpenAI/Google/local vLLM reais.
+
+---
+
+# 556. PRODUCTION TOOL CERTIFICATION
+
+Synthetic Tool não certifica:
+
+agenda
+WhatsApp
+HIS
+Odoo.
+
+Cada adapter real precisará certificação posterior.
+
+---
+
+# 557. HARNESS CERTIFICATION != PRODUCT CERTIFICATION
+
+Uma engine segura não prova que Secretary/Corp estão seguros.
+
+Produtos terão seus próprios evals/policies/tools.
+
+Documente.
+
+---
+
+# 558. PRODUCT ONBOARDING FUTURE
+
+Futuramente um produto deverá fornecer aproximadamente:
+
+AgentProfile
+Skills
+Tools/Adapters
+Policies
+Knowledge
+Channel integration
+Product UI.
+
+Harness fornece engine.
+
+---
+
+# 559. SECRETARY FUTURE CONNECTION
+
+Não implementar agora.
+
+Mas documente arquitetura:
+
+Secretary
+ ↓
+Secretary Profile
+ ↓
+Secretary Skills
+ ↓
+CVG Operational Harness.
+
+---
+
+# 560. CORP FUTURE CONNECTION
+
+Igualmente:
+
+CVG Corp
+ ↓
+Corp Profiles/Skills
+ ↓
+CVG Operational Harness.
+
+---
+
+# 561. RICK FUTURE CONNECTION
+
+Se futuramente desejado:
+
+Rick Professor
+ ↓
+Knowledge-oriented profile
+ ↓
+CVG Operational Harness
+
+ou:
+
+Harness
+ ↓
+Rick Knowledge Service
+
+dependendo da arquitetura escolhida posteriormente.
+
+Não decidir à força nesta Phase.
+
+---
+
+# 562. PHASE 2 LEARNING SUMMARY
+
+Inclua no relatório uma explicação conceitual simples:
+
+Runtime = mantém execução.
+
+Worker = carrega trabalho durável para o Runtime.
+
+Orchestrator = decide próximo passo lógico.
+
+Policy = autoriza.
+
+Approval = autorização humana quando necessária.
+
+Tool = produz ação.
+
+Persistence = mantém verdade durável.
+
+Effect Journal = protege efeitos.
+
+Audit = prova o que ocorreu.
+
+Telemetry = mostra como o sistema está funcionando.
+
+Isso deve ajudar futuros mantenedores.
+
+---
+
+# 563. ARCHITECTURAL SENTENCE
+
+Use como princípio final:
+
+LLM proposes.
+Orchestrator decides the next logical step.
+Policy authorizes.
+Approval human-gates.
+Runtime enforces.
+Tool executes.
+Persistence remembers.
+Audit proves.
+Telemetry observes.
+Worker makes execution durable across processes.
+
+---
+
+# 564. PHASE 2 EXIT QUESTION
+
+A Phase inteira deve responder objetivamente:
+
+"If the HTTP process, Worker process, or model/tool call fails at an
+unfortunate moment, can the CVG Operational Harness recover without losing
+the execution, violating policy, crossing tenant boundaries, or silently
+duplicating the intended effect?"
+
+Se a resposta não puder ser demonstrada com evidência:
+
+não declare PASS completo.
+
+---
+
+# 565. SECOND EXIT QUESTION
+
+"Can the entire canonical path execute without importing or depending on
+Secretary product code?"
+
+Se não:
+
+FAIL arquitetural.
+
+---
+
+# 566. THIRD EXIT QUESTION
+
+"Can Runtime V1 later be replaced by an iterative Runtime V2 without
+redesigning the durability spine?"
+
+Se não:
+
+corrija acoplamento antes de finalizar.
+
+---
+
+# 567. FINAL REPORT SUMMARY FORMAT
+
+No topo de PHASE_2_REPORT.md inclua:
+
+Phase:
+Candidate:
+Status:
+Production:
+Durability Level:
+Critical Requirements:
+Critical PASS:
+Critical PARTIAL:
+Critical FAIL:
+Environment Blockers:
+New Regressions:
+Independent Critic:
+Final Sentinel:
+Score:
+Next Phase:
+
+---
+
+# 568. FINAL TERMINAL EXAMPLE
+
+Use formato próximo deste, preenchido com valores reais:
+
+CVG OPERATIONAL HARNESS — PHASE 2 FINAL
+
+Candidate digest: ...
+Base commit: ...
+HEAD: ...
+Worktree: dirty/clean
+
+Phase status: PASS
+Production: NO_GO
+Durability certification: D5
+
+Canonical durable spine: PROVEN
+HTTP ingestion: PROVEN
+PostgreSQL: PROVEN
+Worker claim: PROVEN
+Concurrent workers: PROVEN
+Idempotency: PROVEN
+Approval pause/resume: PROVEN
+Effect journal: PROVEN
+Crash recovery: PROVEN
+Tenant isolation: PROVEN
+Audit causality: PROVEN
+Telemetry: PROVEN
+
+Baseline regressions: 0 new
+Critical skipped tests: 0
+Independent critic: APPROVE
+Final sentinel: MATCH
+
+Score: X/10
+Next: Phase 3 — Runtime V2 & Hybrid Orchestrator
+
+Não copie esses resultados fictícios.
+
+Preencha somente com resultados reais.
+
+---
+
+# 569. NO AUTO-COMMIT
+
+Não faça commit automaticamente salvo se instrução externa explícita do usuário
+determinar.
+
+Preserve alterações no worktree.
+
+Registre candidate identity por digest.
+
+---
+
+# 570. NO PUSH
+
+Não faça push.
+
+---
+
+# 571. NO PRODUCTION DEPLOYMENT
+
+Não faça deploy.
+
+---
+
+# 572. NO REAL EXTERNAL ACTIONS
+
+Não envie mensagens.
+Não crie agendamentos.
+Não altere sistemas hospitalares.
+Não toque dados reais.
+
+---
+
+# 573. ALLOWED INFRASTRUCTURE
+
+É permitido:
+
+PostgreSQL local/test
+Docker local/test
+synthetic providers
+synthetic tools
+test HTTP server
+test Worker processes
+
+dentro de ambiente seguro.
+
+---
+
+# 574. TOOLING
+
+Você pode utilizar ferramentas existentes do repositório e criar scripts
+de suporte quando necessários.
+
+Prefira scripts reproduzíveis a comandos manuais não documentados.
+
+---
+
+# 575. SKILLS
+
+Se disponíveis, use skills adequadas para:
+
+orchestration
+engineering framework
+verification
+security
+backend architecture
+database
+testing.
+
+Skills orientam processo.
+
+Código e evidência continuam sendo verdade.
+
+---
+
+# 576. GAUNTLET
+
+Se `gauntlet-loop` estiver disponível, utilize para:
+
+implementation
+verification
+critique
+repair
+retest
+
+sem reduzir critérios após falhas.
+
+---
+
+# 577. ORCHESTRATION
+
+Se `orchestrate` estiver disponível, utilize para dividir trabalho em lanes
+com ownership explícito.
+
+Evite agentes modificando arquivos sobrepostos.
+
+---
+
+# 578. ENGINEERING FRAMEWORK
+
+Use `engineering-framework` para manter:
+
+requirements
+architecture
+implementation
+verification
+evidence
+closure
+
+alinhados.
+
+---
+
+# 579. SECURITY SPECIALIST
+
+Quando disponível, execute revisão especializada após o caminho canônico
+estar funcional.
+
+Não apenas no início.
+
+---
+
+# 580. DATABASE SPECIALIST
+
+Quando disponível, use revisão focada em:
+
+transactions
+locking
+leases
+idempotency
+indexes
+migrations
+concurrency.
+
+---
+
+# 581. FINAL VERIFIER
+
+Use verificador independente para conferir:
+
+requirements
+candidate identity
+tests
+evidence
+docs
+conclusions.
+
+---
+
+# 582. NO QUALITY THEATER
+
+Não aumente score com:
+
+mais documentação
+mais arquivos
+mais abstrações
+mais testes triviais.
+
+Score deve subir por:
+
+real durability
+real recovery
+real invariants
+real isolation
+real evidence.
+
+---
+
+# 583. AVOID OVER-BUILDING
+
+Se a solução mais simples usando PostgreSQL existente atender:
+
+use-a.
+
+O objetivo não é construir Temporal artesanalmente.
+
+---
+
+# 584. DO NOT BUILD RUNTIME V2 ACCIDENTALLY
+
+Se durante Phase 2 surgir vontade de implementar:
+
+plan
+observe
+replan
+reflection
+semantic retry
+
+registre como backlog Phase 3.
+
+Não misture objetivos.
+
+---
+
+# 585. DO NOT BUILD SKILL ENGINE ACCIDENTALLY
+
+Skill contract pode existir.
+
+Skill Runtime completo fica depois.
+
+---
+
+# 586. DO NOT BUILD MCP ACCIDENTALLY
+
+MCP é adapter/protocol future capability.
+
+Não necessário para provar durable execution spine.
+
+---
+
+# 587. DO NOT BUILD MULTI-AGENT ACCIDENTALLY
+
+Um synthetic agent basta.
+
+---
+
+# 588. DO NOT OPTIMIZE NATURAL CONVERSATION
+
+Isso é responsabilidade futura de product/runtime cognition.
+
+---
+
+# 589. DO NOT OPTIMIZE RAG
+
+Fora desta Phase.
+
+---
+
+# 590. PHASE SUCCESS PHILOSOPHY
+
+Phase 0/1 respondeu:
+
+"Conseguimos separar a engine?"
+
+Phase 2 responde:
+
+"Podemos confiar que essa engine executa e sobrevive?"
+
+Phase 3 responderá:
+
+"Essa engine consegue pensar em múltiplos passos?"
+
+Mantenha essa separação.
+
+---
+
+# 591. FINAL DEFINITION
+
+Ao terminar a Phase 2, o CVG Operational Harness ainda pode ser pouco
+"inteligente".
+
+Mas deve ser significativamente mais:
+
+durable
+recoverable
+governed
+observable
+testable
+product-independent.
+
+Esse é o sucesso desta fase.
+
+---
+
+# 592. BEGIN EXECUTION
+
+Agora execute a Phase 2 completa.
+
+Primeiro:
+
+PRE-FLIGHT
+→ BASELINE
+→ SCOUT
+→ ARCHITECTURAL PLAN.
+
+Depois:
+
+IMPLEMENTATION.
+
+Depois:
+
+VERIFICATION.
+
+Depois:
+
+FAULT / CONCURRENCY TESTS.
+
+Depois:
+
+EVIDENCE.
+
+Depois:
+
+INDEPENDENT CRITIC.
+
+Depois:
+
+REPAIR, se necessário.
+
+Depois:
+
+FINAL RETEST.
+
+Depois:
+
+FINAL SENTINEL.
+
+Somente então emita a decisão final.
+
+Não interrompa após simplesmente "implementar".
+
+Não declare sucesso antes da evidência.
+
+Não altere os critérios durante a execução.
+
+Execute:
+
+CVG OPERATIONAL HARNESS
+PHASE 2 — DURABLE EXECUTION SPINE & CANONICAL RUNTIME COMPOSITION
+AAA-21

@@ -1,0 +1,2 @@
+const { chromium } = require('playwright');
+(async()=>{const b=await chromium.launch({headless:true});const p=await b.newPage();let errors=[];p.on('pageerror',e=>errors.push(e.message));await p.goto('http://127.0.0.1:4398');for(const w of [1440,768,375]){await p.setViewportSize({width:w,height:1000});await p.screenshot({path:`/tmp/cvg-audit-ui/empty-${w}.png`,fullPage:true});console.log(JSON.stringify({width:w,scroll:await p.evaluate(()=>document.documentElement.scrollWidth),heading:await p.locator('h1').innerText()}));}console.log({errors});await b.close()})();

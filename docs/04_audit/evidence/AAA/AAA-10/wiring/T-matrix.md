@@ -1,0 +1,29 @@
+# AAA-10 wiring — T-matrix (requirement → test → evidence)
+
+Fonte normativa: `docs/02_spec/aaa_execution_contract.md` (§2, §5, §6, §7, §8,
+§8.1) e enunciado da task AAA-10 (lane `wiring`). Testes em
+`packages/agent-runtime/src/__tests__/runtime-journal.test.ts`, salvo indicação.
+
+| Req | Conteúdo | Teste(s) | Resultado |
+| --- | -------- | -------- | --------- |
+| R1 | `operationKey` da §2: com `callerIdempotencyKey` = `op:sha256(canonicalizeJson({tenantId, callerIdempotencyKey}))`; sem ele = `op:sha256(canonicalizeJson({tenantId, capability, action, resource, proposalHash}))` | T-17 (`expectedCallerOperationKey`), T-07/T-14/T-18 (`expectedDerivedOperationKey`); outbox idempotencyKey assertions | PASS |
+| R2a | Ordem: policy revalidation → `approvals.reserve` → `journal.reserve` → `markExecuting` → `markEffectStarted` → tool (payload da proposta) → `journal.confirmEffect` → `approvals.confirm(effect_confirmed)` → `outbox.enqueue` | T-07, T-14, T-17 (execução completa e replay) | PASS |
+| R2b | `journal.reserve` `replay` → `executed` com `executionRef`/`resultDigest` persistidos e zero chamadas de ferramenta | T-07 (2º/3º turnos), T-14, T-17 | PASS |
+| R2c | `journal.reserve` `in_progress` → `denied operation_in_progress`, sem efeito | T-08 | PASS |
+| R2d | `journal.reserve` `uncertain` → `denied operation_uncertain`, sem retry | T-06, T-18 (EFFECT_STARTED) | PASS |
+| R2e | Mesma chave com `proposalHash` diferente → `denied idempotency_key_reuse`, efeito zero | T-15 | PASS |
+| R2f | Falha comprovadamente pré-efeito → `journal.failEffect` + `approvals.release` (APPROVED) + `denied` com o código | `runtime-binding.test.ts` T-16 "releases the approval…" | PASS |
+| R2g | Falha ambígua → `journal.markUncertain` + `approvals.markUncertain` + `denied effect_uncertain`, sem retry | `runtime-binding.test.ts` T-16 "marks the approval UNCERTAIN…" | PASS |
+| R2h | Efeito confirmado, `approval.confirm` falhou → `denied approval_confirm_failed` com `effectConfirmed: true` (nunca negativa que negue o efeito) | "AAA-10 honesty: effect confirmed but approval confirmation failed" | PASS |
+| R2i | Outbox falhou após CONFIRMED → `executed` com `outboxPending: true`, nunca `denied` | T-07 (1º/2º turnos), T-17 | PASS |
+| R3 | Fail closed: `HIGH_RISK_WRITE`/ADMIN ou `effectScope: real_authorized` sem journal → `denied durability_required` antes da ferramenta; `controlled_fake` MEDIUM executa sem claim de durabilidade | "AAA-10 fail-closed durability": 3 testes (`durability_required`, `controlled-fake medium-risk`, `journal_sweep_failed`); T-19 preservado em `runtime-binding.test.ts` | PASS |
+| R4 | `effectJournal.releaseExpired(now, ttlMs)` no início de TODO `runTurn`; exceção → `denied journal_sweep_failed`; `reservationTtlMs` default 60s exposto | `journal_sweep_failed`; T-18 (sweep RESERVED/ABANDONED e EFFECT_STARTED/UNCERTAIN); journal `releaseExpired` nunca executa | PASS |
+| R5 | Outbox de efeito governado usa `idempotencyKey = operationKey` e namespace `<capability>.executed`; payload sem payload bruto da proposta | T-07, T-14, T-17 (chave); payload conferido em runtime.ts (apenas identificadores + `policyVersion`) | PASS |
+| R6 | T-06 | "AAA-10 T-06": crash após `markEffectStarted`, nova instância sobre o mesmo `FileEffectJournal` → UNCERTAIN, zero re-execução, sem falso sucesso | PASS |
+| R6 | T-07 | "AAA-10 T-07": outbox falha duas vezes, mesma chave → ferramenta 1x, replay com digest persistido | PASS |
+| R6 | T-08 | "AAA-10 T-08": dois `runTurn` concorrentes com a mesma `operationKey` (duas instâncias/arquivo) → no máximo 1 efeito, perdedora `operation_in_progress` | PASS |
+| R6 | T-14 | "AAA-10 T-14": restart entre `confirmEffect` e `approval.confirm` → recuperação conclui `approval.confirm`, ferramenta 0x, `executionRef` persistido | PASS |
+| R6 | T-15 | "AAA-10 T-15": reuso de `idempotencyKey` com proposta diferente → `idempotency_key_reuse`, ferramenta 1x total, aprovação liberada | PASS |
+| R6 | T-17 | "AAA-10 T-17": retry/crash preserva `idempotencyKey = operationKey` no replay | PASS |
+| R6 | T-18 | "AAA-10 T-18": RESERVED vencido → APPROVED; EFFECT_STARTED vencido → UNCERTAIN; sweep nunca executa | PASS |
+| R7 | Regressão dos testes existentes do pacote | `green-focused.log` (5 arquivos, 82 testes) e `full-npm-test.log` (194 arquivos passed / 4 skipped; 1132 passed / 56 skipped) | PASS |

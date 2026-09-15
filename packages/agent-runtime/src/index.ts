@@ -1,2 +1,6 @@
 export * from './contracts.ts'
+export * from './effect-journal.ts'
 export * from './runtime.ts'
+export * from './proposal.ts'
+export * from './composition.ts'
+export type { ApprovalAuthority } from '@cvg/approval-engine'
