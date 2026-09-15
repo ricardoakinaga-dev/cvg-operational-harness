@@ -1,3 +1,20 @@
+# REPO-20260915 — controlled repository publication — 2026-09-15T19:20:20-03:00
+
+- request: synchronize the current repository snapshot with
+  `https://github.com/ricardoakinaga-dev/cvg-operational-harness.git`.
+- action: reviewed the required CVG state documents, filtered compiler outputs
+  and local Gauntlet locks, ran the focused publication checks, created commit
+  `c57c330` (`feat: publish controlled operational harness`), and pushed
+  `main` successfully. The destination had no remote refs before publication.
+- verification: `npm test` `258` files passed / `13` skipped and `1,811` tests
+  passed / `115` skipped; typecheck, lint, and web build PASS.
+- decision: publication is complete for the controlled snapshot; no product
+  backlog scope changed. The frozen repository-wide format limitation and
+  production `NO_GO` remain in force.
+- next_action: finish the outstanding controlled AAA-41 Gauntlet bookkeeping;
+  do not infer production, real-data, provider, channel, or sensitive-action
+  authorization from this repository push.
+
 # AAA-41 Phase 4 CAPABILITY BOUNDARY — controlled integration verification — 2026-09-15T10:25:18-03:00
 
 - task/gate: `CVG-PHASE4-CAPABILITY-BOUNDARY` / `AAA-41`; frozen

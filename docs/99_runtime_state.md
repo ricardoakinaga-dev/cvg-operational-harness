@@ -1,3 +1,20 @@
+# REPO-20260915 — controlled repository publication — 2026-09-15T19:20:20-03:00
+
+- status: `READY_FOR_NEXT_STEP`; current_engine: controlled `AUDIT`; task:
+  `CVG-PHASE4-CAPABILITY-BOUNDARY` / `AAA-41`; result `CONDITIONAL_PASS`;
+  production `NO_GO`.
+- last_completed_action: validated and published the controlled snapshot to
+  `https://github.com/ricardoakinaga-dev/cvg-operational-harness.git` on
+  `main`; commit `c57c330` (`feat: publish controlled operational harness`).
+- verification: `npm test` passed `258` files / `1,811` tests with `13` files /
+  `115` tests skipped; typecheck, lint, and build passed. Generated compiler
+  outputs and local Gauntlet writer locks remain excluded by `.gitignore`.
+- limits: repository-wide format drift remains the previously recorded
+  brownfield `NO_GO`; no real data, provider, channel, MCP, credentials,
+  deployment, sensitive action, or production authorization was used.
+- next_action: record the final controlled Gauntlet state as `CONDITIONAL_PASS`
+  under the frozen AAA-41 bar, retaining mechanical and production `NO_GO`.
+
 # AAA-41 Phase 4 CAPABILITY BOUNDARY — controlled evidence assembly — 2026-09-15T10:25:18-03:00
 
 - status: `AUDIT_COMPLETE_CONTROLLED / CONDITIONAL_PASS`; current_engine:
