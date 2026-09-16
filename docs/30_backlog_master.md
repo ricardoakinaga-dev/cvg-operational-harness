@@ -1,3 +1,35 @@
+# AAA-41-CLOSURE RETRY — independent evidence blocker persists — 2026-09-16T18:15:12-03:00
+
+- status: `CONDITIONAL_PASS`; candidate remains
+  `6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e`.
+- action completed: dispatched two additional fresh read-only critics against
+  the exact candidate; both bounded windows ended with no report and mutation
+  sentinel `MATCH`.
+- unresolved blocker: six total bounded fresh attempts have produced no
+  independent `APPROVE`; the Phase 4A entry gate remains
+  `PHASE_4_HANDOFF=BLOCKED`.
+- next_action: obtain a responsive independent critic or qualified external
+  review, then rebind and rerun the final sentinel. Do not implement Phase 4A,
+  change acceptance criteria, commit, or push.
+
+# AAA-41-CLOSURE — Phase 4 certification chain remains blocked — 2026-09-16T10:48:27-03:00
+
+- status: `CONDITIONAL_PASS`; owner: controlled `AUDIT`; candidate
+  `6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e`;
+  certification run `run-6185c586e382-mu44ygfz`.
+- completed: all current required mechanical gates passed and
+  `certification:verify` passed; evidence, candidate identity and composition
+  fingerprint were rebound to the same candidate.
+- unresolved blocker: the final fresh independent critic returned no report
+  after bounded retries (`NO_REPORT_WITHIN_BOUNDED_WINDOW`), therefore there
+  is no independent `APPROVE` and no unconditional Phase 4 closure.
+- handoff: `PHASE_4_HANDOFF=BLOCKED`; production `NO_GO`; Phase 4A source,
+  migrations, real integrations and external effects remain unauthorized.
+- next_action: obtain a responsive fresh read-only critic for the frozen
+  candidate, record the actual decision, rerun the final sentinel and only
+  then reevaluate the handoff. Preserve all historical failure and timeout
+  evidence.
+
 # AAA-4A — Conversational Intelligence Layer — 2026-09-16
 
 - id: `CVG-PHASE4A-CONVERSATIONAL-INTELLIGENCE` / `AAA-4A`

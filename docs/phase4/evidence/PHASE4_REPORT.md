@@ -1,5 +1,47 @@
 # Phase 4 Controlled Report — AAA-41
 
+## Subsequent bounded critic retries — 2026-09-16T18:15:12-03:00
+
+This additive section supersedes the prior critic attempt for the final
+closure decision while preserving the earlier record below. Two further fresh
+non-inherited read-only critics (`Hegel` and `Dirac`) targeted candidate
+`6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e` at HEAD
+`25a1ad9846ff6a4e52ff0560b1452e972ab9fbe7`. Each bounded window was allowed
+approximately 180 seconds; neither returned a report. The before/after
+mutation sentinel matched (`e72d07d5…`). No approval was inferred.
+
+The controlled result remains `CONDITIONAL_PASS`, production remains `NO_GO`,
+and `PHASE_4_HANDOFF=BLOCKED`. The current unresolved assurance gap is the
+absence of a returned independent `APPROVE`; no product or Phase 4A work was
+performed.
+
+## Final closure attempt — 2026-09-16
+
+This additive section supersedes the earlier revalidation section for the
+current closure candidate while preserving all historical observations below.
+
+- Candidate and HEAD: use `certification/candidate-manifest.json` and
+  `certification/phase10-result.json`; current candidate is
+  `6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e` at
+  `25a1ad9846ff6a4e52ff0560b1452e972ab9fbe7`.
+- Composition fingerprint: `069beed525fdf8ef98bbabac2e3008ad949065c533c23c02fbb9de3e86272071`;
+  reverse registration matches and ordering is invariant.
+- Final mechanical run: `run-6185c586e382-mu44ygfz`, `CONDITIONAL_GO` /
+  `AAA_CONTROLLED`; every required catalog gate passed and
+  `npm run certification:verify` qualified the candidate.
+- The first PostgreSQL attempt failed because its disposable container
+  disappeared (`ECONNREFUSED`); the affected gate was rerun against a new
+  disposable fixture and passed, followed by a complete passing certification.
+- Four fresh non-inherited critic handles were attempted across the closure
+  sequence. The final critic targeted this exact candidate, but no report was
+  returned after bounded waits. Its read-only mutation sentinel matched
+  (`d122be37…` before and after). No approval is claimed.
+
+The authoritative closure result is therefore `CONDITIONAL_PASS`, not an
+unconditional Phase 4 `PASS`; production remains `NO_GO` and the Phase 4A
+handoff remains `BLOCKED`. See `PHASE4_FINAL_CLOSURE.md` and
+`FINAL_CRITIC_CLOSURE.md`.
+
 ## Superseding revalidation — 2026-09-16
 
 This section supersedes the historical certification paragraphs below for the

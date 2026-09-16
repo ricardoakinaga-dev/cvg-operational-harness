@@ -171,6 +171,7 @@ export const CANDIDATE_EXCLUDED_PREFIXES = [
   '.gauntlet/',
   '.opencode/',
   'docs/04_audit/evidence/',
+  'docs/phase4/evidence/',
   'apps/web/dist/',
   'certification/logs/',
   'certification/baseline-logs/',
@@ -190,11 +191,14 @@ export const CANDIDATE_EXCLUDED_FILES = [
   'certification/load-report.json',
   'certification/restore-report.json',
   'certification/negative-validation.json',
-  'certification/baseline.json'
+  'certification/baseline.json',
+  'docs/20_master_execution_log.md',
+  'docs/30_backlog_master.md',
+  'docs/99_runtime_state.md'
 ]
 
 export const CANDIDATE_SCOPE_NOTE =
-  'tracked + untracked product/config/contract files; evidence and generated certification outputs excluded; root-level .gauntlet/ and .gauntlet-* state excluded while lookalikes remain candidate files'
+  'tracked + untracked product/config/contract files; evidence, operational ledgers/state, and generated certification outputs excluded; root-level .gauntlet/ and .gauntlet-* state excluded while lookalikes remain candidate files'
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`

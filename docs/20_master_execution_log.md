@@ -1,3 +1,54 @@
+# AAA-41-CLOSURE RETRY — bounded independent critic attempts — 2026-09-16T18:15:12-03:00
+
+### ACTION / RESULT
+
+Against the unchanged candidate `6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e` at HEAD `25a1ad9846ff6a4e52ff0560b1452e972ab9fbe7`, dispatched two new fresh, sealed, read-only critics: `Hegel` and `Dirac`. Each was given an approximately 180-second bounded window. Neither returned a report; both handles were closed. The before/after mutation sentinel matched (`e72d07d5…`). This is recorded as unavailable evidence, not approval.
+
+### DECISION / NEXT
+
+No source, product, Phase 4A, architecture, production, provider, channel,
+MCP or sensitive change was made. Mechanical certification remains `PASS` for
+all 16 gates with `certification:verify=PASS`; controlled Phase 4 remains
+`CONDITIONAL_PASS`, production `NO_GO`, and `PHASE_4_HANDOFF=BLOCKED`. Next:
+obtain a responsive independent critic or external review. No commit/push.
+
+# AAA-41-CLOSURE — Phase 4 final certification closure — 2026-09-16T10:48:27-03:00
+
+### TASK / GATE
+
+`CVG-PHASE4-CAPABILITY-BOUNDARY` / `AAA-41-CLOSURE`; candidate
+`6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e`, HEAD
+`25a1ad9846ff6a4e52ff0560b1452e972ab9fbe7`, composition fingerprint
+`069beed525fdf8ef98bbabac2e3008ad949065c533c23c02fbb9de3e86272071`.
+
+### ACTION / RESULT
+
+Revalidated the complete current certification catalog: format, typecheck,
+lint, build, unit, coverage, PostgreSQL, E2E, evals, security, chaos, load,
+restore, SBOM and licenses all passed; `certification:verify` passed for
+`run-6185c586e382-mu44ygfz`. The first PostgreSQL failure was an isolated
+`ECONNREFUSED` fixture failure and is preserved; the affected gate was rerun
+against disposable PostgreSQL 15 with `27` files / `200` tests / `0` skips.
+
+Four fresh, sealed, read-only independent critic attempts were recorded. The
+final candidate was reviewed by `Ramanujan`; three bounded 60-second waits
+returned no report. No approval was inferred. The critic mutation sentinel
+was `MATCH`; final controlled status is `CONDITIONAL_PASS`.
+
+The only repairs were candidate-scope alignment in
+`scripts/lib/certification-rules.mjs` so required evidence and operational
+ledger updates do not self-invalidate the candidate. Certification self-test
+`N1–N10` / `C0–C27` passed. No Phase 4A implementation or acceptance-bar,
+product, architecture, provider, channel, MCP, production or sensitive work
+was performed.
+
+### DECISION / NEXT
+
+Production remains `NO_GO`. `PHASE_4_HANDOFF=BLOCKED` and Phase 4A
+implementation authorization is `NO` because no fresh independent `APPROVE`
+was returned. Obtain a responsive independent critic against this exact
+candidate before reconsidering the handoff. No commit or push was performed.
+
 # AAA-4A HANDOFF BLOCKED / PHASE 4 REVALIDATION — 2026-09-16
 
 ### TASK / GATE

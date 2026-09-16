@@ -1,5 +1,22 @@
 # Phase 4 current revalidation — AAA-41
 
+## Subsequent critic retry — 2026-09-16T18:15:12-03:00
+
+Two additional fresh read-only critics (`Hegel` and `Dirac`) were dispatched
+against the exact candidate recorded below. Both bounded windows ended with no
+report; both were closed. The mutation sentinel matched before/after
+(`e72d07d5…`). This is not independent approval. The mechanical candidate
+remains valid, but the controlled decision remains `CONDITIONAL_PASS` and the
+Phase 4A handoff remains `BLOCKED`.
+
+- Final closure candidate: `6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e`
+  at HEAD `25a1ad9846ff6a4e52ff0560b1452e972ab9fbe7`, certification run
+  `run-6185c586e382-mu44ygfz`.
+- The final mechanical catalog and `npm run certification:verify` both passed.
+- The final fresh critic returned no report in its bounded window; its
+  read-only mutation sentinel matched (`d122be37…` before and after). This is
+  not approval and leaves the controlled verdict `CONDITIONAL_PASS`.
+
 - Candidate, HEAD, and certification run: use the current authoritative
   records in `certification/candidate-manifest.json` and
   `certification/phase10-result.json`; identifiers are not duplicated here so
