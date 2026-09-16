@@ -13,23 +13,23 @@
 
 ## Commands and exits
 
-| Command | Exit | Result |
-| --- | --- | --- |
-| `npm run typecheck` | 0 | no errors |
-| `npx eslint <11 changed source/test files>` | 0 | clean |
-| `npx prettier --check <11 changed files>` | 0 | all formatted |
-| focused vitest with TEST_DATABASE_URL (3 worker lane + 4 identity + journeys-api-postgres + readiness + postgres-role-preflight) | 0 | 10 files / 93 tests, 0 failed, 0 skipped |
-| `TEST_DATABASE_URL=... npm run test:postgres` | 0 | 19 files / 163 tests, 0 failed, 0 skipped |
-| `npm run test:worker:startup` | 0 | smoke 1 + controlled smoke 1 |
-| `npx vitest run apps/worker` (extra, full worker suite) | 0 | 15 files / 91 tests, 0 skipped |
+| Command                                                                                                                          | Exit | Result                                    |
+| -------------------------------------------------------------------------------------------------------------------------------- | ---- | ----------------------------------------- |
+| `npm run typecheck`                                                                                                              | 0    | no errors                                 |
+| `npx eslint <11 changed source/test files>`                                                                                      | 0    | clean                                     |
+| `npx prettier --check <11 changed files>`                                                                                        | 0    | all formatted                             |
+| focused vitest with TEST_DATABASE_URL (3 worker lane + 4 identity + journeys-api-postgres + readiness + postgres-role-preflight) | 0    | 10 files / 93 tests, 0 failed, 0 skipped  |
+| `TEST_DATABASE_URL=... npm run test:postgres`                                                                                    | 0    | 19 files / 163 tests, 0 failed, 0 skipped |
+| `npm run test:worker:startup`                                                                                                    | 0    | smoke 1 + controlled smoke 1              |
+| `npx vitest run apps/worker` (extra, full worker suite)                                                                          | 0    | 15 files / 91 tests, 0 skipped            |
 
 ## Adversarial probes (all under /tmp/opencode/critic-wave3)
 
-| Probe | Result |
-| --- | --- |
-| probe-identity.ts | spoofed Admin / cross-tenant 403; headers alone 401; expired/wrong-aud/forged/replay 401; double-resolve admin route 500 vs simulation control 400 |
-| probe-factory-double.ts | env-keyring factory resolver + trusted mode -> admin route 500 |
-| probe-startup.sh | production entrypoint exits 1 for no keyring / explicit simulation / invalid keyring; valid keyring passes resolver gate and fails later on DB |
-| probe-rotation.ts | previous-in-window accepted; after-window, revoked previous/current, unknown/missing kid rejected; valid kid accepted |
-| probe-regression.ts | PROD-06 spoofed body ignored; AAA-22 /ready 503, /live 200, sanitized, pool balanced 5/5/5 |
-| repo-copy neutralization | preflight removed -> entrypoint test fails (exit 1, "did not exit within the timeout"); restored byte-identical, test green again |
+| Probe                    | Result                                                                                                                                             |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| probe-identity.ts        | spoofed Admin / cross-tenant 403; headers alone 401; expired/wrong-aud/forged/replay 401; double-resolve admin route 500 vs simulation control 400 |
+| probe-factory-double.ts  | env-keyring factory resolver + trusted mode -> admin route 500                                                                                     |
+| probe-startup.sh         | production entrypoint exits 1 for no keyring / explicit simulation / invalid keyring; valid keyring passes resolver gate and fails later on DB     |
+| probe-rotation.ts        | previous-in-window accepted; after-window, revoked previous/current, unknown/missing kid rejected; valid kid accepted                              |
+| probe-regression.ts      | PROD-06 spoofed body ignored; AAA-22 /ready 503, /live 200, sanitized, pool balanced 5/5/5                                                         |
+| repo-copy neutralization | preflight removed -> entrypoint test fails (exit 1, "did not exit within the timeout"); restored byte-identical, test green again                  |

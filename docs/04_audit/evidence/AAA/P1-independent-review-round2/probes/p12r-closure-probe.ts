@@ -163,7 +163,11 @@ async function crashChild(): Promise<never> {
   const now = () => T0
   const journal = new FileEffectJournal({ directory: JOURNAL_DIR, clock: now })
   const store = new InMemoryApprovalStore()
-  const approvals = new ApprovalEngine({ store, clock: now, reservationTtlMs: TTL })
+  const approvals = new ApprovalEngine({
+    store,
+    clock: now,
+    reservationTtlMs: TTL
+  })
   let approvalId = ''
   const runtime = buildRuntime({
     approvals,
@@ -237,12 +241,15 @@ async function runVariant(
   const journal = new FileEffectJournal({ directory: variantDir, clock: now })
   const store = new InMemoryApprovalStore()
   store.insert(record)
-  const approvals = new ApprovalEngine({ store, clock: now, reservationTtlMs: TTL })
+  const approvals = new ApprovalEngine({
+    store,
+    clock: now,
+    reservationTtlMs: TTL
+  })
   const outboxKeys: string[] = []
   let toolCalls = 0
-  const journalABefore = (
-    await journal.get(TENANT, opKey(TENANT, KEY_A))
-  )?.state
+  const journalABefore = (await journal.get(TENANT, opKey(TENANT, KEY_A)))
+    ?.state
   const runtime = buildRuntime({
     approvals,
     journal,
@@ -266,7 +273,8 @@ async function runVariant(
   const journalAMutated = journalAAfter !== journalABefore
   const notes: string[] = []
   if (options.expectDenied) {
-    if (retry.outcome !== 'denied') notes.push(`outcome ${retry.outcome} != denied`)
+    if (retry.outcome !== 'denied')
+      notes.push(`outcome ${retry.outcome} != denied`)
     if (retry.reason !== options.expectedReason)
       notes.push(`reason ${retry.reason} != ${options.expectedReason}`)
     if (toolCalls !== 0) notes.push(`tool calls ${toolCalls} != 0`)
@@ -276,7 +284,9 @@ async function runVariant(
     if (after.status === 'APPROVED' || after.status === 'EXECUTED')
       notes.push(`approval status ${after.status}`)
     if (!options.allowAfter.includes(journalAAfter ?? 'undefined'))
-      notes.push(`journal A ${journalAAfter} not in ${JSON.stringify(options.allowAfter)}`)
+      notes.push(
+        `journal A ${journalAAfter} not in ${JSON.stringify(options.allowAfter)}`
+      )
   }
   return {
     variant: options.name,
@@ -302,7 +312,10 @@ async function main(): Promise<void> {
   const child = spawnSync(
     'npx',
     ['tsx', fileURLToPath(import.meta.url), 'crash-child'],
-    { cwd: '/home/ricardo/cvg-agent-secretary-v2', stdio: ['ignore', 'inherit', 'inherit'] }
+    {
+      cwd: '/home/ricardo/cvg-agent-secretary-v2',
+      stdio: ['ignore', 'inherit', 'inherit']
+    }
   )
   const state = JSON.parse(readFileSync(STATE_FILE, 'utf8')) as {
     approvalRecord: ApprovalRecord
@@ -376,7 +389,11 @@ async function main(): Promise<void> {
     const journal = new FileEffectJournal({ directory: variantDir, clock: now })
     const store = new InMemoryApprovalStore()
     store.insert({ ...state.approvalRecord })
-    const approvals = new ApprovalEngine({ store, clock: now, reservationTtlMs: TTL })
+    const approvals = new ApprovalEngine({
+      store,
+      clock: now,
+      reservationTtlMs: TTL
+    })
     const outboxKeys: string[] = []
     let toolCalls = 0
     const runtime = buildRuntime({
@@ -390,7 +407,10 @@ async function main(): Promise<void> {
       outboxKeys
     })
     const retry = await runtime.runTurn(
-      turnInput({ approvalId: state.approvalRecord.approvalId, idempotencyKey: KEY_B })
+      turnInput({
+        approvalId: state.approvalRecord.approvalId,
+        idempotencyKey: KEY_B
+      })
     )
     const after = approvals.get(TENANT, state.approvalRecord.approvalId)
     const notes: string[] = []
@@ -426,7 +446,11 @@ async function main(): Promise<void> {
     let positiveNow = new Date(T0.getTime())
     const now = () => positiveNow
     const journal = new FileEffectJournal({ directory: variantDir, clock: now })
-    const approvals = new ApprovalEngine({ store, clock: now, reservationTtlMs: TTL })
+    const approvals = new ApprovalEngine({
+      store,
+      clock: now,
+      reservationTtlMs: TTL
+    })
     // Rebuild an APPROVED record with persisted key A and an expired RESERVED lease.
     const base = { ...state.approvalRecord }
     delete (base as { operationKey?: string }).operationKey
@@ -480,11 +504,14 @@ async function main(): Promise<void> {
     const notes: string[] = []
     if (sweep.released !== 1 || sweep.uncertain !== 0)
       notes.push(`sweep ${JSON.stringify(sweep)}`)
-    if (beforeRetry.status !== 'APPROVED') notes.push(`pre-retry ${beforeRetry.status}`)
+    if (beforeRetry.status !== 'APPROVED')
+      notes.push(`pre-retry ${beforeRetry.status}`)
     if (retry.outcome !== 'executed') notes.push(`outcome ${retry.outcome}`)
     if (toolCalls !== 1) notes.push(`tool calls ${toolCalls}`)
     if (after.status !== 'EXECUTED') notes.push(`final ${after.status}`)
-    if ((await journal.get(TENANT, opKey(TENANT, KEY_A)))?.state !== 'CONFIRMED')
+    if (
+      (await journal.get(TENANT, opKey(TENANT, KEY_A)))?.state !== 'CONFIRMED'
+    )
       notes.push('journal A not CONFIRMED')
     if ((await journal.get(TENANT, opKey(TENANT, KEY_B))) !== undefined)
       notes.push('journal B created')
@@ -512,7 +539,8 @@ async function main(): Promise<void> {
     JSON.stringify(
       {
         probe: 'P1-2R-closure',
-        candidate: '328d6a384658e75dc241db08d59072cbc4c8c4c430bc7d48063653443f092f67',
+        candidate:
+          '328d6a384658e75dc241db08d59072cbc4c8c4c430bc7d48063653443f092f67',
         childCrashExit: child.status,
         crashState: {
           status: state.approvalRecord.status,

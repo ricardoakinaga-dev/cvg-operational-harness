@@ -48,13 +48,17 @@ try {
   assert.equal(own.approvalId, rowA.approvalId)
 
   // (ii) explicit other-tenant filter sees zero rows
-  const cross = await withTenantTransaction(rolePool, tenantA, async (client) => {
-    const result = await client.query<{ count: number }>(
-      `SELECT count(*)::int AS count FROM runtime_approvals WHERE tenant_id = $1`,
-      [tenantB]
-    )
-    return result.rows[0]?.count
-  })
+  const cross = await withTenantTransaction(
+    rolePool,
+    tenantA,
+    async (client) => {
+      const result = await client.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM runtime_approvals WHERE tenant_id = $1`,
+        [tenantB]
+      )
+      return result.rows[0]?.count
+    }
+  )
   assert.equal(cross, 0, 'cross-tenant select must see zero rows')
 
   // (iii) no context sees zero rows
@@ -92,43 +96,56 @@ try {
   } catch (error) {
     insertError = error as Error
   }
-  assert.ok(insertError, 'INSERT with tenant B rows under tenant A context must fail')
-  console.log(`cross-tenant INSERT rejected: ${insertError?.message.split('\n')[0]}`)
+  assert.ok(
+    insertError,
+    'INSERT with tenant B rows under tenant A context must fail'
+  )
+  console.log(
+    `cross-tenant INSERT rejected: ${insertError?.message.split('\n')[0]}`
+  )
 
   // (v) UPDATE of the other tenant's row under tenant A context affects zero rows
-  const updated = await withTenantTransaction(rolePool, tenantA, async (client) => {
-    const result = await client.query(
-      `UPDATE runtime_approvals SET decision_reason = 'critic-cross-update' WHERE tenant_id = $1 AND approval_id = $2`,
-      [tenantB, rowB.approvalId]
-    )
-    return result.rowCount
-  })
+  const updated = await withTenantTransaction(
+    rolePool,
+    tenantA,
+    async (client) => {
+      const result = await client.query(
+        `UPDATE runtime_approvals SET decision_reason = 'critic-cross-update' WHERE tenant_id = $1 AND approval_id = $2`,
+        [tenantB, rowB.approvalId]
+      )
+      return result.rowCount
+    }
+  )
   assert.equal(updated, 0, 'cross-tenant UPDATE must affect zero rows')
 
   // (vi) own-row insert under the correct context still works (grants are real)
-  const ownInsert = await withTenantTransaction(rolePool, tenantA, async (client) => {
-    const result = await client.query(
-      `INSERT INTO runtime_approvals
+  const ownInsert = await withTenantTransaction(
+    rolePool,
+    tenantA,
+    async (client) => {
+      const result = await client.query(
+        `INSERT INTO runtime_approvals
          (tenant_id, approval_id, operator_id, agent_id, agent_version, action,
           resource_type, payload_hash, policy_version, correlation_id, status,
           single_use, requested_at, expires_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'REQUESTED',true, now(), now() + interval '15 minutes')
        RETURNING approval_id`,
-      [
-        tenantA,
-        `appr_own_${randomBytes(3).toString('hex')}`,
-        'op_critic',
-        'agent_secretary',
-        '1.0.0',
-        'appointment.confirm',
-        'appointment',
-        'a'.repeat(64),
-        'policy-v1',
-        'corr:own-insert'
-      ]
-    )
-    return result.rows.length
-  })
+        [
+          tenantA,
+          `appr_own_${randomBytes(3).toString('hex')}`,
+          'op_critic',
+          'agent_secretary',
+          '1.0.0',
+          'appointment.confirm',
+          'appointment',
+          'a'.repeat(64),
+          'policy-v1',
+          'corr:own-insert'
+        ]
+      )
+      return result.rows.length
+    }
+  )
   assert.equal(ownInsert, 1, 'own-tenant INSERT must succeed')
 
   const crossCount = await ownerPool.query<{ count: string }>(
@@ -146,9 +163,7 @@ try {
   console.error(error)
   fail(`probe-e aborted: ${(error as Error).message}`)
 } finally {
-  await h.admin
-    .query(`DROP OWNED BY ${role} CASCADE`)
-    .catch(() => undefined)
+  await h.admin.query(`DROP OWNED BY ${role} CASCADE`).catch(() => undefined)
   await h.admin.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined)
   await h.drop()
 }

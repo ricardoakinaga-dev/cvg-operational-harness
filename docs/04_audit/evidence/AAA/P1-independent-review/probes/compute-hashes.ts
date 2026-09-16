@@ -104,4 +104,11 @@ writeFileSync(
   '/tmp/opencode/p1-review-1789268901/artifact-hashes.json',
   JSON.stringify(output, null, 2)
 )
-console.log(JSON.stringify({ candidateId, fileCount: files.length, dirty: output.dirtyEntries, capturedAt: output.capturedAt }))
+console.log(
+  JSON.stringify({
+    candidateId,
+    fileCount: files.length,
+    dirty: output.dirtyEntries,
+    capturedAt: output.capturedAt
+  })
+)

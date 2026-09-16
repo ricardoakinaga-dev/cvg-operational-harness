@@ -18,9 +18,15 @@ try {
   const a1 = new PostgresApprovalAuthority(pool1)
   const missing = await createApproved(a1, tenantMissing, hintMissing)
   const missingReservation = await a1.reserve(
-    reserveInput(tenantMissing, hintMissing, missing.approvalId, `rsv_${hintMissing}_1`, {
-      ttlMs: 1_000
-    })
+    reserveInput(
+      tenantMissing,
+      hintMissing,
+      missing.approvalId,
+      `rsv_${hintMissing}_1`,
+      {
+        ttlMs: 1_000
+      }
+    )
   )
   await a1.markExecuting({
     tenantId: tenantMissing,
@@ -31,7 +37,9 @@ try {
 
   const pool2 = h.makePool(2)
   const a2 = new PostgresApprovalAuthority(pool2)
-  const now = new Date(Date.parse(missingReservation.reservationExpiresAt) + 1_000)
+  const now = new Date(
+    Date.parse(missingReservation.reservationExpiresAt) + 1_000
+  )
   const firstSweep = await a2.releaseExpired({
     tenantId: tenantMissing,
     now,
@@ -132,8 +140,12 @@ try {
   assert.equal(reconciled.executionCount, 1)
   assert.ok(reconciled.confirmedAt)
   assert.equal(reconciled.reservationGeneration, 1)
-  assert.deepEqual(reconciled.usedReservationIds, [missingReservation.reservationId])
-  console.log('reconcile(effect_confirmed): EXECUTED with executionRef and count=1')
+  assert.deepEqual(reconciled.usedReservationIds, [
+    missingReservation.reservationId
+  ])
+  console.log(
+    'reconcile(effect_confirmed): EXECUTED with executionRef and count=1'
+  )
 
   await pool2.end()
   pass('crash-after-effect keeps UNCERTAIN until explicit reconciliation')

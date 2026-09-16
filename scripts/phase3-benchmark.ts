@@ -67,7 +67,9 @@ class CountingStepStore implements ExecutionStepStore {
   public stepReads = 0
   public checkpointReads = 0
 
-  public constructor(private readonly inner = new InMemoryExecutionStepStore()) {}
+  public constructor(
+    private readonly inner = new InMemoryExecutionStepStore()
+  ) {}
 
   public async recordStep(step: ExecutionStep): Promise<void> {
     this.stepWrites += 1
@@ -77,7 +79,9 @@ class CountingStepStore implements ExecutionStepStore {
     this.stepReads += 1
     return this.inner.listSteps(tenantIdValue, executionId)
   }
-  public async saveCheckpoint(checkpoint: Parameters<ExecutionStepStore['saveCheckpoint']>[0]): Promise<void> {
+  public async saveCheckpoint(
+    checkpoint: Parameters<ExecutionStepStore['saveCheckpoint']>[0]
+  ): Promise<void> {
     this.checkpointWrites += 1
     return this.inner.saveCheckpoint(checkpoint)
   }
@@ -124,7 +128,10 @@ function input(profile: 'single_pass' | 'iterative'): RuntimeInput {
 
 function percentile(values: readonly number[], p: number): number {
   const sorted = [...values].sort((a, b) => a - b)
-  const index = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))
+  const index = Math.min(
+    sorted.length - 1,
+    Math.floor((p / 100) * sorted.length)
+  )
   return sorted[index] as number
 }
 
@@ -148,7 +155,9 @@ async function measure(
       tools,
       audit,
       telemetry,
-      iterativeOrchestrator: new ScriptedOrchestrator({ script: [...decisions] }),
+      iterativeOrchestrator: new ScriptedOrchestrator({
+        script: [...decisions]
+      }),
       stepStore,
       defaultRuntimeProfile: profile
     })

@@ -7,15 +7,15 @@
 
 ## Condições e onde foram fechadas
 
-| Condição | Onde |
-| -------- | ---- |
-| `AAA03-R3-F01` identidade runtime × canal | §2.1 R-ID-1..R-ID-6; §8.1 E-1..E-7; T-17/T-20 |
-| `AAA03-R3-F02` `verifyAndConsume` fora do runtime | §4; T-16 |
-| `AAA03-R3-F03` sweep de reservas | §4; T-18 |
-| `Q1` orçamento por turno | §9 |
-| `Q2` negação de adapter real | §10; T-19 |
-| `Q4` migração do caminho governado | §4; T-16 |
-| `Q5` TTL parametrizado/injetável + prova PG | §4; T-18; AAA-16 |
+| Condição                                          | Onde                                          |
+| ------------------------------------------------- | --------------------------------------------- |
+| `AAA03-R3-F01` identidade runtime × canal         | §2.1 R-ID-1..R-ID-6; §8.1 E-1..E-7; T-17/T-20 |
+| `AAA03-R3-F02` `verifyAndConsume` fora do runtime | §4; T-16                                      |
+| `AAA03-R3-F03` sweep de reservas                  | §4; T-18                                      |
+| `Q1` orçamento por turno                          | §9                                            |
+| `Q2` negação de adapter real                      | §10; T-19                                     |
+| `Q4` migração do caminho governado                | §4; T-16                                      |
+| `Q5` TTL parametrizado/injetável + prova PG       | §4; T-18; AAA-16                              |
 
 ## O que o revisor deve tentar refutar
 

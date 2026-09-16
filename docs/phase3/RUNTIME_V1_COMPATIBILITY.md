@@ -24,15 +24,15 @@ input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
 
 ## Proofs
 
-| Proof | Test | Result |
-| --- | --- | --- |
-| V1 still runs through the same public factory | `runtime-selection.test.ts` P3-COMPAT-001 | PASS |
-| V1 executes with a requested tool and completes | same test, `single_pass` branch | PASS |
-| Iterative unconfigured fails closed (no fallback) | P3-COMPAT-002 | PASS |
-| Worker default profile is `single_pass` | `operational-harness-iterative.test.ts` P3-WORKER-005 | PASS |
-| Phase 2 focused gate unchanged | 5 files / 31 tests | PASS |
-| Full regression (V1 suites included) | 256 files / 1,785 passed / 111 skipped | PASS |
-| Phase 2 PostgreSQL catalog unchanged | 24 files / 190 tests / 0 skips | PASS |
+| Proof                                             | Test                                                  | Result |
+| ------------------------------------------------- | ----------------------------------------------------- | ------ |
+| V1 still runs through the same public factory     | `runtime-selection.test.ts` P3-COMPAT-001             | PASS   |
+| V1 executes with a requested tool and completes   | same test, `single_pass` branch                       | PASS   |
+| Iterative unconfigured fails closed (no fallback) | P3-COMPAT-002                                         | PASS   |
+| Worker default profile is `single_pass`           | `operational-harness-iterative.test.ts` P3-WORKER-005 | PASS   |
+| Phase 2 focused gate unchanged                    | 5 files / 31 tests                                    | PASS   |
+| Full regression (V1 suites included)              | 256 files / 1,785 passed / 111 skipped                | PASS   |
+| Phase 2 PostgreSQL catalog unchanged              | 24 files / 190 tests / 0 skips                        | PASS   |
 
 ## Data compatibility
 

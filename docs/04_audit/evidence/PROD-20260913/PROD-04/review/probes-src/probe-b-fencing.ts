@@ -28,7 +28,11 @@ try {
     tenantId: tenant,
     approvalId: record.approvalId,
     reservationId: g1.reservationId,
-    evidence: { outcome: 'no_effect', source: 'adapter', evidenceRef: 'critic:g1' }
+    evidence: {
+      outcome: 'no_effect',
+      source: 'adapter',
+      evidenceRef: 'critic:g1'
+    }
   })
   const afterRelease = await authority.get(tenant, record.approvalId)
   assert.equal(afterRelease.status, 'APPROVED')
@@ -102,7 +106,11 @@ try {
     assert.equal(rejected?.code, 'reservation_mismatch', `${label}: code`)
     const now = await authority.get(tenant, record.approvalId)
     assert.equal(now.status, 'RESERVED', `${label}: status mutated`)
-    assert.equal(now.reservationId, g2.reservationId, `${label}: reservation mutated`)
+    assert.equal(
+      now.reservationId,
+      g2.reservationId,
+      `${label}: reservation mutated`
+    )
     assert.equal(now.reservationGeneration, 2, `${label}: generation mutated`)
     assert.deepEqual(
       now.usedReservationIds,
@@ -141,8 +149,14 @@ try {
     })
   ])
   const wins = raced.filter((r) => r.status === 'fulfilled')
-  const losses = raced.filter((r) => r.status === 'rejected') as PromiseRejectedResult[]
-  assert.equal(wins.length, 1, `confirm/release race: expected 1 winner, got ${wins.length}`)
+  const losses = raced.filter(
+    (r) => r.status === 'rejected'
+  ) as PromiseRejectedResult[]
+  assert.equal(
+    wins.length,
+    1,
+    `confirm/release race: expected 1 winner, got ${wins.length}`
+  )
   assert.equal(losses.length, 1)
   const final = await authority.get(tenant, record.approvalId)
   assert.ok(
@@ -152,16 +166,24 @@ try {
   if (final.status === 'EXECUTED') {
     assert.equal(final.executionRef, 'exec_g2_race')
     assert.equal(final.reservationGeneration, 2)
-    assert.deepEqual(final.usedReservationIds, [g1.reservationId, g2.reservationId])
+    assert.deepEqual(final.usedReservationIds, [
+      g1.reservationId,
+      g2.reservationId
+    ])
   } else {
     assert.equal(final.reservationId, undefined)
     assert.equal(final.reservationGeneration, 2)
-    assert.deepEqual(final.usedReservationIds, [g1.reservationId, g2.reservationId])
+    assert.deepEqual(final.usedReservationIds, [
+      g1.reservationId,
+      g2.reservationId
+    ])
   }
   console.log(
     `confirm/release race: winner final=${final.status} loser=${(losses[0]?.reason as ApprovalError)?.code} generation retained=${final.reservationGeneration}`
   )
-  pass('generation fencing: all stale g1 ops rejected; g2 confirmed/released atomically')
+  pass(
+    'generation fencing: all stale g1 ops rejected; g2 confirmed/released atomically'
+  )
 } catch (error) {
   console.error(error)
   fail(`probe-b aborted: ${(error as Error).message}`)

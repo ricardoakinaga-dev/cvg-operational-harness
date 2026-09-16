@@ -27,8 +27,7 @@ const commonGates = [
     command: 'npm run typecheck',
     result: 'PASS',
     exitCode: 0,
-    note:
-      're-run on the final bytes after the fake-pool test type fix; earlier P1 finding F1 resolved'
+    note: 're-run on the final bytes after the fake-pool test type fix; earlier P1 finding F1 resolved'
   },
   {
     command: 'npx eslint (changed files)',
@@ -52,7 +51,8 @@ const manifests = {
     origin: ['D13-01', 'Q-A11-01'],
     contract: 'docs/02_spec/prod20260913_m1_corrections_contract.md',
     negativeReproduced: {
-      probe: 'docs/04_audit/evidence/PROD-20260913/PROD-01/sql-atomicity-probe.before.json',
+      probe:
+        'docs/04_audit/evidence/PROD-20260913/PROD-01/sql-atomicity-probe.before.json',
       verdict: 'FAIL_PARTIAL_STATE',
       observed: {
         firstError: 'synthetic audit failure',
@@ -173,7 +173,8 @@ const manifests = {
     origin: ['D13-06', 'Q-A06-03'],
     contract: 'docs/02_spec/prod20260913_m1_corrections_contract.md',
     negativeReproduced: {
-      evidence: 'audit static finding apps/worker/src/postgres-controlled.ts:85 (flag-only check)',
+      evidence:
+        'audit static finding apps/worker/src/postgres-controlled.ts:85 (flag-only check)',
       verdict: 'FAIL_FLAG_ONLY'
     },
     positiveVerified: {
@@ -225,7 +226,8 @@ const manifests = {
     origin: ['D13-06', 'Q-A14-01'],
     contract: 'docs/02_spec/prod20260913_m1_corrections_contract.md',
     negativeReproduced: {
-      evidence: 'audit 0560 D13-06: actor System/journey-r3 and correlation derived from resource',
+      evidence:
+        'audit 0560 D13-06: actor System/journey-r3 and correlation derived from resource',
       verdict: 'FAIL_SYSTEM_ACTOR'
     },
     positiveVerified: {
@@ -246,7 +248,8 @@ const manifests = {
       {
         command:
           'TEST_DATABASE_URL=… npx vitest run journeys-postgres.test.ts journeys-api-postgres.test.ts',
-        result: 'PASS: 2 files / 32 tests, 0 skipped (includes actor/body-injection cases)',
+        result:
+          'PASS: 2 files / 32 tests, 0 skipped (includes actor/body-injection cases)',
         exitCode: 0,
         log: 'docs/04_audit/evidence/PROD-20260913/PROD-02/tests.log'
       }
@@ -258,7 +261,8 @@ const manifests = {
   },
   'AAA-22': {
     task: 'AAA-22',
-    title: 'Implementar readiness com probes reais e limitados (correção D13-04)',
+    title:
+      'Implementar readiness com probes reais e limitados (correção D13-04)',
     status: 'IMPLEMENTED_PARTIAL_PENDING_AAA21_D01',
     origin: ['D13-04'],
     contract: 'docs/02_spec/prod20260913_m1_corrections_contract.md',
@@ -287,7 +291,8 @@ const manifests = {
       ...commonGates,
       {
         command: 'npx vitest run readiness.test.ts',
-        result: 'PASS: 1 file / 8 tests (DB failure 503, live 200, no connection accumulation, consumer probe)',
+        result:
+          'PASS: 1 file / 8 tests (DB failure 503, live 200, no connection accumulation, consumer probe)',
         exitCode: 0,
         log: 'docs/04_audit/evidence/PROD-20260913/AAA-22/tests.log'
       }
@@ -310,30 +315,30 @@ async function main() {
       contractSha256: contractHash,
       sourceSha256: sourceHashes,
       evidenceSha256: evidenceHashes,
-      independence: 'builder output; independent review required before VERIFIED/DONE'
+      independence:
+        'builder output; independent review required before VERIFIED/DONE'
     }
     if (task === 'PROD-05') {
       record.reviewFindingsAddressed = [
         {
           finding:
             'P2: tenant-context cleanup test was vacuous (invalid role never sets context)',
-          fix:
-            'replaced by a same-pool rejection case (CREATE privilege) and a fake-client cleanup-failure case that asserts release(error) destruction; 10/10 tests pass'
+          fix: 'replaced by a same-pool rejection case (CREATE privilege) and a fake-client cleanup-failure case that asserts release(error) destruction; 10/10 tests pass'
         },
         {
-          finding: 'P1 (independent verifier F1): npm run typecheck failed on the fake-pool test client type',
-          fix:
-            'fake pool typed via Parameters<typeof assertPostgresWorkerPreflight>[0]; typecheck PASS on final bytes'
+          finding:
+            'P1 (independent verifier F1): npm run typecheck failed on the fake-pool test client type',
+          fix: 'fake pool typed via Parameters<typeof assertPostgresWorkerPreflight>[0]; typecheck PASS on final bytes'
         },
         {
-          finding: 'P3 (F4): manifest positive verdict still said 8/8 while the run was 10/10',
+          finding:
+            'P3 (F4): manifest positive verdict still said 8/8 while the run was 10/10',
           fix: 'verdict corrected to 10/10'
         },
         {
           finding:
             'P3 (F6): contract said the preflight runs its queries through withTenantContext',
-          fix:
-            'contract text corrected to the explicit same-connection tenant context with verified cleanup'
+          fix: 'contract text corrected to the explicit same-connection tenant context with verified cleanup'
         }
       ]
     }
@@ -341,14 +346,12 @@ async function main() {
       record.reviewFindingsAddressed = [
         {
           finding: 'P3: no post-fix artifact for the D13-01 probe',
-          fix:
-            'sql-atomicity-probe.after.json added and hashed; probe re-run on the corrected tree'
+          fix: 'sql-atomicity-probe.after.json added and hashed; probe re-run on the corrected tree'
         },
         {
           finding:
             'P3 (F5): cleanup failure after COMMIT gave the caller an error for a committed mutation',
-          fix:
-            'tenant-context reset and verification now happen inside the transaction before COMMIT; a reset failure rolls back, so an error never follows a committed mutation'
+          fix: 'tenant-context reset and verification now happen inside the transaction before COMMIT; a reset failure rolls back, so an error never follows a committed mutation'
         }
       ]
     }
@@ -356,8 +359,7 @@ async function main() {
       record.reviewFindingsAddressed = [
         {
           finding: 'P3: readiness probe verdict accepted any query attempt',
-          fix:
-            'verdict now requires queries>=1, /ready 503 and /live 200; readiness-probe.after.json regenerated'
+          fix: 'verdict now requires queries>=1, /ready 503 and /live 200; readiness-probe.after.json regenerated'
         },
         {
           finding:

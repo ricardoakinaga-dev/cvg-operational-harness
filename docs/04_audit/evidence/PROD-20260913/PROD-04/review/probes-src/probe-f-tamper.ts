@@ -30,7 +30,8 @@ const lockTarget = `       WHERE tenant_id = $1 AND approval_id = $2
 const lockReplace = `       WHERE tenant_id = $1 AND approval_id = $2`
 const revLine = '         AND revision = $${casRevisionParam}'
 const statusLine = '         AND status = $${casStatusParam}'
-const resLine = "         AND COALESCE(reservation_id, '') = $${casReservationIdParam}"
+const resLine =
+  "         AND COALESCE(reservation_id, '') = $${casReservationIdParam}"
 const genLine = '         AND reservation_generation = $${casGenerationParam}'
 assert.ok(base.includes(lockTarget), 'lock target not found in source')
 assert.ok(base.includes(revLine), 'revision predicate not found in source')
@@ -40,38 +41,62 @@ assert.ok(base.includes(genLine), 'generation predicate not found in source')
 const t1 = base.replace(lockTarget, lockReplace)
 // T2: revision + generation removed from the CAS predicate; lock kept.
 const t2 = base
-  .replace(revLine, () => '         AND ($${casRevisionParam}::bigint IS NOT NULL)')
-  .replace(genLine, () => '         AND ($${casGenerationParam}::bigint IS NOT NULL)')
+  .replace(
+    revLine,
+    () => '         AND ($${casRevisionParam}::bigint IS NOT NULL)'
+  )
+  .replace(
+    genLine,
+    () => '         AND ($${casGenerationParam}::bigint IS NOT NULL)'
+  )
 // T3: lock removed AND the full predicate neutralised (no serialization, no CAS).
 const t3 = t1
-  .replace(revLine, () => '         AND ($${casRevisionParam}::bigint IS NOT NULL)')
-  .replace(statusLine, () => '         AND ($${casStatusParam}::text IS NOT NULL)')
-  .replace(resLine, () => "         AND ($${casReservationIdParam}::text IS NOT NULL)")
-  .replace(genLine, () => '         AND ($${casGenerationParam}::bigint IS NOT NULL)')
+  .replace(
+    revLine,
+    () => '         AND ($${casRevisionParam}::bigint IS NOT NULL)'
+  )
+  .replace(
+    statusLine,
+    () => '         AND ($${casStatusParam}::text IS NOT NULL)'
+  )
+  .replace(
+    resLine,
+    () => '         AND ($${casReservationIdParam}::text IS NOT NULL)'
+  )
+  .replace(
+    genLine,
+    () => '         AND ($${casGenerationParam}::bigint IS NOT NULL)'
+  )
 
 const variants: Array<[string, string]> = [
   ['runtime-approval-store-t1-nolock.ts', t1],
   ['runtime-approval-store-t2-nocas.ts', t2],
   ['runtime-approval-store-t3-nolock-nocas.ts', t3]
 ]
-for (const [name, code] of variants) writeFileSync(`${TAMPER_DIR}/${name}`, code)
+for (const [name, code] of variants)
+  writeFileSync(`${TAMPER_DIR}/${name}`, code)
 console.log(`wrote tampered copies to ${TAMPER_DIR}`)
 
-const { PostgresApprovalAuthority } = await import(
-  '/home/ricardo/cvg-agent-secretary-v2/packages/persistence/src/runtime-approval-store.ts'
-)
-type AuthorityCtor = new (pool: PostgresPoolLike) => InstanceType<
-  typeof PostgresApprovalAuthority
->
-const t1Class = ((await import(`${TAMPER_DIR}/runtime-approval-store-t1-nolock.ts`)) as {
-  PostgresApprovalAuthority: AuthorityCtor
-}).PostgresApprovalAuthority
-const t2Class = ((await import(`${TAMPER_DIR}/runtime-approval-store-t2-nocas.ts`)) as {
-  PostgresApprovalAuthority: AuthorityCtor
-}).PostgresApprovalAuthority
-const t3Class = ((await import(
-  `${TAMPER_DIR}/runtime-approval-store-t3-nolock-nocas.ts`
-)) as { PostgresApprovalAuthority: AuthorityCtor }).PostgresApprovalAuthority
+const { PostgresApprovalAuthority } =
+  await import('/home/ricardo/cvg-agent-secretary-v2/packages/persistence/src/runtime-approval-store.ts')
+type AuthorityCtor = new (
+  pool: PostgresPoolLike
+) => InstanceType<typeof PostgresApprovalAuthority>
+const t1Class = (
+  (await import(`${TAMPER_DIR}/runtime-approval-store-t1-nolock.ts`)) as {
+    PostgresApprovalAuthority: AuthorityCtor
+  }
+).PostgresApprovalAuthority
+const t2Class = (
+  (await import(`${TAMPER_DIR}/runtime-approval-store-t2-nocas.ts`)) as {
+    PostgresApprovalAuthority: AuthorityCtor
+  }
+).PostgresApprovalAuthority
+const t3Class = (
+  (await import(`${TAMPER_DIR}/runtime-approval-store-t3-nolock-nocas.ts`)) as {
+    PostgresApprovalAuthority: AuthorityCtor
+  }
+).PostgresApprovalAuthority
 
 class Barrier {
   #arrived = 0
@@ -146,19 +171,22 @@ class InjectPool implements PostgresPoolLike {
 
 function summarize(settled: PromiseSettledResult<unknown>[]) {
   const winners = settled.filter((r) => r.status === 'fulfilled')
-  const losers = settled.filter((r) => r.status === 'rejected') as PromiseRejectedResult[]
+  const losers = settled.filter(
+    (r) => r.status === 'rejected'
+  ) as PromiseRejectedResult[]
   return {
     winners: winners.length,
-    codes: losers.map((l) => (l.reason as { code?: string })?.code ?? l.reason?.name)
+    codes: losers.map(
+      (l) => (l.reason as { code?: string })?.code ?? l.reason?.name
+    )
   }
 }
 
 const h = await newSchema('f')
 const pools: Array<{ end(): Promise<void> }> = []
 try {
-  const { PostgresApprovalAuthority: RealAuthority } = await import(
-    '/home/ricardo/cvg-agent-secretary-v2/packages/persistence/src/runtime-approval-store.ts'
-  )
+  const { PostgresApprovalAuthority: RealAuthority } =
+    await import('/home/ricardo/cvg-agent-secretary-v2/packages/persistence/src/runtime-approval-store.ts')
   const setup = h.makePool(4)
   pools.push(setup)
   const seed = new RealAuthority(setup)
@@ -167,7 +195,11 @@ try {
     label: string,
     cls: AuthorityCtor,
     barrier: boolean
-  ): Promise<{ winners: number; codes: Array<string | undefined>; reservationIds: string[] }> => {
+  ): Promise<{
+    winners: number
+    codes: Array<string | undefined>
+    reservationIds: string[]
+  }> => {
     const tenant = tenantId(`tamper_${label}`)
     const hint = `tamper_${label}`
     const record = await createApproved(seed, tenant, hint)
@@ -188,7 +220,10 @@ try {
     const summary = summarize(settled)
     const persisted = await seed.get(tenant, record.approvalId)
     const reservationIds = settled
-      .filter((r): r is PromiseFulfilledResult<{ reservationId: string }> => r.status === 'fulfilled')
+      .filter(
+        (r): r is PromiseFulfilledResult<{ reservationId: string }> =>
+          r.status === 'fulfilled'
+      )
       .map((r) => r.value.reservationId)
     console.log(
       `${label}: winners=${summary.winners} loserCodes=${JSON.stringify(summary.codes)} persisted=${persisted.status} persistedToken=${persisted.reservationId ?? 'none'} winnerTokens=${JSON.stringify(reservationIds)}`
@@ -196,14 +231,30 @@ try {
     return { ...summary, reservationIds }
   }
 
-  const control = await race('control-real', RealAuthority as unknown as AuthorityCtor, false)
-  assert.equal(control.winners, 1, 'control: real adapter must have exactly one winner')
+  const control = await race(
+    'control-real',
+    RealAuthority as unknown as AuthorityCtor,
+    false
+  )
+  assert.equal(
+    control.winners,
+    1,
+    'control: real adapter must have exactly one winner'
+  )
 
   const t1Result = await race('t1-no-lock-cas-kept', t1Class, true)
-  assert.equal(t1Result.winners, 1, 't1: CAS alone must still protect (one winner)')
+  assert.equal(
+    t1Result.winners,
+    1,
+    't1: CAS alone must still protect (one winner)'
+  )
 
   const t2Result = await race('t2-lock-kept-cas-trimmed', t2Class, false)
-  assert.equal(t2Result.winners, 1, 't2: lock alone must still protect (one winner)')
+  assert.equal(
+    t2Result.winners,
+    1,
+    't2: lock alone must still protect (one winner)'
+  )
 
   const t3Result = await race('t3-no-lock-no-cas', t3Class, true)
   assert.equal(
@@ -226,7 +277,13 @@ try {
   const staleRace = async (
     label: string,
     cls: AuthorityCtor
-  ): Promise<{ winner: number; code?: string; generation: string; marker: string | null; status: string }> => {
+  ): Promise<{
+    winner: number
+    code?: string
+    generation: string
+    marker: string | null
+    status: string
+  }> => {
     const tenant = tenantId(`stale_${label}`)
     const hint = `stale_${label}`
     const record = await createApproved(seed, tenant, hint)
@@ -261,12 +318,27 @@ try {
     }
   }
 
-  const realStale = await staleRace('real-cas-detects', RealAuthority as unknown as AuthorityCtor)
-  assert.equal(realStale.winner, 0, 'real adapter must reject the interleaved stale write')
-  assert.equal(realStale.code, 'conflict', 'real adapter must surface domain conflict')
+  const realStale = await staleRace(
+    'real-cas-detects',
+    RealAuthority as unknown as AuthorityCtor
+  )
+  assert.equal(
+    realStale.winner,
+    0,
+    'real adapter must reject the interleaved stale write'
+  )
+  assert.equal(
+    realStale.code,
+    'conflict',
+    'real adapter must surface domain conflict'
+  )
 
   const t2Stale = await staleRace('t2-cas-trimmed', t2Class)
-  assert.equal(t2Stale.winner, 1, 't2 must accept the stale write (guard stripped)')
+  assert.equal(
+    t2Stale.winner,
+    1,
+    't2 must accept the stale write (guard stripped)'
+  )
   assert.equal(t2Stale.status, 'RESERVED')
   console.log(
     'Stale-write falsification: removing revision+generation from the predicate turns a detected conflict into a silent stale overwrite'

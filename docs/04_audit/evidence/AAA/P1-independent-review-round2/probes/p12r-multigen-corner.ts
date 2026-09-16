@@ -7,10 +7,7 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { canonicalizeJson } from '@cvg/shared'
-import {
-  ApprovalEngine,
-  InMemoryApprovalStore
-} from '@cvg/approval-engine'
+import { ApprovalEngine, InMemoryApprovalStore } from '@cvg/approval-engine'
 import {
   DeterministicModelProvider,
   ModelGateway,
@@ -157,9 +154,7 @@ async function main(): Promise<void> {
     toolCalls += 1
   })
 
-  const requested = await runtime.runTurn(
-    turnInput({ idempotencyKey: KEY_A })
-  )
+  const requested = await runtime.runTurn(turnInput({ idempotencyKey: KEY_A }))
   const approvalId = requested.approvalId ?? ''
   approvals.submit(TENANT, approvalId, 'op_1')
   approvals.approve(TENANT, approvalId, { approverId: 'op_2' })

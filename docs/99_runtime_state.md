@@ -1,3 +1,18 @@
+# AAA-4A HANDOFF BLOCKED / PHASE 4 REPAIR — 2026-09-15T22:24:40-03:00
+
+- status: `IN_PROGRESS`; current_engine: controlled `AUDIT`/repair; current
+  task: `CVG-PHASE4-CAPABILITY-BOUNDARY` / `AAA-41`.
+- attempted next task: `CVG-PHASE4A-CONVERSATIONAL-INTELLIGENCE` / `AAA-4A`;
+  handoff `BLOCKED` in `docs/phase4a/PHASE_4_HANDOFF.md`.
+- cause: current Phase 4 certification is `NO_GO` on the required format gate
+  (312 files) and the final fresh critic has no returned report.
+- completed action: archived all 18 prompt parts byte-for-byte under
+  `docs/phase4a/prompts/` and recorded the blocked handoff.
+- next_action: repair only the Phase 4 format drift, rerun its certification,
+  obtain fresh read-only critic evidence, then re-evaluate the AAA-4A gate.
+- safety: no Phase 4A source code, real data/provider/channel/MCP, credential,
+  deployment, sensitive action, or production authorization.
+
 # REPO-20260915 — controlled repository publication — 2026-09-15T19:20:20-03:00
 
 - status: `READY_FOR_NEXT_STEP`; current_engine: controlled `AUDIT`; task:

@@ -53,7 +53,11 @@ export function proposalHash(hint: string): string {
 }
 
 export function syntheticPayload(hint: string): unknown {
-  return { kind: 'critic_synthetic', draftId: `c_${hint}`, label: 'critic only' }
+  return {
+    kind: 'critic_synthetic',
+    draftId: `c_${hint}`,
+    label: 'critic only'
+  }
 }
 
 export function requestInput(tenantId: string, hint: string) {

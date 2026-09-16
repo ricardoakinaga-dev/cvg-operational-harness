@@ -2,26 +2,26 @@
 
 ## Stop taxonomy
 
-| Stop reason | Authority | Meaning |
-| --- | --- | --- |
-| `COMPLETED` | evaluator + runtime | A RESPOND step was accepted and completion is grounded. |
-| `NEEDS_USER_INPUT` | orchestrator + runtime | A question is pending; execution is durable. |
-| `APPROVAL_REQUIRED` | policy/approval + runtime | A human approval is pending; execution is durable. |
-| `HUMAN_TAKEOVER` | policy/orchestrator | Handoff outcome, no channel implemented. |
-| `POLICY_DENIED` | policy/approval | Zero unauthorized effect. |
-| `INSUFFICIENT_EVIDENCE` | evaluator | The agent tried to finalize without sufficient evidence. |
-| `MAX_STEPS` | runtime | Step budget exhausted. |
-| `MAX_MODEL_CALLS` / `MAX_TOKENS` / `MAX_COST` | runtime | Model budget exhausted. |
-| `MAX_TOOL_CALLS` | runtime | Tool budget exhausted before an effect. |
-| `MAX_KNOWLEDGE_CALLS` / `MAX_REPLANS` / `MAX_VERIFICATION_CALLS` | runtime | Optional budgets exhausted. |
-| `MAX_DURATION` | runtime | Active-duration budget exhausted. |
-| `VERIFICATION_FAILED` | runtime | Verification failed terminally (e.g. false success). |
-| `LOOP_DETECTED` | runtime | Repeated/alternating decisions stopped before another effect (non-idempotent tools stop before a second invocation; alternation cycles are detected on closure). |
-| `TOOL_FAILURE` | tool adapter | Includes `unknown_effect:` (terminal reconciliation). |
-| `MODEL_FAILURE` / `INTERNAL_FAILURE` | runtime | Technical retryable. |
-| `STATE_CONFLICT` | runtime | Integrity/version/binding violation, fails closed. |
-| `UNSAFE_REQUEST` | runtime | Invalid identity/budget/envelope. |
-| `CANCELLED` | operator/store | Cancellation between attempts; no new effect. |
+| Stop reason                                                      | Authority                 | Meaning                                                                                                                                                          |
+| ---------------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COMPLETED`                                                      | evaluator + runtime       | A RESPOND step was accepted and completion is grounded.                                                                                                          |
+| `NEEDS_USER_INPUT`                                               | orchestrator + runtime    | A question is pending; execution is durable.                                                                                                                     |
+| `APPROVAL_REQUIRED`                                              | policy/approval + runtime | A human approval is pending; execution is durable.                                                                                                               |
+| `HUMAN_TAKEOVER`                                                 | policy/orchestrator       | Handoff outcome, no channel implemented.                                                                                                                         |
+| `POLICY_DENIED`                                                  | policy/approval           | Zero unauthorized effect.                                                                                                                                        |
+| `INSUFFICIENT_EVIDENCE`                                          | evaluator                 | The agent tried to finalize without sufficient evidence.                                                                                                         |
+| `MAX_STEPS`                                                      | runtime                   | Step budget exhausted.                                                                                                                                           |
+| `MAX_MODEL_CALLS` / `MAX_TOKENS` / `MAX_COST`                    | runtime                   | Model budget exhausted.                                                                                                                                          |
+| `MAX_TOOL_CALLS`                                                 | runtime                   | Tool budget exhausted before an effect.                                                                                                                          |
+| `MAX_KNOWLEDGE_CALLS` / `MAX_REPLANS` / `MAX_VERIFICATION_CALLS` | runtime                   | Optional budgets exhausted.                                                                                                                                      |
+| `MAX_DURATION`                                                   | runtime                   | Active-duration budget exhausted.                                                                                                                                |
+| `VERIFICATION_FAILED`                                            | runtime                   | Verification failed terminally (e.g. false success).                                                                                                             |
+| `LOOP_DETECTED`                                                  | runtime                   | Repeated/alternating decisions stopped before another effect (non-idempotent tools stop before a second invocation; alternation cycles are detected on closure). |
+| `TOOL_FAILURE`                                                   | tool adapter              | Includes `unknown_effect:` (terminal reconciliation).                                                                                                            |
+| `MODEL_FAILURE` / `INTERNAL_FAILURE`                             | runtime                   | Technical retryable.                                                                                                                                             |
+| `STATE_CONFLICT`                                                 | runtime                   | Integrity/version/binding violation, fails closed.                                                                                                               |
+| `UNSAFE_REQUEST`                                                 | runtime                   | Invalid identity/budget/envelope.                                                                                                                                |
+| `CANCELLED`                                                      | operator/store            | Cancellation between attempts; no new effect.                                                                                                                    |
 
 ## Stop authority
 

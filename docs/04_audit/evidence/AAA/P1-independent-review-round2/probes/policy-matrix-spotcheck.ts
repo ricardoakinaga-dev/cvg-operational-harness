@@ -151,9 +151,15 @@ console.log(
     combinationsConfirm: confirmRows.length,
     combinationsReschedule: rescheduleRows.length,
     combinationsModifyReal: modifyRealRows.length,
-    confirmDenyReasons: [...new Set(confirmRows.map((r) => `${r.decision}:${r.reason}`))],
-    rescheduleDenyReasons: [...new Set(rescheduleRows.map((r) => `${r.decision}:${r.reason}`))],
-    modifyRealDenyReasons: [...new Set(modifyRealRows.map((r) => `${r.decision}:${r.reason}`))],
+    confirmDenyReasons: [
+      ...new Set(confirmRows.map((r) => `${r.decision}:${r.reason}`))
+    ],
+    rescheduleDenyReasons: [
+      ...new Set(rescheduleRows.map((r) => `${r.decision}:${r.reason}`))
+    ],
+    modifyRealDenyReasons: [
+      ...new Set(modifyRealRows.map((r) => `${r.decision}:${r.reason}`))
+    ],
     modifyDraft,
     confirmOnDraft: modifyDraftConfirm,
     profilesObserved: [...observedProfiles].sort(),

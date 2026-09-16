@@ -77,7 +77,10 @@ async function main() {
     inputs: hashes,
     probeResults: {
       'D13-01-before': JSON.parse(
-        await readFile(path.join(evidenceDir, 'sql-atomicity-probe.before.json'), 'utf8')
+        await readFile(
+          path.join(evidenceDir, 'sql-atomicity-probe.before.json'),
+          'utf8'
+        )
       ),
       'D13-01-after': JSON.parse(
         await readFile(
@@ -86,10 +89,16 @@ async function main() {
         )
       ),
       'D13-04-before': JSON.parse(
-        await readFile(path.join(evidenceDir, 'readiness-probe.before.json'), 'utf8')
+        await readFile(
+          path.join(evidenceDir, 'readiness-probe.before.json'),
+          'utf8'
+        )
       ),
       'D13-04-after': JSON.parse(
-        await readFile(path.join(evidenceDir, 'readiness-probe.after.json'), 'utf8')
+        await readFile(
+          path.join(evidenceDir, 'readiness-probe.after.json'),
+          'utf8'
+        )
       )
     },
     baselineDrift: JSON.parse(
@@ -117,7 +126,10 @@ async function main() {
   )
   console.log(
     JSON.stringify(
-      { files: files.length, contract: hashes['docs/02_spec/prod20260913_m1_corrections_contract.md'] },
+      {
+        files: files.length,
+        contract: hashes['docs/02_spec/prod20260913_m1_corrections_contract.md']
+      },
       null,
       2
     )

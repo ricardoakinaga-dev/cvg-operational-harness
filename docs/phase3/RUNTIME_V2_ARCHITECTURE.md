@@ -34,20 +34,20 @@ LOAD (checkpoint | initial state)
 
 ## Component responsibilities
 
-| Component | Responsibility | Owns state | Calls model | Executes tool | Authorizes | Durable |
-| --- | --- | --- | --- | --- | --- | --- |
-| HTTP/API | accept submissions, resolve approvals/input, trajectory | no | no | no | no (authenticates only) | Phase 2 tables |
-| Worker | claim, lease, invoke harness, persist lifecycle | lease | no | no | no | yes |
-| Runtime V2 | loop, step ledger, checkpoints, budgets, stop | loop state | no (delegates) | no (delegates) | no | yes (step store) |
-| Hybrid Orchestrator | select next step | stateless | yes (decision support) | no | no | version pinned |
-| Context Engine | assemble per-step semantics | stateless | no | no | no | no |
-| Policy Engine | authorize tool execution | no | no | no | yes | Phase 2 |
-| Approval Engine | human gate | no | no | no | human | Phase 2 durable |
-| Tool Registry | execute capabilities | no | no | yes | no | Phase 2 effect journal |
-| Knowledge Provider | evidence retrieval | no | no | no | no | synthetic (Phase 3) |
-| Completion Evaluator | decide sufficiency/completion | no | optional | no | no | result persisted |
-| Persistence | remember | yes | no | no | no | yes |
-| Audit / Telemetry | prove / observe | no | no | no | no | Phase 2 sinks |
+| Component            | Responsibility                                          | Owns state | Calls model            | Executes tool  | Authorizes              | Durable                |
+| -------------------- | ------------------------------------------------------- | ---------- | ---------------------- | -------------- | ----------------------- | ---------------------- |
+| HTTP/API             | accept submissions, resolve approvals/input, trajectory | no         | no                     | no             | no (authenticates only) | Phase 2 tables         |
+| Worker               | claim, lease, invoke harness, persist lifecycle         | lease      | no                     | no             | no                      | yes                    |
+| Runtime V2           | loop, step ledger, checkpoints, budgets, stop           | loop state | no (delegates)         | no (delegates) | no                      | yes (step store)       |
+| Hybrid Orchestrator  | select next step                                        | stateless  | yes (decision support) | no             | no                      | version pinned         |
+| Context Engine       | assemble per-step semantics                             | stateless  | no                     | no             | no                      | no                     |
+| Policy Engine        | authorize tool execution                                | no         | no                     | no             | yes                     | Phase 2                |
+| Approval Engine      | human gate                                              | no         | no                     | no             | human                   | Phase 2 durable        |
+| Tool Registry        | execute capabilities                                    | no         | no                     | yes            | no                      | Phase 2 effect journal |
+| Knowledge Provider   | evidence retrieval                                      | no         | no                     | no             | no                      | synthetic (Phase 3)    |
+| Completion Evaluator | decide sufficiency/completion                           | no         | optional               | no             | no                      | result persisted       |
+| Persistence          | remember                                                | yes        | no                     | no             | no                      | yes                    |
+| Audit / Telemetry    | prove / observe                                         | no         | no                     | no             | no                      | Phase 2 sinks          |
 
 ## Explicit prohibitions
 

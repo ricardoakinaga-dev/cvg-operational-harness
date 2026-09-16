@@ -41,11 +41,18 @@ try {
   await assert.rejects(
     async () =>
       await authority.reserve(
-        reserveInput(failTenant, failHint, toFail.approvalId, `rsv_${failHint}_2`)
+        reserveInput(
+          failTenant,
+          failHint,
+          toFail.approvalId,
+          `rsv_${failHint}_2`
+        )
       ),
     (error: { code?: string }) => error.code === 'invalid_state'
   )
-  console.log('fail(no_effect): FAILED persisted, generation/history retained, terminal enforced')
+  console.log(
+    'fail(no_effect): FAILED persisted, generation/history retained, terminal enforced'
+  )
 
   // verifyAndConsume persists EXECUTED and rejects the second consumption
   const consumeTenant = tenantId('critic_consume')
@@ -74,14 +81,20 @@ try {
       }),
     (error: { code?: string }) => error.code === 'already_executed'
   )
-  console.log('verifyAndConsume: EXECUTED persisted, replay rejected already_executed')
+  console.log(
+    'verifyAndConsume: EXECUTED persisted, replay rejected already_executed'
+  )
 
   // submit/reject/cancel durable paths
   const opTenant = tenantId('critic_decisions')
   const submitRec = await authority.request(
     (await import('./lib.ts')).requestInput(opTenant, 'submit')
   )
-  const pending = await authority.submit(opTenant, submitRec.approvalId, 'op_critic')
+  const pending = await authority.submit(
+    opTenant,
+    submitRec.approvalId,
+    'op_critic'
+  )
   assert.equal(pending.status, 'PENDING')
   const rejected = await authority.reject(opTenant, submitRec.approvalId, {
     approverId: 'op_approver_critic',
@@ -92,7 +105,11 @@ try {
   const cancelRec = await authority.request(
     (await import('./lib.ts')).requestInput(opTenant, 'cancel')
   )
-  const cancelled = await authority.cancel(opTenant, cancelRec.approvalId, 'op_critic')
+  const cancelled = await authority.cancel(
+    opTenant,
+    cancelRec.approvalId,
+    'op_critic'
+  )
   assert.equal(cancelled.status, 'CANCELLED')
   console.log('submit/reject/cancel durable transitions persisted')
 

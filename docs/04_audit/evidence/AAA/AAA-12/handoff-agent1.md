@@ -20,14 +20,14 @@
 
 ## Comandos e resultados
 
-| Comando | Exit | Resultado |
-| --- | --- | --- |
-| `npx vitest run packages/channel-gateway packages/chaos` (com PostgreSQL descartável) | 0 | 8 arquivos / 62 testes PASS |
-| `npm test` | 0 | 175 arquivos PASS, 4 skipped; 886 testes PASS, 27 skipped (skips condicionais preexistentes de PostgreSQL sem URL) |
-| `npm run typecheck` | 0 | — |
-| `npm run lint` | 0 | — |
-| `git diff --check` | 0 | — |
-| coverage (`--coverage.reportsDirectory` próprio) | 0 | global 86.41/81.46/89.71/87.51; novos módulos declarados no manifest |
+| Comando                                                                               | Exit | Resultado                                                                                                          |
+| ------------------------------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------ |
+| `npx vitest run packages/channel-gateway packages/chaos` (com PostgreSQL descartável) | 0    | 8 arquivos / 62 testes PASS                                                                                        |
+| `npm test`                                                                            | 0    | 175 arquivos PASS, 4 skipped; 886 testes PASS, 27 skipped (skips condicionais preexistentes de PostgreSQL sem URL) |
+| `npm run typecheck`                                                                   | 0    | —                                                                                                                  |
+| `npm run lint`                                                                        | 0    | —                                                                                                                  |
+| `git diff --check`                                                                    | 0    | —                                                                                                                  |
+| coverage (`--coverage.reportsDirectory` próprio)                                      | 0    | global 86.41/81.46/89.71/87.51; novos módulos declarados no manifest                                               |
 
 - 11 cenários obrigatórios mapeados nominalmente no `manifest.json`; estado durável e contagem de efeitos observados no adapter e no journal, não em mocks de retorno.
 - Concorrência: `Promise.all` (1 envio), duas instâncias sobre o mesmo diretório durável (1 envio), restart após reserva (takeover, 1 envio), lease expirado com trabalhador atrasado (sem segundo envio nem falso sucesso).

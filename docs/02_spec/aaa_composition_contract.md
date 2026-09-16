@@ -26,16 +26,16 @@
 
 Cadeia canônica (inalterada): `identidade → policy → proposta imutável → aprovação/reserva → journal → adapter autorizado → efeito → confirmação/UNCERTAIN → audit/timeline`. Toda etapa carrega `tenantId`, identidade da operação (derivada pelo kernel; ver §3) e `correlationId`.
 
-| # | Invariante | Verificação |
-| - | ---------- | ----------- |
-| N1 | Nenhum caminho de workflow alcança `toolExecutor`, outbox ou adapter de efeito fora do kernel; a fronteira só produz `WorkflowPlan`/`WorkflowStep`, convertidos pela composição em `GovernedTurnInput`. | Checagem de imports dos módulos de fronteira/grafo (proibido importar `toolExecutor`/outbox/adapters); teste negativo: passo que tenta invocar efeito fora do kernel é `denied`. |
-| N2 | O payload executado é idêntico ao `proposalHash` aprovado; divergência falha fechado. | Regressões F01/F02/T-16/T-19 reexecutadas no caminho composto. |
-| N3 | A aprovação é durável e vinculada à operação (`operationKey`), com CAS/fencing entre gerações. | `PROD-04`: restart mantém proposta/reserva; duas conexões/gerações não reutilizam token. |
-| N4 | Efeito **real** (`real_authorized` ou high-risk/ADMIN) exige journal durável; sem journal a composição falha fechado. `controlled_fake` pode executar sem journal, conforme o kernel já permite. | Teste de composição sem `effectJournal`: high-risk nega; `real_authorized` negado sem entrada explícita. |
-| N5 | `real_authorized` continua negado sem autorização registrada; capabilities high-risk sem declaração recebem `DENY` antes do executor. | Matriz de capabilities (T-13/F15) no caminho composto. |
-| N6 | Resultado incerto nunca reexecuta automaticamente; vira `UNCERTAIN` com reconciliação explícita. | Crash entre efeito e confirmação → `UNCERTAIN`; nenhum novo efeito no replay. |
-| N7 | O caminho de produção compõe o journal/inbound durável explicitamente; configuração ausente falha fechado (AAA12-R3-F02). | Bootstrap de API/worker com env incompleto → startup rejeitado; gate em `AAA-21`. |
-| N8 | Minimização por construção: payloads do kernel não carregam conteúdo clínico/financeiro real; superfícies de saída (outbox/audit/logs) usam `sanitizeAuditEvidencePayload`/`redactSensitiveText` onde aplicável. | Testes de redaction nos pontos de saída e no payload persistido; revisão do ledger. |
+| #   | Invariante                                                                                                                                                                                                       | Verificação                                                                                                                                                                      |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| N1  | Nenhum caminho de workflow alcança `toolExecutor`, outbox ou adapter de efeito fora do kernel; a fronteira só produz `WorkflowPlan`/`WorkflowStep`, convertidos pela composição em `GovernedTurnInput`.          | Checagem de imports dos módulos de fronteira/grafo (proibido importar `toolExecutor`/outbox/adapters); teste negativo: passo que tenta invocar efeito fora do kernel é `denied`. |
+| N2  | O payload executado é idêntico ao `proposalHash` aprovado; divergência falha fechado.                                                                                                                            | Regressões F01/F02/T-16/T-19 reexecutadas no caminho composto.                                                                                                                   |
+| N3  | A aprovação é durável e vinculada à operação (`operationKey`), com CAS/fencing entre gerações.                                                                                                                   | `PROD-04`: restart mantém proposta/reserva; duas conexões/gerações não reutilizam token.                                                                                         |
+| N4  | Efeito **real** (`real_authorized` ou high-risk/ADMIN) exige journal durável; sem journal a composição falha fechado. `controlled_fake` pode executar sem journal, conforme o kernel já permite.                 | Teste de composição sem `effectJournal`: high-risk nega; `real_authorized` negado sem entrada explícita.                                                                         |
+| N5  | `real_authorized` continua negado sem autorização registrada; capabilities high-risk sem declaração recebem `DENY` antes do executor.                                                                            | Matriz de capabilities (T-13/F15) no caminho composto.                                                                                                                           |
+| N6  | Resultado incerto nunca reexecuta automaticamente; vira `UNCERTAIN` com reconciliação explícita.                                                                                                                 | Crash entre efeito e confirmação → `UNCERTAIN`; nenhum novo efeito no replay.                                                                                                    |
+| N7  | O caminho de produção compõe o journal/inbound durável explicitamente; configuração ausente falha fechado (AAA12-R3-F02).                                                                                        | Bootstrap de API/worker com env incompleto → startup rejeitado; gate em `AAA-21`.                                                                                                |
+| N8  | Minimização por construção: payloads do kernel não carregam conteúdo clínico/financeiro real; superfícies de saída (outbox/audit/logs) usam `sanitizeAuditEvidencePayload`/`redactSensitiveText` onde aplicável. | Testes de redaction nos pontos de saída e no payload persistido; revisão do ledger.                                                                                              |
 
 ## 3. Contrato da fronteira de workflow
 
@@ -77,26 +77,26 @@ export interface WorkflowCoordinatorPort {
 
 **Mapeamento normativo (substitui o termo informal `KernelCommand`).** A composição expõe `toGovernedTurnInput(plan, step, envelope)` e mapeia 1:1:
 
-| WorkflowStep | GovernedTurnInput |
-| ------------ | ----------------- |
-| `capability` / `action` / `resource` / `dataClassification` | mesmos campos |
-| `idempotencyKey` | `idempotencyKey` (identidade da operação derivada pelo kernel, `runtime.ts`; sem chave, o kernel usa tenant/capability/action/resource/proposalHash) |
-| `modelMessages` / `structuredOutput` | `modelMessages` / `structuredOutput` |
-| `plan.tenantId` / `plan.correlationId` | mesmos campos |
-| `plan.conversationId` / `sessionId` | mesmos campos |
-| envelope (agente/versão/perfil/prompt/modelo/limites) | campos correspondentes |
+| WorkflowStep                                                | GovernedTurnInput                                                                                                                                    |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `capability` / `action` / `resource` / `dataClassification` | mesmos campos                                                                                                                                        |
+| `idempotencyKey`                                            | `idempotencyKey` (identidade da operação derivada pelo kernel, `runtime.ts`; sem chave, o kernel usa tenant/capability/action/resource/proposalHash) |
+| `modelMessages` / `structuredOutput`                        | `modelMessages` / `structuredOutput`                                                                                                                 |
+| `plan.tenantId` / `plan.correlationId`                      | mesmos campos                                                                                                                                        |
+| `plan.conversationId` / `sessionId`                         | mesmos campos                                                                                                                                        |
+| envelope (agente/versão/perfil/prompt/modelo/limites)       | campos correspondentes                                                                                                                               |
 
 Regras: (a) o payload executado vem exclusivamente da proposta imutável aprovada (`proposalPayload`/`modelResult`), nunca de `WorkflowStep`; (b) `operationKey` não é campo da fronteira — quando persistido em aprovação/journal, é o derivado/`idempotencyKey` do kernel; (c) o grafo não recebe `toolExecutor`, outbox, journals, repositórios ou credenciais; injeção é feita na composição; (d) modo controlado usa coordenador fake/determinístico; modo real só sob `D04`; (e) seleção por ambiente: `WORKFLOW_COORDINATOR=governed-kernel | langgraph-frontier` — env ausente → `governed-kernel`; `langgraph-frontier` sem adapter → `frontier_not_configured`; valor desconhecido → falha fechada no startup; (f) `AAA12-R3-F02`: a composição não-teste injeta journal durável explicitamente; sem configuração, envio automático falha fechado (sem `inMemory` silencioso).
 
 ## 4. Contratos de consumidor, redaction e rollout
 
-| Consumidor | Porta existente | Fronteira C | Estado neste contrato |
-| ---------- | --------------- | ----------- | --------------------- |
-| Identidade | `OperatorIdentityResolver` (`AAA-20`) | claims confiáveis separados de headers de simulação; audience/expiração/replay | implementado no escopo controlado; IdP real sob `D04` |
-| Modelo | `ModelGateway` | provider fake/determinístico por padrão; provider real só sob `D04` | controlado |
-| Canal | `ChannelGateway` + adapters | outbound suprimido no caminho controlado; envio real sob `D04` | controlado; cadeia `Evolution→Gateway→Connect Desk→Secretary` preservada sem Chatwoot obrigatório |
-| RAG | catálogo/`ApprovedKnowledgeResolver` | corpus sintético marcado; sem fonte institucional real até `D04`; ausência/revogação → handoff | controlado |
-| UI | painel de jornadas/handoff | consome apenas a API pública com identidade/sessão; não cria autoridade | contratos de PROD-07/08/09 |
+| Consumidor | Porta existente                       | Fronteira C                                                                                    | Estado neste contrato                                                                             |
+| ---------- | ------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Identidade | `OperatorIdentityResolver` (`AAA-20`) | claims confiáveis separados de headers de simulação; audience/expiração/replay                 | implementado no escopo controlado; IdP real sob `D04`                                             |
+| Modelo     | `ModelGateway`                        | provider fake/determinístico por padrão; provider real só sob `D04`                            | controlado                                                                                        |
+| Canal      | `ChannelGateway` + adapters           | outbound suprimido no caminho controlado; envio real sob `D04`                                 | controlado; cadeia `Evolution→Gateway→Connect Desk→Secretary` preservada sem Chatwoot obrigatório |
+| RAG        | catálogo/`ApprovedKnowledgeResolver`  | corpus sintético marcado; sem fonte institucional real até `D04`; ausência/revogação → handoff | controlado                                                                                        |
+| UI         | painel de jornadas/handoff            | consome apenas a API pública com identidade/sessão; não cria autoridade                        | contratos de PROD-07/08/09                                                                        |
 
 Redaction: minimização por construção no kernel; `sanitizeAuditEvidencePayload`/`redactSensitiveText` aplicados nas superfícies de persistência de saída que os usam hoje; `AAA-21` deve adicionar os testes de saída do caminho composto. Nenhum payload clínico/financeiro real em nenhum caso.
 
@@ -145,9 +145,9 @@ Rollout por capacidade: `appointment_draft` (draft-only) habilitado no controlad
 
 ## 10. Fechamento das condições da revisão independente (v2)
 
-| Condição | Origem | Fechamento |
-| -------- | ------ | ---------- |
-| C1 — tipo `KernelCommand` indefinido e mapeamento opaco | F1/F2 | Termo substituído pelo mapeamento normativo `toGovernedTurnInput` (§3); `operationKey`/`proposalInput` deixaram de ser campos da fronteira. |
-| C2 — claims em tempo presente e N4/N8 além do código | F3/F4/F6 | §1/§8 recastados como alvo (`AAA-21`); N4 restrito a efeito real/high-risk; N8 como minimização por construção + sanitização onde aplicável. |
-| C3 — colisão `ApprovalStorePort` e autoridades SQL imprecisas | F5/F7 | Porta renomeada para `DurableApprovalStorePort` (persistência apenas); autoridades `platform_capability_approvals` (0002) e `approval_requests` (0000) nomeadas e não duplicadas. |
-| C4 — artefato/falsificabilidade, `frontier_not_configured`, identidade, bloco de revisão | F8–F11 | §3(e) separa os casos de configuração; §7 exige neutralização, artefato `AAA-21/manifest.json` e cenários de equivalência; §1 atribui claims confiáveis a `AAA-20`; cabeçalho com revisão/status. |
+| Condição                                                                                 | Origem   | Fechamento                                                                                                                                                                                        |
+| ---------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1 — tipo `KernelCommand` indefinido e mapeamento opaco                                  | F1/F2    | Termo substituído pelo mapeamento normativo `toGovernedTurnInput` (§3); `operationKey`/`proposalInput` deixaram de ser campos da fronteira.                                                       |
+| C2 — claims em tempo presente e N4/N8 além do código                                     | F3/F4/F6 | §1/§8 recastados como alvo (`AAA-21`); N4 restrito a efeito real/high-risk; N8 como minimização por construção + sanitização onde aplicável.                                                      |
+| C3 — colisão `ApprovalStorePort` e autoridades SQL imprecisas                            | F5/F7    | Porta renomeada para `DurableApprovalStorePort` (persistência apenas); autoridades `platform_capability_approvals` (0002) e `approval_requests` (0000) nomeadas e não duplicadas.                 |
+| C4 — artefato/falsificabilidade, `frontier_not_configured`, identidade, bloco de revisão | F8–F11   | §3(e) separa os casos de configuração; §7 exige neutralização, artefato `AAA-21/manifest.json` e cenários de equivalência; §1 atribui claims confiáveis a `AAA-20`; cabeçalho com revisão/status. |

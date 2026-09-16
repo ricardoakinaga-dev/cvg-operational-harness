@@ -184,7 +184,8 @@ export function buildHarness(options: HarnessOptions = {}) {
       retry: { maxRetries: 0 }
     })
   const policy =
-    options.policy ?? new PolicyEngine({ documents: options.documents ?? [], clock: now })
+    options.policy ??
+    new PolicyEngine({ documents: options.documents ?? [], clock: now })
   const store = options.store ?? new InMemoryApprovalStore()
   const approvals = new ApprovalEngine({ store, clock: now })
   const innerTelemetry = new InMemoryTelemetry({ clock: now })
@@ -290,6 +291,10 @@ export const FAKE_CANCEL_SCOPE: Partial<Record<Capability, EffectScope>> = {
 
 export function report(name: string, data: Record<string, unknown>): void {
   console.log(
-    JSON.stringify({ probe: name, observedAt: new Date().toISOString(), ...data })
+    JSON.stringify({
+      probe: name,
+      observedAt: new Date().toISOString(),
+      ...data
+    })
   )
 }

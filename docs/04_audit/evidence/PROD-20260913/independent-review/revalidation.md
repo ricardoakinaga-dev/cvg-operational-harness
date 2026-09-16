@@ -9,15 +9,15 @@
 
 F1–F6 are all resolved; R1–R7 all pass. One new non-blocking bookkeeping finding (N1, P3) was found and is documented below. No P0/P1/P2 findings.
 
-| Item | Previous finding | Revalidation result |
-|------|------------------|---------------------|
-| R1 / F1 | typecheck exit 2 on fake pool | **PASS** — `npm run typecheck` EXIT=0 on the attested bytes; fake pool cast present and file is inside tsconfig include |
-| R2 / F2 | prettier failed on `aaa_decision_brief.md` | **PASS** — all 16 listed files clean |
-| R3 / F3 | 3 stale hashes in PROD-01 manifest | **PASS** — 64/64 hash-map entries match; `sha256sum -c` 64 SUCESSO; inline `baselineDrift` was/now also verified |
+| Item    | Previous finding                                   | Revalidation result                                                                                                                 |
+| ------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| R1 / F1 | typecheck exit 2 on fake pool                      | **PASS** — `npm run typecheck` EXIT=0 on the attested bytes; fake pool cast present and file is inside tsconfig include             |
+| R2 / F2 | prettier failed on `aaa_decision_brief.md`         | **PASS** — all 16 listed files clean                                                                                                |
+| R3 / F3 | 3 stale hashes in PROD-01 manifest                 | **PASS** — 64/64 hash-map entries match; `sha256sum -c` 64 SUCESSO; inline `baselineDrift` was/now also verified                    |
 | R4 / F5 | post-COMMIT cleanup error after committed mutation | **PASS** — reset+verification now before COMMIT; cleanup/verification failure ⇒ ROLLBACK, no COMMIT; real-pool wire order confirmed |
-| R5 | — | **PASS** — 4 files / 50 tests, 0 skipped |
-| R6 | — | **PASS** — 18 files / 151 tests, 0 skipped |
-| R7 / F6 | contract drift (preflight/lazy reads) | **PASS** — contract now matches the implementation |
+| R5      | —                                                  | **PASS** — 4 files / 50 tests, 0 skipped                                                                                            |
+| R6      | —                                                  | **PASS** — 18 files / 151 tests, 0 skipped                                                                                          |
+| R7 / F6 | contract drift (preflight/lazy reads)              | **PASS** — contract now matches the implementation                                                                                  |
 
 ---
 
@@ -122,13 +122,13 @@ The `observation` label is a stale heuristic of the old probe (it keys only on `
 
 My own probe `/tmp/opencode/reval-c1b.ts` (fresh, tracks COMMIT explicitly; EXIT=0):
 
-| Scenario | Result |
-|----------|--------|
-| A. fake pool, success | order `BEGIN → set_config(tenant) → INSERT → set_config() → verify(current_setting) → COMMIT`; value returned; one clean release; `cleanupBeforeCommit: true` |
-| B. fake pool, first clear fails | thrown `clear attempt 1 failed`; order `… → set_config() → ROLLBACK → set_config()`; `commitExecuted: false`; `errorSurfacedWithCommittedMutation: false` |
-| C. fake pool, `current_setting` still leaks after clear | thrown `PostgreSQL tenant context cleanup was not verified`; `commitExecuted: false`; ROLLBACK |
-| D. real pool (`cvg_prod_test`) | wire order `BEGIN → set_config(tenant) → SELECT 1 AS ok → set_config() → verify(current_setting) → COMMIT`; fresh connection `current_setting('cvg.tenant_id', true)` = NULL |
-| E. real pool + injected clear failure | thrown `injected clear failure`; order `BEGIN → set_config(tenant) → CREATE TEMP TABLE → INSERT → set_config() → ROLLBACK → set_config()`; `commitExecuted: false`; mutation rolled back; fresh connection clean |
+| Scenario                                                | Result                                                                                                                                                                                                           |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A. fake pool, success                                   | order `BEGIN → set_config(tenant) → INSERT → set_config() → verify(current_setting) → COMMIT`; value returned; one clean release; `cleanupBeforeCommit: true`                                                    |
+| B. fake pool, first clear fails                         | thrown `clear attempt 1 failed`; order `… → set_config() → ROLLBACK → set_config()`; `commitExecuted: false`; `errorSurfacedWithCommittedMutation: false`                                                        |
+| C. fake pool, `current_setting` still leaks after clear | thrown `PostgreSQL tenant context cleanup was not verified`; `commitExecuted: false`; ROLLBACK                                                                                                                   |
+| D. real pool (`cvg_prod_test`)                          | wire order `BEGIN → set_config(tenant) → SELECT 1 AS ok → set_config() → verify(current_setting) → COMMIT`; fresh connection `current_setting('cvg.tenant_id', true)` = NULL                                     |
+| E. real pool + injected clear failure                   | thrown `injected clear failure`; order `BEGIN → set_config(tenant) → CREATE TEMP TABLE → INSERT → set_config() → ROLLBACK → set_config()`; `commitExecuted: false`; mutation rolled back; fresh connection clean |
 
 **Conclusion:** a committed mutation can no longer return a cleanup error. The fixed ordering is on the attested bytes (`tenant-scoped-postgres.ts` sha256 `055bca02…` = PROD-02 `sourceSha256`).
 
@@ -178,9 +178,9 @@ The contract now describes the implemented mechanism, not a different one.
 
 ## New findings
 
-| ID | Severity | Finding |
-|----|----------|---------|
-| N1 | **P3** (bookkeeping, non-blocking) | The `npm test` gate claim in five manifests does not match the attested full-suite log or a fresh rerun. Manifests say `PASS: Test Files 234 passed | 7 skipped (241); Tests 1625 passed | 81 skipped (1706)`; the attested `PROD-01/npm-test-final.log:114-115` says `Tests 1625 passed | 83 skipped (1708)`, and two fresh `npm test` runs (one background 226.9s, one foreground 258.4s, EXIT=0) produced `1625 passed | 83 skipped (1708)`. The builder's manifest writer hardcodes the stale figure at `docs/04_audit/evidence/PROD-20260913/PROD-01/write-m1-manifests.mjs:41`. |
+| ID  | Severity                           | Finding                                                                                                                                             |
+| --- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| N1  | **P3** (bookkeeping, non-blocking) | The `npm test` gate claim in five manifests does not match the attested full-suite log or a fresh rerun. Manifests say `PASS: Test Files 234 passed | 7 skipped (241); Tests 1625 passed | 81 skipped (1706)`; the attested `PROD-01/npm-test-final.log:114-115`says`Tests 1625 passed | 83 skipped (1708)`, and two fresh `npm test`runs (one background 226.9s, one foreground 258.4s, EXIT=0) produced`1625 passed | 83 skipped (1708)`. The builder's manifest writer hardcodes the stale figure at `docs/04_audit/evidence/PROD-20260913/PROD-01/write-m1-manifests.mjs:41`. |
 
 - Locations: `PROD-02/manifest.json:60`, `PROD-03/manifest.json:57`, `PROD-05/manifest.json:42`, `PROD-06/manifest.json:42`, `AAA-22/manifest.json:50`.
 - Repro:
@@ -195,11 +195,11 @@ No weakened assertions, unconditional skips, lowered thresholds, real credential
 
 ## Additional gates re-run (resolves prior NOT_VERIFIED items)
 
-| Command | Result |
-|---------|--------|
-| `npm test` (`vitest run --no-file-parallelism --maxWorkers=2`) | EXIT=0; `Test Files 234 passed | 7 skipped (241)`; `Tests 1625 passed | 83 skipped (1708)`; 258.4s. Reproduced twice with identical counts. Resolves previous review NOT_VERIFIED #1. |
-| `npx eslint <14 source batch files>` | EXIT=0 (clean). |
-| `npm run test:worker:startup` | EXIT=0; `worker.startup_smoke_passed` + `worker.controlled_smoke_verified`. |
+| Command                                                        | Result                                                                      |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `npm test` (`vitest run --no-file-parallelism --maxWorkers=2`) | EXIT=0; `Test Files 234 passed                                              | 7 skipped (241)`; `Tests 1625 passed | 83 skipped (1708)`; 258.4s. Reproduced twice with identical counts. Resolves previous review NOT_VERIFIED #1. |
+| `npx eslint <14 source batch files>`                           | EXIT=0 (clean).                                                             |
+| `npm run test:worker:startup`                                  | EXIT=0; `worker.startup_smoke_passed` + `worker.controlled_smoke_verified`. |
 
 ## NOT_VERIFIED limits
 
@@ -211,19 +211,19 @@ No weakened assertions, unconditional skips, lowered thresholds, real credential
 
 ## Command summary
 
-| # | Command | Exit | Key result |
-|---|---------|------|-----------|
-| 1 | `npm run typecheck` | 0 | clean; F1 fixed |
-| 2 | `npx prettier --check <16 batch files>` | 0 | all clean; F2 fixed |
-| 3 | `node /tmp/opencode/reval-r3-hashes.mjs` | 0 | 64/64 MATCH, 0 bad; F3 fixed |
-| 4 | `sha256sum -c /tmp/opencode/reval-r3-sums.txt` | 0 | 64/64 SUCESSO |
-| 5 | `npx tsx /tmp/opencode/verify-c1b.ts` (old probe) | 0 | SQL order shows no COMMIT before ROLLBACK |
-| 6 | `npx tsx /tmp/opencode/reval-c1b.ts` (new probe) | 0 | A–E: cleanup+verify before COMMIT; no error with committed mutation; F5 fixed |
-| 7 | `TEST_DATABASE_URL=… npx vitest run <4 files>` | 0 | 4 files / 50 tests |
-| 8 | `TEST_DATABASE_URL=… npm run test:postgres` | 0 | 18 files / 151 tests, 0 skips |
-| 9 | `npm test` (background) | 0 (summary) | 234 | 7 skipped files; 1625 passed | 83 skipped |
-| 10 | `npm test` (foreground) | 0 | same counts; 258.4s |
-| 11 | `npx eslint <14 source files>` | 0 | clean |
-| 12 | `npm run test:worker:startup` | 0 | startup + controlled smoke verified |
+| #   | Command                                           | Exit        | Key result                                                                    |
+| --- | ------------------------------------------------- | ----------- | ----------------------------------------------------------------------------- | ---------------------------- | ---------- |
+| 1   | `npm run typecheck`                               | 0           | clean; F1 fixed                                                               |
+| 2   | `npx prettier --check <16 batch files>`           | 0           | all clean; F2 fixed                                                           |
+| 3   | `node /tmp/opencode/reval-r3-hashes.mjs`          | 0           | 64/64 MATCH, 0 bad; F3 fixed                                                  |
+| 4   | `sha256sum -c /tmp/opencode/reval-r3-sums.txt`    | 0           | 64/64 SUCESSO                                                                 |
+| 5   | `npx tsx /tmp/opencode/verify-c1b.ts` (old probe) | 0           | SQL order shows no COMMIT before ROLLBACK                                     |
+| 6   | `npx tsx /tmp/opencode/reval-c1b.ts` (new probe)  | 0           | A–E: cleanup+verify before COMMIT; no error with committed mutation; F5 fixed |
+| 7   | `TEST_DATABASE_URL=… npx vitest run <4 files>`    | 0           | 4 files / 50 tests                                                            |
+| 8   | `TEST_DATABASE_URL=… npm run test:postgres`       | 0           | 18 files / 151 tests, 0 skips                                                 |
+| 9   | `npm test` (background)                           | 0 (summary) | 234                                                                           | 7 skipped files; 1625 passed | 83 skipped |
+| 10  | `npm test` (foreground)                           | 0           | same counts; 258.4s                                                           |
+| 11  | `npx eslint <14 source files>`                    | 0           | clean                                                                         |
+| 12  | `npm run test:worker:startup`                     | 0           | startup + controlled smoke verified                                           |
 
 **Final verdict: REVALIDATED_PASS** — F1–F6 resolved, R1–R7 pass; N1 (P3, manifest `npm test` skipped-count bookkeeping) recommended for correction at the next manifest regeneration, with no product impact.

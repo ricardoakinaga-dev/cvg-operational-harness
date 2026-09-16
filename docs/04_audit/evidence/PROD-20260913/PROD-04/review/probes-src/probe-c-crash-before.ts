@@ -17,7 +17,9 @@ try {
   const a1 = new PostgresApprovalAuthority(pool1)
   const record = await createApproved(a1, tenant, hint)
   const reservation = await a1.reserve(
-    reserveInput(tenant, hint, record.approvalId, `rsv_${hint}_1`, { ttlMs: 1_000 })
+    reserveInput(tenant, hint, record.approvalId, `rsv_${hint}_1`, {
+      ttlMs: 1_000
+    })
   )
   assert.equal(reservation.generation, 1)
   // Simulated crash/restart: adapter and pool are discarded.
@@ -45,7 +47,11 @@ try {
   assert.equal(persisted.reservationId, undefined)
   assert.equal(persisted.reservationOwner, undefined)
   assert.equal(persisted.reservationExpiresAt, undefined)
-  assert.equal(persisted.reservationGeneration, 1, 'generation must be retained')
+  assert.equal(
+    persisted.reservationGeneration,
+    1,
+    'generation must be retained'
+  )
   assert.deepEqual(
     persisted.usedReservationIds,
     [reservation.reservationId],
@@ -66,12 +72,16 @@ try {
   )
   assert.equal(sql.rows[0]?.reservation_id, null)
   assert.equal(sql.rows[0]?.reservation_generation, '1')
-  assert.deepEqual(sql.rows[0]?.used_reservation_ids, [reservation.reservationId])
+  assert.deepEqual(sql.rows[0]?.used_reservation_ids, [
+    reservation.reservationId
+  ])
   console.log(
     `crash-before-effect: released=${sweep.released} status=${persisted.status} gen=${persisted.reservationGeneration} used=${persisted.usedReservationIds?.length}`
   )
   await pool2.end()
-  pass('crash-before-effect releases to APPROVED with generation/history retained')
+  pass(
+    'crash-before-effect releases to APPROVED with generation/history retained'
+  )
 } catch (error) {
   console.error(error)
   fail(`probe-c aborted: ${(error as Error).message}`)

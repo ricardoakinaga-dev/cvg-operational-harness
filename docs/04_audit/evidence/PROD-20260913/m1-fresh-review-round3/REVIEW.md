@@ -14,10 +14,10 @@ All eight corrections RA-M1-01..08 were reproduced on real artifacts: every focu
 Source list: `docs/04_audit/evidence/PROD-20260913/reaudit-round2/manifest.json` → `sourceRevalidation.files` (648 paths, each with an expected sha256).
 Method: `sha256` of every listed file, per-file compare against the frozen manifest hashes, plus an aggregate hash over `path+sha256` in sorted order (`fingerprint.py`, stored in this folder).
 
-| | count listed | count hashed | missing | mismatched vs manifest | aggregate sha256 |
-|---|---|---|---|---|---|
-| BEFORE (all runs) | 648 | 648 | 0 | 0 | `b0c675233a0bdf68e9b6aa8f3b07c225634bcbc223c25c6d9c5e9318710a90fe` |
-| AFTER all runs | 648 | 648 | 0 | 0 | `b0c675233a0bdf68e9b6aa8f3b07c225634bcbc223c25c6d9c5e9318710a90fe` |
+|                   | count listed | count hashed | missing | mismatched vs manifest | aggregate sha256                                                   |
+| ----------------- | ------------ | ------------ | ------- | ---------------------- | ------------------------------------------------------------------ |
+| BEFORE (all runs) | 648          | 648          | 0       | 0                      | `b0c675233a0bdf68e9b6aa8f3b07c225634bcbc223c25c6d9c5e9318710a90fe` |
+| AFTER all runs    | 648          | 648          | 0       | 0                      | `b0c675233a0bdf68e9b6aa8f3b07c225634bcbc223c25c6d9c5e9318710a90fe` |
 
 **No byte changed.** `fingerprint-before.json`, `fingerprint-final.json`, `fingerprint.py` stored here. The working tree also matches the frozen candidate manifest exactly before and after (0 mismatches), i.e. this candidate's product bytes are the ones the round produced.
 Disclosure: `npm run build:web` was executed; it only writes `apps/web/dist/*` (gitignored, not in the manifest). No source/test/config file was written by me. All DB work happened on schemas created and dropped by the probes/tests in disposable databases.
@@ -30,19 +30,19 @@ Disclosure: `npm run build:web` was executed; it only writes `apps/web/dist/*` (
 
 ## 3. Gates executed (commands, exit codes, key output)
 
-| Gate | Command | Exit | Key output |
-|---|---|---|---|
-| Typecheck | `npm run typecheck` | 0 | no errors (`typecheck.log`) |
-| ESLint (changed source+test files) | `npx eslint <18 files>` | 0 | clean (`eslint.log`) |
-| Focused vitest | `TEST_DATABASE_URL=…critic3_main npx vitest run --testTimeout=60000 --no-file-parallelism apps/api/src/__tests__/readiness.test.ts apps/web/src/features/journeys/journeys.test.tsx apps/web/src/__tests__/journeys-identity-race.test.tsx packages/persistence/src/__tests__/journey-task-atomicity.test.ts packages/persistence/src/__tests__/journeys-postgres.test.ts apps/api/src/__tests__/journeys-api-postgres.test.ts packages/persistence/src/__tests__/journeys.test.ts packages/persistence/src/__tests__/tenant-isolation.test.ts` | 0 | 8 files, 83 tests passed |
-| Worker focused | `… npx vitest run … apps/worker/src/__tests__/postgres-role-preflight.test.ts postgres-controlled.test.ts controlled-worker.test.ts` | 0 | 3 files, 19 tests passed |
-| PostgreSQL battery | `TEST_DATABASE_URL=…critic3_main npm run test:postgres` | 0 | 19 files, 163 tests passed |
-| Full suite | `TEST_DATABASE_URL=…critic3_main npm test` | 0 | **242 files, 1733 tests passed, 0 skipped**, 254.6 s (`full-test.log`) |
-| Web package regression | `… npx vitest run --no-file-parallelism apps/web` | 0 | 22 files, 70 tests passed |
-| Extra API/persistence | `… journey-routes-coverage.test.ts postgres-persistence-mode.test.ts journeys.test.ts` | 0 | 3 files, 31 tests passed |
-| Worker startup smoke | `npm run test:worker:startup` | 0 | `worker.startup_smoke_passed`, `worker.controlled_smoke_verified` |
-| Web build | `npm run build:web` | 0 | built in 350 ms |
-| Round-2 readiness probe | `NODE_ENV=test npx tsx docs/04_audit/evidence/PROD-20260913/reaudit-round2/m1-readiness-probe.ts` | 0 | `/ready` 503, elapsed 921 ms, destroyed 1 (it only writes stdout) |
+| Gate                               | Command                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Exit | Key output                                                             |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ---------------------------------------------------------------------- |
+| Typecheck                          | `npm run typecheck`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 0    | no errors (`typecheck.log`)                                            |
+| ESLint (changed source+test files) | `npx eslint <18 files>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | 0    | clean (`eslint.log`)                                                   |
+| Focused vitest                     | `TEST_DATABASE_URL=…critic3_main npx vitest run --testTimeout=60000 --no-file-parallelism apps/api/src/__tests__/readiness.test.ts apps/web/src/features/journeys/journeys.test.tsx apps/web/src/__tests__/journeys-identity-race.test.tsx packages/persistence/src/__tests__/journey-task-atomicity.test.ts packages/persistence/src/__tests__/journeys-postgres.test.ts apps/api/src/__tests__/journeys-api-postgres.test.ts packages/persistence/src/__tests__/journeys.test.ts packages/persistence/src/__tests__/tenant-isolation.test.ts` | 0    | 8 files, 83 tests passed                                               |
+| Worker focused                     | `… npx vitest run … apps/worker/src/__tests__/postgres-role-preflight.test.ts postgres-controlled.test.ts controlled-worker.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                            | 0    | 3 files, 19 tests passed                                               |
+| PostgreSQL battery                 | `TEST_DATABASE_URL=…critic3_main npm run test:postgres`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | 0    | 19 files, 163 tests passed                                             |
+| Full suite                         | `TEST_DATABASE_URL=…critic3_main npm test`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | 0    | **242 files, 1733 tests passed, 0 skipped**, 254.6 s (`full-test.log`) |
+| Web package regression             | `… npx vitest run --no-file-parallelism apps/web`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | 0    | 22 files, 70 tests passed                                              |
+| Extra API/persistence              | `… journey-routes-coverage.test.ts postgres-persistence-mode.test.ts journeys.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                          | 0    | 3 files, 31 tests passed                                               |
+| Worker startup smoke               | `npm run test:worker:startup`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | 0    | `worker.startup_smoke_passed`, `worker.controlled_smoke_verified`      |
+| Web build                          | `npm run build:web`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 0    | built in 350 ms                                                        |
+| Round-2 readiness probe            | `NODE_ENV=test npx tsx docs/04_audit/evidence/PROD-20260913/reaudit-round2/m1-readiness-probe.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                               | 0    | `/ready` 503, elapsed 921 ms, destroyed 1 (it only writes stdout)      |
 
 ## 4. Per-RA verification
 
@@ -67,6 +67,7 @@ Contract mapping: connection/admission/late-query failure never becomes success;
 Implementation: `apps/web/src/features/journeys/index.tsx:49-70` (effect deps `[identityKey, selectedSessionId]`, aborts old controller, generation++, clears every form/draft state including `patientName` → `'Bolt'`, `busy`, `message`), `index.tsx:82-100` (`run` captures generation+signal; catch/finally guard generation), `apps/web/src/api/client.ts:476-484,546-710` (signal forwarded to `fetch` for all 8 journey operations).
 
 Evidence:
+
 - Repo tests: `journeys-identity-race.test.tsx` (13 tests) — stale tenant A success/error discarded, current-identity result visible, session A stale success/error discarded for `session_B` and `null`, obsolete request signal aborted, busy preserved for the in-flight current operation, six transitions (tenant/actor/role/logout/session/session-cleared) clear typed data and drafts and reset `patientName` to `Bolt`; `journeys.test.tsx` + `journeys-api-postgres.test.ts` confirm the authorized current search still works.
 - Neutralization in a throwaway copy under `/tmp/opencode/critic3/ui-neutralized` (repo copy never edited; restored afterwards): baseline copy 13/13 pass; removing `selectedSessionId` from the effect deps → **6 failures** (the 4 session invalidation cases + 2 session-clear form cases); removing the 9 generation checks (`if (generation !== generationRef.current) return` → `if (false) return`) → **6 failures** (the 2 delayed previous-tenant cases + the 4 session invalidation cases). Logs `ui-baseline.log`, `ui-neutralized-deps.log`, `ui-neutralized-generation.log`.
 - `npm test` web files all pass (no authorization change; client diff is purely additive `signal` plumbing, inspected via `git diff`).
@@ -91,18 +92,18 @@ Implementation: `apps/worker/src/postgres-role-preflight.ts:54-255` — role fla
 
 Probe (`probe-d-preflight.ts`, real roles and schema in `critic3_preflight`):
 
-| Case | Result |
-|---|---|
-| minimal valid role (grants select/insert/update, no extra) | accepted |
-| extra permissive `USING (true)` policy on `outbox_events` | **pre-fix cross-tenant read demonstrated**: with tenant A context the role read tenant B's event; preflight then **rejected** (`tenant isolation policies are not verified`) |
-| same pool after rejection | `current_setting('cvg.tenant_id', true)` = NULL |
-| single policy with wrong expression (`USING (true)`) | rejected |
-| `REVOKE INSERT ON outbox_effects` | rejected (`table privileges must be minimal`) |
-| `GRANT DELETE ON tasks` | rejected |
-| `NO FORCE ROW LEVEL SECURITY` on `sessions` | rejected |
-| role owns `outbox_effects` | rejected |
-| all mutations reverted (grants re-applied) | minimal role passes again |
-| cleanup verification returns no row | rejects and destroys client (`release(Error)`) |
+| Case                                                       | Result                                                                                                                                                                       |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| minimal valid role (grants select/insert/update, no extra) | accepted                                                                                                                                                                     |
+| extra permissive `USING (true)` policy on `outbox_events`  | **pre-fix cross-tenant read demonstrated**: with tenant A context the role read tenant B's event; preflight then **rejected** (`tenant isolation policies are not verified`) |
+| same pool after rejection                                  | `current_setting('cvg.tenant_id', true)` = NULL                                                                                                                              |
+| single policy with wrong expression (`USING (true)`)       | rejected                                                                                                                                                                     |
+| `REVOKE INSERT ON outbox_effects`                          | rejected (`table privileges must be minimal`)                                                                                                                                |
+| `GRANT DELETE ON tasks`                                    | rejected                                                                                                                                                                     |
+| `NO FORCE ROW LEVEL SECURITY` on `sessions`                | rejected                                                                                                                                                                     |
+| role owns `outbox_effects`                                 | rejected                                                                                                                                                                     |
+| all mutations reverted (grants re-applied)                 | minimal role passes again                                                                                                                                                    |
+| cleanup verification returns no row                        | rejects and destroys client (`release(Error)`)                                                                                                                               |
 
 No skip, no threshold change: policy expression comparison is strict equality after normalization; a second policy (even RESTRICTIVE) fails `tablePolicies.length !== 1`.
 
@@ -115,16 +116,17 @@ No skip, no threshold change: policy expression comparison is strict equality af
 
 ## 6. Adversarial probes (all under /tmp/opencode/critic3, copies stored here)
 
-| Probe | Purpose | Result |
-|---|---|---|
-| `probe-a-readiness.ts` | timeout vs destroy, late success, blocked admission, concurrent probes | all fail-closed 503; 1 admission; late client destroyed once; `/live` 200 |
-| `probe-a2-timers.ts` | timer leak + secret redaction | live timers before/after = 0/0; body has no `postgres://`/`secret_pw` |
-| UI neutralization (throwaway copy) | remove session dep / generation guards | 6 failures each; baseline 13/13 |
-| `probe-c-atomicity.ts` | real trigger, retry, concurrent replay, no 25P02, rollback context reset, memory parity | all pass (see §4) |
-| `probe-d-preflight.ts` | extra permissive policy, wrong expression, missing/forbidden privileges, FORCE/ownership, valid role, cleanup destroy | all pass (see §4) |
-| `probe-e-http-spoof.ts` | spoofed body identity/tenant over HTTP; HTTP task atomicity | trusted actor/correlation/tenant recorded; 500/failure leaves 0/0; retry 1/1 |
+| Probe                              | Purpose                                                                                                               | Result                                                                       |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `probe-a-readiness.ts`             | timeout vs destroy, late success, blocked admission, concurrent probes                                                | all fail-closed 503; 1 admission; late client destroyed once; `/live` 200    |
+| `probe-a2-timers.ts`               | timer leak + secret redaction                                                                                         | live timers before/after = 0/0; body has no `postgres://`/`secret_pw`        |
+| UI neutralization (throwaway copy) | remove session dep / generation guards                                                                                | 6 failures each; baseline 13/13                                              |
+| `probe-c-atomicity.ts`             | real trigger, retry, concurrent replay, no 25P02, rollback context reset, memory parity                               | all pass (see §4)                                                            |
+| `probe-d-preflight.ts`             | extra permissive policy, wrong expression, missing/forbidden privileges, FORCE/ownership, valid role, cleanup destroy | all pass (see §4)                                                            |
+| `probe-e-http-spoof.ts`            | spoofed body identity/tenant over HTTP; HTTP task atomicity                                                           | trusted actor/correlation/tenant recorded; 500/failure leaves 0/0; retry 1/1 |
 
 Probe notes for future reviewers:
+
 - `m1-readiness-probe.ts` and my readiness scripts need a ref'd keep-alive (`setInterval`) — all readiness timers are `unref()`ed, so without one Node exits 0 with no output.
 - Changing table ownership (`ALTER TABLE … OWNER TO`) silently drops the role's explicit grants in PostgreSQL 16; my first preflight run mis-attributed this to the product. A fresh role per test (as the suite does) avoids it.
 
@@ -133,6 +135,7 @@ Probe notes for future reviewers:
 **P0/P1/P2: none.**
 
 **P3 (observations, no acceptance violation):**
+
 1. The preflight covers the declared `WORKER_CRITICAL_TABLES` (11 tables). The default controlled handler additionally reads platform tables (`createPostgresControlledHandlers` → `platform.resolvePublished`, `apps/worker/src/postgres-controlled.ts:263`), which the preflight does not privilege-check. Consequence is fail-closed (runtime permission error after claim), not cross-tenant leakage: `platform_*` tables have RLS+FORCE (`packages/persistence/migrations/0001_tenant_isolation.sql:867+`), and both the corrections and reaudit contracts scope the check to the consumed/critical set.
 2. `withTenantContext` keeps the pre-round cleanup style (set empty + release, no post-clean verification query; `packages/persistence/src/tenant-scoped-postgres.ts:84-147`). The verified-reset requirement is implemented in `withTenantTransaction` (lines 171-188) and in the worker preflight; the PROD-02 contract explicitly kept `withTenantContext` unchanged, so this is out of the RA-M1-04/05/08 scope but worth tracking if other consumers ever carry tenant context.
 

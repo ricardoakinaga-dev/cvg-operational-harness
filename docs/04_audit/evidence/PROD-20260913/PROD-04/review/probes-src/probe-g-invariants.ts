@@ -17,9 +17,11 @@ import { PostgresApprovalAuthority } from '/home/ricardo/cvg-agent-secretary-v2/
 
 class RecordingPool implements PostgresPoolLike {
   readonly statements: string[] = []
-  constructor(private readonly inner: {
-    connect(): Promise<PostgresPoolClient>
-  }) {}
+  constructor(
+    private readonly inner: {
+      connect(): Promise<PostgresPoolClient>
+    }
+  ) {}
   async connect(): Promise<PostgresPoolClient> {
     const client = await this.inner.connect()
     const statements = this.statements
@@ -82,7 +84,11 @@ try {
     tenantId: tenant,
     approvalId: currentId,
     reservationId: reservation.reservationId,
-    evidence: { outcome: 'no_effect', source: 'adapter', evidenceRef: 'critic:inv' }
+    evidence: {
+      outcome: 'no_effect',
+      source: 'adapter',
+      evidenceRef: 'critic:inv'
+    }
   })
   assert.equal(await revisionOf(currentId), '5')
   console.log('revision increments on every persisted transition: 1..5')
@@ -99,7 +105,9 @@ try {
   ]) {
     assert.ok(update?.includes(clause), `CAS predicate missing: ${clause}`)
   }
-  console.log('CAS predicate ships all four clauses: revision/status/reservation_id/generation')
+  console.log(
+    'CAS predicate ships all four clauses: revision/status/reservation_id/generation'
+  )
 
   await assert.rejects(
     async () => await authority.expireStale(),
@@ -147,10 +155,14 @@ try {
     (await authority.get(tenant, stuck.approvalId)).status,
     'UNCERTAIN'
   )
-  console.log('releaseExpired leaves an expired-reservation UNCERTAIN row untouched')
+  console.log(
+    'releaseExpired leaves an expired-reservation UNCERTAIN row untouched'
+  )
 
   await pool.end()
-  pass('invariants: revision, CAS predicate, expireStale rejection, sweep selectivity')
+  pass(
+    'invariants: revision, CAS predicate, expireStale rejection, sweep selectivity'
+  )
 } catch (error) {
   console.error(error)
   fail(`probe-g aborted: ${(error as Error).message}`)

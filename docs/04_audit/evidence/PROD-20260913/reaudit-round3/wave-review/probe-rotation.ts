@@ -13,8 +13,14 @@ import {
 const T0 = 1_700_000_000
 const NOW_MS = T0 * 1000
 const now = () => NOW_MS
-const CURRENT = { keyId: 'kid_cur_2026', secret: 'current-probe-secret-0123456789abcdefgh' }
-const PREV = { keyId: 'kid_prev_2026', secret: 'previous-probe-secret-0123456789abcdefg' }
+const CURRENT = {
+  keyId: 'kid_cur_2026',
+  secret: 'current-probe-secret-0123456789abcdefgh'
+}
+const PREV = {
+  keyId: 'kid_prev_2026',
+  secret: 'previous-probe-secret-0123456789abcdefg'
+}
 const IDENTITY = {
   operatorId: 'operator.rotation.critic',
   role: 'Supervisor' as const,
@@ -26,7 +32,9 @@ function b64(value: unknown): string {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url')
 }
 function sign(encoded: string, secret: string): string {
-  return createHmac('sha256', secret).update(encoded, 'utf8').digest('base64url')
+  return createHmac('sha256', secret)
+    .update(encoded, 'utf8')
+    .digest('base64url')
 }
 function claimsToken(claims: Record<string, unknown>, secret: string): string {
   const encoded = b64(claims)
@@ -42,12 +50,18 @@ function baseClaims(kid?: string): Record<string, unknown> {
     ...(kid ? { kid } : {})
   }
 }
-function tryResolve(resolver: (h: Record<string, unknown>) => unknown, token: string) {
+function tryResolve(
+  resolver: (h: Record<string, unknown>) => unknown,
+  token: string
+) {
   try {
     const identity = resolver({ 'x-cvg-operator-token': token })
     return { ok: true, identity }
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    }
   }
 }
 
@@ -62,8 +76,14 @@ const outWindowRing = createLocalIdentityKeyRing({
   previous: [{ ...PREV, rotatedAt: T0 - 601 }],
   rotationWindowSeconds: 600
 })
-const inWindow = createTrustedOperatorIdentityResolver({ keyRing: inWindowRing, now })
-const outWindow = createTrustedOperatorIdentityResolver({ keyRing: outWindowRing, now })
+const inWindow = createTrustedOperatorIdentityResolver({
+  keyRing: inWindowRing,
+  now
+})
+const outWindow = createTrustedOperatorIdentityResolver({
+  keyRing: outWindowRing,
+  now
+})
 results.previousInWindow = tryResolve(
   inWindow,
   createTrustedOperatorIdentityToken(IDENTITY, PREV, now)
@@ -87,12 +107,18 @@ results.revokedPrevious = tryResolve(
 
 // unknown kid and missing kid rejected when key ring configured
 const ring = createLocalIdentityKeyRing({ current: CURRENT })
-const ringResolver = createTrustedOperatorIdentityResolver({ keyRing: ring, now })
+const ringResolver = createTrustedOperatorIdentityResolver({
+  keyRing: ring,
+  now
+})
 results.unknownKid = tryResolve(
   ringResolver,
   claimsToken(baseClaims('kid_unknown_2026'), CURRENT.secret)
 )
-results.missingKid = tryResolve(ringResolver, claimsToken(baseClaims(), CURRENT.secret))
+results.missingKid = tryResolve(
+  ringResolver,
+  claimsToken(baseClaims(), CURRENT.secret)
+)
 results.validKid = tryResolve(
   ringResolver,
   claimsToken(baseClaims(CURRENT.keyId), CURRENT.secret)

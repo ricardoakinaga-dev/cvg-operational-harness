@@ -52,7 +52,8 @@ async function readJson(relative) {
 
 function deriveEvidenceState(taskIds, statusById) {
   const statuses = taskIds.map((id) => statusById.get(id) ?? 'UNKNOWN')
-  if (statuses.some((status) => status === 'BLOCKED')) return 'BLOCKED_BY_DEPENDENCY'
+  if (statuses.some((status) => status === 'BLOCKED'))
+    return 'BLOCKED_BY_DEPENDENCY'
   if (statuses.every((status) => status === 'VERIFIED' || status === 'DONE'))
     return 'HISTORICAL_VERIFIED_NOT_CURRENT_CANDIDATE'
   if (statuses.some((status) => status === 'VERIFIED' || status === 'DONE'))
@@ -116,16 +117,15 @@ async function main() {
     ]
     const evidence = [
       ...new Set(
-        taskIds
-          .map((id) => taskById.get(id)?.expectedEvidence)
-          .filter(Boolean)
+        taskIds.map((id) => taskById.get(id)?.expectedEvidence).filter(Boolean)
       )
     ]
     const blockedBy = taskIds.filter((id) => statusById.get(id) === 'BLOCKED')
     const findings = [
       ...new Set(taskIds.flatMap((taskId) => findingsForTask(taskId)))
     ]
-    if (testMethods.length === 0) problems.push({ item: entry[idKey], missing: ['testMethod'] })
+    if (testMethods.length === 0)
+      problems.push({ item: entry[idKey], missing: ['testMethod'] })
     return {
       ...entry,
       tasks: taskIds,
@@ -153,8 +153,9 @@ async function main() {
     criteria: {
       total: criteria.length,
       withoutTasks: criteria.filter((item) => item.tasks.length === 0).length,
-      withoutTestMethods: criteria.filter((item) => item.testMethods.length === 0)
-        .length,
+      withoutTestMethods: criteria.filter(
+        (item) => item.testMethods.length === 0
+      ).length,
       blocked: criteria.filter((item) => item.blockedBy.length > 0).length
     },
     requirements: {

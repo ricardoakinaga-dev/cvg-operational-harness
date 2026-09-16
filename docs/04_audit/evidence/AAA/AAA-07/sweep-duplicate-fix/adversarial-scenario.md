@@ -43,17 +43,17 @@ Pre-fix RED evidence (test 1, `red-focused.log`): the retry outcome was
 
 ## Case matrix (all exercised by the new suites)
 
-| Persisted key? | Journal under resolved key | Approval state at expiry | Evidence | Outcome |
-| -------------- | -------------------------- | ------------------------ | -------- | ------- |
-| yes (A) | absent | RESERVED (never EXECUTING) | `no_effect` | release to APPROVED; persisted key retained |
-| yes (A) | absent | EXECUTING | `unknown` | UNCERTAIN, no release |
-| yes (A) | RESERVED / ABANDONED / EFFECT_FAILED | any | `no_effect` | release to APPROVED (retry allowed, effect <= 1) |
-| yes (A) | EFFECT_STARTED / UNCERTAIN / CONFIRMED | any | `unknown` | UNCERTAIN, no release |
-| yes (A) | record with mismatched proposalHash | any | `unknown` | UNCERTAIN, no release |
-| yes (A) | lookup throws | any | no evidence | UNCERTAIN, no release |
-| no (legacy) | absent under derived candidate | any | `unknown` | UNCERTAIN, no release (never APPROVED) |
-| no (legacy) | no-effect proof under derived candidate | any | `no_effect` | release to APPROVED |
-| no (legacy) | EFFECT_STARTED / UNCERTAIN / CONFIRMED | any | `unknown` | UNCERTAIN, no release |
+| Persisted key? | Journal under resolved key              | Approval state at expiry   | Evidence    | Outcome                                          |
+| -------------- | --------------------------------------- | -------------------------- | ----------- | ------------------------------------------------ |
+| yes (A)        | absent                                  | RESERVED (never EXECUTING) | `no_effect` | release to APPROVED; persisted key retained      |
+| yes (A)        | absent                                  | EXECUTING                  | `unknown`   | UNCERTAIN, no release                            |
+| yes (A)        | RESERVED / ABANDONED / EFFECT_FAILED    | any                        | `no_effect` | release to APPROVED (retry allowed, effect <= 1) |
+| yes (A)        | EFFECT_STARTED / UNCERTAIN / CONFIRMED  | any                        | `unknown`   | UNCERTAIN, no release                            |
+| yes (A)        | record with mismatched proposalHash     | any                        | `unknown`   | UNCERTAIN, no release                            |
+| yes (A)        | lookup throws                           | any                        | no evidence | UNCERTAIN, no release                            |
+| no (legacy)    | absent under derived candidate          | any                        | `unknown`   | UNCERTAIN, no release (never APPROVED)           |
+| no (legacy)    | no-effect proof under derived candidate | any                        | `no_effect` | release to APPROVED                              |
+| no (legacy)    | EFFECT_STARTED / UNCERTAIN / CONFIRMED  | any                        | `unknown`   | UNCERTAIN, no release                            |
 
 ## Adversarial checks performed
 

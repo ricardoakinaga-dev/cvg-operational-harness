@@ -56,7 +56,10 @@ async function main(): Promise<void> {
   const failures: string[] = []
   const dir = await mkdtemp(join(tmpdir(), 'p1-f04-'))
   const adapter = new SlowCountingAdapter()
-  const journal = new FileChannelEffectJournal({ directory: dir, clock: () => Date.now() })
+  const journal = new FileChannelEffectJournal({
+    directory: dir,
+    clock: () => Date.now()
+  })
   const gwA = new ChannelGateway({
     outboundAdapters: [adapter],
     effectJournal: journal,
@@ -65,7 +68,10 @@ async function main(): Promise<void> {
   })
   const gwB = new ChannelGateway({
     outboundAdapters: [adapter],
-    effectJournal: new FileChannelEffectJournal({ directory: dir, clock: () => Date.now() }),
+    effectJournal: new FileChannelEffectJournal({
+      directory: dir,
+      clock: () => Date.now()
+    }),
     leaseOwner: 'worker-B',
     waitTimeoutMs: 5_000
   })
@@ -104,13 +110,18 @@ async function main(): Promise<void> {
   // Replay after a fresh gateway over the same durable directory: no resend.
   const gwC = new ChannelGateway({
     outboundAdapters: [adapter],
-    effectJournal: new FileChannelEffectJournal({ directory: dir, clock: () => Date.now() }),
+    effectJournal: new FileChannelEffectJournal({
+      directory: dir,
+      clock: () => Date.now()
+    }),
     leaseOwner: 'worker-C',
     waitTimeoutMs: 5_000
   })
   const replay = await gwC.dispatch(outbound(), { takeoverActive: false })
   if (adapter.sent.length !== 1) {
-    failures.push(`provider sends after restart replay = ${adapter.sent.length}`)
+    failures.push(
+      `provider sends after restart replay = ${adapter.sent.length}`
+    )
   }
   if (replay.externalId !== 'ext_1') {
     failures.push(`replayed result externalId = ${replay.externalId}`)
@@ -141,7 +152,10 @@ async function main(): Promise<void> {
     operationKind: 'outbound_message' as const,
     idempotencyKey: `${TENANT}:whatsapp:probe-f04-legacy`
   }
-  const journal2 = new FileChannelEffectJournal({ directory: dir, clock: () => Date.now() })
+  const journal2 = new FileChannelEffectJournal({
+    directory: dir,
+    clock: () => Date.now()
+  })
   const legacyReserve = await journal2.reserve({
     identity: identity2,
     payloadHash: 'b'.repeat(64),
@@ -149,7 +163,8 @@ async function main(): Promise<void> {
     leaseOwner: 'legacy-worker',
     leaseMs: 30_000
   })
-  if (legacyReserve.outcome !== 'reserved') failures.push(`legacy reserve=${legacyReserve.outcome}`)
+  if (legacyReserve.outcome !== 'reserved')
+    failures.push(`legacy reserve=${legacyReserve.outcome}`)
   const gwLegacy = new ChannelGateway({
     outboundAdapters: [adapter],
     effectJournal: journal2,
@@ -172,7 +187,9 @@ async function main(): Promise<void> {
     failures.push(`version mismatch code = ${versionCode}`)
   }
   if (adapter.sent.length !== 1) {
-    failures.push(`provider sends after version mismatch = ${adapter.sent.length}`)
+    failures.push(
+      `provider sends after version mismatch = ${adapter.sent.length}`
+    )
   }
 
   // Actor alignment: reconciliation requires an accountable actor+reason, and
@@ -183,7 +200,10 @@ async function main(): Promise<void> {
     operationKind: 'outbound_message' as const,
     idempotencyKey: `${TENANT}:whatsapp:probe-f04-actor`
   }
-  const journal3 = new FileChannelEffectJournal({ directory: dir, clock: () => Date.now() })
+  const journal3 = new FileChannelEffectJournal({
+    directory: dir,
+    clock: () => Date.now()
+  })
   await journal3.reserve({
     identity: identity3,
     payloadHash: 'c'.repeat(64),
@@ -227,7 +247,9 @@ async function main(): Promise<void> {
     failures.push(`terminal reconciliation code = ${actorCodes.terminal}`)
   }
   if (adapter.sent.length !== 1) {
-    failures.push(`provider sends after reconciliation checks = ${adapter.sent.length}`)
+    failures.push(
+      `provider sends after reconciliation checks = ${adapter.sent.length}`
+    )
   }
 
   report('F04-channel-concurrency', {
@@ -244,7 +266,9 @@ async function main(): Promise<void> {
   })
 
   await rm(dir, { recursive: true, force: true })
-  console.log(JSON.stringify({ probe: 'F04', falsified: failures.length > 0, failures }))
+  console.log(
+    JSON.stringify({ probe: 'F04', falsified: failures.length > 0, failures })
+  )
   if (failures.length > 0) process.exitCode = 1
 }
 

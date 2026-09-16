@@ -26,12 +26,12 @@ registra cada `startSpan` (nome + id) e intercepta `span.end`, removendo o span 
 Os 16 testes do arquivo usam `expectNoPendingSpans`; o teste dedicado de span closure
 percorre quatro desfechos no mesmo teste:
 
-| Desfecho | Cenário | Resultado esperado | Log |
-| --- | --- | --- | --- |
-| sucesso | `appointment.create` controlled_fake, tool+outbox | `executed`; pending 0 | span-closure.log |
-| negação por policy | `patient.record.write` | `denied policy_denied`; pending 0 | span-closure.log |
-| erro de outbox | outbox lança | `denied outbox_failed`; pending 0 | span-closure.log |
-| timeout/deadline | relógio avança além de `maxDurationMs` após o modelo | `denied loop_deadline_exceeded`; pending 0 | span-closure.log |
+| Desfecho           | Cenário                                              | Resultado esperado                         | Log              |
+| ------------------ | ---------------------------------------------------- | ------------------------------------------ | ---------------- |
+| sucesso            | `appointment.create` controlled_fake, tool+outbox    | `executed`; pending 0                      | span-closure.log |
+| negação por policy | `patient.record.write`                               | `denied policy_denied`; pending 0          | span-closure.log |
+| erro de outbox     | outbox lança                                         | `denied outbox_failed`; pending 0          | span-closure.log |
+| timeout/deadline   | relógio avança além de `maxDurationMs` após o modelo | `denied loop_deadline_exceeded`; pending 0 | span-closure.log |
 
 Cancelamento (`turn_cancelled`) tem prova equivalente nos dois testes de T-11 e no
 teste de resposta tardia, todos com `pending() === []`.

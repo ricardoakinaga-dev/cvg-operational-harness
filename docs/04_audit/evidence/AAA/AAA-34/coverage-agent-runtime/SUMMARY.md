@@ -11,13 +11,13 @@
 
 ## Resultado antes/depois (comando idêntico)
 
-| Arquivo / pacote | Stmts antes | Stmts depois | Branches antes | Branches depois |
-| --- | --- | --- | --- | --- |
+| Arquivo / pacote                    | Stmts antes      | Stmts depois     | Branches antes   | Branches depois  |
+| ----------------------------------- | ---------------- | ---------------- | ---------------- | ---------------- |
 | `packages/agent-runtime` (agregado) | 723/951 = 76,03% | 936/951 = 98,42% | 474/674 = 70,33% | 657/674 = 97,48% |
-| `runtime.ts` | 465/646 = 71,98% | 635/646 = 98,30% | 318/479 = 66,39% | 464/479 = 96,87% |
-| `effect-journal.ts` | 220/259 = 84,94% | 255/259 = 98,46% | 135/166 = 81,33% | 165/166 = 99,40% |
-| `proposal.ts` | 33/41 = 80,49% | 41/41 = 100% | 19/26 = 73,08% | 25/26 = 96,15% |
-| `contracts.ts` | 5/5 = 100% | 5/5 = 100% | 2/3 = 66,67% | 3/3 = 100% |
+| `runtime.ts`                        | 465/646 = 71,98% | 635/646 = 98,30% | 318/479 = 66,39% | 464/479 = 96,87% |
+| `effect-journal.ts`                 | 220/259 = 84,94% | 255/259 = 98,46% | 135/166 = 81,33% | 165/166 = 99,40% |
+| `proposal.ts`                       | 33/41 = 80,49%   | 41/41 = 100%     | 19/26 = 73,08%   | 25/26 = 96,15%   |
+| `contracts.ts`                      | 5/5 = 100%       | 5/5 = 100%       | 2/3 = 66,67%     | 3/3 = 100%       |
 
 - Functions/lines do pacote: antes 101/109 (92,66%) / 693/897 (77,25%); depois 106/109 (97,24%) / 886/897 (98,77%).
 - Referência da task (baseline do enunciado): statements 77,2% / branches 71,5%; medido pelo builder com as 6 suítes originais no mesmo candidato: 76,03/70,33 (a pequena diferença decorre de instrumentação/rounding e do conjunto exato de suítes no momento declarado).
@@ -25,16 +25,16 @@
 
 ## Branches críticos do kernel (≥95% exigido)
 
-| Caminho crítico | Cobertos/total | % |
-| --- | --- | --- |
-| policy→approval reserve→journal→tool→confirm→outbox (`runtime.ts` 592–1617) | 222/230 | 96,52% |
-| fencing/lease/recovery (`runtime.ts` 1950–2366) | 60/62 | 96,77% |
-| imutabilidade terminal (`effect-journal.ts` decide*, 275–459) | 52/52 | 100% |
-| replay idempotente, runtime (`runtime.ts` 1761–1948) | 37/39 | 94,87% (100% dos branches alcançáveis; 2 ramos defensivos inalcançáveis) |
-| replay idempotente, reserva no journal (`effect-journal.ts` 240–273) | 12/12 | 100% |
-| budget/deadline/cancel (`runtime.ts` 454–530, 678–716, 1323–1384, 1473–1510) | 65/68 | 95,59% |
-| autorização de efeito real (`runtime.ts` 311–336, 649–660, 854–866, 1150–1159) | 22/22 | 100% |
-| **Total dos caminhos críticos** | **470/485** | **96,91%** |
+| Caminho crítico                                                                | Cobertos/total | %                                                                        |
+| ------------------------------------------------------------------------------ | -------------- | ------------------------------------------------------------------------ |
+| policy→approval reserve→journal→tool→confirm→outbox (`runtime.ts` 592–1617)    | 222/230        | 96,52%                                                                   |
+| fencing/lease/recovery (`runtime.ts` 1950–2366)                                | 60/62          | 96,77%                                                                   |
+| imutabilidade terminal (`effect-journal.ts` decide\*, 275–459)                 | 52/52          | 100%                                                                     |
+| replay idempotente, runtime (`runtime.ts` 1761–1948)                           | 37/39          | 94,87% (100% dos branches alcançáveis; 2 ramos defensivos inalcançáveis) |
+| replay idempotente, reserva no journal (`effect-journal.ts` 240–273)           | 12/12          | 100%                                                                     |
+| budget/deadline/cancel (`runtime.ts` 454–530, 678–716, 1323–1384, 1473–1510)   | 65/68          | 95,59%                                                                   |
+| autorização de efeito real (`runtime.ts` 311–336, 649–660, 854–866, 1150–1159) | 22/22          | 100%                                                                     |
+| **Total dos caminhos críticos**                                                | **470/485**    | **96,91%**                                                               |
 
 Nível de módulo (todos ≥95%): `runtime.ts` 464/479 = 96,87%; `effect-journal.ts` 165/166 = 99,40%; `proposal.ts` 25/26 = 96,15%; `contracts.ts` 3/3 = 100%.
 

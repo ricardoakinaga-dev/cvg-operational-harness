@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { DurableApprovalEngineAdapter } from '../operational-approval-adapter.ts'
 import type { ApprovalRequest } from '@cvg/harness-contracts'
 
-const tenantId = 'tenant_00000000-0000-4000-8000-000000000731' as ApprovalRequest['tenantId']
+const tenantId =
+  'tenant_00000000-0000-4000-8000-000000000731' as ApprovalRequest['tenantId']
 
 function request(): ApprovalRequest {
   return {
@@ -12,7 +13,8 @@ function request(): ApprovalRequest {
     operationKey: 'approval-adapter-concurrent-1',
     toolId: 'synthetic.tool',
     summary: 'synthetic approval',
-    correlationId: 'correlation_approval_adapter_1' as ApprovalRequest['correlationId'],
+    correlationId:
+      'correlation_approval_adapter_1' as ApprovalRequest['correlationId'],
     executionRef: 'exec_synthetic_approval_adapter_1',
     operatorId: 'agent.synthetic',
     agentVersion: 'v1' as NonNullable<ApprovalRequest['agentVersion']>,

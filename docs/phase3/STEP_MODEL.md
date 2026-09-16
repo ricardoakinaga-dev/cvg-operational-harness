@@ -11,18 +11,18 @@ settles; the step store enforces this ordering for both adapters.
 
 ## Step types
 
-| Type | Meaning |
-| --- | --- |
-| `MODEL` | Pure reasoning/planning step (e.g. REPLAN). |
-| `TOOL` | A tool invocation governed by policy/approval/effect journal. |
-| `KNOWLEDGE` | A knowledge search step (synthetic provider). |
-| `POLICY` | A policy outcome that terminates a tool path (denial/loop). |
-| `APPROVAL` | An approval outcome recorded on the tool path. |
-| `USER_INPUT` | A clarification pause awaiting durable user input. |
-| `VERIFY` | Explicit verification of tool result / evidence / response claims. |
-| `RESPOND` | Final response composition. |
-| `HANDOFF` | Human takeover outcome. |
-| `STOP` | Explicit stop decision. |
+| Type         | Meaning                                                            |
+| ------------ | ------------------------------------------------------------------ |
+| `MODEL`      | Pure reasoning/planning step (e.g. REPLAN).                        |
+| `TOOL`       | A tool invocation governed by policy/approval/effect journal.      |
+| `KNOWLEDGE`  | A knowledge search step (synthetic provider).                      |
+| `POLICY`     | A policy outcome that terminates a tool path (denial/loop).        |
+| `APPROVAL`   | An approval outcome recorded on the tool path.                     |
+| `USER_INPUT` | A clarification pause awaiting durable user input.                 |
+| `VERIFY`     | Explicit verification of tool result / evidence / response claims. |
+| `RESPOND`    | Final response composition.                                        |
+| `HANDOFF`    | Human takeover outcome.                                            |
+| `STOP`       | Explicit stop decision.                                            |
 
 `THINK` is intentionally absent: the orchestrator decision is recorded on the
 step that acts on it (`decisionType`), so no empty reasoning step is persisted.

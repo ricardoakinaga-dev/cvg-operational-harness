@@ -21,11 +21,22 @@ const errors: string[] = []
 
 async function expectReject(pool: unknown, label: string, pattern: RegExp) {
   try {
-    await assertPostgresWorkerPreflight(pool as never, { tenantId: tenantA as never })
-    results.push({ case: label, rejected: false, detail: 'ACCEPTED (unexpected)' })
+    await assertPostgresWorkerPreflight(pool as never, {
+      tenantId: tenantA as never
+    })
+    results.push({
+      case: label,
+      rejected: false,
+      detail: 'ACCEPTED (unexpected)'
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    results.push({ case: label, rejected: true, patternMatched: pattern.test(message), message })
+    results.push({
+      case: label,
+      rejected: true,
+      patternMatched: pattern.test(message),
+      message
+    })
   }
 }
 
@@ -58,7 +69,9 @@ async function main(): Promise<void> {
       return {
         query: async (sql: string, args?: unknown[]) => {
           if (sql.includes('current_user')) {
-            await client.query(`SELECT set_config('role', '${roleName}', false)`)
+            await client.query(
+              `SELECT set_config('role', '${roleName}', false)`
+            )
           }
           return client.query(sql, args)
         },
@@ -76,14 +89,27 @@ async function main(): Promise<void> {
 
   // 1) minimal valid role passes
   try {
-    await assertPostgresWorkerPreflight(directRolePool as unknown as PostgresPoolLike, { tenantId: tenantA as never })
-    results.push({ case: 'minimal valid role passes', rejected: false, accepted: true })
+    await assertPostgresWorkerPreflight(
+      directRolePool as unknown as PostgresPoolLike,
+      { tenantId: tenantA as never }
+    )
+    results.push({
+      case: 'minimal valid role passes',
+      rejected: false,
+      accepted: true
+    })
   } catch (error) {
-    results.push({ case: 'minimal valid role passes', rejected: true, message: error instanceof Error ? error.message : String(error) })
+    results.push({
+      case: 'minimal valid role passes',
+      rejected: true,
+      message: error instanceof Error ? error.message : String(error)
+    })
   }
 
   // 2) demonstrate the unsafe policy would have allowed cross-tenant read
-  await admin.query(`CREATE POLICY synthetic_allow_all ON ${schema}.outbox_events FOR ALL USING (true) WITH CHECK (true)`)
+  await admin.query(
+    `CREATE POLICY synthetic_allow_all ON ${schema}.outbox_events FOR ALL USING (true) WITH CHECK (true)`
+  )
   const crossTenant = await withTenantContext(
     directRolePool as unknown as PostgresPoolLike,
     tenantA as never,
@@ -99,7 +125,11 @@ async function main(): Promise<void> {
     tenantAReadsTenantBEvent: crossTenant.length === 1
   })
   // 3) preflight rejects that extra permissive policy
-  await expectReject(directRolePool, 'extra permissive policy rejected', /policies/)
+  await expectReject(
+    directRolePool,
+    'extra permissive policy rejected',
+    /policies/
+  )
   // 4) context is clean after the rejected preflight on the same pool
   const leaked = await directRolePool.query(
     `SELECT NULLIF(current_setting('cvg.tenant_id', true), '') AS tenant_id`
@@ -108,35 +138,61 @@ async function main(): Promise<void> {
     case: 'tenant context empty after rejected preflight',
     tenantId: leaked.rows[0]?.tenant_id
   })
-  await admin.query(`DROP POLICY synthetic_allow_all ON ${schema}.outbox_events`)
+  await admin.query(
+    `DROP POLICY synthetic_allow_all ON ${schema}.outbox_events`
+  )
 
   // 5) replace expected policy expression with permissive one -> reject
   await admin.query(
     `ALTER POLICY outbox_events_tenant_isolation ON ${schema}.outbox_events USING (true) WITH CHECK (true)`
   )
-  await expectReject(directRolePool, 'single policy with wrong expression rejected', /policies/)
+  await expectReject(
+    directRolePool,
+    'single policy with wrong expression rejected',
+    /policies/
+  )
   await admin.query(
     `ALTER POLICY outbox_events_tenant_isolation ON ${schema}.outbox_events USING (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')) WITH CHECK (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''))`
   )
 
   // 6) revoke a required privilege on outbox_effects -> reject
-  await admin.query(`REVOKE INSERT ON ${schema}.outbox_effects FROM ${roleName}`)
-  await expectReject(directRolePool, 'revoked INSERT on outbox_effects rejected', /privileges/)
+  await admin.query(
+    `REVOKE INSERT ON ${schema}.outbox_effects FROM ${roleName}`
+  )
+  await expectReject(
+    directRolePool,
+    'revoked INSERT on outbox_effects rejected',
+    /privileges/
+  )
   await admin.query(`GRANT INSERT ON ${schema}.outbox_effects TO ${roleName}`)
 
   // 7) forbidden privilege on tasks -> reject
   await admin.query(`GRANT DELETE ON ${schema}.tasks TO ${roleName}`)
-  await expectReject(directRolePool, 'forbidden DELETE on tasks rejected', /privileges|minimal/)
+  await expectReject(
+    directRolePool,
+    'forbidden DELETE on tasks rejected',
+    /privileges|minimal/
+  )
   await admin.query(`REVOKE DELETE ON ${schema}.tasks FROM ${roleName}`)
 
   // 8) missing RLS/FORCE: disable FORCE on sessions -> reject
-  await admin.query(`ALTER TABLE ${schema}.sessions NO FORCE ROW LEVEL SECURITY`)
-  await expectReject(directRolePool, 'missing FORCE RLS rejected', /tenant-isolated|owned/)
+  await admin.query(
+    `ALTER TABLE ${schema}.sessions NO FORCE ROW LEVEL SECURITY`
+  )
+  await expectReject(
+    directRolePool,
+    'missing FORCE RLS rejected',
+    /tenant-isolated|owned/
+  )
   await admin.query(`ALTER TABLE ${schema}.sessions FORCE ROW LEVEL SECURITY`)
 
   // 9) role owns a critical table by grant of ownership -> reject
   await admin.query(`ALTER TABLE ${schema}.outbox_effects OWNER TO ${roleName}`)
-  await expectReject(directRolePool, 'role owning a critical table rejected', /tenant-isolated|owned/)
+  await expectReject(
+    directRolePool,
+    'role owning a critical table rejected',
+    /tenant-isolated|owned/
+  )
   await admin.query(`ALTER TABLE ${schema}.outbox_effects OWNER TO cvg_prod`)
   // Ownership roundtrip drops the role's explicit grants (observed PostgreSQL
   // behavior, checked separately) — re-grant the minimal set before the final check.
@@ -146,10 +202,17 @@ async function main(): Promise<void> {
 
   // 10) minimal role passes again after all mutations reverted
   try {
-    await assertPostgresWorkerPreflight(directRolePool as unknown as PostgresPoolLike, { tenantId: tenantA as never })
+    await assertPostgresWorkerPreflight(
+      directRolePool as unknown as PostgresPoolLike,
+      { tenantId: tenantA as never }
+    )
     results.push({ case: 'minimal role passes after reverts', accepted: true })
   } catch (error) {
-    results.push({ case: 'minimal role passes after reverts', accepted: false, message: error instanceof Error ? error.message : String(error) })
+    results.push({
+      case: 'minimal role passes after reverts',
+      accepted: false,
+      message: error instanceof Error ? error.message : String(error)
+    })
   }
 
   // 11) cleanup verification missing -> client destroyed (fake client, release gets Error)
@@ -184,8 +247,10 @@ async function main(): Promise<void> {
           }
         }
         if (sql.includes('pg_auth_members')) return { rows: [{ count: 0 }] }
-        if (sql.includes('pg_database')) return { rows: [{ owner: 'someone_else' }] }
-        if (sql.includes('has_schema_privilege')) return { rows: [{ can_create: false }] }
+        if (sql.includes('pg_database'))
+          return { rows: [{ owner: 'someone_else' }] }
+        if (sql.includes('has_schema_privilege'))
+          return { rows: [{ can_create: false }] }
         if (sql.includes('FROM pg_class')) return { rows: criticalRows }
         if (sql.includes('FROM pg_policies')) {
           const tenantExpression =
@@ -253,7 +318,9 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  errors.push(error instanceof Error ? error.stack ?? error.message : String(error))
+  errors.push(
+    error instanceof Error ? (error.stack ?? error.message) : String(error)
+  )
   console.log(JSON.stringify({ results, errors }, null, 1))
   process.exit(1)
 })

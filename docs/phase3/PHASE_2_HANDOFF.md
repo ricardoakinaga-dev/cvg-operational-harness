@@ -17,13 +17,13 @@ accepted as proof of the new candidate.
 
 ## Candidate identity
 
-| Field | R4 (previous) | Current (refresh) |
-| --- | --- | --- |
-| HEAD | `512bc11e80fbf7c7b8baf6263aacc811ff829309` | `512bc11e80fbf7c7b8baf6263aacc811ff829309` |
-| worktree | dirty (preserved) | dirty (preserved) |
-| artifact fingerprint | `440591a55593aff958689f74eb44cd2cfa8d2861b84323e0735e58de8b347080` | `882d1e91dc0754962d3d017816cd7660a37db15acef9f5bd38ab7f82a59037de` |
-| functional digest | not recorded | `4c491ca91b0f19e245fbfb40be64d681142355c565cd7527da511627ea934d0f` (847 files) |
-| migration digest | `b49d5320f9d02ad3686e87e930b45f1bfd51a8d862051325acec1a2528db4dd0` | `4b262018a0e648a02b2db0fa2413ad33f230eb806724801b7d74c8f4a7f15bb4` (19 files) |
+| Field                | R4 (previous)                                                      | Current (refresh)                                                              |
+| -------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| HEAD                 | `512bc11e80fbf7c7b8baf6263aacc811ff829309`                         | `512bc11e80fbf7c7b8baf6263aacc811ff829309`                                     |
+| worktree             | dirty (preserved)                                                  | dirty (preserved)                                                              |
+| artifact fingerprint | `440591a55593aff958689f74eb44cd2cfa8d2861b84323e0735e58de8b347080` | `882d1e91dc0754962d3d017816cd7660a37db15acef9f5bd38ab7f82a59037de`             |
+| functional digest    | not recorded                                                       | `4c491ca91b0f19e245fbfb40be64d681142355c565cd7527da511627ea934d0f` (847 files) |
+| migration digest     | `b49d5320f9d02ad3686e87e930b45f1bfd51a8d862051325acec1a2528db4dd0` | `4b262018a0e648a02b2db0fa2413ad33f230eb806724801b7d74c8f4a7f15bb4` (19 files)  |
 
 Machine-readable snapshot: `docs/phase3/CANDIDATE_IDENTITY.json` plus
 `docs/phase3/evidence/PHASE2_REVALIDATION.json`.
@@ -54,15 +54,15 @@ binding instead of reusing R4 bytes.
 
 ## Re-executed gates (current candidate)
 
-| Gate | Command | Result | R4 baseline | Match |
-| --- | --- | --- | --- | --- |
-| focused Phase 2 | `npx vitest run <5 focused files>` | 5 files / 31 tests / 0 skips | 5 / 31 / 0 | yes |
-| canonical verify | `TEST_DATABASE_URL=<disposable> npm run verify:phase2` | format selection, typecheck, lint, build:harness, build, focused, `demo:phase2`, `test:postgres` PASS | PASS | yes |
-| PostgreSQL catalog | `npm run test:postgres -- --reporter=dot` | 24 files / 190 tests / 0 skips | 24 / 190 / 0 | yes |
-| full regression | `npm test -- --reporter=dot` | 250 files / 1,727 passed / 110 skipped | 250 / 1,727 / 110 | yes |
-| E2E | `npm run test:e2e` | 6/6 passed | 6/6 | yes |
-| evals | `npm run test:evals -- --reporter=dot` | 8 tests passed | 8 tests | yes |
-| worker startup | `npm run test:worker:startup` | fail-closed + controlled smoke PASS | PASS | yes |
+| Gate               | Command                                                | Result                                                                                                | R4 baseline       | Match |
+| ------------------ | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- | ----------------- | ----- |
+| focused Phase 2    | `npx vitest run <5 focused files>`                     | 5 files / 31 tests / 0 skips                                                                          | 5 / 31 / 0        | yes   |
+| canonical verify   | `TEST_DATABASE_URL=<disposable> npm run verify:phase2` | format selection, typecheck, lint, build:harness, build, focused, `demo:phase2`, `test:postgres` PASS | PASS              | yes   |
+| PostgreSQL catalog | `npm run test:postgres -- --reporter=dot`              | 24 files / 190 tests / 0 skips                                                                        | 24 / 190 / 0      | yes   |
+| full regression    | `npm test -- --reporter=dot`                           | 250 files / 1,727 passed / 110 skipped                                                                | 250 / 1,727 / 110 | yes   |
+| E2E                | `npm run test:e2e`                                     | 6/6 passed                                                                                            | 6/6               | yes   |
+| evals              | `npm run test:evals -- --reporter=dot`                 | 8 tests passed                                                                                        | 8 tests           | yes   |
+| worker startup     | `npm run test:worker:startup`                          | fail-closed + controlled smoke PASS                                                                   | PASS              | yes   |
 
 Environment: local Node `v24.20.0` (target `>=22 <23`, retained limitation),
 disposable `postgres:15-alpine` container `cvg-phase3-pg` on

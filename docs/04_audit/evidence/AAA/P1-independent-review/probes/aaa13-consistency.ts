@@ -24,24 +24,41 @@ async function main(): Promise<void> {
     readFileSync(join(REHEARSAL, 'manifest.json'), 'utf8')
   )
 
-  const certifyExit = readFileSync(join(REHEARSAL, 'run/certify.exit'), 'utf8').trim()
-  const verifyExit = readFileSync(join(REHEARSAL, 'run/verify.exit'), 'utf8').trim()
+  const certifyExit = readFileSync(
+    join(REHEARSAL, 'run/certify.exit'),
+    'utf8'
+  ).trim()
+  const verifyExit = readFileSync(
+    join(REHEARSAL, 'run/verify.exit'),
+    'utf8'
+  ).trim()
   if (certifyExit !== '0') failures.push(`certify.exit=${certifyExit}`)
   if (verifyExit !== '0') failures.push(`verify.exit=${verifyExit}`)
-  if (matrix.candidateId !== EXPECTED_CANDIDATE) failures.push(`matrix candidate=${matrix.candidateId}`)
+  if (matrix.candidateId !== EXPECTED_CANDIDATE)
+    failures.push(`matrix candidate=${matrix.candidateId}`)
   if (manifest.snapshot?.candidateId !== EXPECTED_CANDIDATE) {
     failures.push(`manifest candidate=${manifest.snapshot?.candidateId}`)
   }
-  if (matrix.gates?.length !== 16) failures.push(`gates=${matrix.gates?.length}`)
-  const nonPass = (matrix.gates ?? []).filter((g: { status: string }) => g.status !== 'PASS')
-  if (nonPass.length > 0) failures.push(`non-PASS gates=${JSON.stringify(nonPass.map((g: { id: string }) => g.id))}`)
+  if (matrix.gates?.length !== 16)
+    failures.push(`gates=${matrix.gates?.length}`)
+  const nonPass = (matrix.gates ?? []).filter(
+    (g: { status: string }) => g.status !== 'PASS'
+  )
+  if (nonPass.length > 0)
+    failures.push(
+      `non-PASS gates=${JSON.stringify(nonPass.map((g: { id: string }) => g.id))}`
+    )
   if ((matrix.verificationFailures ?? []).length > 0) {
-    failures.push(`verificationFailures=${JSON.stringify(matrix.verificationFailures)}`)
+    failures.push(
+      `verificationFailures=${JSON.stringify(matrix.verificationFailures)}`
+    )
   }
 
   // Gate log headers: runId/candidateId/gate/exitCode on every log.
   const logDir = join(REHEARSAL, 'run/logs')
-  const logs = readdirSync(logDir).filter((f) => f.endsWith('.log')).sort()
+  const logs = readdirSync(logDir)
+    .filter((f) => f.endsWith('.log'))
+    .sort()
   const headerFailures: string[] = []
   for (const log of logs) {
     const content = readFileSync(join(logDir, log), 'utf8')
@@ -59,11 +76,14 @@ async function main(): Promise<void> {
       gate !== log.replace('.log', '') ||
       exitCode !== '0'
     ) {
-      headerFailures.push(`${log}: gate=${gate} candidate=${candidate} runId=${runId} exit=${exitCode}`)
+      headerFailures.push(
+        `${log}: gate=${gate} candidate=${candidate} runId=${runId} exit=${exitCode}`
+      )
     }
   }
   if (logs.length !== 16) failures.push(`gate logs=${logs.length}`)
-  if (headerFailures.length > 0) failures.push(`header failures=${headerFailures.join('; ')}`)
+  if (headerFailures.length > 0)
+    failures.push(`header failures=${headerFailures.join('; ')}`)
 
   // Recompute the candidate digest from the preserved snapshot (read-only).
   let recomputed: string | undefined
@@ -101,7 +121,10 @@ async function main(): Promise<void> {
   }
 
   // Coverage context (AAA-04 v2 §9.1 floors are AAA-34/P4, reported for context).
-  const coverageLog = readFileSync(join(REHEARSAL, 'run/logs/coverage.log'), 'utf8')
+  const coverageLog = readFileSync(
+    join(REHEARSAL, 'run/logs/coverage.log'),
+    'utf8'
+  )
 
   console.log(
     JSON.stringify(
@@ -110,7 +133,9 @@ async function main(): Promise<void> {
         certifyExit,
         verifyExit,
         gateCount: matrix.gates?.length,
-        gateStatuses: (matrix.gates ?? []).map((g: { status: string }) => g.status).join(','),
+        gateStatuses: (matrix.gates ?? [])
+          .map((g: { status: string }) => g.status)
+          .join(','),
         decision: matrix.decision,
         runId: matrix.runId,
         candidateId: matrix.candidateId,

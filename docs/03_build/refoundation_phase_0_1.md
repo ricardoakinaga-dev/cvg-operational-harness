@@ -23,4 +23,3 @@ Focused checks: contract typecheck/tests, architecture tests, basic-agent test, 
 ## Recovery
 
 If a new package fails typecheck, remove only the new package from the project references or repair its contract; never reset unrelated changes. If a test attempts a network or real effect, stop and replace it with a local fake. If a review finds a shared-boundary conflict, pause the dependent lane and replan instead of moving legacy code.
-

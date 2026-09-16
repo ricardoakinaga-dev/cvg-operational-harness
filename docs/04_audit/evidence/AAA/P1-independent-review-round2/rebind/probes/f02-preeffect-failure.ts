@@ -67,14 +67,18 @@ async function main(): Promise<void> {
     failures.push(`first outcome ${first.outcome}/${first.reason}`)
   }
   if (afterFirst.status !== 'APPROVED') {
-    failures.push(`approval status after pre-effect failure = ${afterFirst.status}`)
+    failures.push(
+      `approval status after pre-effect failure = ${afterFirst.status}`
+    )
   }
-  if (afterFirst.status === 'EXECUTED') failures.push('approval falsely EXECUTED')
+  if (afterFirst.status === 'EXECUTED')
+    failures.push('approval falsely EXECUTED')
   if (journalRecord?.state !== 'EFFECT_FAILED') {
     failures.push(`journal state = ${journalRecord?.state}`)
   }
   if (h.outboxCalls() !== 0) failures.push(`outbox calls = ${h.outboxCalls()}`)
-  if (h.toolCalls() !== 1) failures.push(`tool calls after first turn = ${h.toolCalls()}`)
+  if (h.toolCalls() !== 1)
+    failures.push(`tool calls after first turn = ${h.toolCalls()}`)
 
   // Retry E-1: same approval/operationKey may re-arm; effect confirmed once.
   const second = await h.runtime.runTurn(turnInput({ approvalId }))
@@ -93,8 +97,10 @@ async function main(): Promise<void> {
   if (journalAfter?.state !== 'CONFIRMED') {
     failures.push(`journal after retry = ${journalAfter?.state}`)
   }
-  if (h.toolCalls() !== 2) failures.push(`tool calls after retry = ${h.toolCalls()}`)
-  if (h.outboxCalls() !== 1) failures.push(`outbox calls after retry = ${h.outboxCalls()}`)
+  if (h.toolCalls() !== 2)
+    failures.push(`tool calls after retry = ${h.toolCalls()}`)
+  if (h.outboxCalls() !== 1)
+    failures.push(`outbox calls after retry = ${h.outboxCalls()}`)
 
   report('F02-pre-effect-failure', {
     first: { outcome: first.outcome, reason: first.reason },
@@ -111,9 +117,13 @@ async function main(): Promise<void> {
   // T-03: model failure in the request turn never creates an approval/effect.
   const failingGateway = {
     async generate() {
-      throw new ModelGatewayError('provider_unavailable', 'probe model outage', {
-        retryable: true
-      })
+      throw new ModelGatewayError(
+        'provider_unavailable',
+        'probe model outage',
+        {
+          retryable: true
+        }
+      )
     }
   }
   const hModel = buildHarness({
@@ -122,13 +132,21 @@ async function main(): Promise<void> {
     modelGateway: failingGateway
   })
   const modelFailed = await hModel.runtime.runTurn(turnInput())
-  if (modelFailed.outcome !== 'denied' || modelFailed.reason !== 'provider_unavailable') {
-    failures.push(`model failure outcome=${modelFailed.outcome}/${modelFailed.reason}`)
+  if (
+    modelFailed.outcome !== 'denied' ||
+    modelFailed.reason !== 'provider_unavailable'
+  ) {
+    failures.push(
+      `model failure outcome=${modelFailed.outcome}/${modelFailed.reason}`
+    )
   }
   if (hModel.approvals.list(TENANT).length !== 0) {
-    failures.push(`model failure created ${hModel.approvals.list(TENANT).length} approval(s)`)
+    failures.push(
+      `model failure created ${hModel.approvals.list(TENANT).length} approval(s)`
+    )
   }
-  if (hModel.toolCalls() !== 0) failures.push(`model failure toolCalls=${hModel.toolCalls()}`)
+  if (hModel.toolCalls() !== 0)
+    failures.push(`model failure toolCalls=${hModel.toolCalls()}`)
   report('F02-model-failure', {
     outcome: modelFailed.outcome,
     reason: modelFailed.reason,
@@ -136,7 +154,9 @@ async function main(): Promise<void> {
     toolCalls: hModel.toolCalls()
   })
 
-  console.log(JSON.stringify({ probe: 'F02', falsified: failures.length > 0, failures }))
+  console.log(
+    JSON.stringify({ probe: 'F02', falsified: failures.length > 0, failures })
+  )
   if (failures.length > 0) process.exitCode = 1
 }
 

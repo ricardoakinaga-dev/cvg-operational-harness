@@ -31,16 +31,16 @@ repair scope and its limits; it is not a production approval.
 
 ## Verification
 
-| Check | Result |
-| --- | --- |
-| `npm run typecheck` | PASS |
-| `npm run lint` | PASS |
-| `npm run build` | PASS; Vite transformed 163 modules |
-| `npm run build:harness` | PASS |
-| `npm run test:evals -- --reporter=dot` | PASS; 1 file / 8 tests |
-| Focused Phase 2 + structure suite | PASS; 8 files / 43 tests |
-| `npm run test:postgres -- --reporter=dot` | 13 files passed, 8 skipped; 81 passed, 103 skipped |
-| `npm test -- --reporter=dot` | 243 passed, 5 failed, 9 skipped; 1,696 passed, 12 failed, 105 skipped; 8 errors |
+| Check                                     | Result                                                                          |
+| ----------------------------------------- | ------------------------------------------------------------------------------- |
+| `npm run typecheck`                       | PASS                                                                            |
+| `npm run lint`                            | PASS                                                                            |
+| `npm run build`                           | PASS; Vite transformed 163 modules                                              |
+| `npm run build:harness`                   | PASS                                                                            |
+| `npm run test:evals -- --reporter=dot`    | PASS; 1 file / 8 tests                                                          |
+| Focused Phase 2 + structure suite         | PASS; 8 files / 43 tests                                                        |
+| `npm run test:postgres -- --reporter=dot` | 13 files passed, 8 skipped; 81 passed, 103 skipped                              |
+| `npm test -- --reporter=dot`              | 243 passed, 5 failed, 9 skipped; 1,696 passed, 12 failed, 105 skipped; 8 errors |
 
 The full-suite failures remain the pre-existing controlled-worker/startup,
 identity/IPC, continuous-worker-startup, and eight loopback HTTP-provider

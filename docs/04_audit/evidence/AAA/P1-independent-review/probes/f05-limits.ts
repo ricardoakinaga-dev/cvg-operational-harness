@@ -1,15 +1,13 @@
 // P1 falsification probe F05 (AAA-11 T-09/T-10/T-11):
 // maxSteps=1, deadline mid-turn and cancellation mid-turn must stop before any
 // tool/outbox step and leave no pending span.
-import {
-  buildHarness,
-  turnInput,
-  report,
-  NOW,
-  TENANT
-} from './harness.ts'
+import { buildHarness, turnInput, report, NOW, TENANT } from './harness.ts'
 
-function stubResult(requestId: string, correlationId: string, createdAt: string) {
+function stubResult(
+  requestId: string,
+  correlationId: string,
+  createdAt: string
+) {
   return {
     requestId,
     tenantId: TENANT,
@@ -46,9 +44,12 @@ async function main(): Promise<void> {
   if (r1.outcome !== 'denied' || r1.reason !== 'steps_budget_exceeded') {
     failures.push(`maxSteps=1 outcome=${r1.outcome}/${r1.reason}`)
   }
-  if (h1.toolCalls() !== 0) failures.push(`maxSteps=1 toolCalls=${h1.toolCalls()}`)
-  if (h1.outboxCalls() !== 0) failures.push(`maxSteps=1 outboxCalls=${h1.outboxCalls()}`)
-  if (h1.providerCalls() !== 1) failures.push(`maxSteps=1 providerCalls=${h1.providerCalls()}`)
+  if (h1.toolCalls() !== 0)
+    failures.push(`maxSteps=1 toolCalls=${h1.toolCalls()}`)
+  if (h1.outboxCalls() !== 0)
+    failures.push(`maxSteps=1 outboxCalls=${h1.outboxCalls()}`)
+  if (h1.providerCalls() !== 1)
+    failures.push(`maxSteps=1 providerCalls=${h1.providerCalls()}`)
   if (h1.tracker.open.size !== 0) {
     failures.push(`maxSteps=1 pending spans=${[...h1.tracker.open].join(',')}`)
   }
@@ -70,7 +71,11 @@ async function main(): Promise<void> {
   const slowGateway = {
     async generate(req: { requestId: string; correlationId: string }) {
       nowMs += 500
-      return stubResult(req.requestId, req.correlationId, new Date(nowMs).toISOString())
+      return stubResult(
+        req.requestId,
+        req.correlationId,
+        new Date(nowMs).toISOString()
+      )
     }
   }
   const h2 = buildHarness({ now: clock, modelGateway: slowGateway })
@@ -80,8 +85,10 @@ async function main(): Promise<void> {
   if (r2.outcome !== 'denied' || r2.reason !== 'loop_deadline_exceeded') {
     failures.push(`deadline outcome=${r2.outcome}/${r2.reason}`)
   }
-  if (h2.toolCalls() !== 0) failures.push(`deadline toolCalls=${h2.toolCalls()}`)
-  if (h2.outboxCalls() !== 0) failures.push(`deadline outboxCalls=${h2.outboxCalls()}`)
+  if (h2.toolCalls() !== 0)
+    failures.push(`deadline toolCalls=${h2.toolCalls()}`)
+  if (h2.outboxCalls() !== 0)
+    failures.push(`deadline outboxCalls=${h2.outboxCalls()}`)
   if (h2.tracker.open.size !== 0) {
     failures.push(`deadline pending spans=${[...h2.tracker.open].join(',')}`)
   }
@@ -110,7 +117,8 @@ async function main(): Promise<void> {
     failures.push(`cancel outcome=${r3.outcome}/${r3.reason}`)
   }
   if (h3.toolCalls() !== 0) failures.push(`cancel toolCalls=${h3.toolCalls()}`)
-  if (h3.outboxCalls() !== 0) failures.push(`cancel outboxCalls=${h3.outboxCalls()}`)
+  if (h3.outboxCalls() !== 0)
+    failures.push(`cancel outboxCalls=${h3.outboxCalls()}`)
   if (h3.tracker.open.size !== 0) {
     failures.push(`cancel pending spans=${[...h3.tracker.open].join(',')}`)
   }
@@ -123,7 +131,9 @@ async function main(): Promise<void> {
     spanNames: h3.tracker.names
   })
 
-  console.log(JSON.stringify({ probe: 'F05', falsified: failures.length > 0, failures }))
+  console.log(
+    JSON.stringify({ probe: 'F05', falsified: failures.length > 0, failures })
+  )
   if (failures.length > 0) process.exitCode = 1
 }
 

@@ -20,15 +20,15 @@ No P0 was found. No weakened assertions, added unconditional skips, lowered thre
 
 ## Findings
 
-| ID | Severity | Finding | Evidence / repro |
-|----|----------|---------|------------------|
-| F1 | **P1** | `npm run typecheck` fails: `apps/worker/src/__tests__/postgres-role-preflight.test.ts(340,37): error TS2345` — the fake pool `{ connect: async () => client }` is not assignable to `PostgresPoolLike` (client.query returns bare `{rows}` without `QueryResult` fields). `npm run build` = `npm run typecheck && npm run build:web`, so the build gate is blocked. | `npm run typecheck` → EXIT=2, exactly 1 `error TS` line (full log `/tmp/opencode/typecheck-full.log`). The file’s sha256 matches PROD-05 `sourceSha256` (`25fb75fe…`), so this exact byte content is the attested one; the manifests’ `typecheck PASS exitCode 0` claims are false for the attested bytes. |
-| F2 | P3 | `npx prettier --check` on the batch files fails only on `docs/01_prd/aaa_decision_brief.md` (markdown comparison-table column alignment). | `npx prettier --check …` → `[warn] docs/01_prd/aaa_decision_brief.md`, EXIT=1; diff shows only table padding changes in section 2.2. |
-| F3 | P3 | Manifest hash drift: 3 of 58 hashes listed in the six manifests do not match the files. | `node /tmp/opencode/verify-c7.mjs` → 55 MATCH / 3 MISMATCH. See hash section. |
-| F4 | P3 | PROD-05 manifest is internally inconsistent: `positiveVerified.verdict` says “PASS: 8/8 (…)”, while its own `gates` row and the actual run are 10 tests. | `docs/04_audit/evidence/PROD-20260913/PROD-05/manifest.json`; actual run 10/10. |
-| F5 | P3 | `withTenantTransaction` edge: if the post-`COMMIT` context cleanup fails once and then succeeds on the retry, the caller still receives the cleanup error although the mutation committed (ambiguous outcome). Bounded by idempotency (retry returns the stored draft). | `/tmp/opencode/verify-c1b.ts`: returns no value, throws `transient cleanup failure`; SQL order `BEGIN, set_config(tenant), INSERT, COMMIT, set_config('') [fail], ROLLBACK, set_config('')`; release clean, exactly once. |
-| F6 | P3 | Contract-vs-implementation drift (PROD-05): the frozen contract says the preflight runs its queries “por `withTenantContext`”; `postgres-role-preflight.ts` hand-rolls set/clear of `cvg.tenant_id` (and does not restore `search_path`). Behaviour was independently verified correct (no leak, destroy-on-failure), but the documented mechanism does not match. Similarly PROD-02’s contract text says “leituras puras mantêm `withTenantContext`” while all journey reads now use `withTenantTransaction` — justified because those reads execute lazy-expiration UPDATEs. | `docs/02_spec/prod20260913_m1_corrections_contract.md` §PROD-05 “Implementação (HOW)”; `apps/worker/src/postgres-role-preflight.ts:66-215`. |
-| F7 | P3 / attribution NOT_VERIFIED | `apps/api/src/server.ts` contains changes outside the M1 scope vs HEAD: `runInitialPostgresMigration` conditional removed (always `runPostgresMigrations` now), inbound-tenant-resolver semantics changed, development-only agent runtime wiring added. `package.json` also carries non-M1 changes (tsx moved to dependencies, vitest/coverage bump, `engines`, certification scripts). The repo is fully dirty vs HEAD and the batch base state is not identifiable from git alone, so attribution to this batch is unverified; the integrator should confirm. No test/credential/weak-assertion risk was found in these hunks. | `git diff -- apps/api/src/server.ts package.json`; current server.ts ~5276–5280, ~5376–5393, ~5113–5145. |
+| ID  | Severity                      | Finding                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Evidence / repro                                                                                                                                                                                                                                                                                           |
+| --- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1  | **P1**                        | `npm run typecheck` fails: `apps/worker/src/__tests__/postgres-role-preflight.test.ts(340,37): error TS2345` — the fake pool `{ connect: async () => client }` is not assignable to `PostgresPoolLike` (client.query returns bare `{rows}` without `QueryResult` fields). `npm run build` = `npm run typecheck && npm run build:web`, so the build gate is blocked.                                                                                                                                                                                                                                                              | `npm run typecheck` → EXIT=2, exactly 1 `error TS` line (full log `/tmp/opencode/typecheck-full.log`). The file’s sha256 matches PROD-05 `sourceSha256` (`25fb75fe…`), so this exact byte content is the attested one; the manifests’ `typecheck PASS exitCode 0` claims are false for the attested bytes. |
+| F2  | P3                            | `npx prettier --check` on the batch files fails only on `docs/01_prd/aaa_decision_brief.md` (markdown comparison-table column alignment).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `npx prettier --check …` → `[warn] docs/01_prd/aaa_decision_brief.md`, EXIT=1; diff shows only table padding changes in section 2.2.                                                                                                                                                                       |
+| F3  | P3                            | Manifest hash drift: 3 of 58 hashes listed in the six manifests do not match the files.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `node /tmp/opencode/verify-c7.mjs` → 55 MATCH / 3 MISMATCH. See hash section.                                                                                                                                                                                                                              |
+| F4  | P3                            | PROD-05 manifest is internally inconsistent: `positiveVerified.verdict` says “PASS: 8/8 (…)”, while its own `gates` row and the actual run are 10 tests.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `docs/04_audit/evidence/PROD-20260913/PROD-05/manifest.json`; actual run 10/10.                                                                                                                                                                                                                            |
+| F5  | P3                            | `withTenantTransaction` edge: if the post-`COMMIT` context cleanup fails once and then succeeds on the retry, the caller still receives the cleanup error although the mutation committed (ambiguous outcome). Bounded by idempotency (retry returns the stored draft).                                                                                                                                                                                                                                                                                                                                                          | `/tmp/opencode/verify-c1b.ts`: returns no value, throws `transient cleanup failure`; SQL order `BEGIN, set_config(tenant), INSERT, COMMIT, set_config('') [fail], ROLLBACK, set_config('')`; release clean, exactly once.                                                                                  |
+| F6  | P3                            | Contract-vs-implementation drift (PROD-05): the frozen contract says the preflight runs its queries “por `withTenantContext`”; `postgres-role-preflight.ts` hand-rolls set/clear of `cvg.tenant_id` (and does not restore `search_path`). Behaviour was independently verified correct (no leak, destroy-on-failure), but the documented mechanism does not match. Similarly PROD-02’s contract text says “leituras puras mantêm `withTenantContext`” while all journey reads now use `withTenantTransaction` — justified because those reads execute lazy-expiration UPDATEs.                                                   | `docs/02_spec/prod20260913_m1_corrections_contract.md` §PROD-05 “Implementação (HOW)”; `apps/worker/src/postgres-role-preflight.ts:66-215`.                                                                                                                                                                |
+| F7  | P3 / attribution NOT_VERIFIED | `apps/api/src/server.ts` contains changes outside the M1 scope vs HEAD: `runInitialPostgresMigration` conditional removed (always `runPostgresMigrations` now), inbound-tenant-resolver semantics changed, development-only agent runtime wiring added. `package.json` also carries non-M1 changes (tsx moved to dependencies, vitest/coverage bump, `engines`, certification scripts). The repo is fully dirty vs HEAD and the batch base state is not identifiable from git alone, so attribution to this batch is unverified; the integrator should confirm. No test/credential/weak-assertion risk was found in these hunks. | `git diff -- apps/api/src/server.ts package.json`; current server.ts ~5276–5280, ~5376–5393, ~5113–5145.                                                                                                                                                                                                   |
 
 ---
 
@@ -96,7 +96,12 @@ PROD03_OUTPUT=/tmp/opencode/verify-race.png node docs/04_audit/evidence/PROD-202
 → EXIT=0, screenshot written (325,261 bytes):
 
 ```json
-{ "probe": "ui-tenant-race", "tenant": "tenant_B", "staleTenantCandidateVisible": false, "verdict": "PASS_STALE_DISCARDED" }
+{
+  "probe": "ui-tenant-race",
+  "tenant": "tenant_B",
+  "staleTenantCandidateVisible": false,
+  "verdict": "PASS_STALE_DISCARDED"
+}
 ```
 
 Server killed afterwards; port 4398 confirmed closed. (`ui-race-probe.red.json` preserved by the builder shows the probe correctly fails when the protections are neutralized.)
@@ -142,6 +147,7 @@ apps/api/src/__tests__/journeys-api-postgres.test.ts
 → EXIT=0, `Test Files 2 passed (2)`, `Tests 32 passed (32)`, 0 skipped. Includes the parity test “records journey audit with the supplied actor and correlation”, the HTTP test “records the authenticated actor and request correlation on journey audit” (body-injected `actorId/actorType/correlationId/auditContext` ignored), and “keeps the HTTP journey mutation and audit atomic and replayable” (audit trigger failure → nothing persisted; retry → 1 draft + 1 audit).
 
 Code inspection:
+
 - `apps/api/src/server.ts:848-852` (and the patient/appointment/task routes): `{ ...request.body, tenantId, auditContext: journeyAuditContext(identity, correlationId) }` — server-owned fields are spread **after** the body, so body fields cannot win.
 - `journeyAuditContext` (`apps/api/src/server.ts:3570`): authenticated identity → `{ actorType: 'Operator', actorId: identity.operatorId, correlationId }`; no identity → explicit `System`/`system.journey-repository`.
 - `normalizeJourneyAuditContext` (`packages/persistence/src/journeys.ts:792`) validates `actorType` and `CorrelationIdSchema` and is used by the Postgres adapter (`journeys-postgres.ts:appendJourneyAuditScoped`).
@@ -154,12 +160,21 @@ Independent throwaway probe (`/tmp/opencode/verify-c4.ts`, imports `buildServer`
   "verdict": "OVERRIDE_BLOCKED_CONFIRMED",
   "httpStatus": 200,
   "draft": { "tenant_id": "tenant_00000000-0000-4000-8000-0000000004c1" },
-  "audit": { "actor_type": "Operator", "actor_id": "operator.header.verifier",
-             "correlation_id": "corr_19f4f79b-…", "journey": "owner_draft_created" },
+  "audit": {
+    "actor_type": "Operator",
+    "actor_id": "operator.header.verifier",
+    "correlation_id": "corr_19f4f79b-…",
+    "journey": "owner_draft_created"
+  },
   "bodyTenantDraftCount": 0,
-  "checks": { "status200": true, "draftTenantIsHeader": true, "bodyTenantUntouched": true,
-              "actorIsHeaderOperator": true, "correlationIsRequestMeta": true,
-              "auditJourneyIsOwnerDraft": true }
+  "checks": {
+    "status200": true,
+    "draftTenantIsHeader": true,
+    "bodyTenantUntouched": true,
+    "actorIsHeaderOperator": true,
+    "correlationIsRequestMeta": true,
+    "auditJourneyIsOwnerDraft": true
+  }
 }
 ```
 
@@ -176,11 +191,25 @@ NODE_ENV=test npx tsx docs/04_audit/evidence/PROD-20260913/PROD-01/readiness-pro
 → EXIT=0:
 
 ```json
-{ "probe": "readiness", "queries": 1,
+{
+  "probe": "readiness",
+  "queries": 1,
   "results": [
-    { "url": "/ready", "status": 503, "body.data.checks": [ { "name": "database", "status": "failed", "detail": "database probe failed" } ] },
-    { "url": "/live",  "status": 200 } ],
-  "verdict": "PASS_PROBED" }
+    {
+      "url": "/ready",
+      "status": 503,
+      "body.data.checks": [
+        {
+          "name": "database",
+          "status": "failed",
+          "detail": "database probe failed"
+        }
+      ]
+    },
+    { "url": "/live", "status": 200 }
+  ],
+  "verdict": "PASS_PROBED"
+}
 ```
 
 ```
@@ -193,15 +222,16 @@ Code inspection: `apps/api/src/server.ts:275` builds the database probe from `pe
 
 ### C6 (integrity/regression) — **REWORK**
 
-| Command | Result |
-|---|---|
-| `npm run typecheck` | **FAIL, EXIT=2** — exactly 1 error: `apps/worker/src/__tests__/postgres-role-preflight.test.ts(340,37): error TS2345` (F1). Blocks `npm run build`. |
-| `TEST_DATABASE_URL=… npm run test:postgres` | **PASS, EXIT=0** — `Test Files 18 passed (18)`, `Tests 151 passed (151)`, 0 skipped; duration 35.42s. Matches the claimed inventory (18/151). |
-| `npx prettier --check <17 batch files>` | **FAIL, EXIT=1** — only `docs/01_prd/aaa_decision_brief.md` (F2). |
-| `npx eslint <17 batch files>` (extra check against manifest gate claims) | PASS, EXIT=0. |
-| `git diff --stat` (tracked batch files) | 9 files changed, 861 insertions(+), 147 deletions(-); the remaining batch files are untracked new files. |
+| Command                                                                  | Result                                                                                                                                              |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run typecheck`                                                      | **FAIL, EXIT=2** — exactly 1 error: `apps/worker/src/__tests__/postgres-role-preflight.test.ts(340,37): error TS2345` (F1). Blocks `npm run build`. |
+| `TEST_DATABASE_URL=… npm run test:postgres`                              | **PASS, EXIT=0** — `Test Files 18 passed (18)`, `Tests 151 passed (151)`, 0 skipped; duration 35.42s. Matches the claimed inventory (18/151).       |
+| `npx prettier --check <17 batch files>`                                  | **FAIL, EXIT=1** — only `docs/01_prd/aaa_decision_brief.md` (F2).                                                                                   |
+| `npx eslint <17 batch files>` (extra check against manifest gate claims) | PASS, EXIT=0.                                                                                                                                       |
+| `git diff --stat` (tracked batch files)                                  | 9 files changed, 861 insertions(+), 147 deletions(-); the remaining batch files are untracked new files.                                            |
 
 Diff inspection (scope requested):
+
 - No weakened/removed assertions in the tracked diffs (`readiness.test.ts` only adds 5 tests; `tenant-scoped-postgres.ts` only adds `withTenantTransaction`; `journeys.ts` adds audit-context support while preserving actor-type restriction; web files add abort/generation plumbing).
 - No unconditional `skip`/`todo`/`.only`: only the standard env-conditional `describeWithPostgres = testDatabaseUrl ? describe : describe.skip` in the three Postgres test files, and the runs with `TEST_DATABASE_URL` set report 0 skipped.
 - No lowered thresholds; no real credentials (only local synthetic role passwords such as `synthetic-role-password`, `randomBytes(18)` at runtime, and `postgres://cvg_prod@127.0.0.1:55481/...` local URLs); no external effects (tests use disposable databases; the UI probe intercepts `**/v1/**` in Chromium).
@@ -223,6 +253,7 @@ Diff inspection (scope requested):
 ```
 
 Assessment:
+
 - The three mismatches are in **PROD-01’s `inputs` map only**. Two are tracking JSONs that continued to evolve during the session; the third is the readiness probe itself, which AAA-22’s manifest documents as revised (“verdict now requires queries>=1…”), so its PROD-01 input hash is stale.
 - All `sourceSha256` hashes of the M1 source/test files and all `evidenceSha256`/`contractSha256` entries in the six manifests **match**, including the batch files that F1 concerns. This is what makes F1 an evidence-gate contradiction rather than a stale-file artifact.
 - No mismatch indicates tampering with product bytes; this is bookkeeping drift (P3).
@@ -245,23 +276,23 @@ Assessment:
 
 ## Commands run (summary)
 
-| # | Command | Exit | Key result |
-|---|---------|------|-----------|
-| 1 | `createdb … verifier_c1` | 0 | scratch DB |
-| 2 | `PROD_PROBE_SCHEMA=verifier_c1_atomicity TEST_DATABASE_URL=…verifier_c1 npx tsx …/sql-atomicity-probe.ts` | 0 | PASS_ATOMIC |
-| 3 | `npx tsx /tmp/opencode/verify-c1.ts` | 0 | FALSIFICATION_FAILED_CONFIRMED_SAFE |
-| 4 | `npx tsx /tmp/opencode/verify-c1b.ts` | 0 | F5: CALLER_SEES_ERROR_AFTER_COMMIT |
-| 5 | `npx vitest run …journeys-identity-race.test.tsx` | 0 | 3/3 |
-| 6 | vite 4398 + `node …/ui-race-probe.cjs` | 0 | PASS_STALE_DISCARDED |
-| 7 | `TEST_DATABASE_URL=…cvg_prod_test npx vitest …postgres-role-preflight.test.ts` | 0 | 10/10 |
-| 8 | `npx tsx /tmp/opencode/verify-c3.ts` | 0 | CLEANUP_DESTROYS_AND_NO_LEAK_CONFIRMED |
-| 9 | `npx tsx /tmp/opencode/verify-c3b.ts` | 0 | DB_OWNER_REJECTED_CONFIRMED |
-| 10 | `TEST_DATABASE_URL=… npx vitest …journeys-postgres.test.ts …journeys-api-postgres.test.ts` | 0 | 2 files / 32 tests |
-| 11 | `NODE_ENV=test TEST_DATABASE_URL=…verifier_c4 npx tsx /tmp/opencode/verify-c4.ts` | 0 | OVERRIDE_BLOCKED_CONFIRMED |
-| 12 | `NODE_ENV=test npx tsx …/readiness-probe.ts` | 0 | PASS_PROBED |
-| 13 | `npx vitest run …readiness.test.ts` | 0 | 8/8 |
-| 14 | `npm run typecheck` | **2** | **1 error (F1)** |
-| 15 | `TEST_DATABASE_URL=… npm run test:postgres` | 0 | 18 files / 151 tests, 0 skipped |
-| 16 | `npx prettier --check <batch files>` | **1** | **warn aaa_decision_brief.md (F2)** |
-| 17 | `npx eslint <batch files>` | 0 | clean |
-| 18 | `node /tmp/opencode/verify-c7.mjs` | 0 | 55 MATCH / 3 MISMATCH (F3) |
+| #   | Command                                                                                                   | Exit  | Key result                             |
+| --- | --------------------------------------------------------------------------------------------------------- | ----- | -------------------------------------- |
+| 1   | `createdb … verifier_c1`                                                                                  | 0     | scratch DB                             |
+| 2   | `PROD_PROBE_SCHEMA=verifier_c1_atomicity TEST_DATABASE_URL=…verifier_c1 npx tsx …/sql-atomicity-probe.ts` | 0     | PASS_ATOMIC                            |
+| 3   | `npx tsx /tmp/opencode/verify-c1.ts`                                                                      | 0     | FALSIFICATION_FAILED_CONFIRMED_SAFE    |
+| 4   | `npx tsx /tmp/opencode/verify-c1b.ts`                                                                     | 0     | F5: CALLER_SEES_ERROR_AFTER_COMMIT     |
+| 5   | `npx vitest run …journeys-identity-race.test.tsx`                                                         | 0     | 3/3                                    |
+| 6   | vite 4398 + `node …/ui-race-probe.cjs`                                                                    | 0     | PASS_STALE_DISCARDED                   |
+| 7   | `TEST_DATABASE_URL=…cvg_prod_test npx vitest …postgres-role-preflight.test.ts`                            | 0     | 10/10                                  |
+| 8   | `npx tsx /tmp/opencode/verify-c3.ts`                                                                      | 0     | CLEANUP_DESTROYS_AND_NO_LEAK_CONFIRMED |
+| 9   | `npx tsx /tmp/opencode/verify-c3b.ts`                                                                     | 0     | DB_OWNER_REJECTED_CONFIRMED            |
+| 10  | `TEST_DATABASE_URL=… npx vitest …journeys-postgres.test.ts …journeys-api-postgres.test.ts`                | 0     | 2 files / 32 tests                     |
+| 11  | `NODE_ENV=test TEST_DATABASE_URL=…verifier_c4 npx tsx /tmp/opencode/verify-c4.ts`                         | 0     | OVERRIDE_BLOCKED_CONFIRMED             |
+| 12  | `NODE_ENV=test npx tsx …/readiness-probe.ts`                                                              | 0     | PASS_PROBED                            |
+| 13  | `npx vitest run …readiness.test.ts`                                                                       | 0     | 8/8                                    |
+| 14  | `npm run typecheck`                                                                                       | **2** | **1 error (F1)**                       |
+| 15  | `TEST_DATABASE_URL=… npm run test:postgres`                                                               | 0     | 18 files / 151 tests, 0 skipped        |
+| 16  | `npx prettier --check <batch files>`                                                                      | **1** | **warn aaa_decision_brief.md (F2)**    |
+| 17  | `npx eslint <batch files>`                                                                                | 0     | clean                                  |
+| 18  | `node /tmp/opencode/verify-c7.mjs`                                                                        | 0     | 55 MATCH / 3 MISMATCH (F3)             |

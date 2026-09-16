@@ -28,4 +28,9 @@ const d2 = policy.evaluate({
   context: { dataClassification: 'INTERNAL' }
 })
 console.log('appointment.cancel =>', d2.decision, d2.reason)
-console.log('runtime ctor', typeof GovernedAgentRuntime, 'approvals', typeof ApprovalEngine)
+console.log(
+  'runtime ctor',
+  typeof GovernedAgentRuntime,
+  'approvals',
+  typeof ApprovalEngine
+)

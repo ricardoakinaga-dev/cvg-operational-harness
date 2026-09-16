@@ -8,13 +8,13 @@
 
 ## 1. Fingerprint (real bytes, before vs after)
 
-| | value |
-| --- | --- |
-| Set | tracked+untracked non-ignored product/config/test sources: `apps/**`, `packages/**`, `tests/**`, `scripts/**`, `deploy/**`, `package.json`, `package-lock.json`, `Dockerfile`, `tsconfig*`, `*.mts`, `eslint.config.js` (excludes node_modules/dist/coverage/test-results and certification outputs) |
-| Count | 544 files |
-| BEFORE aggregate sha256 | `a5480a6c9cad5061467553ac3497b529b1696084ffae4c8a6a89451b85e9f8e3` |
-| AFTER aggregate sha256 | `a5480a6c9cad5061467553ac3497b529b1696084ffae4c8a6a89451b85e9f8e3` |
-| Delta | **zero changes** (`fingerprint-before.json` == `fingerprint-after.json`) |
+|                         | value                                                                                                                                                                                                                                                                                                |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Set                     | tracked+untracked non-ignored product/config/test sources: `apps/**`, `packages/**`, `tests/**`, `scripts/**`, `deploy/**`, `package.json`, `package-lock.json`, `Dockerfile`, `tsconfig*`, `*.mts`, `eslint.config.js` (excludes node_modules/dist/coverage/test-results and certification outputs) |
+| Count                   | 544 files                                                                                                                                                                                                                                                                                            |
+| BEFORE aggregate sha256 | `a5480a6c9cad5061467553ac3497b529b1696084ffae4c8a6a89451b85e9f8e3`                                                                                                                                                                                                                                   |
+| AFTER aggregate sha256  | `a5480a6c9cad5061467553ac3497b529b1696084ffae4c8a6a89451b85e9f8e3`                                                                                                                                                                                                                                   |
+| Delta                   | **zero changes** (`fingerprint-before.json` == `fingerprint-after.json`)                                                                                                                                                                                                                             |
 
 Method: `git ls-files -co --exclude-standard` -> include filter -> per-file sha256 -> aggregate over sorted `sha256␠␠path` lines (`fingerprint.py`, copied in this directory). Recomputed after all runs: identical.
 
@@ -45,12 +45,12 @@ Byte proof (vs round-2 candidate, which matches the frozen manifest):
 
 Executed evidence (all on the current bytes):
 
-| Gate | Exit | Result |
-| --- | --- | --- |
-| focused vitest (`continuous-worker`, `postgres-controlled-hardening`, `continuous-worker-entrypoint.integration`) with TEST_DATABASE_URL | 0 | included in 10 files / 93 tests, 0 failed, 0 skipped |
-| full `npx vitest run apps/worker` with TEST_DATABASE_URL | 0 | 15 files / 91 tests, 0 skipped (matches builder claim) |
-| `npm run test:postgres` | 0 | 19 files / 163 tests, 0 skipped |
-| `npm run test:worker:startup` | 0 | `worker.startup_smoke_passed`, `worker.controlled_smoke_verified` |
+| Gate                                                                                                                                     | Exit | Result                                                            |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | ---- | ----------------------------------------------------------------- |
+| focused vitest (`continuous-worker`, `postgres-controlled-hardening`, `continuous-worker-entrypoint.integration`) with TEST_DATABASE_URL | 0    | included in 10 files / 93 tests, 0 failed, 0 skipped              |
+| full `npx vitest run apps/worker` with TEST_DATABASE_URL                                                                                 | 0    | 15 files / 91 tests, 0 skipped (matches builder claim)            |
+| `npm run test:postgres`                                                                                                                  | 0    | 19 files / 163 tests, 0 skipped                                   |
+| `npm run test:worker:startup`                                                                                                            | 0    | `worker.startup_smoke_passed`, `worker.controlled_smoke_verified` |
 
 Discrimination independently proven (throwaway copy `/tmp/opencode/critic-wave3/repo-copy`, node_modules symlinked, repo untouched):
 
@@ -68,21 +68,21 @@ Delta vs round-2 bytes is confined to the four owned files and is additive/mecha
 
 Independent adversarial results (probes run with Node 22, synthetic keys only):
 
-| Probe | Observed |
-| --- | --- |
-| spoofed `x-operator-id/role=Admin` + valid Operator token, `GET /v1/admin/agents` | 403 forbidden (header never authorizes) |
-| valid Supervisor token + cross-tenant `x-tenant-id` | 403 forbidden |
-| simulation headers, no token, trusted mode | 401 unauthorized (no fake fallback) |
-| expired / wrong-audience / forged-signature tokens | 401 unauthorized each |
-| replayed token (same resolver instance) | first 200, replay 401 unauthorized |
-| rotation: previous key inside window | accepted |
-| rotation: previous past window / revoked previous / revoked current / unknown `kid` / missing `kid` | rejected ("not active" / "requires a key identifier") |
-| valid `kid` token | accepted |
-| configured env factory (`CVG_OPERATOR_IDENTITY_KEYRING`), revoked current | rejected |
-| production entrypoint, no keyring | exit 1, "Production requires an injected operator identity resolver" |
-| production entrypoint, `CVG_IDENTITY_MODE=simulation` | exit 1, "simulation is forbidden" |
-| production entrypoint, invalid keyring JSON | exit 1, sanitized "CVG_OPERATOR_IDENTITY_KEYRING is invalid" (no secret leak) |
-| production entrypoint, valid keyring + unreachable DB | resolver gate passes; fails later on DB (ECONNREFUSED) — proves the gate is not masking other errors |
+| Probe                                                                                               | Observed                                                                                             |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| spoofed `x-operator-id/role=Admin` + valid Operator token, `GET /v1/admin/agents`                   | 403 forbidden (header never authorizes)                                                              |
+| valid Supervisor token + cross-tenant `x-tenant-id`                                                 | 403 forbidden                                                                                        |
+| simulation headers, no token, trusted mode                                                          | 401 unauthorized (no fake fallback)                                                                  |
+| expired / wrong-audience / forged-signature tokens                                                  | 401 unauthorized each                                                                                |
+| replayed token (same resolver instance)                                                             | first 200, replay 401 unauthorized                                                                   |
+| rotation: previous key inside window                                                                | accepted                                                                                             |
+| rotation: previous past window / revoked previous / revoked current / unknown `kid` / missing `kid` | rejected ("not active" / "requires a key identifier")                                                |
+| valid `kid` token                                                                                   | accepted                                                                                             |
+| configured env factory (`CVG_OPERATOR_IDENTITY_KEYRING`), revoked current                           | rejected                                                                                             |
+| production entrypoint, no keyring                                                                   | exit 1, "Production requires an injected operator identity resolver"                                 |
+| production entrypoint, `CVG_IDENTITY_MODE=simulation`                                               | exit 1, "simulation is forbidden"                                                                    |
+| production entrypoint, invalid keyring JSON                                                         | exit 1, sanitized "CVG_OPERATOR_IDENTITY_KEYRING is invalid" (no secret leak)                        |
+| production entrypoint, valid keyring + unreachable DB                                               | resolver gate passes; fails later on DB (ECONNREFUSED) — proves the gate is not masking other errors |
 
 `parseIdentityMode` (unit) fails closed to `trusted` outside `test`, rejects unknown values, keeps explicit simulation for UI/dev.
 

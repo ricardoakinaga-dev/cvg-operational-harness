@@ -69,14 +69,20 @@ async function main(): Promise<void> {
     [body.data?.id ?? 'none']
   )
   const row = audit.rows[0] as
-    | { actor_type: string; actor_id: string; correlation_id: string; tenant_id: string }
+    | {
+        actor_type: string
+        actor_id: string
+        correlation_id: string
+        tenant_id: string
+      }
     | undefined
   results.prod06OwnerDraftSpoof = {
     status: draft.statusCode,
     responseTenant: body.data?.tenantId,
     auditRow: row ?? null,
     recordedActorIsTrustedHeader:
-      row?.actor_id === 'operator.wave3.critic' && row?.actor_type === 'Operator',
+      row?.actor_id === 'operator.wave3.critic' &&
+      row?.actor_type === 'Operator',
     recordedCorrelationMatchesResponseMeta:
       row?.correlation_id === body.meta?.correlationId,
     spoofedCorrelationIgnored:
@@ -109,18 +115,21 @@ async function main(): Promise<void> {
   const readyBody = (
     await readyApp.inject({ method: 'GET', url: '/ready' })
   ).json() as {
-    data: { ready: boolean; checks: Array<{ name: string; status: string; detail: string }> }
+    data: {
+      ready: boolean
+      checks: Array<{ name: string; status: string; detail: string }>
+    }
   }
-  const liveStatus = (
-    await readyApp.inject({ method: 'GET', url: '/live' })
-  ).statusCode
+  const liveStatus = (await readyApp.inject({ method: 'GET', url: '/live' }))
+    .statusCode
   results.aaa22ThrowingClient = {
     readyStatuses,
     allReady503: readyStatuses.every((status) => status === 503),
     liveStatus,
     readyFalse: readyBody.data?.ready === false,
-    databaseCheckStatus: readyBody.data?.checks.find((c) => c.name === 'database')
-      ?.status,
+    databaseCheckStatus: readyBody.data?.checks.find(
+      (c) => c.name === 'database'
+    )?.status,
     sanitized: !JSON.stringify(readyBody).includes('secret'),
     queries
   }
@@ -154,9 +163,8 @@ async function main(): Promise<void> {
       (await poolApp.inject({ method: 'GET', url: '/ready' })).statusCode
     )
   }
-  const poolLive = (
-    await poolApp.inject({ method: 'GET', url: '/live' })
-  ).statusCode
+  const poolLive = (await poolApp.inject({ method: 'GET', url: '/live' }))
+    .statusCode
   results.aaa22PoolAccumulation = {
     poolStatuses,
     allReady503: poolStatuses.every((status) => status === 503),
@@ -173,7 +181,9 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.log(
-    JSON.stringify({ probe_error: error instanceof Error ? error.stack : String(error) })
+    JSON.stringify({
+      probe_error: error instanceof Error ? error.stack : String(error)
+    })
   )
   process.exit(1)
 })

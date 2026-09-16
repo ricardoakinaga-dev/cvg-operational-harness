@@ -2,12 +2,12 @@
 
 ## Layers
 
-| Concept | Question answered | Authority |
-| --- | --- | --- |
-| `CompletionEvaluator` | Is the execution complete/failed/paused? | Completion outcome (runtime enforces). |
-| `SufficiencyEvaluator` | Is the evidence coverage enough? | Domain-aware coverage signal. |
-| Claim validation | Are response claims grounded in evidence? | Grounding signal (runtime enforces). |
-| Policy | Is the action authorized? | Authorization. |
+| Concept                | Question answered                         | Authority                              |
+| ---------------------- | ----------------------------------------- | -------------------------------------- |
+| `CompletionEvaluator`  | Is the execution complete/failed/paused?  | Completion outcome (runtime enforces). |
+| `SufficiencyEvaluator` | Is the evidence coverage enough?          | Domain-aware coverage signal.          |
+| Claim validation       | Are response claims grounded in evidence? | Grounding signal (runtime enforces).   |
+| Policy                 | Is the action authorized?                 | Authorization.                         |
 
 Evaluators never execute tools and never authorize.
 

@@ -57,7 +57,12 @@ async function main() {
     const sha256 = createHash('sha256').update(bytes).digest('hex')
     if (sha256 === entry.sha256) unchanged.push(entry.path)
     else
-      changed.push({ path: entry.path, area: areaOf(entry.path), was: entry.sha256, now: sha256 })
+      changed.push({
+        path: entry.path,
+        area: areaOf(entry.path),
+        was: entry.sha256,
+        now: sha256
+      })
   }
   const productChanged = changed.filter((item) => item.area === 'product')
   const docsChanged = changed.filter((item) => item.area === 'docs')

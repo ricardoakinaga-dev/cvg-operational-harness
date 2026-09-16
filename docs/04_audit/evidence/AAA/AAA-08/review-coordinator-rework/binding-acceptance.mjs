@@ -101,11 +101,43 @@ const input = {
   idempotencyKey: 'audit_same_operation'
 }
 const results = []
-for (const action of ['appointment.confirm', 'appointment.reschedule', 'appointment.cancel']) {
+for (const action of [
+  'appointment.confirm',
+  'appointment.reschedule',
+  'appointment.cancel'
+]) {
   const h = harness()
-  const request = { ...input, capability: 'appointment.modify', action, resource: { type: 'appointment_draft', id: 'draft_synthetic', tenantId } }
+  const request = {
+    ...input,
+    capability: 'appointment.modify',
+    action,
+    resource: { type: 'appointment_draft', id: 'draft_synthetic', tenantId }
+  }
   const result = await h.runtime.runTurn(request)
-  results.push({ capability: request.capability, action, resourceType: request.resource.type, outcome: result.outcome, decision: result.decision?.decision, reason: result.decision?.reason, toolCalls: h.effects.length })
+  results.push({
+    capability: request.capability,
+    action,
+    resourceType: request.resource.type,
+    outcome: result.outcome,
+    decision: result.decision?.decision,
+    reason: result.decision?.reason,
+    toolCalls: h.effects.length
+  })
 }
-console.log(JSON.stringify({ fixture: 'synthetic-only; tool records payload in memory', results }, null, 2))
-if (!results.every(x => x.outcome === 'denied' && x.decision === 'DENY' && x.reason === 'action_capability_mismatch' && x.toolCalls === 0)) throw new Error('Regression: forbidden action reached the executor')
+console.log(
+  JSON.stringify(
+    { fixture: 'synthetic-only; tool records payload in memory', results },
+    null,
+    2
+  )
+)
+if (
+  !results.every(
+    (x) =>
+      x.outcome === 'denied' &&
+      x.decision === 'DENY' &&
+      x.reason === 'action_capability_mismatch' &&
+      x.toolCalls === 0
+  )
+)
+  throw new Error('Regression: forbidden action reached the executor')

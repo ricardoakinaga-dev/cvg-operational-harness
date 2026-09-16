@@ -1,3 +1,22 @@
+# AAA-4A — Conversational Intelligence Layer — 2026-09-15T22:24:40-03:00
+
+- id: `CVG-PHASE4A-CONVERSATIONAL-INTELLIGENCE` / `AAA-4A`
+- status: `BLOCKED`; owner: `cvg-operational-harness`; production `NO_GO`.
+- objective: add an optional generic Conversational Intelligence Layer above
+  the governed Harness for controlled synthetic consumers, only after the
+  Phase 4 handoff is current and verified.
+- entry gate: `docs/phase4a/PHASE_4_HANDOFF.md` must be superseded with
+  `PHASE_4_HANDOFF=VERIFIED`.
+- completed: the full 18-part prompt is archived under
+  `docs/phase4a/prompts/`; no source implementation started.
+- blocker: Phase 4 is currently `CONDITIONAL_PASS`/mechanical `NO_GO` with
+  required format drift and no fresh critic report.
+- next_action: repair Phase 4 format drift, rerun certification, obtain fresh
+  critic evidence, and re-evaluate this dependency.
+- limits: no real data/provider/channel/MCP, credential, deployment,
+  sensitive clinical/financial/scheduling/record action, or unrestricted
+  production path.
+
 # AAA-41 Phase 4 CAPABILITY BOUNDARY — evidence and certification closure — 2026-09-15T10:25:18-03:00
 
 - id: `CVG-PHASE4-CAPABILITY-BOUNDARY` / `AAA-41`

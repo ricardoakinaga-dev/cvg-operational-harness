@@ -1,3 +1,24 @@
+# AAA-4A HANDOFF BLOCKED / PHASE 4 REPAIR — 2026-09-15T22:24:40-03:00
+
+### TASK / GATE
+
+`CVG-PHASE4A-CONVERSATIONAL-INTELLIGENCE` / `AAA-4A`; required
+`PHASE_4_HANDOFF=VERIFIED` is not satisfied.
+
+### ACTION / RESULT
+
+Verified the current Phase 4 evidence and reproduced `npm run format:check`
+with exit 1 and 312 files out of format. `docs/phase4/evidence/FINAL_CRITIC.md`
+also records no fresh critic report. The Phase 4A handoff was recorded as
+`BLOCKED`, and the 549643-byte user prompt archive was copied byte-for-byte to
+`docs/phase4a/prompts/`.
+
+### NEXT / LIMITS
+
+Repair and re-certify Phase 4 before any Phase 4A source implementation. No
+real provider/channel/MCP, network, credential, data, sensitive action,
+deployment, or production release was used.
+
 # REPO-20260915 — controlled repository publication — 2026-09-15T19:20:20-03:00
 
 - request: synchronize the current repository snapshot with

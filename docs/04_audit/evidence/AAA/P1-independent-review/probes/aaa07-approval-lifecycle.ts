@@ -1,9 +1,6 @@
 // P1 falsification probe AAA-07: approval lifecycle (reserve/CAS/TTL sweep/
 // fencing/terminal immutability/expiry/tenant) against the real engine.
-import {
-  ApprovalEngine,
-  ApprovalError
-} from '@cvg/approval-engine'
+import { ApprovalEngine, ApprovalError } from '@cvg/approval-engine'
 import { report, TENANT } from './harness.ts'
 
 const OTHER_TENANT = 'tenant_00000000-0000-4000-8000-0000000000ff'
@@ -14,7 +11,10 @@ const PAYLOAD = { text: 'APPROVED_PAYLOAD' }
 let nowMs = Date.parse('2026-09-12T12:00:00.000Z')
 const clock = () => new Date(nowMs)
 
-function request(engine: ApprovalEngine, overrides: Record<string, unknown> = {}) {
+function request(
+  engine: ApprovalEngine,
+  overrides: Record<string, unknown> = {}
+) {
   return engine.request({
     tenantId: TENANT,
     operatorId: 'op_1',
@@ -35,7 +35,10 @@ function request(engine: ApprovalEngine, overrides: Record<string, unknown> = {}
   })
 }
 
-function reserveInput(approvalId: string, overrides: Record<string, unknown> = {}) {
+function reserveInput(
+  approvalId: string,
+  overrides: Record<string, unknown> = {}
+) {
   return {
     tenantId: TENANT,
     approvalId,
@@ -56,14 +59,19 @@ function throwsCode(fn: () => unknown): string | undefined {
     fn()
     return undefined
   } catch (error) {
-    return error instanceof ApprovalError ? error.code : `non-approval:${String(error)}`
+    return error instanceof ApprovalError
+      ? error.code
+      : `non-approval:${String(error)}`
   }
 }
 
 async function main(): Promise<void> {
   const failures: string[] = []
   const expect = (label: string, actual: unknown, expected: unknown) => {
-    if (actual !== expected) failures.push(`${label}: got ${String(actual)}, expected ${String(expected)}`)
+    if (actual !== expected)
+      failures.push(
+        `${label}: got ${String(actual)}, expected ${String(expected)}`
+      )
   }
 
   const engine = new ApprovalEngine({ clock })
@@ -84,7 +92,11 @@ async function main(): Promise<void> {
   expect(
     'markExecuting wrong token',
     throwsCode(() =>
-      engine.markExecuting({ tenantId: TENANT, approvalId: a1.approvalId, reservationId: 'rsv_wrong' })
+      engine.markExecuting({
+        tenantId: TENANT,
+        approvalId: a1.approvalId,
+        reservationId: 'rsv_wrong'
+      })
     ),
     'reservation_mismatch'
   )
@@ -95,7 +107,11 @@ async function main(): Promise<void> {
         tenantId: TENANT,
         approvalId: a1.approvalId,
         reservationId: 'rsv_wrong',
-        evidence: { outcome: 'effect_confirmed', executionRef: 'exec_x', evidenceRef: 'probe' }
+        evidence: {
+          outcome: 'effect_confirmed',
+          executionRef: 'exec_x',
+          evidenceRef: 'probe'
+        }
       })
     ),
     'reservation_mismatch'
@@ -107,19 +123,31 @@ async function main(): Promise<void> {
         tenantId: TENANT,
         approvalId: a1.approvalId,
         reservationId: 'rsv_wrong',
-        evidence: { outcome: 'no_effect', source: 'journal', evidenceRef: 'probe' }
+        evidence: {
+          outcome: 'no_effect',
+          source: 'journal',
+          evidenceRef: 'probe'
+        }
       })
     ),
     'reservation_mismatch'
   )
-  engine.markExecuting({ tenantId: TENANT, approvalId: a1.approvalId, reservationId: r1.reservationId })
+  engine.markExecuting({
+    tenantId: TENANT,
+    approvalId: a1.approvalId,
+    reservationId: r1.reservationId
+  })
   observed.executingStatus = engine.get(TENANT, a1.approvalId).status
   expect('markExecuting status', observed.executingStatus, 'EXECUTING')
   engine.release({
     tenantId: TENANT,
     approvalId: a1.approvalId,
     reservationId: r1.reservationId,
-    evidence: { outcome: 'no_effect', source: 'journal', evidenceRef: 'probe:release' }
+    evidence: {
+      outcome: 'no_effect',
+      source: 'journal',
+      evidenceRef: 'probe:release'
+    }
   })
   expect('release status', engine.get(TENANT, a1.approvalId).status, 'APPROVED')
   // After release the approval is APPROVED without reservation: an old token
@@ -132,7 +160,11 @@ async function main(): Promise<void> {
         tenantId: TENANT,
         approvalId: a1.approvalId,
         reservationId: r1.reservationId,
-        evidence: { outcome: 'effect_confirmed', executionRef: 'exec_stale', evidenceRef: 'probe' }
+        evidence: {
+          outcome: 'effect_confirmed',
+          executionRef: 'exec_stale',
+          evidenceRef: 'probe'
+        }
       })
     ),
     'invalid_state'
@@ -140,14 +172,20 @@ async function main(): Promise<void> {
   expect(
     'reservation token reuse',
     throwsCode(() =>
-      engine.reserve(reserveInput(a1.approvalId, { reservationId: r1.reservationId }))
+      engine.reserve(
+        reserveInput(a1.approvalId, { reservationId: r1.reservationId })
+      )
     ),
     'reservation_reused'
   )
 
   // --- terminal immutability ---
   const r1b = engine.reserve(reserveInput(a1.approvalId))
-  engine.markExecuting({ tenantId: TENANT, approvalId: a1.approvalId, reservationId: r1b.reservationId })
+  engine.markExecuting({
+    tenantId: TENANT,
+    approvalId: a1.approvalId,
+    reservationId: r1b.reservationId
+  })
   expect(
     'stale token during new generation',
     throwsCode(() =>
@@ -155,7 +193,11 @@ async function main(): Promise<void> {
         tenantId: TENANT,
         approvalId: a1.approvalId,
         reservationId: r1.reservationId,
-        evidence: { outcome: 'effect_confirmed', executionRef: 'exec_stale', evidenceRef: 'probe' }
+        evidence: {
+          outcome: 'effect_confirmed',
+          executionRef: 'exec_stale',
+          evidenceRef: 'probe'
+        }
       })
     ),
     'reservation_mismatch'
@@ -164,7 +206,11 @@ async function main(): Promise<void> {
     tenantId: TENANT,
     approvalId: a1.approvalId,
     reservationId: r1b.reservationId,
-    evidence: { outcome: 'effect_confirmed', executionRef: 'exec_1', evidenceRef: 'probe:confirm' }
+    evidence: {
+      outcome: 'effect_confirmed',
+      executionRef: 'exec_1',
+      evidenceRef: 'probe:confirm'
+    }
   })
   observed.executedStatus = engine.get(TENANT, a1.approvalId).status
   expect('confirm status', observed.executedStatus, 'EXECUTED')
@@ -180,7 +226,11 @@ async function main(): Promise<void> {
         tenantId: TENANT,
         approvalId: a1.approvalId,
         reservationId: r1b.reservationId,
-        evidence: { outcome: 'no_effect', source: 'journal', evidenceRef: 'probe' }
+        evidence: {
+          outcome: 'no_effect',
+          source: 'journal',
+          evidenceRef: 'probe'
+        }
       })
     ),
     'invalid_state'
@@ -204,7 +254,11 @@ async function main(): Promise<void> {
         tenantId: TENANT,
         approvalId: a1.approvalId,
         actorId: 'op_9',
-        evidence: { outcome: 'no_effect', source: 'operator', evidenceRef: 'probe' }
+        evidence: {
+          outcome: 'no_effect',
+          source: 'operator',
+          evidenceRef: 'probe'
+        }
       })
     ),
     'invalid_state'
@@ -213,7 +267,11 @@ async function main(): Promise<void> {
     tenantId: TENANT,
     approvalId: a1.approvalId,
     reservationId: r1b.reservationId,
-    evidence: { outcome: 'effect_confirmed', executionRef: 'exec_1', evidenceRef: 'probe:confirm' }
+    evidence: {
+      outcome: 'effect_confirmed',
+      executionRef: 'exec_1',
+      evidenceRef: 'probe:confirm'
+    }
   })
   expect('idempotent confirm keeps EXECUTED', idemConfirm.status, 'EXECUTED')
   expect(
@@ -223,7 +281,11 @@ async function main(): Promise<void> {
         tenantId: TENANT,
         approvalId: a1.approvalId,
         reservationId: r1b.reservationId,
-        evidence: { outcome: 'effect_confirmed', executionRef: 'exec_other', evidenceRef: 'probe' }
+        evidence: {
+          outcome: 'effect_confirmed',
+          executionRef: 'exec_other',
+          evidenceRef: 'probe'
+        }
       })
     ),
     'already_executed'
@@ -239,11 +301,19 @@ async function main(): Promise<void> {
     tenantId: TENANT,
     now: clock(),
     ttlMs: 1_000,
-    evidenceFor: () => ({ outcome: 'no_effect', source: 'journal', evidenceRef: 'probe:sweep' })
+    evidenceFor: () => ({
+      outcome: 'no_effect',
+      source: 'journal',
+      evidenceRef: 'probe:sweep'
+    })
   })
   observed.sweepReleased = sweep1
   expect('sweep released count', sweep1.released, 1)
-  expect('sweep released status', engine.get(TENANT, a2.approvalId).status, 'APPROVED')
+  expect(
+    'sweep released status',
+    engine.get(TENANT, a2.approvalId).status,
+    'APPROVED'
+  )
 
   const r2b = engine.reserve(reserveInput(a2.approvalId))
   nowMs += 5_000
@@ -255,17 +325,29 @@ async function main(): Promise<void> {
   })
   observed.sweepUncertain = sweep2
   expect('sweep uncertain count', sweep2.uncertain, 1)
-  expect('sweep uncertain status', engine.get(TENANT, a2.approvalId).status, 'UNCERTAIN')
+  expect(
+    'sweep uncertain status',
+    engine.get(TENANT, a2.approvalId).status,
+    'UNCERTAIN'
+  )
   expect(
     'reserve UNCERTAIN',
-    throwsCode(() => engine.reserve(reserveInput(a2.approvalId, { reservationId: r2b.reservationId }))),
+    throwsCode(() =>
+      engine.reserve(
+        reserveInput(a2.approvalId, { reservationId: r2b.reservationId })
+      )
+    ),
     'uncertain'
   )
   const reconciled = engine.reconcile({
     tenantId: TENANT,
     approvalId: a2.approvalId,
     actorId: 'op_9',
-    evidence: { outcome: 'no_effect', source: 'operator', evidenceRef: 'probe:reconcile' }
+    evidence: {
+      outcome: 'no_effect',
+      source: 'operator',
+      evidenceRef: 'probe:reconcile'
+    }
   })
   expect('reconcile no_effect -> FAILED', reconciled.status, 'FAILED')
 
@@ -274,14 +356,27 @@ async function main(): Promise<void> {
   engine.approve(TENANT, a3.approvalId, { approverId: 'op_2' })
   engine.reserve(reserveInput(a3.approvalId))
   nowMs += 5_000
-  engine.releaseExpired({ tenantId: TENANT, now: clock(), ttlMs: 1_000, evidenceFor: () => undefined })
+  engine.releaseExpired({
+    tenantId: TENANT,
+    now: clock(),
+    ttlMs: 1_000,
+    evidenceFor: () => undefined
+  })
   const reconciled2 = engine.reconcile({
     tenantId: TENANT,
     approvalId: a3.approvalId,
     actorId: 'op_9',
-    evidence: { outcome: 'effect_confirmed', executionRef: 'exec_recon', evidenceRef: 'probe:reconcile' }
+    evidence: {
+      outcome: 'effect_confirmed',
+      executionRef: 'exec_recon',
+      evidenceRef: 'probe:reconcile'
+    }
   })
-  expect('reconcile effect_confirmed -> EXECUTED', reconciled2.status, 'EXECUTED')
+  expect(
+    'reconcile effect_confirmed -> EXECUTED',
+    reconciled2.status,
+    'EXECUTED'
+  )
 
   // --- expiry and tenant isolation ---
   const a4 = request(engine, { expiresInMs: 1_000 })
@@ -289,7 +384,9 @@ async function main(): Promise<void> {
   nowMs += 5_000
   expect(
     'approve expired',
-    throwsCode(() => engine.approve(TENANT, a4.approvalId, { approverId: 'op_2' })),
+    throwsCode(() =>
+      engine.approve(TENANT, a4.approvalId, { approverId: 'op_2' })
+    ),
     'expired'
   )
   expect('expired status', engine.get(TENANT, a4.approvalId).status, 'EXPIRED')
@@ -300,7 +397,9 @@ async function main(): Promise<void> {
   )
   expect(
     'cross-tenant reserve',
-    throwsCode(() => engine.reserve(reserveInput(a4.approvalId, { tenantId: OTHER_TENANT }))),
+    throwsCode(() =>
+      engine.reserve(reserveInput(a4.approvalId, { tenantId: OTHER_TENANT }))
+    ),
     'not_found'
   )
 
@@ -309,12 +408,20 @@ async function main(): Promise<void> {
   engine.submit(TENANT, a5.approvalId, 'op_1')
   expect(
     'self approval',
-    throwsCode(() => engine.approve(TENANT, a5.approvalId, { approverId: 'op_1' })),
+    throwsCode(() =>
+      engine.approve(TENANT, a5.approvalId, { approverId: 'op_1' })
+    ),
     'self_approval_denied'
   )
 
   report('AAA07-approval-lifecycle', { observed, failures })
-  console.log(JSON.stringify({ probe: 'AAA-07', falsified: failures.length > 0, failures }))
+  console.log(
+    JSON.stringify({
+      probe: 'AAA-07',
+      falsified: failures.length > 0,
+      failures
+    })
+  )
   if (failures.length > 0) process.exitCode = 1
 }
 

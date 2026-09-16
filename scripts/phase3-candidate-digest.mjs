@@ -136,7 +136,9 @@ const rootFiles = ROOT_FILES.map((file) => join(repo, file)).filter((file) => {
 })
 
 const functional = digestFiles([...functionalRoots, ...rootFiles])
-const migrations = digestFiles(walk(join(repo, 'packages/persistence/migrations')))
+const migrations = digestFiles(
+  walk(join(repo, 'packages/persistence/migrations'))
+)
 
 const result = {
   candidate: 'CVG-OPERATIONAL-HARNESS-PHASE3',
@@ -159,6 +161,9 @@ const result = {
 
 const outputIndex = process.argv.indexOf('--output')
 if (outputIndex !== -1 && process.argv[outputIndex + 1]) {
-  writeFileSync(process.argv[outputIndex + 1], `${JSON.stringify(result, null, 2)}\n`)
+  writeFileSync(
+    process.argv[outputIndex + 1],
+    `${JSON.stringify(result, null, 2)}\n`
+  )
 }
 console.log(JSON.stringify(result, null, 2))

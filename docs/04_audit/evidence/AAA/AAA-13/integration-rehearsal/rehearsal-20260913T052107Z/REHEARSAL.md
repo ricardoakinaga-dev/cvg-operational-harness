@@ -6,32 +6,32 @@
 
 ## 1. Identidade do candidato e snapshot
 
-| Item | Valor |
-| --- | --- |
-| Origem | `/home/ricardo/cvg-agent-secretary-v2` (HEAD `512bc11e80fbf7c7b8baf6263aacc811ff829309`, branch `main`, dirty — 119 entradas alteradas) |
-| Snapshot | `/tmp/opencode/aaa13-rehearsal-20260913T052107Z/repo` (commit local sintético `a99df0d3c36011b8f8f4955b5ee812d09d7c542f`, dirty) |
-| `candidateId` | `911f049888a45ab206770c29c07a492b4294905225ce0d722f7a193e694da9d4` |
-| Arquivos | 855 (774 tracked + 81 untracked); hashes em `snapshot-files.sha256` |
-| Igualdade origem ↔ cópia | `originBefore = originAfter = copy = producer = 911f0498…`; 0 mismatches; nenhum `capture-drift.json` |
-| `runId` | `run-911f049888a4-mtzd9k5w` |
-| Node / npm | `v24.20.0` / `11.19.0` (alvo do projeto é Node 22 — limitação declarada) |
-| Ambiente | `CI=1`, `CVG_API_PORT=3233`, `CVG_WEB_PORT=4233` |
-| Scripts aprovados | `phase10-certify.mjs 46b024c8…`, `phase10-verify.mjs 24825421…`, `certification-rules.mjs 1d1edc9d…` (inalterados) |
-| Delta vs rodada 3 | +4 adicionados, 7 alterados, 0 removidos (`candidate-delta-vs-round3.txt`) |
+| Item                     | Valor                                                                                                                                   |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Origem                   | `/home/ricardo/cvg-agent-secretary-v2` (HEAD `512bc11e80fbf7c7b8baf6263aacc811ff829309`, branch `main`, dirty — 119 entradas alteradas) |
+| Snapshot                 | `/tmp/opencode/aaa13-rehearsal-20260913T052107Z/repo` (commit local sintético `a99df0d3c36011b8f8f4955b5ee812d09d7c542f`, dirty)        |
+| `candidateId`            | `911f049888a45ab206770c29c07a492b4294905225ce0d722f7a193e694da9d4`                                                                      |
+| Arquivos                 | 855 (774 tracked + 81 untracked); hashes em `snapshot-files.sha256`                                                                     |
+| Igualdade origem ↔ cópia | `originBefore = originAfter = copy = producer = 911f0498…`; 0 mismatches; nenhum `capture-drift.json`                                   |
+| `runId`                  | `run-911f049888a4-mtzd9k5w`                                                                                                             |
+| Node / npm               | `v24.20.0` / `11.19.0` (alvo do projeto é Node 22 — limitação declarada)                                                                |
+| Ambiente                 | `CI=1`, `CVG_API_PORT=3233`, `CVG_WEB_PORT=4233`                                                                                        |
+| Scripts aprovados        | `phase10-certify.mjs 46b024c8…`, `phase10-verify.mjs 24825421…`, `certification-rules.mjs 1d1edc9d…` (inalterados)                      |
+| Delta vs rodada 3        | +4 adicionados, 7 alterados, 0 removidos (`candidate-delta-vs-round3.txt`)                                                              |
 
 A cópia foi construída por `create-snapshot.mjs` a partir do escopo canônico do candidato (tracked + untracked não ignorados), **preservando a partição tracked/untracked** via `git init` local: os arquivos tracked da origem entraram no índice do snapshot; os untracked permaneceram untracked. A lista completa de hashes (`snapshot-files.sha256`, 855 linhas) foi gravada **antes** do ensaio (snapshot `05:21:13.742Z`; certify iniciou `05:21:34Z`). O `candidate-manifest.json` do produtor confere com essa lista: 855/855 hashes iguais, 0 mismatches, sem `candidate-drift.json`. Nenhuma credencial foi copiada (apenas `.env.example`; `.env`/`.env.local` são ignorados e não existem no snapshot).
 
 ## 2. Comandos, exit codes e resultados
 
-| Etapa | Comando (na cópia) | Início/fim (UTC) | Exit | Resultado |
-| --- | --- | --- | --- | --- |
-| Snapshot | `node create-snapshot.mjs <origem> <snap>/repo <evidência>` | 05:21:07Z | 0 | candidateId idêntico origem↔cópia, 0 mismatches, sem drift |
-| Dependências | `cp -a node_modules` (declarado; symlink evitado para não resolver pacotes da origem) | 05:21Z | 0 | 273 MB copiados; candidateId inalterado |
-| PostgreSQL | `initdb` + `pg_ctl start` (cluster novo, porta **55435**, fsync on) | 05:21Z | 0 | `cvg_aaa13_rehearsal` dedicado; `pg-verify.log` = `55435|on|on|on|<data>|16.15` |
-| Produtor | `npm run certify` com `TEST_DATABASE_URL=postgres://ricardo@127.0.0.1:55435/cvg_aaa13_rehearsal` | 05:21:34Z → 05:31:52Z | **0** | **16/16 gates `PASS`**, 0 skips, decisão `CONDITIONAL_GO / AAA_CONTROLLED` |
-| Verificador | `npm run certification:verify` (mesmo snapshot) | 05:31:55Z → 05:31:56Z | **0** | `current candidate qualified`; 27 hashes; mesmo `candidateId`/`runId` |
-| Negativos (suplementar) | `node scripts/phase10-verify.mjs --self-test` (mesmo snapshot, após o verify exigido) | 05:32:03Z → 05:32:08Z | 0 | **37/37 PASS** (N1–N9 + C0–C27), gera `negative-validation.json` na cópia |
-| PostgreSQL stop | `pg_ctl stop` | 05:32Z | 0 | cluster descartável encerrado; porta 55435 liberada |
+| Etapa                   | Comando (na cópia)                                                                               | Início/fim (UTC)      | Exit  | Resultado                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------ | --------------------- | ----- | -------------------------------------------------------------------------- | --- | --- | --- | ------ | ------ |
+| Snapshot                | `node create-snapshot.mjs <origem> <snap>/repo <evidência>`                                      | 05:21:07Z             | 0     | candidateId idêntico origem↔cópia, 0 mismatches, sem drift                 |
+| Dependências            | `cp -a node_modules` (declarado; symlink evitado para não resolver pacotes da origem)            | 05:21Z                | 0     | 273 MB copiados; candidateId inalterado                                    |
+| PostgreSQL              | `initdb` + `pg_ctl start` (cluster novo, porta **55435**, fsync on)                              | 05:21Z                | 0     | `cvg_aaa13_rehearsal` dedicado; `pg-verify.log` = `55435                   | on  | on  | on  | <data> | 16.15` |
+| Produtor                | `npm run certify` com `TEST_DATABASE_URL=postgres://ricardo@127.0.0.1:55435/cvg_aaa13_rehearsal` | 05:21:34Z → 05:31:52Z | **0** | **16/16 gates `PASS`**, 0 skips, decisão `CONDITIONAL_GO / AAA_CONTROLLED` |
+| Verificador             | `npm run certification:verify` (mesmo snapshot)                                                  | 05:31:55Z → 05:31:56Z | **0** | `current candidate qualified`; 27 hashes; mesmo `candidateId`/`runId`      |
+| Negativos (suplementar) | `node scripts/phase10-verify.mjs --self-test` (mesmo snapshot, após o verify exigido)            | 05:32:03Z → 05:32:08Z | 0     | **37/37 PASS** (N1–N9 + C0–C27), gera `negative-validation.json` na cópia  |
+| PostgreSQL stop         | `pg_ctl stop`                                                                                    | 05:32Z                | 0     | cluster descartável encerrado; porta 55435 liberada                        |
 
 Logs brutos: `run/certify.stdout.log`, `run/certify.stderr.log`, `run/verify.*`, `run/selftest.*`, `run/logs/*.log` (16 gates), `run/postgres/*` (init/start/verify/stop/config). Nenhum relatório foi editado; nenhum limiar foi reduzido; nenhum achado foi removido.
 
@@ -39,24 +39,24 @@ Logs brutos: `run/certify.stdout.log`, `run/certify.stderr.log`, `run/verify.*`,
 
 Fonte: `gate-matrix.json` / `gate-matrix.md` (derivada dos bytes brutos pelas regras aprovadas). Correlação completa: **16/16 gates** com `runId`, `candidateId`, `gate` e `exitCode` do cabeçalho iguais ao resultado declarado; itens de evidência com hash do manifesto = hash real; `verifyGateEvidence` = **0 falhas**; `candidate-drift.json` ausente.
 
-| Gate | Exit | Status | Skips | Métrica derivada dos bytes brutos |
-| --- | --- | --- | --- | --- |
-| format | 0 | PASS | 0 | — |
-| typecheck | 0 | PASS | 0 | — |
-| lint | 0 | PASS | 0 | — |
-| build | 0 | PASS | 0 | — |
-| unit | 0 | PASS | 0 | 233 arquivos / 1634 testes PASS (0 skipped) |
-| coverage | 0 | PASS | 0 | 96.81 st / 93.14 br / 97.36 fn / 97.40 ln |
-| security | 0 | PASS | 0 | `found 0 vulnerabilities` |
-| worker_startup | 0 | PASS | 0 | startup+controlled smoke |
-| postgres | 0 | PASS | 0 | 14 arquivos / 123 testes PASS (banco real do ensaio) |
-| e2e | 0 | PASS | 0 | 6 testes chromium PASS |
-| evals | 0 | PASS | 0 | 56 cenários, sucesso 0.9464, violação 0, unsafe 0, adversarial 1.0; 3 mismatches dentro dos limites |
-| chaos | 0 | PASS | 0 | `chaos-report.json`: 20 testes / 10 suítes PASS, 0 pending; `phase10-result.metrics.chaos.executed=16` (artefato legado de agregação, idêntico às rodadas anteriores — ver limitations) |
-| load | 0 | PASS | 0 | 10000 eventos, loss 0, duplicates 0, p95 4.008ms |
-| restore | 0 | PASS | 0 | digestMatches true, outbox/tenant ok; RPO/RTO `NOT_VALIDATED_ON_PRODUCTION_INFRASTRUCTURE` |
-| sbom | 0 | PASS | 0 | 372 componentes CycloneDX |
-| licenses | 0 | PASS | 0 | total 372 (21 internos), denied 0, unknown 0, unclassified 0, invalidExceptions 0 |
+| Gate           | Exit | Status | Skips | Métrica derivada dos bytes brutos                                                                                                                                                       |
+| -------------- | ---- | ------ | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| format         | 0    | PASS   | 0     | —                                                                                                                                                                                       |
+| typecheck      | 0    | PASS   | 0     | —                                                                                                                                                                                       |
+| lint           | 0    | PASS   | 0     | —                                                                                                                                                                                       |
+| build          | 0    | PASS   | 0     | —                                                                                                                                                                                       |
+| unit           | 0    | PASS   | 0     | 233 arquivos / 1634 testes PASS (0 skipped)                                                                                                                                             |
+| coverage       | 0    | PASS   | 0     | 96.81 st / 93.14 br / 97.36 fn / 97.40 ln                                                                                                                                               |
+| security       | 0    | PASS   | 0     | `found 0 vulnerabilities`                                                                                                                                                               |
+| worker_startup | 0    | PASS   | 0     | startup+controlled smoke                                                                                                                                                                |
+| postgres       | 0    | PASS   | 0     | 14 arquivos / 123 testes PASS (banco real do ensaio)                                                                                                                                    |
+| e2e            | 0    | PASS   | 0     | 6 testes chromium PASS                                                                                                                                                                  |
+| evals          | 0    | PASS   | 0     | 56 cenários, sucesso 0.9464, violação 0, unsafe 0, adversarial 1.0; 3 mismatches dentro dos limites                                                                                     |
+| chaos          | 0    | PASS   | 0     | `chaos-report.json`: 20 testes / 10 suítes PASS, 0 pending; `phase10-result.metrics.chaos.executed=16` (artefato legado de agregação, idêntico às rodadas anteriores — ver limitations) |
+| load           | 0    | PASS   | 0     | 10000 eventos, loss 0, duplicates 0, p95 4.008ms                                                                                                                                        |
+| restore        | 0    | PASS   | 0     | digestMatches true, outbox/tenant ok; RPO/RTO `NOT_VALIDATED_ON_PRODUCTION_INFRASTRUCTURE`                                                                                              |
+| sbom           | 0    | PASS   | 0     | 372 componentes CycloneDX                                                                                                                                                               |
+| licenses       | 0    | PASS   | 0     | total 372 (21 internos), denied 0, unknown 0, unclassified 0, invalidExceptions 0                                                                                                       |
 
 O gate PostgreSQL **executou** (não `NOT_EXECUTED`): `TEST_DATABASE_URL` apontou para o cluster descartável exclusivo do ensaio na porta 55435. Nenhum gate foi pulado ou ficou ausente.
 

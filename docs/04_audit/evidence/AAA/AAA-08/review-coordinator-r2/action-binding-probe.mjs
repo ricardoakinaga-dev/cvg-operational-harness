@@ -101,11 +101,34 @@ const input = {
   idempotencyKey: 'audit_same_operation'
 }
 const results = []
-for (const action of ['appointment.confirm', 'appointment.reschedule', 'appointment.cancel']) {
+for (const action of [
+  'appointment.confirm',
+  'appointment.reschedule',
+  'appointment.cancel'
+]) {
   const h = harness()
-  const request = { ...input, capability: 'appointment.modify', action, resource: { type: 'appointment_draft', id: 'draft_synthetic', tenantId } }
+  const request = {
+    ...input,
+    capability: 'appointment.modify',
+    action,
+    resource: { type: 'appointment_draft', id: 'draft_synthetic', tenantId }
+  }
   const result = await h.runtime.runTurn(request)
-  results.push({ capability: request.capability, action, resourceType: request.resource.type, outcome: result.outcome, decision: result.decision?.decision, toolCalls: h.effects.length })
+  results.push({
+    capability: request.capability,
+    action,
+    resourceType: request.resource.type,
+    outcome: result.outcome,
+    decision: result.decision?.decision,
+    toolCalls: h.effects.length
+  })
 }
-console.log(JSON.stringify({ fixture: 'synthetic-only; tool records payload in memory', results }, null, 2))
-if (!results.every(x => x.outcome === 'executed' && x.toolCalls === 1)) throw new Error('Counterexample changed; review current behavior')
+console.log(
+  JSON.stringify(
+    { fixture: 'synthetic-only; tool records payload in memory', results },
+    null,
+    2
+  )
+)
+if (!results.every((x) => x.outcome === 'executed' && x.toolCalls === 1))
+  throw new Error('Counterexample changed; review current behavior')

@@ -41,7 +41,9 @@ async function main(): Promise<void> {
     outbox: async () => failOutbox()
   })
 
-  const requested = await h1.runtime.runTurn(turnInput({ idempotencyKey: CALLER_KEY }))
+  const requested = await h1.runtime.runTurn(
+    turnInput({ idempotencyKey: CALLER_KEY })
+  )
   const approvalId = requested.approvalId ?? ''
   const stored = h1.approvals.get(TENANT, approvalId)
   approveApproval(h1, approvalId)
@@ -51,9 +53,12 @@ async function main(): Promise<void> {
     turnInput({ approvalId, idempotencyKey: CALLER_KEY })
   )
   if (first.outcome !== 'executed' || first.outboxPending !== true) {
-    failures.push(`first turn outcome=${first.outcome} outboxPending=${first.outboxPending}`)
+    failures.push(
+      `first turn outcome=${first.outcome} outboxPending=${first.outboxPending}`
+    )
   }
-  if (sharedToolCalls !== 1) failures.push(`tool calls after first turn = ${sharedToolCalls}`)
+  if (sharedToolCalls !== 1)
+    failures.push(`tool calls after first turn = ${sharedToolCalls}`)
   const approvalAfterFirst = h1.approvals.get(TENANT, approvalId)
 
   // Crash/restart: new journal + new runtime over the same directory.
@@ -69,7 +74,9 @@ async function main(): Promise<void> {
     turnInput({ approvalId, idempotencyKey: CALLER_KEY })
   )
   if (replay.outcome !== 'executed' || replay.replayed !== true) {
-    failures.push(`replay outcome=${replay.outcome} replayed=${replay.replayed}`)
+    failures.push(
+      `replay outcome=${replay.outcome} replayed=${replay.replayed}`
+    )
   }
   if (sharedToolCalls !== 1) {
     failures.push(`tool re-ran on replay: calls=${sharedToolCalls}`)
@@ -78,7 +85,9 @@ async function main(): Promise<void> {
     failures.push(`replay reason=${replay.reason}`)
   }
   const opKey = `op:${createHash('sha256')
-    .update(canonicalizeJson({ tenantId: TENANT, callerIdempotencyKey: CALLER_KEY }))
+    .update(
+      canonicalizeJson({ tenantId: TENANT, callerIdempotencyKey: CALLER_KEY })
+    )
     .digest('hex')}`
   const journalRecord = await j2.get(TENANT, opKey)
   if (journalRecord?.state !== 'CONFIRMED') {
@@ -140,14 +149,20 @@ async function main(): Promise<void> {
 
   // Independent hash check of operationKey stability: same tenant+callerKey.
   const opKeyA = `op:${createHash('sha256')
-    .update(canonicalizeJson({ tenantId: TENANT, callerIdempotencyKey: CALLER_KEY }))
+    .update(
+      canonicalizeJson({ tenantId: TENANT, callerIdempotencyKey: CALLER_KEY })
+    )
     .digest('hex')}`
 
   report('F03-durable-replay', {
     directory: dir,
     first: { outcome: first.outcome, outboxPending: first.outboxPending },
     approvalAfterFirst: approvalAfterFirst.status,
-    replay: { outcome: replay.outcome, reason: replay.reason, replayed: replay.replayed },
+    replay: {
+      outcome: replay.outcome,
+      reason: replay.reason,
+      replayed: replay.replayed
+    },
     sharedToolCalls,
     concurrentReserveOutcomes: outcomes,
     operationKeyFromCallerKey: opKeyA,
@@ -156,7 +171,9 @@ async function main(): Promise<void> {
   })
 
   await rm(dir, { recursive: true, force: true })
-  console.log(JSON.stringify({ probe: 'F03', falsified: failures.length > 0, failures }))
+  console.log(
+    JSON.stringify({ probe: 'F03', falsified: failures.length > 0, failures })
+  )
   if (failures.length > 0) process.exitCode = 1
 }
 

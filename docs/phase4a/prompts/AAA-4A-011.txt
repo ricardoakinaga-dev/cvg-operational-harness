@@ -1,0 +1,1057 @@
+83. Mutated/paraphrased corpus.
+84. Efficiency eval.
+
+L. VERIFICATION
+85. Format.
+86. Typecheck.
+87. Lint.
+88. Build.
+89. Harness-core-without-conversation build.
+90. Architecture dependency gates.
+91. Conversation unit tests.
+92. Contract tests.
+93. PostgreSQL tests.
+94. Runtime V1 regression.
+95. Runtime V2 regression.
+96. Phase 4 capability regression.
+97. E2E.
+98. Golden conversation evals.
+99. Security/adversarial suite.
+100. Chaos/restart.
+101. Concurrency.
+102. SBOM.
+103. Licenses.
+104. Performance baseline.
+
+M. CERTIFICATION
+105. Freeze source candidate.
+106. Generate candidate identity.
+107. Generate conversation composition identity.
+108. Generate evidence graph.
+109. Generate evidence manifest.
+110. Run architecture critic.
+111. Repair if rejected.
+112. Rerun affected gates.
+113. Run adversarial conversation critic.
+114. Repair if rejected.
+115. Rerun affected gates.
+116. Run conversation quality critic.
+117. Repair systematic quality defects.
+118. Run mutated corpus.
+119. Run complete regression.
+120. Regenerate stale evidence.
+121. Re-freeze candidate.
+122. Re-run critics if source changed materially.
+123. Validate reports/results.
+124. Run final sentinel.
+125. Emit final certification.
+
+======================================================================
+1124. DO NOT STOP AFTER IMPLEMENTATION
+======================================================================
+
+Do not stop when:
+
+ConversationState works.
+
+Do not stop when:
+
+chat demo works.
+
+Do not stop when:
+
+golden conversation looks good.
+
+Do not stop when:
+
+tests mostly pass.
+
+Phase 4A completes only after:
+
+ARCHITECTURE
+→ IMPLEMENTATION
+→ DURABILITY
+→ GOVERNANCE
+→ GROUNDING
+→ SECURITY
+→ CONVERSATION QUALITY
+→ FULL REGRESSION
+→ FRESH EVIDENCE
+→ INDEPENDENT CRITICS
+→ REPAIR
+→ FINAL SENTINEL.
+
+======================================================================
+1125. DO NOT OPTIMIZE FOR DEMO THEATER
+======================================================================
+
+A beautiful demo with hidden hardcoded branches is a failure.
+
+Prefer ugly but correct generic architecture first.
+
+Then improve language quality.
+
+======================================================================
+1126. NO SCRIPTED GOLDEN-PATH CHEATING
+======================================================================
+
+The synthetic consumer must not recognize exact golden-test phrases and return
+prewritten responses.
+
+Use the same generic dialogue interpretation and state machinery across:
+
+golden cases
+paraphrases
+adversarial cases.
+
+======================================================================
+1127. GOLDEN-PHRASE DETECTION AUDIT
+======================================================================
+
+Search implementation for literals copied from golden conversation inputs.
+
+Review every match.
+
+Test fixtures are allowed.
+
+Production/generic conversation code containing exact golden phrases is
+suspicious and must be justified.
+
+======================================================================
+1128. MUTATION ROBUSTNESS
+======================================================================
+
+For each critical golden journey, generate several controlled variations:
+
+different word order
+synonyms
+short responses
+minor typos
+implicit references
+explicit references
+correction phrasing.
+
+The critical invariants must remain stable.
+
+======================================================================
+1129. DIALOGUE INTERPRETATION ROBUSTNESS
+======================================================================
+
+Do not require exact wording such as:
+
+"the second one."
+
+Equivalent phrases should work in controlled tests:
+
+"second"
+"option two"
+"I'll take number 2"
+"the later one"
+
+when context makes them equivalent.
+
+======================================================================
+1130. CORRECTION ROBUSTNESS
+======================================================================
+
+Test:
+
+"actually Friday"
+"no, Friday instead"
+"change that to Friday"
+"I meant Friday"
+
+All should produce equivalent structured correction when context supports it.
+
+======================================================================
+1131. CANCELLATION ROBUSTNESS
+======================================================================
+
+Test:
+
+"cancel"
+"forget it"
+"never mind"
+
+according to profile semantics.
+
+Do not use giant keyword tables as primary intelligence.
+
+======================================================================
+1132. SIDE-QUESTION ROBUSTNESS
+======================================================================
+
+Test side questions with different wording while pending state remains stable.
+
+======================================================================
+1133. REFERENCE ROBUSTNESS
+======================================================================
+
+Test:
+
+"that one"
+"the second"
+"the later option"
+"the one at 4"
+
+against same option set.
+
+======================================================================
+1134. AMBIGUITY ROBUSTNESS
+======================================================================
+
+If two interpretations remain plausible:
+
+clarify.
+
+Do not force the model to always produce a single confident answer.
+
+======================================================================
+1135. INTERPRETATION CONFIDENCE
+======================================================================
+
+If confidence metadata is used:
+
+do not treat arbitrary model probability as truth.
+
+Prefer structural ambiguity detection.
+
+======================================================================
+1136. STRUCTURAL AMBIGUITY
+======================================================================
+
+Examples:
+
+two possible referents
+multiple pending questions
+missing required entity
+conflicting user statements.
+
+These can be detected deterministically after model interpretation.
+
+======================================================================
+1137. SEMANTIC AMBIGUITY
+======================================================================
+
+Model may flag ambiguity.
+
+Runtime/dialogue layer decides whether clarification is required.
+
+======================================================================
+1138. ENTITY EXTRACTION
+======================================================================
+
+Model extracts candidate entities.
+
+Validation/profile decides whether values are acceptable.
+
+======================================================================
+1139. ENTITY VALIDATION
+======================================================================
+
+For synthetic reservation:
+
+date/time/resource constraints belong consumer/profile domain validation.
+
+Not generic Harness Core.
+
+======================================================================
+1140. INVALID ENTITY
+======================================================================
+
+Example:
+
+synthetic resource does not exist.
+
+Do not let model invent one.
+
+Use Capability/domain validation.
+
+======================================================================
+1141. ENTITY NORMALIZATION
+======================================================================
+
+Keep user-facing original text where useful.
+
+Store normalized value separately.
+
+======================================================================
+1142. CORRECTION HISTORY
+======================================================================
+
+Preserve:
+
+old value
+new value
+source turn
+reason.
+
+Do not expose unnecessarily to user.
+
+======================================================================
+1143. CONVERSATIONAL PROVENANCE
+======================================================================
+
+Resolved facts should be traceable to:
+
+user turn
+Tool result
+Knowledge evidence
+system state.
+
+======================================================================
+1144. PROVENANCE SURVIVES SUMMARY
+======================================================================
+
+Summary/compression must not erase required references.
+
+======================================================================
+1145. RESPONSE CLAIM PROVENANCE
+======================================================================
+
+For each strict-profile response claim:
+
+source reference available.
+
+======================================================================
+1146. RESPONSE VERIFIER INPUT
+======================================================================
+
+Verifier receives structured:
+
+claims
+ground truth/evidence
+action status
+current conversation state.
+
+Not raw prompt only.
+
+======================================================================
+1147. RESPONSE VERIFIER OUTPUT
+======================================================================
+
+Typed:
+
+PASS
+REVISE
+FAIL_SAFE
+
+with bounded reason codes.
+
+======================================================================
+1148. FAIL_SAFE RESPONSE
+======================================================================
+
+If response cannot be safely regenerated within budget:
+
+produce deterministic safe fallback based on structured state.
+
+Example conceptually:
+
+"I couldn't confirm that action. No confirmed success is recorded."
+
+Use profile-appropriate naturalization if safely available.
+
+======================================================================
+1149. SAFE FALLBACK DOES NOT CALL TOOL
+======================================================================
+
+Critical.
+
+======================================================================
+1150. SAFE FALLBACK DOES NOT INVENT FACT
+======================================================================
+
+Critical.
+
+======================================================================
+1151. RESPONSE QUALITY FALLBACK
+======================================================================
+
+A less elegant truthful response is preferable to fluent falsehood.
+
+======================================================================
+1152. MODEL CALL ECONOMY
+======================================================================
+
+Before every new model call ask:
+
+Can deterministic state solve this?
+
+Can existing Runtime result solve this?
+
+Can Context Engine already provide it?
+
+Avoid unnecessary calls.
+
+======================================================================
+1153. TARGET CALL GRAPH — SIMPLE TURN
+======================================================================
+
+Example:
+
+USER greeting
+→ deterministic/social route or one response call
+→ response.
+
+No Harness Tool loop.
+
+======================================================================
+1154. TARGET CALL GRAPH — SIMPLE PENDING ANSWER
+======================================================================
+
+PendingQuestion expects option index.
+
+User says "2".
+
+Deterministic bind
+→ resume Harness.
+
+No interpretation model required if safe.
+
+======================================================================
+1155. TARGET CALL GRAPH — COMPLEX TURN
+======================================================================
+
+Natural ambiguous request
+→ interpretation model
+→ structured state
+→ Harness Runtime
+→ response model
+→ verifier if required.
+
+======================================================================
+1156. NO UNIVERSAL FIVE-CALL PIPELINE
+======================================================================
+
+Critical performance principle.
+
+======================================================================
+1157. CALL GRAPH EVIDENCE
+======================================================================
+
+Report model calls for each golden scenario.
+
+======================================================================
+1158. MODEL CALL BUDGET REGRESSION
+======================================================================
+
+Add thresholds for obvious runaway scenarios.
+
+Do not hardcode unrealistic universal limits.
+
+======================================================================
+1159. RESPONSE COMPOSITION DETERMINISTIC PATH
+======================================================================
+
+For some structured operational confirmations, consider deterministic template
+fallback.
+
+This is a fallback, not primary robotic UX.
+
+======================================================================
+1160. TEMPLATE SAFETY
+======================================================================
+
+Templates may be useful for:
+
+hard failure
+unknown outcome
+approval pending
+
+where truth is more important than creativity.
+
+======================================================================
+1161. TEMPLATE DOES NOT BECOME FORM BOT
+======================================================================
+
+Natural response model remains available for ordinary dialogue.
+
+======================================================================
+1162. CONVERSATIONAL VARIATION
+======================================================================
+
+Do not randomize purely for variety in deterministic tests.
+
+======================================================================
+1163. PERSONA CONSISTENCY TEST
+======================================================================
+
+Same profile across multiple turns should remain stylistically coherent.
+
+======================================================================
+1164. PERSONA IS NOT IDENTITY AUTHORITY
+======================================================================
+
+Obvious but test architecture.
+
+======================================================================
+1165. USER REQUESTED STYLE CHANGE
+======================================================================
+
+If profile allows:
+
+"be more concise"
+
+can alter style for session.
+
+This remains conversation state, not Harness Core.
+
+Optional.
+
+======================================================================
+1166. STYLE CHANGE DOES NOT ALTER ACTION
+======================================================================
+
+Test if implemented.
+
+======================================================================
+1167. CONVERSATIONAL EXPLANATION
+======================================================================
+
+Agent should be able to explain:
+
+why it needs clarification
+why action is awaiting approval
+why it cannot confirm an unknown result
+
+without exposing internal implementation details.
+
+======================================================================
+1168. NO INTERNAL JARGON
+======================================================================
+
+User should not see:
+
+Effect Journal
+Runtime V2
+RLS
+checkpoint digest
+
+unless debug/test mode.
+
+======================================================================
+1169. INTERNAL-TO-USER TRANSLATION
+======================================================================
+
+ResponseComposer maps internal outcomes to product-friendly concepts.
+
+======================================================================
+1170. DEBUG MODE SEPARATION
+======================================================================
+
+Test/demo can display trajectory separately from user response.
+
+Do not mix.
+
+======================================================================
+1171. CONVERSATION RESPONSE OBJECT
+======================================================================
+
+Potential shape:
+
+{
+  messageId,
+  conversationId,
+  text,
+  responseMode,
+  relatedExecutionId?,
+  pendingQuestion?,
+  handoff?,
+  groundingSummary?
+}
+
+Do not expose internal fields unnecessarily.
+
+======================================================================
+1172. USER-FACING GROUNDING
+======================================================================
+
+Knowledge profile may expose citations/references.
+
+Transactional profile may expose confirmation/reference.
+
+======================================================================
+1173. INTERNAL GROUNDING
+======================================================================
+
+Even when user-facing citation is not shown, verifier needs provenance.
+
+======================================================================
+1174. RESPONSE DELIVERY CONTRACT
+======================================================================
+
+Delivery receives already verified response.
+
+It cannot edit factual content arbitrarily.
+
+======================================================================
+1175. CHANNEL FORMATTING
+======================================================================
+
+Future channel adapter may format response.
+
+It must not change semantics.
+
+======================================================================
+1176. CHANNEL TRUNCATION
+======================================================================
+
+Future concern.
+
+Do not implement now.
+
+======================================================================
+1177. CHANNEL CAPABILITIES
+======================================================================
+
+Buttons/quick replies future.
+
+Out of scope.
+
+======================================================================
+1178. CONVERSATIONAL APPROVAL UI
+======================================================================
+
+Future channel may show Approve/Reject buttons.
+
+Phase 4A may simulate trusted binding.
+
+No real UI needed.
+
+======================================================================
+1179. SYNTHETIC TRUSTED APPROVAL
+======================================================================
+
+Prefer explicit test route/event to prove Approval Engine integration.
+
+======================================================================
+1180. NATURAL LANGUAGE APPROVAL EXPERIMENT
+======================================================================
+
+If implemented, classify separately as:
+
+CONVERSATIONAL_APPROVAL_ADAPTER_EXPERIMENTAL.
+
+Do not make required for Phase PASS.
+
+======================================================================
+1181. APPROVAL AUTHENTICATION
+======================================================================
+
+Any real future conversational approval requires authenticated actor identity.
+
+Document.
+
+======================================================================
+1182. HUMAN HANDOFF ROUTING
+======================================================================
+
+Synthetic handoff sink only.
+
+No real operator channel.
+
+======================================================================
+1183. HANDOFF ACKNOWLEDGEMENT
+======================================================================
+
+Agent can tell user the request was handed off only if handoff state actually
+persisted/accepted.
+
+======================================================================
+1184. FALSE HANDOFF TEST
+======================================================================
+
+If handoff sink fails:
+
+do not say human has received it.
+
+======================================================================
+1185. HANDOFF EFFECT
+======================================================================
+
+If handoff enqueue is an effect:
+
+use appropriate durability/idempotency.
+
+======================================================================
+1186. HANDOFF RETRY
+======================================================================
+
+Technical retry does not recreate user task action.
+
+======================================================================
+1187. HANDOFF DUPLICATE
+======================================================================
+
+No duplicate handoff tickets for transport retry.
+
+======================================================================
+1188. HANDOFF REFERENCE
+======================================================================
+
+Synthetic reference may be user-visible.
+
+======================================================================
+1189. HUMAN TAKEOVER STATE
+======================================================================
+
+Agent should stop consequential autonomous actions after takeover unless
+explicitly resumed.
+
+======================================================================
+1190. POST-HANDOFF USER MESSAGE
+======================================================================
+
+Define safe behavior.
+
+May acknowledge/add context, but not silently restart action.
+
+======================================================================
+1191. HANDOFF CANCEL
+======================================================================
+
+Out of scope unless simple.
+
+======================================================================
+1192. KNOWLEDGE CONVERSATION DEPTH
+======================================================================
+
+Support follow-up questions referencing prior answer.
+
+Example:
+
+User:
+"What are the available service tiers?"
+
+Agent answers grounded.
+
+User:
+"Which of those includes priority support?"
+
+Resolve "those" from prior evidence/context.
+
+======================================================================
+1193. FOLLOW-UP GROUNDING
+======================================================================
+
+Do not answer solely from prior generated prose if evidence references remain
+available.
+
+======================================================================
+1194. KNOWLEDGE FOLLOW-UP TEST
+======================================================================
+
+Mandatory for second profile if implemented.
+
+======================================================================
+1195. KNOWLEDGE CORRECTION
+======================================================================
+
+If new evidence invalidates prior answer:
+
+agent should update/correct.
+
+======================================================================
+1196. KNOWLEDGE STALENESS
+======================================================================
+
+Synthetic provider can simulate version change.
+
+Do not assume prior answer remains current.
+
+======================================================================
+1197. KNOWLEDGE SOURCE VERSION
+======================================================================
+
+Preserve provenance.
+
+======================================================================
+1198. KNOWLEDGE RESPONSE MEMORY
+======================================================================
+
+Conversation may remember what was discussed.
+
+Evidence remains source of truth.
+
+======================================================================
+1199. RICK READINESS SIGNAL
+======================================================================
+
+If Knowledge Assistant proves:
+
+multi-turn follow-up
+evidence replan
+grounding
+correction
+context retention
+
+then Phase 4A can state architecture is suitable for a future Rick-style
+consumer pilot.
+
+Do not migrate Rick now.
+
+======================================================================
+1200. SECRETARY READINESS SIGNAL
+======================================================================
+
+If Service Desk proves:
+
+clarification
+options
+correction
+governed actions
+approval
+handoff
+crash recovery
+
+then architecture is suitable for future Secretary pilot design.
+
+======================================================================
+1201. READINESS IS NOT MIGRATION
+======================================================================
+
+Critical wording.
+
+======================================================================
+1202. FIRST PRODUCT PILOT RECOMMENDATION
+======================================================================
+
+If strong PASS:
+
+Secretary is likely the strongest first product pilot because it exercises:
+
+conversation
+transaction
+waiting user
+approval
+handoff
+channel integration.
+
+======================================================================
+1203. SECOND PRODUCT PILOT RECOMMENDATION
+======================================================================
+
+Rick-style knowledge consumer then tests a different workload.
+
+======================================================================
+1204. MULTI-AGENT ENTRY GATE
+======================================================================
+
+Do not recommend multi-agent architecture until:
+
+Phase 4A strong PASS
++
+at least one real product pilot
++
+preferably second independent consumer evidence.
+
+======================================================================
+1205. WHY MULTI-AGENT LATER
+======================================================================
+
+Multi-agent introduces:
+
+delegation
+shared state
+authority propagation
+agent identity
+cross-agent context
+deadlocks
+cost multiplication
+distributed planning.
+
+These should not mask unresolved conversation/product issues.
+
+======================================================================
+1206. PHASE 5 PREVIEW
+======================================================================
+
+Future:
+
+PHASE 5 — FIRST PRODUCT ADAPTER & SECRETARY SHADOW PILOT
+
+Potential goals:
+
+Secretary profile extraction
+Secretary domain capabilities
+channel adapter
+shadow mode
+read-only real integration
+comparison with legacy Secretary
+migration gates.
+
+Do not implement now.
+
+======================================================================
+1207. PHASE 5 CORE RULE
+======================================================================
+
+If Secretary pilot requires changing Runtime for Secretary semantics:
+
+treat as architectural finding.
+
+Do not immediately patch Core.
+
+======================================================================
+1208. CONSUMER PRESSURE TEST
+======================================================================
+
+Determine whether missing primitive is:
+
+truly generic
+
+or:
+
+Secretary-specific.
+
+======================================================================
+1209. GENERIC PRIMITIVE PROMOTION
+======================================================================
+
+Only promote to Core after evidence.
+
+======================================================================
+1210. PHASE 4A CORE CHANGE BUDGET
+======================================================================
+
+Generic Harness Core changes during Phase 4A should be minimal.
+
+Allowed when needed to fix a genuinely generic missing boundary.
+
+Every Core change requires:
+
+reason
+genericity proof
+regression test
+architecture review.
+
+======================================================================
+1211. CORE CHANGE LEDGER
+======================================================================
+
+Create:
+
+docs/phase4a/CORE_CHANGE_LEDGER.md
+
+For every Harness Core modification:
+
+file
+reason
+why generic
+why not conversation-layer
+tests
+critic assessment.
+
+======================================================================
+1212. ZERO-CORE-CHANGE IDEAL
+======================================================================
+
+If Phase 4 already exposed sufficient public boundaries, ideal Phase 4A may
+require little/no Runtime Core change.
+
+Do not force zero if a genuine generic defect exists.
+
+======================================================================
+1213. CORE CHANGE CRITIC
+======================================================================
+
+Independent critic reviews every Core change.
+
+======================================================================
+1214. PRODUCT LEAK TEST
+======================================================================
+
+Search Core for synthetic consumer/domain terms.
+
+======================================================================
+1215. CONVERSATION LEAK TEST
+======================================================================
+
+Search Runtime/Policy/Executor for:
+
+persona
+tone
+dialogue
+pendingQuestion
+conversationGoal
+
+where not generic optional boundary.
+
+Manually classify.
+
+======================================================================
+1216. PENDING USER GENERICITY
+======================================================================
+
+Runtime already has WAITING_USER.
+
+Do not duplicate it with conversation-specific execution state.
+
+======================================================================
+1217. CONVERSATION STORE LOCATION
+======================================================================
+
+Conversation Store may live in conversation support/persistence layer within
+same monorepo.
+
+Physical repository location is less important than dependency direction.
+
+======================================================================
+1218. PERSISTENCE CORE CHANGE
+======================================================================
+
+Adding generic conversation tables does not necessarily mean Harness Core
+depends on conversation.
+
+Keep repository/adapter dependencies outward.
+
+======================================================================
+1219. MIGRATION IS NOT CORE COUPLING BY ITSELF
+======================================================================
+
+But Runtime must not require those tables for non-conversation execution.
+
+======================================================================
+1220. DB OPTIONALITY TEST
+======================================================================
+
+Non-conversation Harness operation must not fail because conversation tables
+are unused/missing in isolated Core test configuration, where architecture
+permits.
+
+If global migration set includes them, ensure runtime dependency still absent.
+
+======================================================================
+1221. DEPLOYMENT MIGRATION REALITY
+======================================================================
+
+In a monolith database, migrations may coexist.
+
+Document logical optionality separately.
+
+======================================================================
+1222. CONVERSATION SERVICE
+======================================================================
+
+If separate service/module boundary is useful, keep it lightweight.
+
+Do not create microservice solely for architectural appearance.
+
+======================================================================
+1223. MONOREPO MODULARITY
+======================================================================
+
+A modular monolith is acceptable.
+
+======================================================================
+1224. NETWORK HOP
+======================================================================
+
+Do not add internal network hop unless needed.
+
+======================================================================
+1225. PERFORMANCE
+======================================================================
+
+Measure overhead of conversation layer separately

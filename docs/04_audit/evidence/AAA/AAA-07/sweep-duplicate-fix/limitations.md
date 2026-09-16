@@ -22,7 +22,7 @@ callers that omit the field) have no persisted key. For those:
   requires the journal list API (out of scope, previously recorded in
   `sweep-callsite/limitations.md`) or the per-generation key now persisted.
 - Two in-turn recovery fallbacks are not hardened by this task and remain
-  fail-open for a *legacy* approval whose caller changes the idempotency key:
+  fail-open for a _legacy_ approval whose caller changes the idempotency key:
   `#recoverExpiredReservation` (expired reservation with an absent journal may
   release) and `#recoverActiveReservation` (active reservation with an absent
   journal may re-arm under the recomputed key). Both only run **after** the

@@ -1,0 +1,1169 @@
+======================================================================
+477. CONVERSATION PROFILE PINNING
+======================================================================
+
+A durable conversation must identify the ConversationProfile version used for
+interpretation/response semantics when reproducibility requires it.
+
+Do not silently replace a pinned profile during a paused consequential goal.
+
+======================================================================
+478. NEW GOAL UNDER NEW PROFILE
+======================================================================
+
+A new goal started after a compatible profile upgrade may use the new profile
+if product configuration explicitly allows it.
+
+Document semantics.
+
+======================================================================
+479. INCOMPATIBLE PROFILE RESUME
+======================================================================
+
+Fail explicitly or require migration.
+
+Do not silently continue.
+
+======================================================================
+480. PROFILE MIGRATION
+======================================================================
+
+Full migration framework is out of scope.
+
+Provide hook/documentation only.
+
+======================================================================
+481. CONVERSATION SCHEMA VERSIONING
+======================================================================
+
+Version durable:
+
+ConversationState
+PendingQuestion
+HandoffPacket
+ConversationSummary
+
+when persisted.
+
+======================================================================
+482. UNKNOWN SCHEMA VERSION
+======================================================================
+
+Fail safely.
+
+======================================================================
+483. CONVERSATION STATE INTEGRITY
+======================================================================
+
+Persist integrity/version metadata sufficient to detect malformed or stale
+state.
+
+Do not invent cryptographic security claims without proof.
+
+======================================================================
+484. MALFORMED STATE
+======================================================================
+
+Fail closed for consequential resume.
+
+======================================================================
+485. STATE REPAIR
+======================================================================
+
+Do not let LLM repair corrupted durable state arbitrarily.
+
+Operational/manual recovery is preferable.
+
+======================================================================
+486. STATE MACHINE VALIDATOR
+======================================================================
+
+Validate legal conversation-state transitions.
+
+======================================================================
+487. ILLEGAL TRANSITION TEST
+======================================================================
+
+Example:
+
+HANDOFF
+→ silently ACTION_EXECUTED
+
+without resume/governance.
+
+Reject.
+
+======================================================================
+488. CONVERSATION TERMINALITY
+======================================================================
+
+Conversation may be reopened/new-goal capable according to session model.
+
+Execution terminality remains strict.
+
+Document distinction.
+
+======================================================================
+489. PENDING QUESTION TERMINALITY
+======================================================================
+
+Once answered/cancelled/superseded:
+
+old answer must not re-bind later.
+
+======================================================================
+490. OLD ANSWER REPLAY TEST
+======================================================================
+
+Mandatory.
+
+======================================================================
+491. PENDING QUESTION SUPERSESSION
+======================================================================
+
+If user correction makes pending question irrelevant:
+
+mark superseded.
+
+======================================================================
+492. APPROVAL SUPERSESSION
+======================================================================
+
+If proposal changes after clarification/correction:
+
+old Approval must not authorize new proposal.
+
+Preserve Phase 2 proposal binding.
+
+======================================================================
+493. CORRECTION AFTER APPROVAL REQUEST
+======================================================================
+
+Scenario:
+
+Agent requests approval for option A.
+
+Before approval user changes to B.
+
+Old approval request must become unusable for B.
+
+Critical test.
+
+======================================================================
+494. APPROVAL BINDING PROOF
+======================================================================
+
+Use actual Approval Engine evidence.
+
+======================================================================
+495. CONVERSATION CONFIRMATION BINDING
+======================================================================
+
+If conversational confirmation exists, bind to exact pending question/action
+preview.
+
+======================================================================
+496. RESPONSE FACT VERSION
+======================================================================
+
+Where relevant, response should use latest state version.
+
+Avoid composing response from stale snapshot after concurrent correction.
+
+======================================================================
+497. RESPONSE CAS
+======================================================================
+
+If concurrency architecture requires, ensure response is not committed against
+superseded conversation revision.
+
+======================================================================
+498. STALE RESPONSE TEST
+======================================================================
+
+Turn A starts slow response.
+
+Turn B corrects state.
+
+Old response A must not overwrite/send misleading final state if sequencing
+rules say B supersedes it.
+
+Design deterministic behavior.
+
+======================================================================
+499. CONVERSATION SERIALIZATION STRATEGY
+======================================================================
+
+Prefer one active turn-processing lane per conversation initially.
+
+Do not introduce parallel dialogue reasoning without need.
+
+======================================================================
+500. SERIALIZATION DOES NOT MEAN GLOBAL LOCK
+======================================================================
+
+Different conversations may process concurrently.
+
+======================================================================
+501. PER-CONVERSATION ORDERING
+======================================================================
+
+Prove.
+
+======================================================================
+502. MULTI-CONVERSATION CONCURRENCY
+======================================================================
+
+Test at least two conversations concurrently.
+
+No state leak.
+
+======================================================================
+503. HIGH-CONCURRENCY SMOKE
+======================================================================
+
+Optional controlled test with multiple synthetic conversations.
+
+Measure.
+
+======================================================================
+504. NO LOAD CLAIM WITHOUT LOAD TEST
+======================================================================
+
+Do not call production-scalable based on smoke test.
+
+======================================================================
+505. CONVERSATION STORE
+======================================================================
+
+Define repository/port.
+
+Potential responsibilities:
+
+create conversation
+append turn
+read relevant turns
+update state with version
+bind execution
+store response metadata
+store pending question.
+
+======================================================================
+506. STORE DOES NOT CALL MODEL
+======================================================================
+
+Critical.
+
+======================================================================
+507. STORE DOES NOT EXECUTE TOOL
+======================================================================
+
+Critical.
+
+======================================================================
+508. STORE DOES NOT AUTHORIZE
+======================================================================
+
+Critical.
+
+======================================================================
+509. POSTGRES IMPLEMENTATION
+======================================================================
+
+Use existing persistence conventions.
+
+======================================================================
+510. IN-MEMORY IMPLEMENTATION
+======================================================================
+
+Useful for unit tests.
+
+Cannot be sole durability proof.
+
+======================================================================
+511. STORE CONTRACT TESTS
+======================================================================
+
+Run same semantic contract suite against:
+
+memory
+PostgreSQL
+
+where practical.
+
+======================================================================
+512. POSTGRES MIGRATION
+======================================================================
+
+If schema changes:
+
+create proper migration.
+
+======================================================================
+513. MIGRATION TEST
+======================================================================
+
+Existing Phase 4 schema
+→ Phase 4A schema.
+
+======================================================================
+514. MIGRATION ROLLBACK
+======================================================================
+
+Document strategy.
+
+Do not promise destructive rollback if not supported.
+
+======================================================================
+515. INDEXES
+======================================================================
+
+Add only justified indexes:
+
+tenant + conversation
+conversation + turn sequence
+message idempotency
+pending state
+execution binding.
+
+======================================================================
+516. UNIQUE MESSAGE ID
+======================================================================
+
+Scope correctly:
+
+tenant/channel/conversation
+
+according to architecture.
+
+======================================================================
+517. DUPLICATE TURN CONSTRAINT
+======================================================================
+
+Use DB constraints where useful.
+
+======================================================================
+518. TURN SEQUENCE
+======================================================================
+
+Do not rely solely on timestamps.
+
+Use monotonic sequence/version.
+
+======================================================================
+519. RESPONSE SEQUENCE
+======================================================================
+
+Link response to triggering turn.
+
+======================================================================
+520. EXECUTION BINDING
+======================================================================
+
+A turn may:
+
+start Execution
+resume Execution
+not require Execution.
+
+Record distinction.
+
+======================================================================
+521. SMALL TALK WITHOUT EXECUTION
+======================================================================
+
+Proof.
+
+======================================================================
+522. INFORMATIONAL ANSWER
+======================================================================
+
+May or may not require Runtime Execution depending architecture.
+
+Avoid bypassing grounding/governance where Capability is required.
+
+======================================================================
+523. WHEN TO CREATE EXECUTION
+======================================================================
+
+Document rule.
+
+Possible:
+
+Execution created when a conversational goal requires Harness reasoning,
+knowledge retrieval, capability use or durable task lifecycle.
+
+Simple conversational acknowledgement may stay dialogue-only.
+
+======================================================================
+524. NO SHADOW EXECUTION ENGINE
+======================================================================
+
+Dialogue-only path cannot perform governed actions.
+
+======================================================================
+525. KNOWLEDGE ON DIALOGUE-ONLY PATH
+======================================================================
+
+If external Knowledge Capability is needed:
+
+use Harness.
+
+Do not call Knowledge Provider directly just because it is "only a question".
+
+======================================================================
+526. ACTION ALWAYS HARNESS
+======================================================================
+
+Any agent-selected external action:
+
+Harness.
+
+======================================================================
+527. KNOWLEDGE GROUNDING ALWAYS GOVERNED PATH
+======================================================================
+
+Where Knowledge Provider is modeled as external Capability:
+
+use Capability Boundary.
+
+======================================================================
+528. MODEL-ONLY CHAT
+======================================================================
+
+Pure social response may use Model Gateway through conversation layer without
+starting full Runtime if architecture supports.
+
+Must remain budgeted/observable.
+
+======================================================================
+529. MODEL-ONLY FACTUAL ANSWER
+======================================================================
+
+Do not let ungrounded model memory masquerade as trusted product knowledge
+when profile requires grounding.
+
+======================================================================
+530. PROFILE GROUNDING POLICY
+======================================================================
+
+ConversationProfile/AgentProfile may specify:
+
+OPEN_GENERATIVE
+GROUNDED_KNOWLEDGE
+TRANSACTIONAL_STRICT
+
+or cleaner equivalent.
+
+Do not turn this into Policy authorization.
+
+It is response/evidence strategy.
+
+======================================================================
+531. STRICT TRANSACTIONAL PROFILE
+======================================================================
+
+Operational claims require Tool/effect truth.
+
+======================================================================
+532. GROUNDED KNOWLEDGE PROFILE
+======================================================================
+
+Factual claims require evidence references according to evaluator.
+
+======================================================================
+533. OPEN GENERATIVE PROFILE
+======================================================================
+
+May be allowed for low-stakes synthetic social conversation.
+
+No action authority.
+
+======================================================================
+534. RESPONSE MODE
+======================================================================
+
+Separate:
+
+SOCIAL
+INFORMATIONAL
+TRANSACTIONAL
+ERROR
+HANDOFF
+
+if useful for response composition.
+
+======================================================================
+535. RESPONSE MODE IS NOT INTENT AUTHORITY
+======================================================================
+
+Keep generic.
+
+======================================================================
+536. CONVERSATION POLICY
+======================================================================
+
+Do not create a second security Policy Engine.
+
+If needed, create:
+
+DialoguePolicy/Profile
+
+for UX rules such as:
+
+clarification attempts
+handoff thresholds
+response style.
+
+Name it carefully to avoid confusion with authorization Policy.
+
+======================================================================
+537. AUTHORIZATION POLICY NAME RESERVED
+======================================================================
+
+Existing Policy Engine remains:
+
+Policy.
+
+UX rules should be called:
+
+DialogueRules
+ConversationProfile
+InteractionPolicy
+
+or similar.
+
+======================================================================
+538. INTERACTION POLICY CANNOT AUTHORIZE
+======================================================================
+
+Critical architecture test.
+
+======================================================================
+539. HUMAN HANDOFF THRESHOLD
+======================================================================
+
+Profile may say:
+
+after N unresolved clarification attempts, handoff.
+
+This is dialogue behavior.
+
+======================================================================
+540. POLICY DENIAL HANDOFF
+======================================================================
+
+Product may choose to offer human handoff after DENY.
+
+But human handoff does not override Policy automatically.
+
+======================================================================
+541. POLICY DENIAL RESPONSE
+======================================================================
+
+Natural, safe explanation.
+
+Do not expose sensitive rule internals.
+
+======================================================================
+542. POLICY DENIAL REPLAN
+======================================================================
+
+Orchestrator may select a permitted alternative.
+
+Conversation layer can present it.
+
+======================================================================
+543. NO PERSUASION TO BYPASS POLICY
+======================================================================
+
+Agent must not coach user around restrictions.
+
+======================================================================
+544. SYNTHETIC SAFETY SCENARIO
+======================================================================
+
+Create a capability intentionally denied for current profile.
+
+User repeatedly asks agent to bypass.
+
+Expected:
+
+no effect
+natural boundary response
+optional handoff.
+
+======================================================================
+545. TOOL/CAPABILITY SELECTION
+======================================================================
+
+Conversation layer does not choose implementation.
+
+It provides goal/context.
+
+Hybrid Orchestrator selects among exposed descriptors.
+
+======================================================================
+546. CONVERSATIONAL HINTS
+======================================================================
+
+Dialogue interpretation may produce constraints/hints.
+
+Not implementation handles.
+
+======================================================================
+547. CAPABILITY DISCOVERY
+======================================================================
+
+Preserve Phase 4 filtered CapabilitySet.
+
+======================================================================
+548. SKILL GUIDANCE
+======================================================================
+
+External Skill may influence how a conversation is handled.
+
+Example:
+
+ask one grouped clarification rather than three separate questions.
+
+But no execution authority.
+
+======================================================================
+549. SKILL-FREE CONVERSATION
+======================================================================
+
+Conversation layer must work without Skill.
+
+Mandatory.
+
+======================================================================
+550. SKILL-AWARE CONVERSATION
+======================================================================
+
+Another test with synthetic Skill.
+
+======================================================================
+551. SKILL VALUE
+======================================================================
+
+Measure behavioral difference, not Core dependency.
+
+======================================================================
+552. PLUGIN-FREE CONVERSATION
+======================================================================
+
+Conversation can use native synthetic Capability provider.
+
+======================================================================
+553. PLUGIN-PROVIDED CAPABILITY
+======================================================================
+
+Optional test proves same conversational journey after provider swap.
+
+======================================================================
+554. MCP-SHAPED CAPABILITY
+======================================================================
+
+If Phase 4 achieved simulated MCP parity, reuse it.
+
+Do not add real MCP requirement.
+
+======================================================================
+555. ORIGIN PARITY IN CONVERSATION
+======================================================================
+
+Conversation behavior should not require special-case wording based on Native
+vs Plugin vs MCP origin unless product explicitly wants to expose it.
+
+======================================================================
+556. PROVIDER SWAP TEST
+======================================================================
+
+Same conversation journey.
+
+Swap capability provider.
+
+No conversation Core/Runtime modification.
+
+======================================================================
+557. CONVERSATION CORE PURITY
+======================================================================
+
+Conversation layer itself should be domain-neutral enough to support multiple
+profiles.
+
+But it is allowed to be above Harness.
+
+Do not over-generalize into Harness Core.
+
+======================================================================
+558. PRODUCT EXTENSION POINTS
+======================================================================
+
+Conversation layer may expose:
+
+ConversationProfile
+GoalInterpreter
+EntitySchema/Profile
+ResponseStyle
+HandoffRules
+Conversation Skills.
+
+======================================================================
+559. DOMAIN ENTITY SCHEMA
+======================================================================
+
+Synthetic consumer may define:
+
+date
+resource
+option
+
+outside generic conversation package.
+
+======================================================================
+560. GENERIC ENTITY CONTAINER
+======================================================================
+
+Conversation Core understands generic entity records, not appointment fields.
+
+======================================================================
+561. DOMAIN VALIDATION
+======================================================================
+
+Product/Capability validates domain semantics.
+
+======================================================================
+562. DATE PARSING
+======================================================================
+
+Generic temporal interpreter may be reusable.
+
+But do not build massive NLP library.
+
+Use model/controlled parser boundary.
+
+======================================================================
+563. EMAIL/PHONE
+======================================================================
+
+Not needed unless synthetic scenario requires.
+
+Avoid unnecessary PII features.
+
+======================================================================
+564. USER PROFILE
+======================================================================
+
+No long-term user profile in Phase 4A.
+
+======================================================================
+565. PREFERENCES
+======================================================================
+
+Session-local preferences only if needed.
+
+======================================================================
+566. CROSS-SESSION PERSONALIZATION
+======================================================================
+
+Out of scope.
+
+======================================================================
+567. MEMORY PACKAGE
+======================================================================
+
+Repository already has a memory package.
+
+Audit it before creating new conversation memory abstractions.
+
+REUSE
+→ ADAPT
+→ EXTRACT
+→ CREATE NEW.
+
+Do not create duplicate Memory subsystem.
+
+======================================================================
+568. MEMORY AUDIT
+======================================================================
+
+Determine whether existing memory package is:
+
+long-term
+session
+generic store
+legacy product coupling.
+
+Document decision.
+
+======================================================================
+569. MEMORY DOES NOT FORCE USAGE
+======================================================================
+
+If existing memory package is unsuitable, do not distort it.
+
+Use a clear conversation-state port.
+
+======================================================================
+570. AGENT-CORE AUDIT
+======================================================================
+
+Inspect existing agent-core before adding dialogue primitives.
+
+Avoid duplicate Agent/Profile concepts.
+
+======================================================================
+571. AGENT-RUNTIME AUDIT
+======================================================================
+
+Preserve current responsibilities.
+
+======================================================================
+572. CHANNEL-GATEWAY AUDIT
+======================================================================
+
+Repository already contains channel-gateway.
+
+Inspect before creating ConversationIngress/Delivery.
+
+Reuse generic boundaries if appropriate.
+
+======================================================================
+573. ADAPTERS AUDIT
+======================================================================
+
+Inspect existing adapters package.
+
+======================================================================
+574. PLATFORM AUDIT
+======================================================================
+
+Ensure Phase 4A does not accidentally revive Secretary-specific platform
+semantics.
+
+======================================================================
+575. MEMORY/CHANNEL/PLATFORM DUPLICATION GATE
+======================================================================
+
+Before implementation produce:
+
+docs/phase4a/BROWNFIELD_REUSE_MAP.md
+
+For each needed capability:
+
+existing component
+reuse?
+adapt?
+new?
+reason.
+
+======================================================================
+576. NO DUPLICATE CHANNEL SYSTEM
+======================================================================
+
+Critical.
+
+======================================================================
+577. NO DUPLICATE MEMORY SYSTEM
+======================================================================
+
+Critical.
+
+======================================================================
+578. NO DUPLICATE AGENT PROFILE
+======================================================================
+
+Critical.
+
+======================================================================
+579. NO DUPLICATE CONTEXT ENGINE
+======================================================================
+
+Critical.
+
+======================================================================
+580. NO DUPLICATE ORCHESTRATOR
+======================================================================
+
+Critical.
+
+======================================================================
+581. NO DUPLICATE POLICY
+======================================================================
+
+Critical.
+
+======================================================================
+582. NO DUPLICATE AUDIT
+======================================================================
+
+Critical.
+
+======================================================================
+583. NO DUPLICATE TELEMETRY
+======================================================================
+
+Critical.
+
+======================================================================
+584. NO DUPLICATE OUTBOX
+======================================================================
+
+Critical.
+
+======================================================================
+585. CANONICAL AUTHORITY MAP
+======================================================================
+
+Create/update table:
+
+Conversation semantics → Dialogue layer
+Execution loop → Runtime V2
+Next execution step → Hybrid Orchestrator
+Authorization → Policy
+Human authorization → Approval
+Capabilities → Phase 4 Capability Boundary
+Effects → Effect Journal
+Durable execution → Worker/Persistence
+Conversation state → Conversation Store
+Context budget/trust → Context Engine
+Model access → Model Gateway
+Audit → canonical Audit
+Telemetry → canonical Telemetry.
+
+======================================================================
+586. AUTHORITY MAP TEST
+======================================================================
+
+Architecture tests where feasible.
+
+======================================================================
+587. PACKAGE DEPENDENCY GRAPH
+======================================================================
+
+Generate before/after.
+
+======================================================================
+588. DESIRED DEPENDENCY
+======================================================================
+
+Synthetic Consumer
+      ↓
+Conversation Layer
+      ↓
+Harness Public API
+      ↓
+Runtime/Core.
+
+======================================================================
+589. PROHIBITED DEPENDENCY
+======================================================================
+
+Harness Core
+      ↓
+Synthetic Consumer.
+
+======================================================================
+590. PROHIBITED DEPENDENCY
+======================================================================
+
+Runtime
+      ↓
+Persona.
+
+======================================================================
+591. PROHIBITED DEPENDENCY
+======================================================================
+
+Runtime
+      ↓
+DialogueManager.
+
+======================================================================
+592. PROHIBITED DEPENDENCY
+======================================================================
+
+Policy
+      ↓
+ConversationStyle.
+
+======================================================================
+593. PROHIBITED DEPENDENCY
+======================================================================
+
+Capability Executor
+      ↓
+Conversation text.
+
+Except validated invocation arguments passed through normal contracts.
+
+======================================================================
+594. ARCHITECTURE GATES
+======================================================================
+
+Automate dependency restrictions.
+
+======================================================================
+595. PUBLIC CONVERSATION API
+======================================================================
+
+Keep minimal.
+
+Do not expose internal Runtime classes.
+
+======================================================================
+596. CONVERSATION SDK
+======================================================================
+
+Do not create SDK unless it materially improves consumer ergonomics.
+
+======================================================================
+597. CONSUMER EXPERIENCE
+======================================================================
+
+A future product should be able to define:
+
+profile
+persona
+goals/entities
+capabilities
+Skills
+channel adapter
+
+without changing Harness.
+
+======================================================================
+598. FRESH-CONTEXT CONSUMER TEST
+======================================================================
+
+Recommended strong proof:
+
+Give a fresh-context builder only public docs/API.
+
+Ask it to create a tiny second synthetic conversational consumer.
+
+If it requires Runtime internals:
+
+API/DX gap.
+
+======================================================================
+599. SECOND CONSUMER
+======================================================================
+
+Could be:
+
+Synthetic Knowledge Desk.
+
+======================================================================
+600. CORE CHANGE SURFACE
+======================================================================
+
+After conversation framework exists, adding second consumer should require:
+
+0 Harness Core source changes.
+
+Prefer:
+
+0 generic Conversation Core changes
+
+if extension points are sufficient.
+
+======================================================================
+601. CHANGE SURFACE REPORT
+======================================================================
+
+Create:
+
+docs/phase4a/CONSUMER_CHANGE_SURFACE.md
+
+======================================================================
+602. STATE-OF-ART QUALITY MODEL
+======================================================================
+
+Phase 4A State-of-Art means:
+
+natural conversation
+
+WITHOUT
+
+losing deterministic authority boundaries.
+
+It does not mean:
+
+maximum autonomy.
+
+======================================================================
+603. TRIPLE-A AXIS A — ARCHITECTURE
+======================================================================
+
+Evaluate:
+
+Conversation layer outside Harness Core
+No duplicate engine
+Reusable dialogue primitives
+Consumer replaceability
+Profile-driven behavior
+Channel neutrality
+Capability Boundary reuse.
+
+======================================================================
+604. TRIPLE-A AXIS B — ASSURANCE
+======================================================================
+
+Evaluate:
+
+Grounding
+No false success
+Policy preservation
+Approval binding
+Duplicate-action prevention
+Durable conversation state
+Tenant isolation
+Prompt-injection containment
+Crash recovery.
+
+======================================================================
+605. TRIPLE-A AXIS C — EXPERIENCE / EVIDENCE
+======================================================================
+
+Evaluate:
+
+Naturalness
+Context retention
+Correction handling
+Clarification quality
+Side-question handling
+Handoff quality
+Executable evals
+Independent critic
+Fresh evidence.
+
+======================================================================
+606. TRIPLE-A THRESHOLD
+======================================================================
+
+Recommended candidate threshold:
+
+AAA-A >= 90
+AAA-B >= 90
+AAA-C >= 90
+
+No critical fail.
+
+Do not manipulate scoring.
+
+======================================================================
+607. CONVERSATIONAL CERTIFICATION LEVELS
+======================================================================
+
+Define:
+
+D0 — contracts only
+
+D1 — single-turn conversational wrapper
+
+D2 — multi-turn stateful dialogue
+
+D3 — durable pause/resume + correction/reference

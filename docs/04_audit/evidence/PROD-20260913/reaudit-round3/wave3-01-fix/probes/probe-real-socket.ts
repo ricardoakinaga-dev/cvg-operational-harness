@@ -68,7 +68,10 @@ async function main() {
       {
         realSocket: {
           first: { status: first.status, code: firstBody.error?.code ?? null },
-          second: { status: second.status, code: secondBody.error?.code ?? null },
+          second: {
+            status: second.status,
+            code: secondBody.error?.code ?? null
+          },
           expected: { first: 400, second: 401 }
         }
       },

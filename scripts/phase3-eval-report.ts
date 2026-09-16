@@ -20,7 +20,9 @@ async function main(): Promise<void> {
     'docs/phase3/evidence/LOOP_EVAL_RESULTS.json',
     `${JSON.stringify(report, null, 2)}\n`
   )
-  console.log(JSON.stringify({ event: 'phase3.evals', ...report, results: undefined }))
+  console.log(
+    JSON.stringify({ event: 'phase3.evals', ...report, results: undefined })
+  )
 }
 main().catch((error: unknown) => {
   console.error(error)

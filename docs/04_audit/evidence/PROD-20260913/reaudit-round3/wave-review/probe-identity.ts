@@ -21,7 +21,9 @@ function encode(value: unknown): string {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url')
 }
 function sign(encoded: string, secret: string): string {
-  return createHmac('sha256', secret).update(encoded, 'utf8').digest('base64url')
+  return createHmac('sha256', secret)
+    .update(encoded, 'utf8')
+    .digest('base64url')
 }
 function rawToken(claims: Record<string, unknown>, secret = SECRET): string {
   const encoded = encode(claims)
@@ -32,7 +34,10 @@ function errOf(json: unknown): string | undefined {
 }
 
 async function main(): Promise<void> {
-  const resolver = createTrustedOperatorIdentityResolver({ secret: SECRET, now })
+  const resolver = createTrustedOperatorIdentityResolver({
+    secret: SECRET,
+    now
+  })
   const app = buildServer({
     identityMode: 'trusted',
     operatorIdentityResolver: resolver
@@ -102,7 +107,10 @@ async function main(): Promise<void> {
     url: '/v1/tasks',
     headers: { 'x-cvg-operator-token': expiredToken }
   })
-  results.expiredToken = { status: expired.statusCode, code: errOf(expired.json()) }
+  results.expiredToken = {
+    status: expired.statusCode,
+    code: errOf(expired.json())
+  }
 
   // (d) wrong audience
   const wrongAudience = await app.inject({
@@ -144,7 +152,10 @@ async function main(): Promise<void> {
       )
     }
   })
-  results.forgedSignature = { status: forged.statusCode, code: errOf(forged.json()) }
+  results.forgedSignature = {
+    status: forged.statusCode,
+    code: errOf(forged.json())
+  }
 
   // (f) replay of the same token (single-resolution route)
   const replayToken = createTrustedOperatorIdentityToken(
@@ -209,7 +220,9 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.log(
-    JSON.stringify({ probe_error: error instanceof Error ? error.stack : String(error) })
+    JSON.stringify({
+      probe_error: error instanceof Error ? error.stack : String(error)
+    })
   )
   process.exit(1)
 })

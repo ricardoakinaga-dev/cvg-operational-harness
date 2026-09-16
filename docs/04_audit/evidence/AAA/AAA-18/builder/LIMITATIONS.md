@@ -1,7 +1,7 @@
 # AAA-18 — Limitations and residual risks (builder lane)
 
 1. **Legacy direct-client adapter is single-connection.** For `persistence.kind =
-   'postgres'`, `singleConnectionPool` hands the checked-out client to
+'postgres'`, `singleConnectionPool` hands the checked-out client to
    `PostgresJourneyRepository`. It is safe for the controlled sequential usage this
    mode exists for, but it is not a concurrent production adapter: a pool is required
    for parallel tenant-scoped operations. Production requires

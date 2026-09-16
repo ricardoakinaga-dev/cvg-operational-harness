@@ -1,0 +1,1080 @@
+;
+5. Dialogue Interpreter;
+6. Conversation → Harness adapter;
+7. Harness outcome → response context;
+8. Response Composer;
+9. grounding verifier;
+10. pending question resume;
+11. side-question handling;
+12. correction/reference handling;
+13. handoff;
+14. synthetic consumer;
+15. adversarial scenarios;
+16. durability/restart;
+17. evals;
+18. evidence.
+
+======================================================================
+850. DO NOT START WITH UI
+======================================================================
+
+Critical.
+
+First prove architecture at API/test level.
+
+======================================================================
+851. DO NOT START WITH PROMPT ENGINEERING
+======================================================================
+
+First define:
+
+state
+authority
+contracts
+durability
+grounding.
+
+Then prompts.
+
+======================================================================
+852. PROMPT PROFILE
+======================================================================
+
+Prompt instructions should be versioned/profile-driven.
+
+======================================================================
+853. SYSTEM INSTRUCTIONS
+======================================================================
+
+Conversation persona/style must remain subordinate to Harness governance.
+
+======================================================================
+854. PROMPT TEMPLATE
+======================================================================
+
+Do not create one giant monolithic prompt containing all system state.
+
+Use structured Context Engine composition.
+
+======================================================================
+855. PROMPT SIZE
+======================================================================
+
+Bound.
+
+======================================================================
+856. PROMPT SNAPSHOT
+======================================================================
+
+If prompt version/hash infrastructure exists, reuse.
+
+======================================================================
+857. RESPONSE PROMPT
+======================================================================
+
+Provide structured truth.
+
+Do not ask model to rediscover action status from raw transcript.
+
+======================================================================
+858. INTERPRETATION PROMPT
+======================================================================
+
+Provide:
+
+current active goal
+pending question
+relevant entities
+recent relevant turns
+allowed interpretation schema.
+
+Do not expose Tool implementation.
+
+======================================================================
+859. MODEL DOES NOT SEE SECRETS
+======================================================================
+
+Critical.
+
+======================================================================
+860. MODEL DOES NOT SEE RAW POLICY INTERNALS
+======================================================================
+
+Only safe constraints/hints where needed.
+
+======================================================================
+861. MODEL DOES NOT SEE EXECUTOR
+======================================================================
+
+Critical.
+
+======================================================================
+862. MODEL DOES NOT SEE DATABASE
+======================================================================
+
+Critical.
+
+======================================================================
+863. RESPONSE MODEL DOES NOT SEE APPROVAL TOKEN
+======================================================================
+
+Critical.
+
+======================================================================
+864. APPROVAL BINDING INTERNAL
+======================================================================
+
+Keep proposal hash/identity in trusted state.
+
+======================================================================
+865. USER-FACING APPROVAL TEXT
+======================================================================
+
+Can describe proposed action safely.
+
+======================================================================
+866. ACTION PREVIEW GROUNDING
+======================================================================
+
+Preview must reflect actual proposal.
+
+======================================================================
+867. PREVIEW DRIFT
+======================================================================
+
+If proposal changes:
+
+regenerate preview.
+
+Old Approval invalid.
+
+======================================================================
+868. RESPONSE CONFIRMATION
+======================================================================
+
+Final confirmation should include useful action details from actual result.
+
+======================================================================
+869. NO RAW TOOL JSON
+======================================================================
+
+Naturalize relevant fields.
+
+======================================================================
+870. NO HIDDEN FIELD LOSS
+======================================================================
+
+Important user-facing fields required by profile must not be omitted.
+
+======================================================================
+871. RESPONSE REQUIRED FIELDS
+======================================================================
+
+Transactional synthetic profile may require:
+
+resource
+date/time
+confirmation/reference.
+
+Use profile config.
+
+======================================================================
+872. RESPONSE VERIFICATION REQUIRED FIELDS
+======================================================================
+
+Deterministic check.
+
+======================================================================
+873. KNOWLEDGE RESPONSE REQUIRED ELEMENTS
+======================================================================
+
+Knowledge profile may require:
+
+answer
+uncertainty if any
+evidence references.
+
+======================================================================
+874. STYLE VERIFICATION
+======================================================================
+
+Do not make subjective style a hard safety blocker unless clearly malformed.
+
+======================================================================
+875. FACT VERIFICATION
+======================================================================
+
+Hard blocker.
+
+======================================================================
+876. ACTION VERIFICATION
+======================================================================
+
+Hard blocker.
+
+======================================================================
+877. POLICY VERIFICATION
+======================================================================
+
+Already enforced before action.
+
+Response verifier may ensure wording does not falsely imply bypass.
+
+======================================================================
+878. RESPONSE SANITIZATION
+======================================================================
+
+Prevent accidental inclusion of:
+
+internal IDs not meant for user
+stack traces
+secrets
+policy internals.
+
+======================================================================
+879. SAFE REFERENCES
+======================================================================
+
+Synthetic external confirmation/reference may be user-visible.
+
+Internal execution IDs generally not.
+
+======================================================================
+880. RESPONSE AUDIENCE
+======================================================================
+
+User-facing.
+
+Handoff packet has different audience.
+
+Do not reuse blindly.
+
+======================================================================
+881. HUMAN HANDOFF SUMMARY
+======================================================================
+
+More operational detail may be included than user response, still bounded.
+
+======================================================================
+882. OPERATOR TRUST
+======================================================================
+
+Do not assume operator can see cross-tenant data.
+
+======================================================================
+883. HANDOFF ACCESS CONTROL
+======================================================================
+
+Test.
+
+======================================================================
+884. CONVERSATION ADMIN DEBUG
+======================================================================
+
+If debug endpoint exists, protect it.
+
+======================================================================
+885. TRAJECTORY ENDPOINT
+======================================================================
+
+Internal/test by default.
+
+======================================================================
+886. NO PUBLIC INTERNAL TRACE
+======================================================================
+
+Critical.
+
+======================================================================
+887. E2E
+======================================================================
+
+Add API-level E2E for realistic synthetic conversation.
+
+======================================================================
+888. E2E JOURNEY #1
+======================================================================
+
+Start conversation
+→ incomplete booking
+→ clarification
+→ availability
+→ option selection
+→ create
+→ response.
+
+======================================================================
+889. E2E JOURNEY #2
+======================================================================
+
+Correction before action.
+
+======================================================================
+890. E2E JOURNEY #3
+======================================================================
+
+Side question + resume.
+
+======================================================================
+891. E2E JOURNEY #4
+======================================================================
+
+Approval.
+
+======================================================================
+892. E2E JOURNEY #5
+======================================================================
+
+Post-effect response failure/recovery.
+
+======================================================================
+893. E2E JOURNEY #6
+======================================================================
+
+Handoff.
+
+======================================================================
+894. E2E JOURNEY #7
+======================================================================
+
+Knowledge profile.
+
+======================================================================
+895. E2E JOURNEY #8
+======================================================================
+
+Prompt injection.
+
+======================================================================
+896. E2E JOURNEY #9
+======================================================================
+
+Duplicate message.
+
+======================================================================
+897. E2E JOURNEY #10
+======================================================================
+
+Cross-tenant denial.
+
+======================================================================
+898. UNIT TESTS
+======================================================================
+
+Focus:
+
+state transitions
+reference resolution
+pending question
+correction
+goal stack
+response grounding.
+
+======================================================================
+899. CONTRACT TESTS
+======================================================================
+
+Conversation Store
+Dialogue Interpreter
+Response Composer
+Conversation Adapter.
+
+======================================================================
+900. INTEGRATION TESTS
+======================================================================
+
+Conversation Layer ↔ Harness
+Conversation Store ↔ Postgres
+Conversation ↔ Capability Boundary.
+
+======================================================================
+901. CHAOS TESTS
+======================================================================
+
+Extend existing chaos package if appropriate rather than creating separate
+chaos framework.
+
+======================================================================
+902. CHAOS SCENARIOS
+======================================================================
+
+Model timeout
+Tool timeout
+Postgres transient failure
+response failure
+worker restart.
+
+======================================================================
+903. CHAOS DOES NOT BYPASS GOVERNANCE
+======================================================================
+
+Critical.
+
+======================================================================
+904. FAULT INJECTION
+======================================================================
+
+Deterministic hooks.
+
+======================================================================
+905. NO RANDOM FLAKINESS
+======================================================================
+
+Seed randomness if used.
+
+======================================================================
+906. PROPERTY TESTS
+======================================================================
+
+Optional for state reducer/concurrency invariants.
+
+Do not add library unless justified.
+
+======================================================================
+907. SECURITY TESTS
+======================================================================
+
+Dedicated suite.
+
+======================================================================
+908. SECURITY TEST — FALSE APPROVAL
+======================================================================
+
+Mandatory.
+
+======================================================================
+909. SECURITY TEST — TENANT SWITCH
+======================================================================
+
+Mandatory.
+
+======================================================================
+910. SECURITY TEST — HIDDEN CAPABILITY
+======================================================================
+
+Mandatory.
+
+======================================================================
+911. SECURITY TEST — RESPONSE FALSE SUCCESS
+======================================================================
+
+Mandatory.
+
+======================================================================
+912. SECURITY TEST — MALICIOUS TOOL OUTPUT
+======================================================================
+
+Mandatory.
+
+======================================================================
+913. SECURITY TEST — MALICIOUS KNOWLEDGE
+======================================================================
+
+Mandatory.
+
+======================================================================
+914. SECURITY TEST — MALICIOUS SKILL
+======================================================================
+
+Mandatory if Skill fixture used.
+
+======================================================================
+915. SECURITY TEST — PENDING QUESTION HIJACK
+======================================================================
+
+Mandatory.
+
+======================================================================
+916. SECURITY TEST — CROSS-CONVERSATION
+======================================================================
+
+Mandatory.
+
+======================================================================
+917. SECURITY TEST — DUPLICATE MESSAGE
+======================================================================
+
+Mandatory.
+
+======================================================================
+918. SECURITY TEST — STALE APPROVAL
+======================================================================
+
+Mandatory.
+
+======================================================================
+919. SECURITY TEST — STALE PROPOSAL
+======================================================================
+
+Mandatory.
+
+======================================================================
+920. SECURITY TEST — HUGE HISTORY
+======================================================================
+
+Mandatory/bounded smoke.
+
+======================================================================
+921. SECURITY TEST — PERSONA OVERRIDE
+======================================================================
+
+Mandatory.
+
+======================================================================
+922. SECURITY TEST — DYNAMIC PLUGIN REQUEST
+======================================================================
+
+Preserve Phase 4.
+
+======================================================================
+923. SECURITY TEST — MODEL AUTHORITY CLAIM
+======================================================================
+
+Scripted model tries to self-authorize.
+
+Reject.
+
+======================================================================
+924. SECURITY TEST — TOOL DIRECT CALL
+======================================================================
+
+Conversation package must have no direct Tool implementation access.
+
+Architecture gate.
+
+======================================================================
+925. SECURITY TEST — RESPONSE COMPOSER DIRECT CALL
+======================================================================
+
+Same.
+
+======================================================================
+926. SECURITY TEST — DIALOGUE MANAGER DIRECT CALL
+======================================================================
+
+Same.
+
+======================================================================
+927. CORE PURITY TEST
+======================================================================
+
+Build Harness without Phase 4A package.
+
+======================================================================
+928. CONVERSATION PURITY TEST
+======================================================================
+
+Build conversation package without synthetic consumer.
+
+======================================================================
+929. CONSUMER PURITY TEST
+======================================================================
+
+Consumer uses only public APIs.
+
+======================================================================
+930. DEEP IMPORT TEST
+======================================================================
+
+No `/src/internal`.
+
+======================================================================
+931. MODEL SDK IMPORT TEST
+======================================================================
+
+Only Model Gateway adapters may use provider SDK.
+
+======================================================================
+932. TOOL IMPLEMENTATION IMPORT TEST
+======================================================================
+
+Consumer/conversation package uses Capability descriptors/public interfaces.
+
+======================================================================
+933. POSTGRES DIRECT ACCESS
+======================================================================
+
+Conversation persistence adapter may use DB.
+
+DialogueManager/ResponseComposer should not.
+
+======================================================================
+934. DATABASE BOUNDARY
+======================================================================
+
+Architecture gate.
+
+======================================================================
+935. GLOBAL STATE GATE
+======================================================================
+
+No global mutable conversation/session state.
+
+======================================================================
+936. MULTI-INSTANCE TEST
+======================================================================
+
+Two conversation service instances share Postgres safely.
+
+======================================================================
+937. WORKER COMPATIBILITY
+======================================================================
+
+Conversation-generated Executions use existing Worker.
+
+No special conversation worker unless clearly necessary.
+
+======================================================================
+938. NO CONVERSATION WORKER DUPLICATION
+======================================================================
+
+Critical.
+
+======================================================================
+939. TURN PROCESSOR
+======================================================================
+
+A lightweight durable turn processor may exist if needed.
+
+But do not duplicate Harness Worker semantics.
+
+Prefer API/service coordination + existing durable execution.
+
+======================================================================
+940. TURN PROCESSOR RESPONSIBILITY
+======================================================================
+
+If created:
+
+persist/interpret dialogue
+start/resume Harness
+compose/persist response.
+
+No Tool execution.
+
+======================================================================
+941. TURN PROCESSOR CRASH SAFETY
+======================================================================
+
+Test.
+
+======================================================================
+942. RESPONSE OUTBOX
+======================================================================
+
+Reuse existing generic outbox if possible.
+
+======================================================================
+943. CHANNEL GATEWAY
+======================================================================
+
+Reuse existing package if appropriate.
+
+======================================================================
+944. SYNTHETIC DELIVERY ADAPTER
+======================================================================
+
+Implement outside conversation Core if possible.
+
+======================================================================
+945. RESPONSE DELIVERY CONTRACT
+======================================================================
+
+Generic.
+
+======================================================================
+946. DELIVERY RESULT
+======================================================================
+
+SENT
+FAILED_RETRYABLE
+FAILED_TERMINAL
+
+or existing taxonomy.
+
+======================================================================
+947. DELIVERY UNKNOWN
+======================================================================
+
+If needed.
+
+Do not overbuild.
+
+======================================================================
+948. DELIVERY AUDIT
+======================================================================
+
+Separate from action Audit.
+
+======================================================================
+949. RESPONSE DUPLICATION
+======================================================================
+
+Prefer idempotent message identity.
+
+======================================================================
+950. DELIVERY EVAL
+======================================================================
+
+Not naturalness.
+
+Operational correctness.
+
+======================================================================
+951. DOCUMENTATION
+======================================================================
+
+Create:
+
+docs/phase4a/PHASE_4_HANDOFF.md
+docs/phase4a/SCOUT_REPORT.md
+docs/phase4a/BROWNFIELD_REUSE_MAP.md
+docs/phase4a/ARCHITECTURE_PLAN.md
+docs/phase4a/CONVERSATIONAL_INTELLIGENCE_ARCHITECTURE.md
+docs/phase4a/CONVERSATION_STATE_MODEL.md
+docs/phase4a/DIALOGUE_MANAGER.md
+docs/phase4a/RESPONSE_COMPOSITION.md
+docs/phase4a/CONVERSATIONAL_AUTHORITY_MODEL.md
+docs/phase4a/SOURCE_OF_TRUTH_MATRIX.md
+docs/phase4a/RETRY_AND_REPAIR_MODEL.md
+docs/phase4a/CRASH_MATRIX.md
+docs/phase4a/CONVERSATION_QUALITY_RUBRIC.md
+docs/phase4a/CONVERSATION_QUALITY_REPORT.md
+docs/phase4a/SECURITY_REVIEW.md
+docs/phase4a/THREAT_MODEL.md
+docs/phase4a/PERFORMANCE_BASELINE.md
+docs/phase4a/CONSUMER_CHANGE_SURFACE.md
+docs/phase4a/CRITICAL_TEST_CATALOG.md
+docs/phase4a/REQUIREMENTS_TRACEABILITY.md
+docs/phase4a/PHASE_4A_REPORT.md
+docs/phase4a/PHASE_4A_RESULT.json
+
+and evidence bundle.
+
+Do not create empty ceremonial docs.
+
+======================================================================
+952. ARCHITECTURE DOCUMENT
+======================================================================
+
+Show clearly:
+
+                    PRODUCT
+                       │
+              ConversationProfile
+                       │
+               Dialogue Manager
+                       │
+              Conversation State
+                       │
+               Goal / Context
+                       │
+════════════════════════════════════════
+       CVG OPERATIONAL HARNESS API
+════════════════════════════════════════
+                       │
+                  Runtime V2
+                       │
+              Hybrid Orchestrator
+                       │
+                Context Engine
+                       │
+              Capability Boundary
+                       │
+             Policy / Approval
+                       │
+              Effect Journal
+                       │
+               Durable Spine
+
+Response path:
+
+Harness Outcome
+      ↓
+Grounded Response Context
+      ↓
+Response Composer
+      ↓
+Verifier
+      ↓
+Synthetic Delivery Adapter.
+
+======================================================================
+953. CONVERSATION-FREE DIAGRAM
+======================================================================
+
+Also show Harness operating without conversation layer.
+
+Mandatory.
+
+======================================================================
+954. RESPONSIBILITY MATRIX
+======================================================================
+
+For:
+
+ConversationProfile
+DialogueManager
+ConversationStore
+ResponseComposer
+Context Engine
+Runtime
+Orchestrator
+Policy
+Approval
+Capability Registry
+Capability Executor
+Skill
+Channel Adapter.
+
+Columns:
+
+owns dialogue?
+owns execution?
+can call model?
+can authorize?
+can execute capability?
+durable?
+product-specific allowed?
+
+======================================================================
+955. ADRS
+======================================================================
+
+Create ADRs for at least:
+
+Conversational Intelligence outside Harness Core
+Conversation vs Execution
+Dialogue State vs Runtime State
+Dialogue Manager vs Hybrid Orchestrator
+Conversation working memory
+Response Composer
+Grounded response contract
+Pending question binding
+Side-question/resume model
+Conversation concurrency
+Conversation profile versioning
+No long-term memory in Phase 4A
+No multi-agent in Phase 4A.
+
+======================================================================
+956. ADR — CONVERSATION OUTSIDE CORE
+======================================================================
+
+This is the most important ADR.
+
+Explain why Harness remains usable for non-conversational agents.
+
+======================================================================
+957. ADR — NO SECOND ORCHESTRATOR
+======================================================================
+
+Explicit.
+
+======================================================================
+958. ADR — NO SECOND CONTEXT ENGINE
+======================================================================
+
+Explicit.
+
+======================================================================
+959. ADR — NO SECOND MEMORY AUTHORITY
+======================================================================
+
+Explicit.
+
+======================================================================
+960. ADR — NO SECOND CHANNEL INFRA
+======================================================================
+
+Explicit.
+
+======================================================================
+961. ADR — RESPONSE AFTER EFFECT
+======================================================================
+
+Document crash/retry semantics.
+
+======================================================================
+962. ADR — CONCURRENT TURNS
+======================================================================
+
+Document serialization/CAS choice.
+
+======================================================================
+963. ADR — USER CORRECTION
+======================================================================
+
+Document stale proposal invalidation.
+
+======================================================================
+964. TEST CATALOG
+======================================================================
+
+Use IDs such as:
+
+P4A-ARCH-001
+P4A-CONV-001
+P4A-STATE-001
+P4A-CORRECT-001
+P4A-REF-001
+P4A-SIDE-001
+P4A-APPROVAL-001
+P4A-GROUND-001
+P4A-CRASH-001
+P4A-TENANT-001
+P4A-CONCURRENCY-001
+P4A-SEC-001
+P4A-EVAL-001.
+
+======================================================================
+965. REQUIREMENTS TRACEABILITY
+======================================================================
+
+Map:
+
+requirement
+→ implementation
+→ test
+→ evidence
+→ status.
+
+======================================================================
+966. STATUS TAXONOMY
+======================================================================
+
+IMPLEMENTED
+PROVEN
+PARTIAL
+NOT_PROVEN
+OUT_OF_SCOPE
+ENVIRONMENT_BLOCKED.
+
+======================================================================
+967. CRITICAL REQUIREMENTS
+======================================================================
+
+Mark at minimum:
+
+CONVERSATION-OUTSIDE-CORE
+NO-DUPLICATE-RUNTIME
+DURABLE-CONVERSATION-STATE
+TENANT-ISOLATION
+CORRECTION-SAFETY
+PENDING-QUESTION-BINDING
+APPROVAL-BINDING
+FALSE-SUCCESS-GUARD
+POST-EFFECT-RECOVERY
+DUPLICATE-TURN-GUARD
+CONCURRENT-TURN-SAFETY
+CAPABILITY-BOUNDARY
+POLICY-AUTHORITY
+CONTEXT-BOUND
+GROUNDING
+HANDOFF
+EVIDENCE-FRESHNESS.
+
+======================================================================
+968. INDEPENDENT ARCHITECTURE CRITIC
+======================================================================
+
+After implementation, run fresh critic.
+
+Mission:
+
+TRY TO PROVE THAT PHASE 4A TURNED THE HARNESS INTO A CHATBOT FRAMEWORK OR
+CREATED A SECOND AGENT ENGINE.
+
+======================================================================
+969. CRITIC QUESTIONS
+======================================================================
+
+At minimum:
+
+Q1. Does Harness Core depend on conversation package?
+
+Q2. Can Harness run without it?
+
+Q3. Does Runtime know persona?
+
+Q4. Does Runtime know conversation intent?
+
+Q5. Does DialogueManager execute Tools?
+
+Q6. Is there a second Orchestrator?
+
+Q7. Is there a second Context Engine authority?
+
+Q8. Is there a second Memory authority?
+
+Q9. Is there a second Policy?
+
+Q10. Does ResponseComposer have execution authority?
+
+Q11. Can user text approve action directly?
+
+Q12. Can stale "yes" approve a changed proposal?
+
+Q13. Can response claim success without Effect Journal truth?
+
+Q14. Can correction race produce stale action?
+
+Q15. Can duplicate turn duplicate effect?
+
+Q16. Can crash after effect duplicate effect?
+
+Q17. Can pending question be hijacked cross-conversation?
+
+Q18. Can conversation data leak cross-tenant?
+
+Q19. Can Tool output inject privileged instruction?
+
+Q20. Can Skill content inject privileged instruction?
+
+Q21. Is Context bounded?
+
+Q22. Does side-question handling preserve original goal?
+
+Q23. Does conversation state survive fresh-process restart?
+
+Q24. Is synthetic consumer realistic or merely scripted toy?
+
+Q25. Does second profile prove generality?
+
+Q26. Did Phase 4 Capability Boundary remain canonical?
+
+Q27. Did Phase 3 Runtime V2 remain canonical?
+
+Q28. Did Phase 2 durable spine remain canonical?
+
+Q29. Is evidence fresh?
+
+Q30. Are naturalness claims independently evaluated?
+
+======================================================================
+970. CRITIC RESULT
+======================================================================
+
+APPROVE
+or
+REJECT.
+
+======================================================================
+971. CRITIC MUST INSPECT SOURCE
+======================================================================
+
+Not reports only.
+
+======================================================================
+972. CRITIC MUST INSPECT TESTS
+======================================================================
+
+Reject fake tests.
+
+======================================================================
+973. CRITIC MUST INSPECT CONVERSATIONS
+======================================================================
+
+Read actual golden trajectories.
+
+================================================================

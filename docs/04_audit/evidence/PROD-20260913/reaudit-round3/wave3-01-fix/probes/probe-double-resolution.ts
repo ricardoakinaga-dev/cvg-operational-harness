@@ -147,7 +147,8 @@ async function main() {
       results.scenarioC_literalHeaderObjectReuse = {
         first,
         second,
-        secondExpected: '401 unauthorized (server sees distinct headers objects)'
+        secondExpected:
+          '401 unauthorized (server sees distinct headers objects)'
       }
     } finally {
       await app.close()

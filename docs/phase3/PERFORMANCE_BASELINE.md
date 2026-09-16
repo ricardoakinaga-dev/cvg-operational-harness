@@ -4,11 +4,11 @@ Measured by `scripts/phase3-benchmark.ts` (60 runs each, in-memory controlled,
 no external effects). Raw data:
 `docs/phase3/evidence/PERFORMANCE_BASELINE.json`.
 
-| Profile | avg latency | p50 | p95 | steps | model calls | tool calls | step writes | checkpoint writes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Runtime V1 single-pass (1 tool) | 0.059 ms | 0.02 ms | 0.13 ms | 1.0 | 0.0 | 1.0 | 0 | 0 |
-| Runtime V2 simple (RESPOND only) | 0.254 ms | 0.16 ms | 0.56 ms | 1.0 | 0.0 | 0.0 | 1.0 | 2.0 |
-| Runtime V2 multi-step (5 steps, 2 tools, verify) | 1.213 ms | 1.10 ms | 1.97 ms | 5.0 | 0.0 | 2.0 | 7.0 | 8.0 |
+| Profile                                          | avg latency | p50     | p95     | steps | model calls | tool calls | step writes | checkpoint writes |
+| ------------------------------------------------ | ----------- | ------- | ------- | ----- | ----------- | ---------- | ----------- | ----------------- |
+| Runtime V1 single-pass (1 tool)                  | 0.059 ms    | 0.02 ms | 0.13 ms | 1.0   | 0.0         | 1.0        | 0           | 0                 |
+| Runtime V2 simple (RESPOND only)                 | 0.254 ms    | 0.16 ms | 0.56 ms | 1.0   | 0.0         | 0.0        | 1.0         | 2.0               |
+| Runtime V2 multi-step (5 steps, 2 tools, verify) | 1.213 ms    | 1.10 ms | 1.97 ms | 5.0   | 0.0         | 2.0        | 7.0         | 8.0               |
 
 ## Reading
 
@@ -32,12 +32,12 @@ no external effects). Raw data:
 
 ## Loop cost by scenario (synthetic)
 
-| Scenario | steps | model calls | tool calls | knowledge calls | replans |
-| --- | --- | --- | --- | --- | --- |
-| Simple query | 1 | 0 | 0 | 0 | 0 |
-| Operational tool chain + verify | 5 | 0 | 2 | 0 | 1 |
-| Knowledge refinement | 3 | 0 | 0 | 2 | 0 |
-| Hostile static loop | ≤3 | 0 | 3 | 0 | 0 |
+| Scenario                        | steps | model calls | tool calls | knowledge calls | replans |
+| ------------------------------- | ----- | ----------- | ---------- | --------------- | ------- |
+| Simple query                    | 1     | 0           | 0          | 0               | 0       |
+| Operational tool chain + verify | 5     | 0           | 2          | 0               | 1       |
+| Knowledge refinement            | 3     | 0           | 0          | 2               | 0       |
+| Hostile static loop             | ≤3    | 0           | 3          | 0               | 0       |
 
 Cost fixtures are zero by construction (deterministic providers). Cost budget
 enforcement is proven separately with fake usage (`MAX_COST`, `MAX_TOKENS`).

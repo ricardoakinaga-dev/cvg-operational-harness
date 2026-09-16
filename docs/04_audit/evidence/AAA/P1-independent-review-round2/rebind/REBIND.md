@@ -10,22 +10,22 @@
 
 **Focused packages: EQUAL (no delta).** The four P2-B packages are byte-identical to the frozen candidate at every capture point of this rebind.
 
-| Package (src) | Files | candidate manifest sha256 | current manifest sha256 | Delta |
-| ------------- | ----- | ------------------------- | ----------------------- | ----- |
-| `packages/agent-runtime/src` | 17 | `6d1f68b16bf5c073c758c9fc55a8e91c96a955c42297f04bf57c8a85dc45c978` | same | **EQUAL** |
-| `packages/approval-engine/src` | 12 | `27fa0ff9e8e9eddfaf2e16bc1364305ff9f9763209680e5cc020acd79d8d639f` | same | **EQUAL** |
-| `packages/channel-gateway/src` | 22 | `6ede1f9dd7df8019bd5e43a03defe876c31107a1d9b3901abc0b244c0d4e0b9d` | same | **EQUAL** |
-| `packages/policy-engine/src` | 10 | `4beab82afeafec9e5cd3218b349a23d173c1b7f76ffe1ccf3651eecf47bfa114` | same | **EQUAL** |
+| Package (src)                  | Files | candidate manifest sha256                                          | current manifest sha256 | Delta     |
+| ------------------------------ | ----- | ------------------------------------------------------------------ | ----------------------- | --------- |
+| `packages/agent-runtime/src`   | 17    | `6d1f68b16bf5c073c758c9fc55a8e91c96a955c42297f04bf57c8a85dc45c978` | same                    | **EQUAL** |
+| `packages/approval-engine/src` | 12    | `27fa0ff9e8e9eddfaf2e16bc1364305ff9f9763209680e5cc020acd79d8d639f` | same                    | **EQUAL** |
+| `packages/channel-gateway/src` | 22    | `6ede1f9dd7df8019bd5e43a03defe876c31107a1d9b3901abc0b244c0d4e0b9d` | same                    | **EQUAL** |
+| `packages/policy-engine/src`   | 10    | `4beab82afeafec9e5cd3218b349a23d173c1b7f76ffe1ccf3651eecf47bfa114` | same                    | **EQUAL** |
 
 Per-file maps: `commands/drift/packages_*.candidate.sha256` vs `.current.sha256`; consolidated equality: `commands/focused-package-equality.txt`.
 
 **However, the premise "the only deltas vs `328d6a38` are tracking/docs (no product source delta)" is NOT satisfied at the tree level.** The working tree is a successor with concurrent product changes and was actively moving during the rebind:
 
-| Capture | Time (UTC) | candidateId | files | product sources |
-| ------- | ---------- | ----------- | ----- | --------------- |
-| first recompute | 07:12:5x | `363de074c49b912ee13758966c2f89664beb66e3ac8c951af1f16b046e3886be` | 857 | 488 (2 changed + 1 added) |
-| window start | 07:19:31 | `fe271f7ee74ba14a81996403e2dbb764ec99ecf0669ab6ff7f970b65af8dacc8` | 858 | 488 |
-| window end | 07:26:15 | `c8e9f3555892ae8b15c14c8f2ef5ce7fc1e27c3d8afcbec1b1cc5cafba1aecde` | 864 | 494 |
+| Capture         | Time (UTC) | candidateId                                                        | files | product sources           |
+| --------------- | ---------- | ------------------------------------------------------------------ | ----- | ------------------------- |
+| first recompute | 07:12:5x   | `363de074c49b912ee13758966c2f89664beb66e3ac8c951af1f16b046e3886be` | 857   | 488 (2 changed + 1 added) |
+| window start    | 07:19:31   | `fe271f7ee74ba14a81996403e2dbb764ec99ecf0669ab6ff7f970b65af8dacc8` | 858   | 488                       |
+| window end      | 07:26:15   | `c8e9f3555892ae8b15c14c8f2ef5ce7fc1e27c3d8afcbec1b1cc5cafba1aecde` | 864   | 494                       |
 
 Product deltas observed vs `328d6a38` (all outside the four focused packages):
 
@@ -41,27 +41,27 @@ Full detail: `commands/product-sources-delta.txt`, `commands/product-manifest-st
 
 Probe bytes are identical to the round-2 reviewer artifacts (integrity: `commands/probe-source-integrity.txt`); run with `npx tsx` against the current workspace sources. All 7 exit 0 and report `falsified: false`. Raw logs in `raw/`.
 
-| Probe | Claim | Raw result (current tree) | Falsified? |
-| ----- | ----- | ------------------------- | ---------- |
-| F01 `f01-payload-binding.ts` | tool receives only the approved payload; divergent caller payload denied | no-journal `denied/durability_required` tool 0; execution payload `{"text":"APPROVED_PAYLOAD"}` providerCalls 1; caller B `denied/payload_mismatch` tool 0 | **No** |
-| F02 `f02-preeffect-failure.ts` | no false EXECUTED; honest state on pre-effect failure; model failure zero approvals | `denied/adapter_precheck_failed`, approval `APPROVED`, journal `EFFECT_FAILED`, outbox 0; retry `executed`/`CONFIRMED`; model failure `denied/provider_unavailable`, 0 approvals, tool 0 | **No** |
-| F03 `f03-durable-replay.ts` | at-most-one effect under crash/concurrency | turn 1 `executed/outbox_pending` tool 1; replay `idempotent_replay` tool 1; concurrent reserve `[in_progress,reserved]`; reuse `idempotency_key_reuse` | **No** |
-| F04 `f04-channel-concurrency.ts` | channel single send + hash_version/actor | `providerSends 1`, fulfilled 2; replay `ext_1`; conflict `idempotency_key_reuse`; version `hash_algorithm_mismatch`; actor `reconciliation_required` | **No** |
-| F05 `f05-limits.ts` | budget/deadline/cancel, zero pending spans | `steps_budget_exceeded` / `loop_deadline_exceeded` / `turn_cancelled`; tool 0, outbox 0, **pendingSpans 0** each | **No** |
-| F15 `aaa08-policy-matrix.ts` (runtime block) | F15 runtime deny, tool 0 | `f15Runtime: denied/policy_denied`, tool 0; draft x real matrix holds | **No** |
-| T-19 `t19-real-effect.ts` | `real_effect_not_authorized`, zero calls | three unauthorized cases `denied/real_effect_not_authorized` tool 0; authorized -> `approval_required` | **No** |
+| Probe                                        | Claim                                                                               | Raw result (current tree)                                                                                                                                                                | Falsified? |
+| -------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| F01 `f01-payload-binding.ts`                 | tool receives only the approved payload; divergent caller payload denied            | no-journal `denied/durability_required` tool 0; execution payload `{"text":"APPROVED_PAYLOAD"}` providerCalls 1; caller B `denied/payload_mismatch` tool 0                               | **No**     |
+| F02 `f02-preeffect-failure.ts`               | no false EXECUTED; honest state on pre-effect failure; model failure zero approvals | `denied/adapter_precheck_failed`, approval `APPROVED`, journal `EFFECT_FAILED`, outbox 0; retry `executed`/`CONFIRMED`; model failure `denied/provider_unavailable`, 0 approvals, tool 0 | **No**     |
+| F03 `f03-durable-replay.ts`                  | at-most-one effect under crash/concurrency                                          | turn 1 `executed/outbox_pending` tool 1; replay `idempotent_replay` tool 1; concurrent reserve `[in_progress,reserved]`; reuse `idempotency_key_reuse`                                   | **No**     |
+| F04 `f04-channel-concurrency.ts`             | channel single send + hash_version/actor                                            | `providerSends 1`, fulfilled 2; replay `ext_1`; conflict `idempotency_key_reuse`; version `hash_algorithm_mismatch`; actor `reconciliation_required`                                     | **No**     |
+| F05 `f05-limits.ts`                          | budget/deadline/cancel, zero pending spans                                          | `steps_budget_exceeded` / `loop_deadline_exceeded` / `turn_cancelled`; tool 0, outbox 0, **pendingSpans 0** each                                                                         | **No**     |
+| F15 `aaa08-policy-matrix.ts` (runtime block) | F15 runtime deny, tool 0                                                            | `f15Runtime: denied/policy_denied`, tool 0; draft x real matrix holds                                                                                                                    | **No**     |
+| T-19 `t19-real-effect.ts`                    | `real_effect_not_authorized`, zero calls                                            | three unauthorized cases `denied/real_effect_not_authorized` tool 0; authorized -> `approval_required`                                                                                   | **No**     |
 
 Probe exit codes: `raw/probe-exits.txt` (all `exit=0`). This confirms the P2-B focused behaviors on the successor bytes for the four packages (which are unchanged from `328d6a38…`).
 
 ## 3. Gate results
 
-| # | Command | Exit | Counts / result | Log |
-| - | ------- | ---- | --------------- | --- |
-| 1 | `npm test` (window run, 07:19:35–07:23:06) | **0** | Test Files **231 passed \| 5 skipped (236)**; Tests **1588 passed \| 65 skipped (1653)** | `commands/npm-test-final.log` |
-| 2 | `npm run typecheck` (07:25:52 retry) | **0** | clean — first run at 07:21 exited **2** while the `apps/worker` lane was mid-edit (`TS2724`, `TS2339`, `TS2552`, …); the lane fixed types and the retry passed | `commands/typecheck-retry.log` / `commands/typecheck-final.log` |
-| 3 | `npm run lint` (07:25:5x, last check) | **1** | `apps/worker/src/continuous-worker.ts:174 'timer' is never reassigned. Use 'const' instead` (1 error; in-flight worker lane, outside the four focused packages) | `commands/lint-retry.log` |
-| 4 | `TEST_DATABASE_URL=postgres://ricardo@127.0.0.1:55432/cvg_aaa16_test npm run test:postgres` (07:23:25) | **0** | Test Files **14 passed (14)**; Tests **123 passed (123)**; **0 skipped** | `commands/test-postgres-final.log` |
-| 5 | `npx vitest run apps/api/src/__tests__/journeys-api-postgres.test.ts` with DB (context) | **0** | 1 file / **8 passed (8)** | `commands/new-journeys-api-test.log` |
+| #   | Command                                                                                                | Exit  | Counts / result                                                                                                                                                 | Log                                                             |
+| --- | ------------------------------------------------------------------------------------------------------ | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| 1   | `npm test` (window run, 07:19:35–07:23:06)                                                             | **0** | Test Files **231 passed \| 5 skipped (236)**; Tests **1588 passed \| 65 skipped (1653)**                                                                        | `commands/npm-test-final.log`                                   |
+| 2   | `npm run typecheck` (07:25:52 retry)                                                                   | **0** | clean — first run at 07:21 exited **2** while the `apps/worker` lane was mid-edit (`TS2724`, `TS2339`, `TS2552`, …); the lane fixed types and the retry passed  | `commands/typecheck-retry.log` / `commands/typecheck-final.log` |
+| 3   | `npm run lint` (07:25:5x, last check)                                                                  | **1** | `apps/worker/src/continuous-worker.ts:174 'timer' is never reassigned. Use 'const' instead` (1 error; in-flight worker lane, outside the four focused packages) | `commands/lint-retry.log`                                       |
+| 4   | `TEST_DATABASE_URL=postgres://ricardo@127.0.0.1:55432/cvg_aaa16_test npm run test:postgres` (07:23:25) | **0** | Test Files **14 passed (14)**; Tests **123 passed (123)**; **0 skipped**                                                                                        | `commands/test-postgres-final.log`                              |
+| 5   | `npx vitest run apps/api/src/__tests__/journeys-api-postgres.test.ts` with DB (context)                | **0** | 1 file / **8 passed (8)**                                                                                                                                       | `commands/new-journeys-api-test.log`                            |
 
 Notes: without `TEST_DATABASE_URL`, `npm test` skips 5 files / 65 tests (the 5th skipped file is the new `journeys-api-postgres.test.ts`; it passes 8/8 with the DB). The added `apps/api` and `apps/worker` files are concurrent-lane work and are not part of the four focused P2-B packages. Because the tree changed after each run (`c8e9f355…` at 07:26 > the bytes at run time), these gate results bind to the bytes present when each command executed; they are **not** a green certification of the latest tree.
 

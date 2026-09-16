@@ -161,7 +161,9 @@ async function main(): Promise<void> {
     `SELECT (SELECT count(*) FROM tasks WHERE idempotency_key='spoof-task-0002')::int AS tasks,
             (SELECT count(*) FROM audit_events)::int AS audit_total`
   )
-  await admin.query(`DROP TRIGGER reject_http_task_audit ON ${schema}.audit_events`)
+  await admin.query(
+    `DROP TRIGGER reject_http_task_audit ON ${schema}.audit_events`
+  )
   await admin.query(`DROP FUNCTION reject_http_task_audit()`)
   const retried = await app.inject({
     method: 'POST',
@@ -213,7 +215,9 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  errors.push(error instanceof Error ? error.stack ?? error.message : String(error))
+  errors.push(
+    error instanceof Error ? (error.stack ?? error.message) : String(error)
+  )
   console.log(JSON.stringify({ results, errors }, null, 1))
   process.exit(1)
 })

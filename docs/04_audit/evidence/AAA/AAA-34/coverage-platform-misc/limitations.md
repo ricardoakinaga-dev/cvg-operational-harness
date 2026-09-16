@@ -19,8 +19,8 @@
    - `packages/shared/src/canonical.ts` line 112 `default` switch arm is
      unreachable through `typeof`.
    - `packages/platform/src/tool-invocation-boundary.ts` lines 122 and 184:
-     >240-char handler error and key-total-chars overflow are shadowed by earlier
-     defensive returns.
+     > 240-char handler error and key-total-chars overflow are shadowed by earlier
+     > defensive returns.
    - `packages/platform/src/plugin-gateway.ts` lines 768/775/781 are guarded by
      `normalizeRegisteredPlugin` manifest validation and cannot be reached
      through the public registry.

@@ -6,11 +6,15 @@ async function main(): Promise<void> {
   const realSetTimeout = globalThis.setTimeout
   const realClearTimeout = globalThis.clearTimeout
   let live = 0
-  const patchedSet: typeof setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+  const patchedSet: typeof setTimeout = ((
+    ...args: Parameters<typeof setTimeout>
+  ) => {
     live += 1
     return realSetTimeout(...args)
   }) as typeof setTimeout
-  const patchedClear: typeof clearTimeout = ((timer: Parameters<typeof clearTimeout>[0]) => {
+  const patchedClear: typeof clearTimeout = ((
+    timer: Parameters<typeof clearTimeout>[0]
+  ) => {
     live -= 1
     return realClearTimeout(timer)
   }) as typeof clearTimeout
@@ -19,7 +23,9 @@ async function main(): Promise<void> {
   try {
     let rejectQuery: (e: Error) => void = () => undefined
     const secretError = () =>
-      new Error('connection string postgres://secret_user:secret_pw@db:5432/prod failed')
+      new Error(
+        'connection string postgres://secret_user:secret_pw@db:5432/prod failed'
+      )
     const pool = {
       connect: async () => ({
         query: () =>
@@ -45,7 +51,11 @@ async function main(): Promise<void> {
       liveTimersBefore: before,
       liveTimersAfter: after,
       leakedSecret: body.includes('secret_pw') || body.includes('postgres://'),
-      detail: (res.json() as { data: { checks: Array<{ name: string; detail: string }> } }).data.checks.find((c) => c.name === 'database')?.detail
+      detail: (
+        res.json() as {
+          data: { checks: Array<{ name: string; detail: string }> }
+        }
+      ).data.checks.find((c) => c.name === 'database')?.detail
     })
     await app.close()
   } finally {

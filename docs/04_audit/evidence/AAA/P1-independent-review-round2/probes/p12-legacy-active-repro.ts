@@ -6,7 +6,14 @@
 // is orphaned.
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, cpSync } from 'node:fs'
+import {
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  appendFileSync,
+  rmSync,
+  cpSync
+} from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
@@ -49,7 +56,9 @@ const STATE_FILE = join(ROOT, 'crash-state.json')
 const EFFECT_LOG = join(ROOT, 'effects.log')
 
 function opKey(tenantId: string, key: string): string {
-  return `op:${createHash('sha256').update(canonicalizeJson({ tenantId, callerIdempotencyKey: key }), 'utf8').digest('hex')}`
+  return `op:${createHash('sha256')
+    .update(canonicalizeJson({ tenantId, callerIdempotencyKey: key }), 'utf8')
+    .digest('hex')}`
 }
 
 function turnInput(
@@ -149,7 +158,11 @@ async function crashChild(): Promise<never> {
   const now = () => T0
   const journal = new FileEffectJournal({ directory: JOURNAL_DIR, clock: now })
   const store = new InMemoryApprovalStore()
-  const approvals = new ApprovalEngine({ store, clock: now, reservationTtlMs: TTL })
+  const approvals = new ApprovalEngine({
+    store,
+    clock: now,
+    reservationTtlMs: TTL
+  })
   let approvalId = ''
   const runtime = buildRuntime({
     approvals,
@@ -201,7 +214,11 @@ async function adjudicate(): Promise<void> {
     const journal = new FileEffectJournal({ directory: variantDir, clock: now })
     const store = new InMemoryApprovalStore()
     store.insert(record)
-    const approvals = new ApprovalEngine({ store, clock: now, reservationTtlMs: TTL })
+    const approvals = new ApprovalEngine({
+      store,
+      clock: now,
+      reservationTtlMs: TTL
+    })
     const outboxKeys: string[] = []
     let toolCalls = 0
     const runtime = buildRuntime({
@@ -218,9 +235,7 @@ async function adjudicate(): Promise<void> {
     const retry = await runtime.runTurn(
       turnInput({
         approvalId: record.approvalId,
-        ...(variant === 'legacy-absent-key'
-          ? {}
-          : { idempotencyKey: KEY_B })
+        ...(variant === 'legacy-absent-key' ? {} : { idempotencyKey: KEY_B })
       })
     )
     const after = approvals.get(TENANT, record.approvalId)
@@ -228,7 +243,8 @@ async function adjudicate(): Promise<void> {
     const journalB = await journal.get(TENANT, opKey(TENANT, KEY_B))
     results.push({
       variant,
-      inputRecordHadOperationKey: state.approvalRecord.operationKey !== undefined,
+      inputRecordHadOperationKey:
+        state.approvalRecord.operationKey !== undefined,
       variantRecordOperationKey: record.operationKey ?? null,
       leaseActiveAtRetry: true,
       outcome: retry.outcome,
@@ -276,9 +292,14 @@ async function main(): Promise<void> {
   const child = spawnSync(
     'npx',
     ['tsx', fileURLToPath(import.meta.url), 'crash-child'],
-    { cwd: '/home/ricardo/cvg-agent-secretary-v2', stdio: ['ignore', 'inherit', 'inherit'] }
+    {
+      cwd: '/home/ricardo/cvg-agent-secretary-v2',
+      stdio: ['ignore', 'inherit', 'inherit']
+    }
   )
-  console.log(JSON.stringify({ probe: 'P1-2-legacy-child-exit', status: child.status }))
+  console.log(
+    JSON.stringify({ probe: 'P1-2-legacy-child-exit', status: child.status })
+  )
   await adjudicate()
 }
 

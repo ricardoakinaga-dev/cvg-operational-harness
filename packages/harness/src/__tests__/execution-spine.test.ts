@@ -407,12 +407,8 @@ describe('neutral durable execution spine contract', () => {
     expect(processedA.record.state).toBe('SUCCEEDED')
     expect(processedB.record.state).toBe('SUCCEEDED')
     expect(counter.value).toBe(2)
-    expect(
-      (await journal.get(tenantA, operationKey))?.state
-    ).toBe('CONFIRMED')
-    expect(
-      (await journal.get(tenantB, operationKey))?.state
-    ).toBe('CONFIRMED')
+    expect((await journal.get(tenantA, operationKey))?.state).toBe('CONFIRMED')
+    expect((await journal.get(tenantB, operationKey))?.state).toBe('CONFIRMED')
     expect(fixtures.auditEvents.map((event) => event.tenant)).toEqual([
       tenantA,
       tenantB

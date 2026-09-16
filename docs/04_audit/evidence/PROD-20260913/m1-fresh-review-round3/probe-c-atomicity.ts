@@ -67,7 +67,8 @@ async function main(): Promise<void> {
   await admin.query(
     `CREATE TRIGGER reject_audit BEFORE INSERT ON ${schema}.audit_events FOR EACH ROW EXECUTE FUNCTION reject_audit()`
   )
-  const pidBefore = (await pool.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+  const pidBefore = (await pool.query('SELECT pg_backend_pid() AS pid')).rows[0]
+    .pid
   let atomicError: string | undefined
   PROGRESS('trigger installed, calling repo')
   const atomicCode: string | undefined = await (async () => {
@@ -208,7 +209,8 @@ async function main(): Promise<void> {
   }
   const tasksAfterFail = db.state.tasks.length
   const auditsAfterFail = db.state.auditEvents.length
-  ;(AuditRepository.prototype as unknown as { append: unknown }).append = auditAppend
+  ;(AuditRepository.prototype as unknown as { append: unknown }).append =
+    auditAppend
   const memoryTask = memoryRepo.createJourneyTask(memoryInput as never)
   const memoryReplay = memoryRepo.createJourneyTask(memoryInput as never)
   results.push({
@@ -228,7 +230,9 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  errors.push(error instanceof Error ? error.stack ?? error.message : String(error))
+  errors.push(
+    error instanceof Error ? (error.stack ?? error.message) : String(error)
+  )
   console.log(JSON.stringify({ results, errors }, null, 1))
   process.exitCode = 1
 })

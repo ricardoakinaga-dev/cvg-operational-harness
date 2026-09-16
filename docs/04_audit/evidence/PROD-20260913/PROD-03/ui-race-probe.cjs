@@ -18,7 +18,9 @@ async function main() {
     started = resolve
   })
   const browser = await chromium.launch()
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 1000 }
+  })
   await page.route('**/v1/**', async (route) => {
     const url = route.request().url()
     if (url.includes('/owners/search')) {
@@ -27,12 +29,17 @@ async function main() {
       return
     }
     const data = url.includes('/conversations')
-      ? { items: [], pageInfo: { limit: 25, offset: 0, total: 0, hasNextPage: false } }
+      ? {
+          items: [],
+          pageInfo: { limit: 25, offset: 0, total: 0, hasNextPage: false }
+        }
       : []
     await route.fulfill({ json: { success: true, data } })
   })
   await page.goto(WEB_URL)
-  await page.getByLabel('ID do operador', { exact: true }).fill('synthetic.operator')
+  await page
+    .getByLabel('ID do operador', { exact: true })
+    .fill('synthetic.operator')
   await page.getByLabel('Tenant ID', { exact: true }).fill('tenant_A')
   await page
     .getByLabel('Telefone sintético', { exact: true })

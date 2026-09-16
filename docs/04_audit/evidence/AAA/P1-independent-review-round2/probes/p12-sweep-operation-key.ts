@@ -11,7 +11,13 @@
 // journal confirm, leaving approval EXECUTING + journal EFFECT_STARTED.
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  appendFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -28,10 +34,7 @@ import {
   PromptRegistry
 } from '@cvg/model-gateway'
 import type { ModelProfile } from '@cvg/model-gateway'
-import {
-  PolicyEngine,
-  type Capability
-} from '@cvg/policy-engine'
+import { PolicyEngine, type Capability } from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import {
   GovernedAgentRuntime,
@@ -63,7 +66,9 @@ const FAKE_CANCEL_SCOPE: Partial<Record<Capability, EffectScope>> = {
 const WORKDIR = '/tmp/opencode/p1-review2-20260913T053543Z'
 
 function callerKey(tenantId: string, key: string): string {
-  return `op:${createHash('sha256').update(canonicalizeJson({ tenantId, callerIdempotencyKey: key }), 'utf8').digest('hex')}`
+  return `op:${createHash('sha256')
+    .update(canonicalizeJson({ tenantId, callerIdempotencyKey: key }), 'utf8')
+    .digest('hex')}`
 }
 
 interface Harness {
@@ -171,7 +176,9 @@ function buildHarness(options: {
   }
 }
 
-function turnInput(overrides: Partial<GovernedTurnInput> = {}): GovernedTurnInput {
+function turnInput(
+  overrides: Partial<GovernedTurnInput> = {}
+): GovernedTurnInput {
   return {
     tenantId: TENANT,
     operatorId: 'op_1',
@@ -187,7 +194,9 @@ function turnInput(overrides: Partial<GovernedTurnInput> = {}): GovernedTurnInpu
     dataClassification: 'INTERNAL',
     prompt: { promptId: 'binding-core', version: '1.0.0' },
     modelProfile: 'fast',
-    modelMessages: { messages: [{ role: 'user', content: 'cancelar consulta' }] },
+    modelMessages: {
+      messages: [{ role: 'user', content: 'cancelar consulta' }]
+    },
     structuredOutput: { schemaName: 'PayloadContract', schema: PAYLOAD_SCHEMA },
     ...overrides
   }
@@ -204,7 +213,9 @@ async function requestApproval(
 ): Promise<string> {
   const requested = await h.runtime.runTurn(turnInput(overrides))
   if (requested.outcome !== 'approval_required' || !requested.approvalId) {
-    throw new Error(`request turn failed: ${requested.outcome}/${requested.reason}`)
+    throw new Error(
+      `request turn failed: ${requested.outcome}/${requested.reason}`
+    )
   }
   return requested.approvalId
 }
@@ -252,7 +263,9 @@ async function legacyCrashState(
   callerKeyValue: string,
   executing = true
 ): Promise<{ approvalId: string; reservationId: string }> {
-  const approvalId = await requestApproval(h, { idempotencyKey: callerKeyValue })
+  const approvalId = await requestApproval(h, {
+    idempotencyKey: callerKeyValue
+  })
   approve(h, approvalId)
   const stored = h.approvals.get(TENANT, approvalId)
   const reservation = h.approvals.reserve({
@@ -613,7 +626,8 @@ async function scenarioPositiveControl(): Promise<Observed> {
   )
   const approval = h.approvals.get(TENANT, approvalId)
   const observed: Observed = {
-    scenario: 'positive-control: persisted key + proven-absent journal + never-EXECUTING',
+    scenario:
+      'positive-control: persisted key + proven-absent journal + never-EXECUTING',
     outcome: retry.outcome,
     reason: retry.reason,
     approvalStatus: approval.status,
@@ -632,7 +646,11 @@ async function scenarioPositiveControl(): Promise<Observed> {
     `positive control sweep wrong: ${JSON.stringify(sweep)}`
   )
   check(observed, observed.outcome === 'executed', 'retry not executed')
-  check(observed, observed.toolCalls === 1, `tool calls ${observed.toolCalls} != 1`)
+  check(
+    observed,
+    observed.toolCalls === 1,
+    `tool calls ${observed.toolCalls} != 1`
+  )
   check(
     observed,
     observed.journalAState === 'CONFIRMED',
@@ -674,14 +692,15 @@ async function runCrashChild(): Promise<never> {
     toolExecutor: async () => {
       appendFileSync(effectLog, 'EFFECT\n')
       const record: ApprovalRecord = h.approvals.get(TENANT, capturedApprovalId)
-      const journalRecord = await journal.get(
-        TENANT,
-        callerKey(TENANT, KEY_A)
-      )
+      const journalRecord = await journal.get(TENANT, callerKey(TENANT, KEY_A))
       writeFileSync(
         stateFile,
         JSON.stringify(
-          { approvalRecord: record, journalRecord, at: currentNow.toISOString() },
+          {
+            approvalRecord: record,
+            journalRecord,
+            at: currentNow.toISOString()
+          },
           null,
           2
         )
@@ -790,12 +809,16 @@ async function adjudicateCrash(): Promise<Observed> {
     reservationTtlMs: TTL
   })
   const retry = await retryRuntime.runTurn(
-    turnInput({ approvalId: state.approvalRecord.approvalId, idempotencyKey: KEY_B })
+    turnInput({
+      approvalId: state.approvalRecord.approvalId,
+      idempotencyKey: KEY_B
+    })
   )
   const approval = approvals.get(TENANT, state.approvalRecord.approvalId)
   const effectsAfter = readFileSync(effectLog, 'utf8').length
   const observed: Observed = {
-    scenario: 'REAL CRASH child (exit 99 after effect, before confirm) + sweep + changed-key-B retry',
+    scenario:
+      'REAL CRASH child (exit 99 after effect, before confirm) + sweep + changed-key-B retry',
     outcome: retry.outcome,
     reason: retry.reason,
     approvalStatus: approval.status,
@@ -868,10 +891,14 @@ async function main(): Promise<void> {
 
   // Clean crash dir before the spawn.
   mkdirSync(stateDir, { recursive: true })
-  const child = spawnSync('npx', ['tsx', fileURLToPath(import.meta.url), 'crash-child'], {
-    cwd: '/home/ricardo/cvg-agent-secretary-v2',
-    stdio: ['ignore', 'inherit', 'inherit']
-  })
+  const child = spawnSync(
+    'npx',
+    ['tsx', fileURLToPath(import.meta.url), 'crash-child'],
+    {
+      cwd: '/home/ricardo/cvg-agent-secretary-v2',
+      stdio: ['ignore', 'inherit', 'inherit']
+    }
+  )
   console.log(
     JSON.stringify({
       probe: 'P1-2-crash-child-exit',

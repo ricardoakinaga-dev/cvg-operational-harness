@@ -12,12 +12,12 @@
 
 ## Deliverables (new files, nothing else touched)
 
-| File                                             | sha256                                                           |
-| ------------------------------------------------ | ---------------------------------------------------------------- |
-| `docs/04_audit/evidence/AAA/AAA-09/manifest.json` | `5acb559a8a0ec83b23ecdf12f53c315677ed81947db96403f16f6bc109202900` |
-| `docs/04_audit/evidence/AAA/AAA-10/manifest.json` | `5970b5c6f83efade70075f8b368f526d07dea8401e90dfa8b605680f4af7afef` |
-| `docs/04_audit/evidence/AAA/AAA-11/manifest.json` | `cb9a35ad7f880580a430c546867bf014b986846f0c90106ac25a8f8b1d496ca1` |
-| `docs/04_audit/evidence/AAA/AAA-17/manifest.json` | `32863012251cbf7d89db992c0c752fde506686c9d9fe3bfaa2676b5bb8a8c1df` |
+| File                                                                | sha256                                                             |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `docs/04_audit/evidence/AAA/AAA-09/manifest.json`                   | `5acb559a8a0ec83b23ecdf12f53c315677ed81947db96403f16f6bc109202900` |
+| `docs/04_audit/evidence/AAA/AAA-10/manifest.json`                   | `5970b5c6f83efade70075f8b368f526d07dea8401e90dfa8b605680f4af7afef` |
+| `docs/04_audit/evidence/AAA/AAA-11/manifest.json`                   | `cb9a35ad7f880580a430c546867bf014b986846f0c90106ac25a8f8b1d496ca1` |
+| `docs/04_audit/evidence/AAA/AAA-17/manifest.json`                   | `32863012251cbf7d89db992c0c752fde506686c9d9fe3bfaa2676b5bb8a8c1df` |
 | `docs/04_audit/evidence/AAA/P2-5-evidence-index/validate-index.mjs` | `d900508181c9bb5e823f4198e23b2d32cfe504e5dece44b70a3555465915a8c2` |
 
 The four indexes now exist at exactly the paths declared by the backlog

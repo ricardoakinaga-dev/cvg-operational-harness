@@ -18,20 +18,23 @@ try {
     const p1 = h.makePool(1)
     const p2 = h.makePool(1)
     try {
-      const seed = new (await import(
-        '/home/ricardo/cvg-agent-secretary-v2/packages/persistence/src/runtime-approval-store.ts'
-      )).PostgresApprovalAuthority(main)
+      const seed = new (
+        await import('/home/ricardo/cvg-agent-secretary-v2/packages/persistence/src/runtime-approval-store.ts')
+      ).PostgresApprovalAuthority(main)
       const record = await createApproved(seed, tenant, hint)
 
-      const { PostgresApprovalAuthority } = await import(
-        '/home/ricardo/cvg-agent-secretary-v2/packages/persistence/src/runtime-approval-store.ts'
-      )
+      const { PostgresApprovalAuthority } =
+        await import('/home/ricardo/cvg-agent-secretary-v2/packages/persistence/src/runtime-approval-store.ts')
       const a1 = new PostgresApprovalAuthority(p1)
       const a2 = new PostgresApprovalAuthority(p2)
 
       const settled = await Promise.allSettled([
-        a1.reserve(reserveInput(tenant, hint, record.approvalId, `rsv_${hint}_1`)),
-        a2.reserve(reserveInput(tenant, hint, record.approvalId, `rsv_${hint}_2`))
+        a1.reserve(
+          reserveInput(tenant, hint, record.approvalId, `rsv_${hint}_1`)
+        ),
+        a2.reserve(
+          reserveInput(tenant, hint, record.approvalId, `rsv_${hint}_2`)
+        )
       ])
       const fulfilled = settled.filter((r) => r.status === 'fulfilled')
       const rejected = settled.filter(
@@ -44,7 +47,11 @@ try {
       )
       assert.equal(rejected.length, 1, `iteration ${i}: expected one loser`)
       const loser = rejected[0]?.reason as ApprovalError
-      assert.equal(loser?.code, 'already_reserved', `iteration ${i}: loser code ${loser?.code}`)
+      assert.equal(
+        loser?.code,
+        'already_reserved',
+        `iteration ${i}: loser code ${loser?.code}`
+      )
 
       const winner = (
         fulfilled[0] as PromiseFulfilledResult<{ reservationId: string }>

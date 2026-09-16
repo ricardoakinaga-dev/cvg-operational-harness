@@ -11,14 +11,14 @@
 
 ## Antes/depois (comando focado idêntico)
 
-| Arquivo / pacote | Stmts antes | Stmts depois | Branches antes | Branches depois | Funcs depois | Lines depois |
-| ---------------- | ----------- | ------------ | -------------- | --------------- | ------------ | ------------ |
+| Arquivo / pacote                    | Stmts antes      | Stmts depois     | Branches antes       | Branches depois      | Funcs depois | Lines depois     |
+| ----------------------------------- | ---------------- | ---------------- | -------------------- | -------------------- | ------------ | ---------------- |
 | `packages/policy-engine` (agregado) | 155/163 = 95,09% | 161/163 = 98,77% | 124/139 = **89,20%** | 136/139 = **97,84%** | 30/30 = 100% | 152/153 = 99,34% |
-| `engine.ts` | 93/99 = 93,93% | 98/99 = 98,98% | 97/109 = **88,99%** | 107/109 = **98,16%** | 13/13 = 100% | 92/93 = 98,92% |
-| `grants.ts` | 17/19 = 89,47% | 18/19 = 94,73% | 3/6 = **50,00%** | 5/6 = **83,33%** | 6/6 = 100% | 17/17 = 100% |
-| `capabilities.ts` | 16/16 = 100% | 16/16 = 100% | 10/10 = 100% | 10/10 = 100% | 4/4 = 100% | 100% |
-| `documents.ts` | 29/29 = 100% | 29/29 = 100% | 14/14 = 100% | 14/14 = 100% | 7/7 = 100% | 100% |
-| `index.ts` | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | 100% |
+| `engine.ts`                         | 93/99 = 93,93%   | 98/99 = 98,98%   | 97/109 = **88,99%**  | 107/109 = **98,16%** | 13/13 = 100% | 92/93 = 98,92%   |
+| `grants.ts`                         | 17/19 = 89,47%   | 18/19 = 94,73%   | 3/6 = **50,00%**     | 5/6 = **83,33%**     | 6/6 = 100%   | 17/17 = 100%     |
+| `capabilities.ts`                   | 16/16 = 100%     | 16/16 = 100%     | 10/10 = 100%         | 10/10 = 100%         | 4/4 = 100%   | 100%             |
+| `documents.ts`                      | 29/29 = 100%     | 29/29 = 100%     | 14/14 = 100%         | 14/14 = 100%         | 7/7 = 100%   | 100%             |
+| `index.ts`                          | 0/0              | 0/0              | 0/0                  | 0/0                  | 0/0          | 100%             |
 
 - Fonte bruta: `before/coverage-summary.json`, `after/coverage-summary.json`, `coverage-before-after.json`, logs `before-coverage-command.log` / `after-coverage-command.log`.
 - Testes do pacote: antes 3 arquivos / 35 testes; depois 5 arquivos / 54 testes (`+19`).

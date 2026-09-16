@@ -1,11 +1,6 @@
 // P1 falsification probe AAA-08 (T-12/T-13, F15 draft x real):
 // policy matrix for draft vs real and the runtime denial of a real modify.
-import {
-  buildHarness,
-  turnInput,
-  report,
-  TENANT
-} from './harness.ts'
+import { buildHarness, turnInput, report, TENANT } from './harness.ts'
 import { PolicyEngine } from '@cvg/policy-engine'
 
 const base = {
@@ -122,7 +117,11 @@ async function main(): Promise<void> {
           ...base,
           capability: 'appointment.cancel',
           action: 'appointment.cancel',
-          resource: { type: 'appointment', id: 'apt_1', tenantId: 'tenant_other' }
+          resource: {
+            type: 'appointment',
+            id: 'apt_1',
+            tenantId: 'tenant_other'
+          }
         }),
       expected: 'DENY'
     },
@@ -144,7 +143,9 @@ async function main(): Promise<void> {
     const d = c.evaluate()
     observed[c.name] = `${d.decision}:${d.reason}`
     if (d.decision !== c.expected) {
-      failures.push(`${c.name}: expected ${c.expected}, got ${d.decision} (${d.reason})`)
+      failures.push(
+        `${c.name}: expected ${c.expected}, got ${d.decision} (${d.reason})`
+      )
     }
   }
 
@@ -157,12 +158,18 @@ async function main(): Promise<void> {
       resource: { type: 'appointment', id: 'apt_real', tenantId: TENANT }
     })
   )
-  if (r.outcome !== 'denied') failures.push(`F15 runtime outcome=${r.outcome}/${r.reason}`)
-  if (h.toolCalls() !== 0) failures.push(`F15 runtime toolCalls=${h.toolCalls()}`)
-  if (h.providerCalls() !== 0) failures.push(`F15 runtime providerCalls=${h.providerCalls()}`)
+  if (r.outcome !== 'denied')
+    failures.push(`F15 runtime outcome=${r.outcome}/${r.reason}`)
+  if (h.toolCalls() !== 0)
+    failures.push(`F15 runtime toolCalls=${h.toolCalls()}`)
+  if (h.providerCalls() !== 0)
+    failures.push(`F15 runtime providerCalls=${h.providerCalls()}`)
 
   // Real confirm/reschedule through the runtime: policy DENY, zero tool.
-  for (const capability of ['appointment.confirm', 'appointment.reschedule'] as const) {
+  for (const capability of [
+    'appointment.confirm',
+    'appointment.reschedule'
+  ] as const) {
     const hx = buildHarness()
     const rx = await hx.runtime.runTurn(
       turnInput({
@@ -171,17 +178,29 @@ async function main(): Promise<void> {
         resource: { type: 'appointment', id: 'apt_real', tenantId: TENANT }
       })
     )
-    if (rx.outcome !== 'denied') failures.push(`${capability} runtime=${rx.outcome}/${rx.reason}`)
-    if (hx.toolCalls() !== 0) failures.push(`${capability} toolCalls=${hx.toolCalls()}`)
+    if (rx.outcome !== 'denied')
+      failures.push(`${capability} runtime=${rx.outcome}/${rx.reason}`)
+    if (hx.toolCalls() !== 0)
+      failures.push(`${capability} toolCalls=${hx.toolCalls()}`)
   }
 
   report('AAA08-draft-real-matrix', {
     observed,
-    f15Runtime: { outcome: r.outcome, reason: r.reason, toolCalls: h.toolCalls() },
+    f15Runtime: {
+      outcome: r.outcome,
+      reason: r.reason,
+      toolCalls: h.toolCalls()
+    },
     failures
   })
 
-  console.log(JSON.stringify({ probe: 'AAA-08', falsified: failures.length > 0, failures }))
+  console.log(
+    JSON.stringify({
+      probe: 'AAA-08',
+      falsified: failures.length > 0,
+      failures
+    })
+  )
   if (failures.length > 0) process.exitCode = 1
 }
 

@@ -212,10 +212,11 @@ function mapRecord(row: ExecutionRow): ExecutionRecord {
     tenantId: row.tenant_id,
     idempotencyKey: row.idempotency_key,
     requestHash: row.request_hash,
-    ...(request.capabilityFingerprint ?? request.runtime.capabilityFingerprint
+    ...((request.capabilityFingerprint ?? request.runtime.capabilityFingerprint)
       ? {
           capabilityFingerprint:
-            request.capabilityFingerprint ?? request.runtime.capabilityFingerprint
+            request.capabilityFingerprint ??
+            request.runtime.capabilityFingerprint
         }
       : {}),
     request,

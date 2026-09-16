@@ -50,4 +50,3 @@ Create a reversible Phase 0/1 foundation named CVG Operational Harness with neut
 ## Discovery gate
 
 The problem, target, constraints, users, evidence and non-goals are sufficiently bounded for a controlled PRD/SPEC. The gate authorizes documentation and a reversible local foundation build only; it does not authorize external effects or production.
-
