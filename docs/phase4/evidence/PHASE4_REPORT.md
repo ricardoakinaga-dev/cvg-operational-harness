@@ -1,5 +1,34 @@
 # Phase 4 Controlled Report — AAA-41
 
+## Superseding revalidation — 2026-09-16
+
+This section supersedes the historical certification paragraphs below for the
+current candidate. It is intentionally additive so the earlier failure and
+repair history remains auditable.
+
+- Candidate, HEAD, and certification run: use the current authoritative
+  records in `certification/candidate-manifest.json` and
+  `certification/phase10-result.json`; this evidence intentionally does not
+  duplicate self-referential candidate identifiers.
+- Current mechanical result: `CONDITIONAL_GO` / `AAA_CONTROLLED`.
+- Current required gates: format, typecheck, lint, build, unit, coverage,
+  security, worker startup, PostgreSQL, E2E, evals, chaos, load, restore,
+  SBOM and licenses — all `PASS`.
+- The PostgreSQL lease-expiry regression was made deterministic with an
+  injected test clock; the focused case passed 12/12 and the complete
+  PostgreSQL suite passed 27/27 files and 200/200 tests.
+- `npm run certification:verify`: `PASS` for the current candidate.
+- Fresh read-only critic evidence in this controlled sequence: no report
+  returned before its bounded window was closed; the mutation sentinel matched
+  (`449826be…` before and after). This does not qualify the recertified
+  candidate as independently approved.
+
+The controlled result therefore remains `CONDITIONAL_PASS`, not an
+unconditional Phase 4 approval. External provider/channel/identity validation
+and human signoff remain pending, and production remains `NO_GO`. The current
+revalidation artifacts are `PHASE4_REVALIDATION_20260916.md`,
+`FINAL_CRITIC_REVALIDATION.md`, and `FINAL_SENTINEL_REVALIDATION.json`.
+
 ## Current status
 
 The implementation and focused adversarial evidence are complete for the

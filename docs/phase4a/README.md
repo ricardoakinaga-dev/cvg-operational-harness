@@ -10,5 +10,8 @@ ordered parts under `prompts/`:
 
 The prompt archive is input evidence, not an implementation or production
 authorization. Phase 4A source implementation is gated by
-`PHASE_4_HANDOFF.md`; real data, real providers/channels, sensitive actions,
-deployment, and production release remain out of scope.
+`PHASE_4_HANDOFF.md`; the pipeline status is recorded in
+`GATE_VALIDATION.md`. The planned boundary, consumers, traceability and
+critical tests are recorded in the linked planning artifacts. Real data, real
+providers/channels, sensitive actions, deployment, and production release
+remain out of scope.

@@ -1,5 +1,35 @@
 # Phase 4 Handoff — AAA-4A entry gate
 
+## Superseding revalidation — 2026-09-16
+
+`PHASE_4_HANDOFF=BLOCKED` remains the authoritative gate for Phase 4A.
+
+- The current mechanical certification authority is
+  `certification/candidate-manifest.json` plus
+  `certification/phase10-result.json`; the latest controlled result is
+  `CONDITIONAL_GO` / `AAA_CONTROLLED` with all required local gates passing.
+- The fresh read-only critic evidence available in this controlled sequence
+  returned no report within its bounded window and was closed without
+  interpreting timeout as approval; it is not a current-candidate approval.
+- The matching before/after sentinel proves mutation cleanliness for that
+  window only; it does not provide independent approval.
+- External provider/channel/identity validation and human signoff remain
+  pending, and production remains `NO_GO`.
+
+Because the independent approval requirement is not satisfied, Phase 4 has not
+handed implementation authority to Phase 4A. Planning artifacts and the
+byte-for-byte prompt archive are allowed; Phase 4A source, migrations, effects,
+and production paths remain prohibited.
+
+The current revalidation evidence is in
+`docs/phase4/evidence/PHASE4_REVALIDATION_20260916.md`,
+`FINAL_CRITIC_REVALIDATION.md`, and `FINAL_SENTINEL_REVALIDATION.json`.
+
+## Historical entry record
+
+The following record preserves the initial blocked-gate observations and is
+superseded by the revalidation above.
+
 - Task: `CVG-PHASE4A-CONVERSATIONAL-INTELLIGENCE` / `AAA-4A`
 - Observed: 2026-09-15
 - Scope: controlled local synthetic repository only

@@ -284,7 +284,10 @@ describe('channel effect journal PostgreSQL adapter', () => {
       'marks an expired SENDING lease uncertain and never resends by itself',
       async () => {
         const identity = uniqueIdentity()
-        const journal = new PostgresChannelEffectJournal(first)
+        let nowMs = Date.now()
+        const journal = new PostgresChannelEffectJournal(first, {
+          clock: () => nowMs
+        })
         const leaseOwner = 'host:1:instance-a'
         await journal.reserve({
           identity,
@@ -294,7 +297,7 @@ describe('channel effect journal PostgreSQL adapter', () => {
           leaseMs: 5
         })
         await journal.claimSend(identity, leaseOwner)
-        await new Promise((resolve) => setTimeout(resolve, 25))
+        nowMs += 25
 
         const reservation = await journal.reserve({
           identity,

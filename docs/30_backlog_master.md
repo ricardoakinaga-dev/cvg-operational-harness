@@ -1,3 +1,23 @@
+# AAA-4A — Conversational Intelligence Layer — 2026-09-16
+
+- id: `CVG-PHASE4A-CONVERSATIONAL-INTELLIGENCE` / `AAA-4A`
+- status: `BLOCKED`; owner: `cvg-operational-harness`; production `NO_GO`.
+- completed in planning: 18 prompt parts archived byte-for-byte; discovery,
+  PRD, SPEC, architecture plan, quality bar, task registration, and explicit
+  gate validation prepared, plus traceability, symbol, consumer, critical-test
+  and reviewer-packet artifacts.
+- current dependency: Phase 4 mechanical local gates pass in the certification
+  authority, but the fresh independent critic returned no report; therefore
+  `PHASE_4_HANDOFF=BLOCKED` remains unchanged.
+- reliability note: the PostgreSQL expired-SENDING test timing race was
+  repaired with an injected test clock and verified at 27/27 files and
+  200/200 tests.
+- next_action: obtain a responsive independent review against the reconciled
+  candidate and re-evaluate the entry gate. No Phase 4A source or migration
+  implementation is authorized while blocked.
+- limits: no real data/provider/channel/MCP, credential, deployment, sensitive
+  clinical/financial/scheduling/record action, or unrestricted production.
+
 # AAA-4A — Conversational Intelligence Layer — 2026-09-15T22:24:40-03:00
 
 - id: `CVG-PHASE4A-CONVERSATIONAL-INTELLIGENCE` / `AAA-4A`

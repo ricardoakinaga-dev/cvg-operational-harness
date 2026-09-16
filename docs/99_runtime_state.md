@@ -1,3 +1,27 @@
+# AAA-4A HANDOFF BLOCKED / PHASE 4 REVALIDATION — 2026-09-16
+
+- status: `IN_PROGRESS`; current_engine: controlled `AUDIT`; current task:
+  `CVG-PHASE4A-CONVERSATIONAL-INTELLIGENCE` / `AAA-4A`.
+- completed this round: archived all 18 prompt parts byte-for-byte and
+  prepared the Phase 4A discovery, PRD, SPEC, architecture, quality-bar, and
+  task-registration artifacts under `docs/phase4a/`; formalized their
+  planning-only gate status in `docs/phase4a/GATE_VALIDATION.md` and completed
+  the pre-BUILD traceability, boundary, consumer, test-catalog and reviewer
+  packet artifacts.
+- current Phase 4 evidence: the latest certification authority records
+  `CONDITIONAL_GO` / `AAA_CONTROLLED` with all required local gates passing;
+  production remains `NO_GO`.
+- reliability repair: made the PostgreSQL expired-SENDING lease test
+  deterministic with an injected clock; focused 12/12 and full PostgreSQL
+  27/27 files / 200/200 tests passed.
+- blocker: the fresh independent critic returned no report within its bounded
+  window, so no approval exists. `PHASE_4_HANDOFF=BLOCKED` remains current.
+- next_action: obtain a responsive independent read-only review against the
+  reconciled Phase 4 candidate, then re-evaluate the handoff. Do not start
+  Phase 4A source, migration, effect, or production work while blocked.
+- safety: no real data/provider/channel/MCP, credential, deployment, or
+  clinical, financial, scheduling, record, or other sensitive action.
+
 # AAA-4A HANDOFF BLOCKED / PHASE 4 REPAIR — 2026-09-15T22:24:40-03:00
 
 - status: `IN_PROGRESS`; current_engine: controlled `AUDIT`/repair; current

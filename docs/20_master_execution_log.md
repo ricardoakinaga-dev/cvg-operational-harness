@@ -1,3 +1,30 @@
+# AAA-4A HANDOFF BLOCKED / PHASE 4 REVALIDATION — 2026-09-16
+
+### TASK / GATE
+
+`CVG-PHASE4A-CONVERSATIONAL-INTELLIGENCE` / `AAA-4A`; current
+`PHASE_4_HANDOFF=BLOCKED` remains authoritative.
+
+### ACTION / RESULT
+
+Archived the 18 user prompt parts byte-for-byte, registered the Phase 4A
+planning artifacts, and recorded their planning-only Discovery/PRD/SPEC gate
+status in `docs/phase4a/GATE_VALIDATION.md`. Completed the pre-BUILD
+traceability, symbol, consumer, critical-test and independent-review packet
+artifacts. Reconciled the Phase 4 evidence with the current
+certification authority: required local gates pass, but the fresh independent
+critic returned no report in its bounded window. No approval was inferred from
+the timeout or from the matching mutation sentinel. Repaired the flaky
+PostgreSQL lease-expiry test with an injected clock; the focused case passed
+12/12 and the full PostgreSQL gate passed 27/27 files and 200/200 tests.
+
+### NEXT / LIMITS
+
+Seek a responsive independent read-only review against the reconciled current
+candidate. Keep Phase 4A source, migrations, effects, provider/channel/MCP
+integration, credentials, deployment, and production authorization disabled
+until the handoff is explicitly `VERIFIED`.
+
 # AAA-4A HANDOFF BLOCKED / PHASE 4 REPAIR — 2026-09-15T22:24:40-03:00
 
 ### TASK / GATE
