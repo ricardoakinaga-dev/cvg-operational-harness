@@ -1,8 +1,28 @@
 # Phase 4A requirements traceability — AAA-4A
 
-Status is `PLANNING_ONLY / BUILD_BLOCKED`. The archived prompt parts under
-`prompts/` are authoritative; this matrix translates them into the frozen
-quality bar without claiming that planned evidence is already present.
+## Superseding implementation snapshot — 2026-09-17
+
+The former planning matrix is retained below as historical gate context. The
+controlled build now exists under `packages/conversation`, with synthetic
+consumers, a tenant-scoped PostgreSQL adapter/migration, delivery leases,
+adversarial tests, a 15-case golden corpus and 15 multi-turn trajectories.
+The controlled executable result is **73 passed tests across 12 files** with
+disposable PostgreSQL enabled; the structural verifier records 16 assertions.
+The PostgreSQL run covered RLS, durable contention, stale lease recovery,
+reload and fencing, including the post-claim effect-authorization race.
+
+Status vocabulary in the current evidence is deliberately evidence-based:
+`PROVEN_CONTROLLED` means the named local synthetic test or build executed;
+`PARTIAL_ENVIRONMENT` means a required external or production environment
+proof remains outside scope; `NOT_RUN` means no evidence is claimed. The final
+candidate, fresh critics, sentinel and certification result are bound in
+`evidence/`. Production, real data, real providers/channels and real effects
+remain `NO_GO` regardless of controlled test status.
+
+Status is `IMPLEMENTED_CONTROLLED / AUDIT_COMPLETE / PASS`. The archived
+prompt parts under `prompts/` are authoritative; this matrix translates them
+into the frozen quality bar. The table below is retained as the original
+planning matrix, while candidate-bound proof lives in `evidence/`.
 
 | Quality ID          | Prompt anchors        | Planned implementation surface                          | Required proof                                                                    | Current status |
 | ------------------- | --------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------- |
@@ -26,14 +46,16 @@ quality bar without claiming that planned evidence is already present.
 
 ## Evidence state
 
-The current repository proves only the Phase 4 controlled certification and
-the Phase 4A planning archive. It does not yet prove any Phase 4A row above.
-The following are mandatory before a Phase 4A result can be called AAA:
+The current repository proves the controlled Phase 4A implementation rows
+through executable tests and generated evidence. The final controlled
+certification contains the required candidate binding, environment execution,
+fresh critics and sentinel:
 
 - a current `PHASE_4_HANDOFF=VERIFIED` record;
-- validated Phase 4A PRD/SPEC plus human review;
+- validated Phase 4A PRD/SPEC plus the controlled build authorization;
 - executable package, synthetic consumers and persistence/delivery fixtures;
 - current test, security, performance, critic and candidate-bound evidence;
+- three fresh independent critic reports with complete axis scores; and
 - a final sentinel captured after the last source change.
 
 No row may be changed to PASS from document inspection alone. Evidence must

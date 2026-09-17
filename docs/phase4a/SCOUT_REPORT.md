@@ -1,10 +1,21 @@
 # Phase 4A discovery — brownfield scout report
 
+## Implementation follow-up — 2026-09-17
+
+The discovery boundary was implemented as planned. The optional package is
+`packages/conversation`; the existing Harness, Context Engine, policy,
+approval, capability registry, effect journal and tenant conventions remain
+the brownfield authorities. The PostgreSQL adapter and migration are additive
+and the focused disposable PostgreSQL proof has now run against PostgreSQL
+16.4, including RLS, contention, stale lease recovery and fencing. This
+follow-up does not revise the original discovery findings.
+
 - Task: `CVG-PHASE4A-CONVERSATIONAL-INTELLIGENCE` / `AAA-4A`
 - Observed: 2026-09-15
 - Scope: controlled synthetic consumers only; production remains `NO_GO`.
-- Discovery status: complete for planning; implementation remains gated by
-  `PHASE_4_HANDOFF=VERIFIED` and the CVG PRD/SPEC gates.
+- Discovery status: complete; implementation entered through
+  `PHASE_4_HANDOFF=VERIFIED` and the CVG PRD/SPEC gates, with final audit
+  evidence still required for certification.
 
 ## Current seams
 

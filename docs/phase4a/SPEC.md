@@ -4,7 +4,9 @@
 
 Create one optional package, `@cvg/conversation`, under
 `packages/conversation`. It may depend on `@cvg/harness-contracts` and
-`@cvg/harness`; it must not be imported by either. Model-gateway, storage and
+`@cvg/harness`; `@cvg/harness` is a development/test fixture dependency
+while runtime code consumes only `@cvg/harness-contracts`. The package must not
+be imported by either. Model-gateway, storage and
 delivery integrations are ports/adapters. No generic conversation code may
 import product-shaped `agent-core`, `platform`, `policy`, `tools`, or
 `workflows` packages.
@@ -23,6 +25,10 @@ postgres-store.ts         SQL adapter over a narrow query/transaction port
 delivery.ts               stable response outbox/delivery idempotency
 profiles.ts               generic profile factory and synthetic profile ports
 ```
+
+Profiles also carry a locale and bounded response copy. Generic composition
+uses those profile-owned labels and templates, so a consumer cannot leak
+reservation-specific wording or internal action verbs into another profile.
 
 ## 2. Identity and state
 

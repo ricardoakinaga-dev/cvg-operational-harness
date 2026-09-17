@@ -1,3 +1,36 @@
+# AAA-4A — Conversational Intelligence Layer — controlled completion — 2026-09-17
+
+- id: `CVG-PHASE4A-CONVERSATIONAL-INTELLIGENCE` / `AAA-4A`
+- status: `COMPLETED_CONTROLLED_PASS`; owner: `cvg-operational-harness`;
+  production `NO_GO`.
+- delivery: optional generic `@cvg/conversation` package with bounded typed
+  dialogue state, rules-first plus typed model fallback, corrections and
+  references, grounded responses, explicit handoff, public Harness bridge,
+  memory/PostgreSQL stores, delivery idempotency and two synthetic consumers.
+- evidence: candidate `aaa4a-df2c0b1a1b7e0e9a`, digest
+  `df2c0b1a1b7e0e9a40badf7bd04a444a0ecf1f30390865412b2845adce492e77`;
+  73/73 focused tests, PostgreSQL `EXECUTED`, 15 golden scenarios, 15
+  trajectories, adversarial corpus, performance evidence and three fresh
+  candidate-bound critic approvals.
+- next_action: stop the closed Gauntlet run. A new gate is required for real
+  providers, channels, credentials, sensitive actions or production deployment.
+- limits: synthetic/local only; no real data, provider, channel, credential,
+  clinical, financial, appointment or record action.
+
+# AAA-41-CRITIC-CLOSURE — independent assurance CLOSED — 2026-09-16T22:40:00Z
+
+- status: `PASS` (controlled); candidate
+  `6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e`.
+- action completed: fresh independent read-only critic APPROVE obtained
+  (P4-CRITIC-ATTEMPT-01; 0 critical/0 high; Q01–Q20 PASS); mutation sentinel
+  MATCH; evidence rebound; closure sentinel MATCH; `PHASE_4_HANDOFF=VERIFIED`.
+- residual debt (not implemented, critic-only scope): P4-CRIT-001 (PG 20-way
+  same-key contention test before any durable claim), P4-CRIT-002 (iterative
+  catalog parity note), P4-CRIT-003 (tenant-alias trust-model note).
+- next_action: Phase 4A may proceed against the frozen boundary. Production
+  `NO_GO`; no commit/push; live-verify drift confined to 2 allowed
+  gate-record files, disclosed in closure evidence.
+
 # AAA-41-CLOSURE RETRY — independent evidence blocker persists — 2026-09-16T18:15:12-03:00
 
 - status: `CONDITIONAL_PASS`; candidate remains

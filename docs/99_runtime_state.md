@@ -1,3 +1,49 @@
+# AAA-4A — controlled certification closed — 2026-09-17
+
+- status: `PASS` in the controlled synthetic scope; current_engine: controlled
+  `AUDIT`; task: `CVG-PHASE4A-CONVERSATIONAL-INTELLIGENCE` / `AAA-4A`.
+- candidate: `aaa4a-df2c0b1a1b7e0e9a`; digest:
+  `df2c0b1a1b7e0e9a40badf7bd04a444a0ecf1f30390865412b2845adce492e77`.
+- verification: 73/73 focused tests across 12 files, 16 structural assertions,
+  disposable PostgreSQL `EXECUTED`, synthetic demo, repository typecheck,
+  frozen Harness build, golden evidence and performance evidence all passed.
+- final sentinel: `PASS`; `sourceCandidateUnchanged=true`; sentinel digest
+  `0a1ee3d2dd7a85fe51ecc83612f65ac7c56289a3f1f0ae965f58afd823839a6f`.
+- independent review: three fresh read-only critics returned `APPROVE`; the
+  minimum Triple-A axis scores are architecture 94, reliability 93, grounding
+  92, transactionIntegrity 95, knowledge 91, security 93, naturalness 90 and
+  generality 92.
+- next_action: stop this Phase 4A run. Any real integration or production path
+  requires a new gate.
+- limits: synthetic/local only; no real data, provider, channel, credential,
+  clinical, financial, appointment or record action; production remains
+  `NO_GO`.
+
+# AAA-41-CRITIC-CLOSURE — independent APPROVE obtained, handoff VERIFIED — 2026-09-16T22:40:00Z
+
+- status: `PASS` (controlled synthetic Phase 4); current_engine: controlled
+  `AUDIT`; task: `CVG-PHASE4-CAPABILITY-BOUNDARY` / `AAA-41-CRITIC-CLOSURE`.
+- candidate: `6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e`;
+  HEAD `1d137fa426c146f02826d91060e92b55093a74d1`; composition fingerprint
+  `069beed525fdf8ef98bbabac2e3008ad949065c533c23c02fbb9de3e86272071`;
+  certification run `run-6185c586e382-mu44ygfz`.
+- last_completed_action: executed the user-ordered critic-only closure —
+  archived the prompt to `docs/AAA-41-CRITIC-CLOSURE.md`, froze the candidate,
+  validated mechanical binding (`certification:verify` PASS pre-release),
+  dispatched one fresh sealed read-only critic (P4-CRITIC-ATTEMPT-01) which
+  returned complete APPROVE (0 critical, 0 high, P4-Q01–Q20 all PASS),
+  proved protected-source MATCH, rebound evidence, ran the closure sentinel
+  (MATCH), superseded `PHASE4_REPORT.md`, and released
+  `PHASE_4_HANDOFF=VERIFIED` in `docs/phase4a/PHASE_4_HANDOFF.md`.
+- disclosure: live `certification:verify` after the two mandated gate-record
+  writes reports drift confined to those allowed files; zero protected bytes
+  changed; all 29 artifact hashes still PASS. No freshness faked.
+- next_action: Phase 4A implementation may begin against the frozen Phase 4
+  boundary. Production remains `NO_GO`; no real data/provider/channel/MCP,
+  credentials, deployment, or sensitive action authorized.
+- safety: no application source/test/migration/dependency change; no Phase 4A
+  code written in this run; no commit/push.
+
 # AAA-41-CLOSURE RETRY — independent critic still unavailable — 2026-09-16T18:15:12-03:00
 
 - status: `CONDITIONAL_PASS`; current_engine: controlled `AUDIT`; task:

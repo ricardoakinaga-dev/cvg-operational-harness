@@ -1,5 +1,24 @@
 # Phase 4 Controlled Report — AAA-41
 
+## FINAL INDEPENDENT CLOSURE — 2026-09-16 (superseding)
+
+Superseding independent closure — 2026-09-16T22:40:00Z.
+
+The exact candidate `6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e`
+(composition `069beed525fdf8ef98bbabac2e3008ad949065c533c23c02fbb9de3e86272071`,
+certification run `run-6185c586e382-mu44ygfz`) received a fresh read-only
+independent critic APPROVE (P4-CRITIC-ATTEMPT-01, fresh-context sealed packet,
+`FINAL_CRITIC_APPROVAL.md` SHA-256
+`6bcb2960983681b2b688582fa1c587a2dfed0bc8c4885d550cd5451c7faa90ea`, raw
+`59dde900…`). P4-Q01–P4-Q20 all PASS; 0 critical, 0 high, 1 medium + 2 low
+residuals preserved. The protected source mutation sentinel matched
+(`fe29568a…` before/after) and the final closure sentinel matched. Therefore
+the controlled synthetic Phase 4 status is promoted from CONDITIONAL_PASS to
+PASS. Production remains NO_GO. Scope, non-goals, trust/MCP/durability limits
+and prior BLOCKED/CONDITIONAL history below are preserved as superseded audit
+trail. Full closure: `CRITIC_ONLY_CLOSURE.md`, `CRITIC_ONLY_RESULT.json`,
+`CRITIC_ONLY_SENTINEL.json` (MATCH), `CRITIC_ONLY_CLOSURE_CHAIN.json`.
+
 ## Subsequent bounded critic retries — 2026-09-16T18:15:12-03:00
 
 This additive section supersedes the prior critic attempt for the final

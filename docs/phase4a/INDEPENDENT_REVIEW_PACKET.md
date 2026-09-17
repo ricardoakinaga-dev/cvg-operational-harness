@@ -1,5 +1,12 @@
 # Phase 4A independent review packet — AAA-4A
 
+## Current review target — 2026-09-17
+
+The current review target is the Phase 4A candidate described by
+`evidence/CANDIDATE.json` and `evidence/EVIDENCE_MANIFEST.json`. Fresh critics
+must inspect the current candidate and frozen `QUALITY_BAR.json`, use a fresh
+context, remain read-only, and report `APPROVE`, `CONDITIONAL` or `BLOCK`.
+
 This packet is prepared for a reviewer who is independent of the implementation
 author. It does not grant approval by itself.
 

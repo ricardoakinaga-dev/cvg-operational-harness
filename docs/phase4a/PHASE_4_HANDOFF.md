@@ -1,5 +1,74 @@
 # Phase 4 Handoff — AAA-4A entry gate
 
+# Phase 4A controlled closure — 2026-09-17
+
+`PHASE4A_CERTIFICATION=PASS`
+
+Candidate: `aaa4a-df2c0b1a1b7e0e9a`
+Digest: `df2c0b1a1b7e0e9a40badf7bd04a444a0ecf1f30390865412b2845adce492e77`
+Focused: 73/73 tests across 12 files; PostgreSQL: `EXECUTED`.
+Critics: three fresh candidate-bound `APPROVE` reports; all axes meet the
+frozen 90-point floor. The final `SENTINEL.json` was captured with
+`sourceCandidateUnchanged=true` and sentinel digest
+`0a1ee3d2dd7a85fe51ecc83612f65ac7c56289a3f1f0ae965f58afd823839a6f`.
+
+Scope remains `synthetic-local-only`; production, real providers/channels,
+credentials, clinical/financial/appointment actions and unrestricted release
+are `NO_GO`.
+
+# Superseding Phase 4A Entry Gate — 2026-09-16T22:40:00Z
+
+PHASE_4_HANDOFF=VERIFIED
+
+Phase 4 candidate:
+HEAD: 1d137fa426c146f02826d91060e92b55093a74d1 (certified manifest HEAD 25a1ad9846ff6a4e52ff0560b1452e972ab9fbe7; protected-source diff zero)
+Candidate digest: 6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e
+Composition fingerprint: 069beed525fdf8ef98bbabac2e3008ad949065c533c23c02fbb9de3e86272071
+
+Mechanical certification:
+PASS (`certification:verify` PASS; run run-6185c586e382-mu44ygfz; all 16 required gates PASS; phase10 decision CONDITIONAL_GO / AAA_CONTROLLED pending the critic now obtained)
+
+Independent critic:
+P4-CRITIC-ATTEMPT-01 — fresh-context gauntlet-critic subagent (Task ses_f53a18362ffeWGkzIjWqaGNA1Z), sealed packet, read-only, builder-separated
+Decision:
+APPROVE
+Report:
+docs/phase4/evidence/FINAL_CRITIC_APPROVAL.md
+Report SHA-256:
+6bcb2960983681b2b688582fa1c587a2dfed0bc8c4885d550cd5451c7faa90ea
+
+Critic read-only mutation sentinel:
+MATCH (fe29568a… before/after; protected source unchanged)
+
+Final closure sentinel:
+MATCH (docs/phase4/evidence/CRITIC_ONLY_SENTINEL.json)
+
+Phase 4 controlled status:
+PASS
+
+Production:
+NO_GO
+
+Authorization:
+Phase 4A implementation may begin against this frozen Phase 4 public
+capability boundary.
+
+Limits:
+No production authorization is implied. No real provider/channel/MCP network,
+credential, patient/customer data, clinical/financial action, deployment, or
+unrestricted production path is authorized. Residuals P4-CRIT-001 (PG 20-way
+same-key contention untested), P4-CRIT-002 (iterative catalog parity note),
+P4-CRIT-003 (tenant-alias trust-model note) must be visible to Phase 4A; no
+stronger guarantee may be assumed. Phase 4A must consume the frozen boundary;
+genuine Phase 4 defects reopen via explicit change/certification, never silent
+mutation.
+
+Phase 4 is independently approved for the controlled synthetic scope and its
+frozen capability boundary may now be consumed by Phase 4A implementation.
+This is not Production GO.
+
+---
+
 ## Superseding revalidation — 2026-09-16
 
 `PHASE_4_HANDOFF=BLOCKED` remains the authoritative gate for Phase 4A.

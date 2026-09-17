@@ -25,14 +25,12 @@ the reason must be recorded in the ADR and task ledger.
 ## Dependency direction
 
 ```text
-synthetic consumer/profile
-          |
-          v
-packages/conversation  --->  @cvg/harness  --->  @cvg/harness-contracts
-          |                         |
-          +----> store/delivery     +----> policy/approval/journal ports
-                                      |
-                                      +----> @cvg/model-gateway adapter (optional)
+composition root          --->  packages/conversation  --->  @cvg/harness-contracts
+      |                                  |                         ^
+      +----> @cvg/harness ----------------+                         |
+      |                                  +----> store/delivery       |
+      +----> @cvg/model-gateway adapter (optional)                  |
+                                         (tests may use @cvg/harness)
 ```
 
 The reverse dependency is prohibited: `@cvg/harness`, `@cvg/harness-contracts`,

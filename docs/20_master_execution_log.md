@@ -1,3 +1,34 @@
+# AAA-4A — final controlled certification — 2026-09-17
+
+### ACTION / RESULT
+
+Completed the supplied 16-part prompt implementation under the verified
+DISCOVERY -> PRD -> SPEC -> BUILD -> AUDIT gate. Candidate
+`aaa4a-df2c0b1a1b7e0e9a` / digest
+`df2c0b1a1b7e0e9a40badf7bd04a444a0ecf1f30390865412b2845adce492e77` is
+candidate-bound to the implementation, 73/73 focused tests, 16 structural
+assertions, golden/performance evidence and three fresh read-only `APPROVE`
+reports. The computed axis floor is architecture 94, reliability 93,
+grounding 92, transactionIntegrity 95, knowledge 91, security 93,
+naturalness 90 and generality 92. PostgreSQL is `EXECUTED`.
+
+### DECISION / LIMITS
+
+`PHASE4A_CERTIFICATION=PASS` for controlled synthetic/local use. The final
+sentinel was captured with a matching candidate source snapshot. Production, real data/providers/
+channels/credentials, clinical or financial actions, appointment actions and
+unrestricted deployment remain `NO_GO`. No commit or push was performed.
+
+# AAA-41-CRITIC-CLOSURE — fresh independent APPROVE, handoff VERIFIED — 2026-09-16T22:40:00Z
+
+### ACTION / RESULT
+
+Executed the critic-only closure on the frozen candidate `6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e` (HEAD `1d137fa426c146f02826d91060e92b55093a74d1`, composition `069beed5…`, run `run-6185c586e382-mu44ygfz`). Prompt archived to `docs/AAA-41-CRITIC-CLOSURE.md`. Pre-critic protected fingerprint `fe29568a…`; one fresh sealed read-only critic (P4-CRITIC-ATTEMPT-01) inspected source/tests/deps/evidence, answered P4-Q01–Q20 all PASS, found 0 critical / 0 high (1 medium + 2 low residuals), and returned APPROVE. Post-critic fingerprint `fe29568a…` — MATCH; protected git diff empty. Evidence rebound (`FINAL_CRITIC_APPROVAL.md` SHA-256 `6bcb2960…`, raw `59dde900…`), closure sentinel MATCH, `PHASE4_REPORT.md` superseded to PASS (controlled), `PHASE_4_HANDOFF=VERIFIED`.
+
+### DECISION / NEXT
+
+Phase 4 (controlled synthetic): PASS. Production: NO*GO. Phase 4A implementation authorized against the frozen boundary; no Phase 4A code written here. Disclosure: live verify after the mandated gate-record writes shows drift confined to the 2 allowed files; 29 artifact hashes still PASS. No commit/push. Evidence: `docs/phase4/evidence/CRITIC_ONLY*\*`, `FINAL_CRITIC_APPROVAL.md`, `critic-only/attempt-01-raw.md`.
+
 # AAA-41-CLOSURE RETRY — bounded independent critic attempts — 2026-09-16T18:15:12-03:00
 
 ### ACTION / RESULT

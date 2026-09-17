@@ -121,7 +121,8 @@ const defaultPostgresMigrations = [
   '0016_operational_execution_spine',
   '0017_runtime_approval_execution_binding',
   '0018_operational_execution_invariants',
-  '0019_iterative_execution_steps'
+  '0019_iterative_execution_steps',
+  '0020_conversation_intelligence'
 ]
 
 export interface PostgresQueryable {
