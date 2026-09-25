@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type {
   EffectJournal,
   EffectJournalRecord,
@@ -41,7 +42,11 @@ export interface PostgresOperationalExecutionStoreOptions {
   readonly retryDelayMs?: number
   readonly maxAttempts?: number
   readonly clock?: () => Date
+  /** Deterministic seam for synthetic tests; defaults to node:crypto UUIDs. */
+  readonly executionIdFactory?: OperationalExecutionIdFactory
 }
+
+export type OperationalExecutionIdFactory = () => string
 
 interface ExecutionRow extends QueryResultRow {
   tenant_id: string
@@ -284,6 +289,7 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
   private readonly retryDelayMs: number
   private readonly maxAttempts: number
   private readonly clock: () => Date
+  private readonly executionIdFactory: OperationalExecutionIdFactory
 
   public constructor(
     private readonly connection: OperationalExecutionPostgresConnection,
@@ -299,6 +305,7 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
       'maxAttempts'
     )
     this.clock = options.clock ?? (() => new Date())
+    this.executionIdFactory = options.executionIdFactory ?? randomUUID
   }
 
   public submit(
@@ -309,7 +316,7 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
     const normalized = parseExecutionSubmission(input, tenant)
     const now = rawNow ?? this.clock()
     const requestHash = computeExecutionRequestHash(normalized)
-    const id = `exec_${cryptoRandomUuid()}`
+    const id = createOperationalExecutionId(this.executionIdFactory)
     return this.run(tenant, (client) =>
       transaction(client, async () => {
         const existing = await client.query<ExecutionRow>(
@@ -1611,6 +1618,15 @@ function eventType(state: ExecutionState): ExecutionEvent['type'] {
   return 'RECOVERED'
 }
 
-function cryptoRandomUuid(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
+export function createOperationalExecutionId(
+  factory: OperationalExecutionIdFactory = randomUUID
+): string {
+  const token = factory()
+  if (typeof token !== 'string' || token.trim().length === 0) {
+    throw new Error('execution ID factory must return a non-empty string')
+  }
+  if (token.length > 200) {
+    throw new Error('execution ID factory returned an oversized value')
+  }
+  return `exec_${token.trim()}`
 }

@@ -321,6 +321,13 @@ describe('published worker runtime boundary', () => {
     ).toBeNull()
     expect(
       getWorkerStartupFailure({
+        NODE_ENV: 'production',
+        CVG_WORKER_QUEUE_ADAPTER: 'controlled-memory',
+        CVG_WORKER_TENANT_ID: 'tenant_00000000-0000-4000-8000-000000000172'
+      })
+    ).toMatchObject({ code: 'production_controlled_worker_forbidden' })
+    expect(
+      getWorkerStartupFailure({
         CVG_WORKER_QUEUE_ADAPTER: 'postgres-controlled'
       })
     ).toEqual({
@@ -389,5 +396,37 @@ describe('published worker runtime boundary', () => {
       message:
         'Controlled PostgreSQL worker is disabled in production pending external gates'
     })
+  })
+
+  it('keeps the homologation profile explicitly armed and fail-closed', () => {
+    const base = {
+      NODE_ENV: 'test',
+      CVG_WORKER_RUNTIME: 'operational-harness-homolog',
+      CVG_WORKER_TENANT_ID: tenantId,
+      DATABASE_URL: 'postgres://fixture.invalid/cvg',
+      POSTGRES_RLS_ENFORCEMENT: 'true',
+      CVG_WORKER_CONTROLLED_MODE: 'true'
+    }
+    expect(getWorkerStartupFailure(base)).toEqual({
+      code: 'homolog_arming_required',
+      message: 'Homologation worker requires CVG_HOMOLOG_SYNTHETIC_ONLY=true'
+    })
+    expect(
+      getWorkerStartupFailure({ ...base, CVG_HOMOLOG_SYNTHETIC_ONLY: 'true' })
+    ).toBeNull()
+    expect(
+      getWorkerStartupFailure({
+        ...base,
+        CVG_HOMOLOG_SYNTHETIC_ONLY: 'true',
+        POSTGRES_RLS_ENFORCEMENT: 'false'
+      })
+    ).toMatchObject({ code: 'postgres_rls_required' })
+    expect(
+      getWorkerStartupFailure({
+        ...base,
+        NODE_ENV: 'production',
+        CVG_HOMOLOG_SYNTHETIC_ONLY: 'true'
+      })
+    ).toMatchObject({ code: 'production_controlled_worker_forbidden' })
   })
 })

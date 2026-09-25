@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import Fastify from 'fastify'
 import {
@@ -110,7 +109,6 @@ import {
   type PostgresPoolLike,
   type SessionRecord,
   runPostgresMigrations,
-  readPostgresMigrationSql,
   TaskRepository,
   type PostgresQueryable
 } from '@cvg/persistence'
@@ -122,6 +120,7 @@ import {
   receiveInboundMessage,
   requestHumanApproval
 } from '@cvg/agent-core'
+import { CompositeTelemetry, type Telemetry } from '@cvg/observability'
 import {
   createInMemoryOperationalExecutionStore,
   OperationalExecutionError,
@@ -140,7 +139,25 @@ import {
   parseHttpSecurityEnv,
   type HttpSecurityOptions
 } from './http-security.ts'
-import { InMemoryRateLimiter } from './rate-limit.ts'
+import {
+  createConfiguredRateLimitKeyRing,
+  InMemoryRateLimiter,
+  PostgresRateLimiter
+} from './rate-limit.ts'
+import type { RateLimiterPort } from './rate-limit.ts'
+import {
+  decodeTrustedOperatorTokenClaims,
+  TRUSTED_OPERATOR_TOKEN_HEADER
+} from './operator-identity.ts'
+import {
+  clearOperatorSessionCookie,
+  createInMemoryOperatorSessionStore,
+  parseOperatorSessionCookie,
+  type OperatorSessionRecord,
+  type OperatorSessionStore,
+  serializeOperatorSessionCookie
+} from './operator-session.ts'
+import { installOperatorSessionHook } from './operator-session-hook.ts'
 import { ControlledRequestMetrics } from './request-metrics.ts'
 import { installResponseCorrelationHook } from './response-correlation.ts'
 import { healthRoute, liveRoute, readyRoute } from './routes/health.ts'
@@ -231,12 +248,19 @@ const serverCapabilityActorAuthorizer: CapabilityActorAuthorizer = ({
 
 export interface BuildServerOptions {
   runtimeLogger?: (entry: RuntimeLogEntry) => void
+  /** Optional composed telemetry; defaults to a bounded local facade. */
+  telemetry?: Telemetry
   persistence?:
     | { kind: 'memory' }
     | { kind: 'postgres'; client: PostgresQueryable }
     | { kind: 'postgres-pool'; pool: PostgresPoolLike }
   platform?: ControlPlaneStore
   operatorIdentityResolver?: OperatorIdentityResolver
+  /**
+   * Explicit browser session authority. Local implementations are for
+   * controlled fixtures only; production must inject an owned durable store.
+   */
+  operatorSessionStore?: OperatorSessionStore
   /**
    * Explicit identity mode. Defaults to `simulation` only for `NODE_ENV=test`;
    * every other environment defaults to `trusted` and must inject a resolver.
@@ -258,6 +282,20 @@ export interface BuildServerOptions {
   durableInbound?: boolean
   /** Explicit adapter override, useful for deterministic controlled tests. */
   outbox?: DurableOutboxAdapter
+  /**
+   * REM21-003 / AUD19-006 — distributed token-replay authority. When set
+   * with trusted identity mode, an onRequest hook authenticates each
+   * presented token before claiming its id, so replays are rejected across
+   * processes and restarts. Omitted: the resolver keeps its process-local
+   * replay cache.
+   */
+  tokenReplayStore?: WebhookReplayStore
+  /**
+   * AUD19-006 — rate limiter authority. Defaults to process-local memory,
+   * while `buildServerFromEnv` explicitly wires PostgreSQL for durable
+   * deployments. Store errors deny (fail-closed).
+   */
+  rateLimiter?: RateLimiterPort
   /**
    * Extra bounded readiness probes (for example the consumer heartbeat wired
    * by the integrated composition). The database probe is built from
@@ -299,9 +337,27 @@ export function buildServer(options: BuildServerOptions = {}) {
       'Production requires trusted operator identity mode; simulation is forbidden'
     )
   }
-  const operatorIdentityResolver = createEffectiveOperatorIdentityResolver(
-    identityMode,
-    options.operatorIdentityResolver
+  if (identityMode === 'simulation' && process.env.NODE_ENV !== 'test') {
+    throw new Error(
+      'Simulation identity mode requires the explicit controlled test profile'
+    )
+  }
+  const trustedOperatorIdentityResolver =
+    createEffectiveOperatorIdentityResolver(
+      identityMode,
+      options.operatorIdentityResolver
+    )
+  const sessionIdentityByHeaders = new WeakMap<
+    object,
+    OperatorIdentity | null
+  >()
+  const sessionRecordByHeaders = new WeakMap<object, OperatorSessionRecord>()
+  const sessionStoreFailureByHeaders = new WeakSet<object>()
+  const operatorIdentityResolver = createSessionAwareOperatorIdentityResolver(
+    trustedOperatorIdentityResolver,
+    options.operatorSessionStore,
+    sessionIdentityByHeaders,
+    identityMode === 'trusted'
   )
   if (
     process.env.NODE_ENV !== 'test' &&
@@ -378,6 +434,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     (process.env.NODE_ENV === 'test' ||
       process.env.NODE_ENV === 'development') &&
     options.requestMetricsEnabled !== false
+  const telemetry = options.telemetry ?? new CompositeTelemetry()
   const requestStartedAt = new WeakMap<object, number>()
   const app = Object.assign(
     Fastify({
@@ -394,7 +451,8 @@ export function buildServer(options: BuildServerOptions = {}) {
       requestMetrics,
       operationalExecution,
       operationalApprovalAuthority,
-      operationalApprovals
+      operationalApprovals,
+      telemetry
     }
   )
   app.setErrorHandler((error, _request, reply) => {
@@ -429,16 +487,38 @@ export function buildServer(options: BuildServerOptions = {}) {
   })
   installHttpSecurityHooks(app, httpSecurity)
   installResponseCorrelationHook(app)
+  if (identityMode === 'trusted' && options.operatorSessionStore) {
+    installOperatorSessionHook({
+      app,
+      enforceHttps: httpSecurity.enforceHttps,
+      operatorSessionStore: options.operatorSessionStore,
+      sessionIdentityByHeaders,
+      sessionRecordByHeaders,
+      sessionStoreFailureByHeaders
+    })
+  }
   app.addHook('onRequest', async (request) => {
     requestStartedAt.set(request, performance.now())
   })
   app.addHook('onResponse', async (request, reply) => {
     const startedAt = requestStartedAt.get(request) ?? performance.now()
+    const latencyMs = Math.max(0, performance.now() - startedAt)
     requestMetrics.record({
       method: request.method,
       routeTemplate: request.routeOptions.url,
       statusCode: reply.statusCode,
-      latencyMs: Math.max(0, performance.now() - startedAt)
+      latencyMs
+    })
+    safeTelemetry(() => {
+      const status = httpStatusBucket(reply.statusCode)
+      telemetry.recordMetric('http_requests_total', 1, {
+        operation: 'http_request',
+        status
+      })
+      telemetry.recordMetric('http_request_duration_ms', latencyMs, {
+        operation: 'http_request',
+        status
+      })
     })
     requestStartedAt.delete(request)
   })
@@ -457,17 +537,30 @@ export function buildServer(options: BuildServerOptions = {}) {
       }
     }
   )
-  const rateLimiter = new InMemoryRateLimiter()
+  // AUD19-006: process-local memory is the default so legacy fixtures and
+  // schemas without the 0023 buckets keep working. Durable deployments opt
+  // into the shared limiter explicitly (buildServerFromEnv does it for
+  // PostgreSQL persistence). Store errors deny (fail-closed), never admit.
+  const rateLimiter: RateLimiterPort =
+    options.rateLimiter ?? new InMemoryRateLimiter()
   app.addHook('onRequest', async (request, reply) => {
-    const limit = rateLimiter.check(`ip:${request.ip}`, {
-      max: 300,
-      windowMs: 60_000
-    })
-    if (!limit.allowed) {
-      const correlationId = createCorrelationId()
+    // AUD19-006: infrastructure probes are never rate-billed; liveness must
+    // stay distinguishable from dependency health (AUD19-009). The abuse
+    // surface below stays limited and fail-closed.
+    const rawUrl = request.url.split('?')[0]
+    if (
+      rawUrl === healthRoute ||
+      rawUrl === liveRoute ||
+      rawUrl === readyRoute ||
+      rawUrl === '/health/metrics'
+    ) {
+      return
+    }
+    const correlationId = createCorrelationId()
+    const deny = (retryAfterSeconds: number) => {
       reply
         .code(429)
-        .header('retry-after', String(limit.retryAfterSeconds))
+        .header('retry-after', String(retryAfterSeconds))
         .header('cache-control', 'no-store')
       return reply.send(
         fail(
@@ -477,7 +570,101 @@ export function buildServer(options: BuildServerOptions = {}) {
         )
       )
     }
+    // AUD19-006: store errors deny (fail-closed), never admit.
+    let limit
+    try {
+      limit = await rateLimiter.check(`ip:${request.ip}`, {
+        max: 300,
+        windowMs: 60_000
+      })
+    } catch {
+      return deny(60)
+    }
+    if (!limit.allowed) {
+      return deny(limit.retryAfterSeconds)
+    }
   })
+  // REM21-003 / AUD19-006 — distributed operator-token replay enforcement.
+  // Authenticate the complete token before extracting its jti for the shared
+  // store. The effective resolver memoizes by request headers, so protected
+  // route helpers reuse this authenticated identity instead of consuming the
+  // process-local replay cache a second time.
+  if (options.tokenReplayStore && identityMode === 'trusted') {
+    const tokenReplayStore = options.tokenReplayStore
+    app.addHook('onRequest', async (request, reply) => {
+      const rawPath = request.url.split('?')[0]
+      if (
+        sessionRecordByHeaders.has(request.headers) &&
+        rawPath !== '/v1/session'
+      )
+        return
+      const raw = request.headers[TRUSTED_OPERATOR_TOKEN_HEADER]
+      if (typeof raw !== 'string' || raw.trim() === '') return
+      let identity: OperatorIdentity
+      try {
+        if (!trustedOperatorIdentityResolver) {
+          throw new Error('trusted operator identity resolver is required')
+        }
+        identity = trustedOperatorIdentityResolver(request.headers)
+        if (!identity.tenantId) {
+          throw new Error('trusted operator identity must be tenant-bound')
+        }
+      } catch {
+        const correlationId = createCorrelationId()
+        reply.code(401).header('cache-control', 'no-store')
+        return reply.send(
+          fail(
+            'unauthorized',
+            'Valid operator identity headers are required',
+            correlationId
+          )
+        )
+      }
+      // The resolver above is the authentication authority. This decoder is
+      // used only after that authority has accepted the same raw header, never
+      // as a pre-authentication decision.
+      const claims = decodeTrustedOperatorTokenClaims(raw)
+      if (!claims) {
+        const correlationId = createCorrelationId()
+        reply.code(401).header('cache-control', 'no-store')
+        return reply.send(
+          fail(
+            'unauthorized',
+            'Valid operator identity headers are required',
+            correlationId
+          )
+        )
+      }
+      let claimed: boolean
+      try {
+        claimed = await tokenReplayStore.claim(
+          `operator-jti:${claims.jti}`,
+          Number(claims.exp) * 1000
+        )
+      } catch {
+        const correlationId = createCorrelationId()
+        reply.code(401).header('cache-control', 'no-store')
+        return reply.send(
+          fail(
+            'unauthorized',
+            'Valid operator identity headers are required',
+            correlationId
+          )
+        )
+      }
+      if (!claimed) {
+        const correlationId = createCorrelationId()
+        reply.code(401).header('cache-control', 'no-store')
+        return reply.send(
+          fail(
+            'unauthorized',
+            'Trusted operator token replay detected',
+            correlationId
+          )
+        )
+      }
+    })
+  }
   const conversations = persistence.conversations
   const tasks = persistence.tasks
   const approvals = persistence.approvals
@@ -487,8 +674,26 @@ export function buildServer(options: BuildServerOptions = {}) {
     approvalAuthority: capabilityApprovalAuthority,
     actorAuthorizer: serverCapabilityActorAuthorizer
   })
-  const emitRuntimeLog = (entry: RuntimeLogEntry) =>
+  const emitRuntimeLog = (entry: RuntimeLogEntry) => {
+    safeTelemetry(() =>
+      telemetry.log(entry.status === 'error' ? 'error' : 'info', entry.event, {
+        correlationId: entry.correlationId,
+        route: entry.route,
+        status: entry.status,
+        ...(entry.sessionId !== undefined
+          ? { sessionId: entry.sessionId }
+          : {}),
+        ...(entry.conversationId !== undefined
+          ? { conversationId: entry.conversationId }
+          : {}),
+        ...(entry.resourceId !== undefined
+          ? { resourceId: entry.resourceId }
+          : {}),
+        ...(entry.errorCode !== undefined ? { errorCode: entry.errorCode } : {})
+      })
+    )
     options.runtimeLogger?.(entry)
+  }
   const requireIdentity = (
     headers: Record<string, unknown>,
     permission: string
@@ -531,6 +736,149 @@ export function buildServer(options: BuildServerOptions = {}) {
       return fail('invalid_action', 'Not found', correlationId)
     }
     return ok({ metrics: requestMetrics.snapshot() }, correlationId)
+  })
+
+  app.get('/v1/session', async (request, reply) => {
+    const correlationId = createCorrelationId()
+    reply.header('cache-control', 'no-store')
+    try {
+      if (
+        identityMode !== 'trusted' ||
+        !options.operatorSessionStore ||
+        !trustedOperatorIdentityResolver
+      ) {
+        reply.code(503)
+        return fail(
+          'configuration_error',
+          'Trusted operator session bootstrap is unavailable',
+          correlationId
+        )
+      }
+
+      if (sessionStoreFailureByHeaders.has(request.headers)) {
+        reply.code(503)
+        return fail(
+          'configuration_error',
+          'Operator session store is unavailable',
+          correlationId
+        )
+      }
+
+      const existing = sessionRecordByHeaders.get(request.headers)
+      const rawToken = request.headers[TRUSTED_OPERATOR_TOKEN_HEADER]
+      const hasBootstrapToken =
+        typeof rawToken === 'string' && rawToken.trim().length > 0
+      if (existing && !hasBootstrapToken) {
+        return ok(
+          {
+            identity: existing.identity,
+            expiresAt: new Date(existing.expiresAt).toISOString()
+          },
+          correlationId
+        )
+      }
+
+      let identity: OperatorIdentity
+      try {
+        identity = (
+          existing && hasBootstrapToken
+            ? trustedOperatorIdentityResolver
+            : operatorIdentityResolver
+        )!(request.headers)
+      } catch (error) {
+        if (error instanceof DomainError) throw error
+        throw new DomainError(
+          'unauthorized',
+          'A valid trusted bootstrap token is required'
+        )
+      }
+      const claims = decodeTrustedOperatorTokenClaims(rawToken)
+      if (!claims) {
+        throw new DomainError(
+          'unauthorized',
+          'A valid trusted bootstrap token is required'
+        )
+      }
+      let record: OperatorSessionRecord
+      try {
+        record = await options.operatorSessionStore.create({
+          identity,
+          expiresAt: Number(claims.exp) * 1000
+        })
+      } catch {
+        reply.code(503)
+        return fail(
+          'configuration_error',
+          'Operator session store is unavailable',
+          correlationId
+        )
+      }
+      reply.header(
+        'set-cookie',
+        serializeOperatorSessionCookie(record, httpSecurity.enforceHttps)
+      )
+      if (existing) {
+        try {
+          await options.operatorSessionStore.revoke(existing.sessionId)
+        } catch {
+          try {
+            await options.operatorSessionStore.revoke(record.sessionId)
+          } catch {
+            // Best effort cleanup; the response remains fail-closed below.
+          }
+          reply
+            .code(503)
+            .header('cache-control', 'no-store')
+            .header(
+              'set-cookie',
+              clearOperatorSessionCookie(httpSecurity.enforceHttps)
+            )
+          return fail(
+            'configuration_error',
+            'Operator session store is unavailable',
+            correlationId
+          )
+        }
+      }
+      return ok(
+        {
+          identity: record.identity,
+          expiresAt: new Date(record.expiresAt).toISOString()
+        },
+        correlationId
+      )
+    } catch (error) {
+      reply.header(
+        'set-cookie',
+        clearOperatorSessionCookie(httpSecurity.enforceHttps)
+      )
+      const safeError = toSafeError(error)
+      reply.code(statusCodeForError(safeError.code))
+      return fail(safeError.code, safeError.message, correlationId)
+    }
+  })
+
+  app.post('/v1/session/logout', async (request, reply) => {
+    const correlationId = createCorrelationId()
+    reply.header('cache-control', 'no-store')
+    reply.header(
+      'set-cookie',
+      clearOperatorSessionCookie(httpSecurity.enforceHttps)
+    )
+    try {
+      const sessionId = parseOperatorSessionCookie(request.headers.cookie)
+      if (sessionId && options.operatorSessionStore) {
+        await options.operatorSessionStore.revoke(sessionId)
+      }
+      return ok({ loggedOut: true }, correlationId)
+    } catch {
+      reply.code(503)
+      return fail(
+        'configuration_error',
+        'Operator session could not be revoked',
+        correlationId
+      )
+    }
   })
 
   app.post('/v1/executions', async (request, reply) => {
@@ -787,6 +1135,39 @@ export function buildServer(options: BuildServerOptions = {}) {
       try {
         const identity = requireIdentity(request.headers, 'approval:decide')
         const tenantId = resolveDataPlaneTenant(request.headers, identity)
+        // AUD19-006: tenant/subject-scoped mutation budget on the sensitive
+        // decision path. Store errors deny (fail-closed), never admit.
+        try {
+          const scoped = await rateLimiter.check(
+            `tenant:${tenantId}:sub:${identity.operatorId}`,
+            { max: 120, windowMs: 60_000 }
+          )
+          if (!scoped.allowed) {
+            reply
+              .code(429)
+              .header('retry-after', String(scoped.retryAfterSeconds))
+              .header('cache-control', 'no-store')
+            return reply.send(
+              fail(
+                'rate_limited',
+                'Request rate limit exceeded. Retry later.',
+                correlationId
+              )
+            )
+          }
+        } catch {
+          reply
+            .code(429)
+            .header('retry-after', '60')
+            .header('cache-control', 'no-store')
+          return reply.send(
+            fail(
+              'rate_limited',
+              'Request rate limit exceeded. Retry later.',
+              correlationId
+            )
+          )
+        }
         const params = request.params as {
           executionId?: unknown
           approvalId?: unknown
@@ -826,6 +1207,8 @@ export function buildServer(options: BuildServerOptions = {}) {
         }
         const decision = body.decision
         const decisionReason = body.note
+        const decisionActorType =
+          identity.role === 'Supervisor' ? ('Supervisor' as const) : 'Approver'
         if (
           execution.state !== 'WAITING_APPROVAL' &&
           (approval.status === 'PENDING' || approval.status === 'REQUESTED')
@@ -862,11 +1245,14 @@ export function buildServer(options: BuildServerOptions = {}) {
         }
         if (decision === 'APPROVED') {
           if (approval.status === 'PENDING') {
-            await operationalApprovalAuthority.approve(
+            approval = await operationalApprovalAuthority.approve(
               tenantId,
               approval.approvalId,
               {
                 approverId: identity.operatorId,
+                decisionActorType,
+                decisionCorrelationId: correlationId,
+                commandKey,
                 ...(decisionReason !== undefined
                   ? { reason: decisionReason }
                   : {})
@@ -883,11 +1269,14 @@ export function buildServer(options: BuildServerOptions = {}) {
             )
           }
         } else if (approval.status === 'PENDING') {
-          await operationalApprovalAuthority.reject(
+          approval = await operationalApprovalAuthority.reject(
             tenantId,
             approval.approvalId,
             {
               approverId: identity.operatorId,
+              decisionActorType,
+              decisionCorrelationId: correlationId,
+              commandKey,
               ...(decisionReason !== undefined
                 ? { reason: decisionReason }
                 : {})
@@ -900,35 +1289,60 @@ export function buildServer(options: BuildServerOptions = {}) {
           )
         }
 
+        const decisionActorId = approval.approverId
+        const persistedDecisionActorType = approval.decisionActorType
+        const persistedDecisionCorrelation = approval.decisionCorrelationId
+        const persistedDecisionCommandKey = approval.decisionCommandKey
+        if (
+          !decisionActorId ||
+          !persistedDecisionActorType ||
+          !persistedDecisionCorrelation ||
+          !persistedDecisionCommandKey
+        ) {
+          throw new DomainError(
+            'conflict',
+            'Approval decision causality is incomplete'
+          )
+        }
+
         const resolved = await operationalExecution.resolveApproval({
           tenantId,
           executionId: execution.id,
           approvalId: approval.approvalId,
-          actorId: identity.operatorId,
+          actorId: decisionActorId,
           decision,
-          ...(decisionReason !== undefined ? { reason: decisionReason } : {})
+          ...(approval.decisionReason !== undefined
+            ? { reason: approval.decisionReason }
+            : {})
         })
-        if (execution.state === 'WAITING_APPROVAL') {
-          await audit.append(
-            {
-              type: 'approval_decision',
-              actorType: identity.role,
-              actorId: identity.operatorId,
-              correlationId,
-              policyVersion: approval.policyVersion,
-              payload: {
-                executionId: execution.id,
-                approvalId: approval.approvalId,
-                decision,
-                previousState: execution.state,
-                nextState: resolved.state,
-                payloadHash: approval.payloadHash,
-                commandKey
-              }
-            },
-            tenantId
-          )
-        }
+        // AUD19-003: the decision audit event is appended unconditionally.
+        // `audit.append` deduplicates `approval_decision` by
+        // (tenant, approvalId, decision), so retries after a crash between
+        // resume and audit converge on exactly one event instead of losing
+        // it (previous code gated on the stale pre-resolve state) or
+        // duplicating it.
+        await audit.append(
+          {
+            type: 'approval_decision',
+            actorType: persistedDecisionActorType,
+            actorId: decisionActorId,
+            correlationId: persistedDecisionCorrelation,
+            policyVersion: approval.policyVersion,
+            payload: {
+              tenantId,
+              executionId: execution.id,
+              approvalId: approval.approvalId,
+              decision: decision.toLowerCase(),
+              reason: approval.decisionReason ?? null,
+              previousState: execution.state,
+              nextState: resolved.state,
+              payloadHash: approval.payloadHash,
+              commandKey: persistedDecisionCommandKey,
+              operationKey: approval.operationKey ?? null
+            }
+          },
+          tenantId
+        )
         reply.code(decision === 'APPROVED' ? 202 : 200)
         return reply.send(
           ok(
@@ -1057,9 +1471,17 @@ export function buildServer(options: BuildServerOptions = {}) {
         const shouldQueueInbound =
           durableInbound &&
           (result.accepted || result.runtimeStatus === 'pending')
-        const queuedOutbox = shouldQueueInbound
-          ? (result.outbox ??
-            (await outbox!.enqueue({
+        // AUD19-004: the fallback enqueue carries post-creation ids that the
+        // atomic path did not have, so a redelivery hits the content binding.
+        // Converge on the already-queued winner instead of silently
+        // reusing the key with divergent content.
+        const queueInboundFallback = async () => {
+          const idempotencyKey = createInboundIdempotencyKey(
+            channel,
+            String(body.externalMessageId ?? '')
+          )
+          try {
+            return await outbox!.enqueue({
               tenantId,
               type: 'inbound.process',
               payload: {
@@ -1073,14 +1495,28 @@ export function buildServer(options: BuildServerOptions = {}) {
                 messageId: result.messageId
               },
               correlationId: result.correlationId ?? correlationId,
-              idempotencyKey: createInboundIdempotencyKey(
-                channel,
-                String(body.externalMessageId ?? '')
-              ),
+              idempotencyKey,
               conversationId: result.conversationId,
               sessionId: runtimeSessionId,
               inboundMessageId: result.messageId
-            })))
+            })
+          } catch (error) {
+            if (
+              error instanceof DomainError &&
+              error.code === 'conflict' &&
+              typeof outbox!.findByIdempotencyKey === 'function'
+            ) {
+              const winner = await outbox!.findByIdempotencyKey(
+                tenantId,
+                idempotencyKey
+              )
+              if (winner) return winner
+            }
+            throw error
+          }
+        }
+        const queuedOutbox = shouldQueueInbound
+          ? (result.outbox ?? (await queueInboundFallback()))
           : undefined
         const runtime =
           !durableInbound &&
@@ -4256,13 +4692,18 @@ function requirePlatformScope(
     ? headers['x-tenant-id'][0]
     : headers['x-tenant-id']
   const tenant = TenantIdSchema.safeParse(rawTenant)
-  if (!tenant.success) {
+  const scopedTenant = tenant.success
+    ? tenant.data
+    : identity.tenantId
+      ? TenantIdSchema.parse(identity.tenantId)
+      : null
+  if (!scopedTenant) {
     throw new DomainError(
       'unauthorized',
       'Valid tenant scope headers are required'
     )
   }
-  if (identity.tenantId && identity.tenantId !== tenant.data) {
+  if (identity.tenantId && identity.tenantId !== scopedTenant) {
     throw new DomainError(
       'forbidden',
       'Operator identity cannot access this tenant scope'
@@ -4274,7 +4715,7 @@ function requirePlatformScope(
       'Trusted operator tenant scope is required in production'
     )
   }
-  return { tenantId: tenant.data }
+  return { tenantId: scopedTenant }
 }
 
 function capabilityApprovalReference(
@@ -4349,6 +4790,37 @@ function createEffectiveOperatorIdentityResolver(
   }
 }
 
+function createSessionAwareOperatorIdentityResolver(
+  resolver: OperatorIdentityResolver | undefined,
+  sessionStore: OperatorSessionStore | undefined,
+  sessionIdentityByHeaders: WeakMap<object, OperatorIdentity | null>,
+  requireSessionStore: boolean
+): OperatorIdentityResolver | undefined {
+  if (!resolver) return undefined
+  if (requireSessionStore && !sessionStore) {
+    return () => {
+      throw new DomainError(
+        'configuration_error',
+        'Operator session store is required for trusted requests'
+      )
+    }
+  }
+  if (!sessionStore) return resolver
+  return (headers) => {
+    if (sessionIdentityByHeaders.has(headers)) {
+      const identity = sessionIdentityByHeaders.get(headers)
+      if (!identity) {
+        throw new DomainError(
+          'unauthorized',
+          'Operator session is missing or expired'
+        )
+      }
+      return identity
+    }
+    return resolver(headers)
+  }
+}
+
 async function appendPlatformAudit(
   audit: RuntimePersistence['audit'],
   identity: OperatorIdentity,
@@ -4378,517 +4850,23 @@ function statusCodeForError(code: string): number {
   if (code === 'unsupported_media_type') return 415
   if (code === 'not_found') return 404
   if (code === 'request_uri_too_long') return 414
+  if (code === 'configuration_error') return 503
   if (code === 'internal_error') return 500
   return 400
 }
 
-const tenantIsolationTables = [
-  'conversations',
-  'messages',
-  'sessions',
-  'agent_runs',
-  'tool_calls',
-  'approval_requests',
-  'tasks',
-  'audit_events',
-  'idempotency',
-  'outbox_events',
-  'outbox_effects',
-  'outbox_attempts',
-  'platform_agents',
-  'platform_agent_versions',
-  'platform_test_runs',
-  'platform_execution_traces',
-  'platform_capability_approvals',
-  'platform_test_suites',
-  'platform_test_suite_runs',
-  'platform_plugin_catalog',
-  'platform_knowledge_sources',
-  'platform_release_candidates',
-  'audit_evidence_checkpoints',
-  'runtime_approvals',
-  'operational_executions',
-  'operational_execution_outbox',
-  'operational_execution_events',
-  'operational_effect_journal'
-] as const
-
-const tenantIsolationQuarantineTables = [
-  'tenant_isolation_quarantine',
-  'outbox_quarantine'
-] as const
-
-const webhookReplayTables = ['webhook_replay_events'] as const
-
-const tenantIsolationMigrationTables = [
-  ...tenantIsolationTables,
-  ...webhookReplayTables,
-  ...tenantIsolationQuarantineTables,
-  'schema_migrations'
-] as const
-
-const tenantIsolationMigrationVersions = [
-  '0000_initial',
-  '0001_tenant_isolation',
-  '0002_capability_approvals',
-  '0003_test_suite_catalog',
-  '0004_plugin_manifest_catalog',
-  '0005_knowledge_source_catalog',
-  '0006_release_candidate_evidence',
-  '0007_audit_evidence_checkpoint',
-  '0008_session_agent_version_pin',
-  '0009_release_candidate_validator_integrity',
-  '0010_outbox_durability',
-  '0011_outbox_payload_redaction',
-  '0012_channel_effect_journal',
-  '0013_runtime_effect_journal',
-  '0014_journeys',
-  '0015_runtime_approval_store',
-  '0016_operational_execution_spine',
-  '0017_runtime_approval_execution_binding',
-  '0018_operational_execution_invariants',
-  '0019_iterative_execution_steps'
-] as const
-
-const tenantIsolationRequiredConstraints = [
-  'messages_runtime_status_check',
-  'messages_tenant_id_not_null',
-  'sessions_tenant_id_not_null',
-  'agent_runs_tenant_id_not_null',
-  'tool_calls_tenant_id_not_null',
-  'approval_requests_tenant_id_not_null',
-  'tasks_tenant_id_not_null',
-  'audit_events_tenant_id_not_null',
-  'outbox_events_tenant_id_not_null',
-  'outbox_events_tenant_id_id_key',
-  'outbox_events_tenant_id_idempotency_key_key',
-  'outbox_events_status_check',
-  'outbox_events_attempts_check',
-  'outbox_events_processing_lease_check',
-  'outbox_events_failed_available_check',
-  'outbox_events_dead_letter_check',
-  'outbox_effects_pkey',
-  'outbox_effects_tenant_event_fk',
-  'outbox_effects_tenant_id_event_id_key',
-  'outbox_attempts_pkey',
-  'outbox_attempts_attempt_check',
-  'outbox_attempts_tenant_event_fk',
-  'outbox_quarantine_pkey',
-  'messages_tenant_conversation_fk',
-  'sessions_tenant_conversation_fk',
-  'sessions_agent_binding_pair_check',
-  'sessions_agent_binding_agent_fk',
-  'sessions_agent_binding_version_fk',
-  'agent_runs_tenant_session_fk',
-  'tool_calls_tenant_run_fk',
-  'approval_requests_tenant_session_fk',
-  'tasks_tenant_session_fk',
-  'platform_versions_tenant_agent_fk',
-  'platform_test_runs_tenant_agent_version_fk',
-  'platform_execution_traces_tenant_agent_version_fk',
-  'platform_capability_approvals_tenant_nonce_key',
-  'platform_capability_approvals_tenant_agent_version_fk',
-  'platform_test_suites_tenant_agent_version_fk',
-  'platform_test_suites_previous_agent_fk',
-  'platform_test_suite_runs_tenant_suite_fk',
-  'platform_test_suite_runs_tenant_agent_fk',
-  'platform_test_suite_runs_tenant_suite_agent_fk',
-  'platform_plugin_catalog_pkey',
-  'platform_plugin_catalog_tenant_name_version_key',
-  'platform_plugin_catalog_status_check',
-  'platform_plugin_catalog_manifest_identity_check',
-  'platform_knowledge_sources_pkey',
-  'platform_knowledge_sources_tenant_identity_key',
-  'platform_knowledge_sources_status_check',
-  'platform_knowledge_sources_secret_metadata_check',
-  'platform_release_candidates_pkey',
-  'platform_release_candidates_identity_key',
-  'platform_release_candidates_status_check',
-  'platform_release_candidates_gates_check',
-  'platform_release_candidates_digest_check',
-  'platform_release_candidates_validation_actor_check',
-  'audit_evidence_checkpoints_pkey',
-  'audit_evidence_checkpoints_identity_key',
-  'audit_evidence_checkpoints_filters_check',
-  'audit_evidence_checkpoints_event_ids_check',
-  'audit_evidence_checkpoints_event_count_check',
-  'audit_evidence_checkpoints_count_matches_ids_check',
-  'audit_evidence_checkpoints_digest_check',
-  'audit_evidence_checkpoints_status_check',
-  'audit_evidence_checkpoints_created_by_check',
-  'audit_evidence_checkpoints_updated_by_check',
-  'runtime_approvals_pkey',
-  'runtime_approvals_execution_count_check',
-  'runtime_approvals_reservation_generation_check',
-  'runtime_approvals_used_reservation_ids_check',
-  'runtime_approvals_revision_check',
-  'operational_executions_approval_binding',
-  'operational_executions_waiting_approval_id',
-  'operational_executions_success_payload',
-  'operational_executions_failure_payload',
-  'operational_executions_retry_failure_kind',
-  'operational_executions_cancel_failure_kind',
-  'operational_executions_inactive_lease_clear',
-  'operational_executions_completed_timestamp_shape'
-] as const
-
-const tenantIsolationRequiredIndexes = [
-  'idempotency_pkey',
-  'idx_conversations_tenant_id',
-  'idx_messages_tenant_conversation',
-  'idx_messages_runtime_status',
-  'idx_sessions_tenant_conversation',
-  'idx_sessions_tenant_agent_version',
-  'idx_agent_runs_tenant_session',
-  'idx_tool_calls_tenant_run',
-  'idx_approval_requests_tenant_session',
-  'idx_tasks_tenant_session',
-  'idx_audit_events_tenant_created',
-  'idx_outbox_events_tenant_status',
-  'idx_outbox_events_tenant_status_available',
-  'idx_outbox_events_tenant_lease',
-  'idx_outbox_effects_tenant_event',
-  'idx_outbox_attempts_tenant_event',
-  'idx_outbox_quarantine_tenant_captured',
-  'idx_platform_agents_tenant_id',
-  'idx_platform_agent_versions_tenant_agent',
-  'idx_platform_test_runs_tenant_created',
-  'idx_platform_execution_traces_tenant_created',
-  'idx_platform_capability_approvals_tenant_status',
-  'idx_platform_capability_approvals_tenant_actor',
-  'idx_platform_test_suites_tenant_agent',
-  'idx_platform_test_suite_runs_tenant_created',
-  'idx_platform_plugin_catalog_tenant_status',
-  'idx_platform_knowledge_sources_tenant_status',
-  'idx_platform_release_candidates_tenant_status',
-  'idx_platform_release_candidates_tenant_agent',
-  'idx_audit_evidence_checkpoints_tenant_status',
-  'idx_audit_evidence_checkpoints_tenant_created',
-  'idx_runtime_approvals_status_reservation_expires',
-  'idx_runtime_approvals_operation_key',
-  'uq_runtime_approvals_execution_binding',
-  'idx_operational_executions_tenant_state',
-  'idx_operational_executions_approval',
-  'idx_operational_execution_outbox_claim',
-  'idx_operational_execution_events_lookup',
-  'idx_operational_execution_events_approval',
-  'idx_operational_effect_journal_state'
-] as const
-
-export async function assertTenantIsolationMigrationState(
-  client: PostgresQueryable
-): Promise<void> {
-  const applied = await client.query<{
-    version: string
-    checksum: string | null
-    applied_at: Date
-    baseline_actor: string | null
-    baseline_reference: string | null
-    baseline_at: Date | null
-  }>(
-    `SELECT version, checksum, applied_at, baseline_actor, baseline_reference, baseline_at
-     FROM schema_migrations
-     WHERE version = ANY($1::text[])`,
-    [tenantIsolationMigrationVersions]
-  )
-  const appliedByVersion = new Map(
-    applied.rows.map((migration) => [migration.version, migration])
-  )
-  let previousAppliedAt = 0
-  for (const version of tenantIsolationMigrationVersions) {
-    const migration = appliedByVersion.get(version)
-    const sql = await readPostgresMigrationSql(version)
-    const expectedChecksum = createHash('sha256').update(sql).digest('hex')
-    const appliedAt = migration?.applied_at
-      ? new Date(migration.applied_at).getTime()
-      : Number.NaN
-    const baselineFields = migration
-      ? [
-          migration.baseline_actor,
-          migration.baseline_reference,
-          migration.baseline_at
-        ]
-      : []
-    const baselineIsPartial =
-      baselineFields.some((field) => field !== null && field !== undefined) &&
-      baselineFields.some((field) => field === null || field === undefined)
-    if (
-      !migration ||
-      migration.checksum !== expectedChecksum ||
-      !Number.isFinite(appliedAt) ||
-      appliedAt < previousAppliedAt ||
-      baselineIsPartial
-    ) {
-      throw new Error(
-        `PostgreSQL tenant-isolation migration state is not verified: ${version}`
-      )
-    }
-    previousAppliedAt = appliedAt
-  }
-}
-
-export async function assertTenantIsolationSchema(
-  client: PostgresQueryable
-): Promise<void> {
-  const policyTables = [...tenantIsolationTables, 'outbox_quarantine'] as const
-  const tables = await client.query<{
-    relname: string
-    relrowsecurity: boolean
-    relforcerowsecurity: boolean
-  }>(
-    `SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
-     FROM pg_class AS c
-     INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
-     WHERE n.nspname = current_schema()
-       AND c.relname = ANY($1::text[])`,
-    [policyTables]
-  )
-  const relationByName = new Map(
-    tables.rows.map((table) => [table.relname, table])
-  )
-  const policies = await client.query<{
-    tablename: string
-    policyname: string
-    permissive: string
-    roles: string
-    cmd: string
-    qual: string | null
-    with_check: string | null
-  }>(
-    `SELECT tablename, policyname, permissive, roles, cmd, qual, with_check
-     FROM pg_policies
-     WHERE schemaname = current_schema()
-       AND tablename = ANY($1::text[])`,
-    [policyTables]
-  )
-  const policiesByTable = new Map<string, typeof policies.rows>()
-  for (const policy of policies.rows) {
-    const tablePolicies = policiesByTable.get(policy.tablename) ?? []
-    policiesByTable.set(policy.tablename, [...tablePolicies, policy])
-  }
-  const expectedExpression =
-    "tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
-  const expectedTenantOnlyExpression =
-    "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
-
-  for (const table of policyTables) {
-    const relation = relationByName.get(table)
-    const tablePolicies = policiesByTable.get(table) ?? []
-    const policy = tablePolicies[0]
-    if (
-      !relation ||
-      !relation.relrowsecurity ||
-      !relation.relforcerowsecurity ||
-      tablePolicies.length !== 1 ||
-      !policy ||
-      policy.policyname !== `${table}_tenant_isolation` ||
-      policy.permissive !== 'PERMISSIVE' ||
-      policy.roles !== '{public}' ||
-      policy.cmd !== 'ALL' ||
-      normalizePolicyExpression(policy.qual) !==
-        (table === 'runtime_approvals' ||
-        table === 'outbox_effects' ||
-        table === 'outbox_attempts' ||
-        table === 'outbox_quarantine'
-          ? expectedTenantOnlyExpression
-          : expectedExpression) ||
-      normalizePolicyExpression(policy.with_check) !==
-        (table === 'runtime_approvals' ||
-        table === 'outbox_effects' ||
-        table === 'outbox_attempts' ||
-        table === 'outbox_quarantine'
-          ? expectedTenantOnlyExpression
-          : expectedExpression)
-    ) {
-      throw new Error(
-        'PostgreSQL tenant isolation policies are not fully installed'
-      )
-    }
-  }
-
-  const columns = await client.query<{
-    table_name: string
-    column_name: string
-  }>(
-    `SELECT c.relname AS table_name, a.attname AS column_name
-     FROM pg_class AS c
-     INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
-     INNER JOIN pg_attribute AS a ON a.attrelid = c.oid
-     WHERE n.nspname = current_schema()
-       AND c.relname = ANY($1::text[])
-       AND a.attname = ANY($2::text[])
-       AND a.attnum > 0
-       AND NOT a.attisdropped`,
-    [
-      policyTables,
-      [
-        'tenant_id',
-        'tenant_isolation_quarantined',
-        'agent_id',
-        'agent_version_id',
-        'payload_protection_version',
-        'result_protection_version'
-      ]
-    ]
-  )
-  const columnsByTable = new Map<string, Set<string>>()
-  for (const column of columns.rows) {
-    const tableColumns = columnsByTable.get(column.table_name) ?? new Set()
-    tableColumns.add(column.column_name)
-    columnsByTable.set(column.table_name, tableColumns)
-  }
-  const missingColumns = policyTables.filter((table) => {
-    const tableColumns = columnsByTable.get(table)
-    return (
-      !tableColumns?.has('tenant_id') ||
-      (![
-        'runtime_approvals',
-        'outbox_effects',
-        'outbox_attempts',
-        'outbox_quarantine'
-      ].includes(table) &&
-        !tableColumns.has('tenant_isolation_quarantined'))
-    )
-  })
-  if (missingColumns.length > 0) {
-    throw new Error(
-      `PostgreSQL tenant isolation columns are incomplete: ${missingColumns.join(', ')}`
-    )
-  }
-  const sessionColumns = columnsByTable.get('sessions')
-  if (
-    !sessionColumns?.has('agent_id') ||
-    !sessionColumns.has('agent_version_id')
-  ) {
-    throw new Error('PostgreSQL session version pinning columns are incomplete')
-  }
-  const outboxEventsColumns = columnsByTable.get('outbox_events')
-  const outboxEffectsColumns = columnsByTable.get('outbox_effects')
-  if (
-    !outboxEventsColumns?.has('payload_protection_version') ||
-    !outboxEffectsColumns?.has('result_protection_version')
-  ) {
-    throw new Error(
-      'PostgreSQL outbox payload protection columns are incomplete'
-    )
-  }
-
-  const constraints = await client.query<{ conname: string }>(
-    `SELECT conname
-     FROM pg_constraint
-     WHERE connamespace = current_schema()::regnamespace
-       AND conname = ANY($1::text[])`,
-    [tenantIsolationRequiredConstraints]
-  )
-  const constraintNames = new Set(
-    constraints.rows.map((constraint) => constraint.conname)
-  )
-  const missingConstraints = tenantIsolationRequiredConstraints.filter(
-    (constraint) => !constraintNames.has(constraint)
-  )
-  if (missingConstraints.length > 0) {
-    throw new Error(
-      `PostgreSQL tenant isolation constraints are incomplete: ${missingConstraints.join(', ')}`
-    )
-  }
-
-  const indexes = await client.query<{ indexname: string }>(
-    `SELECT indexname
-     FROM pg_indexes
-     WHERE schemaname = current_schema()
-       AND indexname = ANY($1::text[])`,
-    [tenantIsolationRequiredIndexes]
-  )
-  const indexNames = new Set(indexes.rows.map((index) => index.indexname))
-  const missingIndexes = tenantIsolationRequiredIndexes.filter(
-    (index) => !indexNames.has(index)
-  )
-  if (missingIndexes.length > 0) {
-    throw new Error(
-      `PostgreSQL tenant isolation indexes are incomplete: ${missingIndexes.join(', ')}`
-    )
-  }
-}
-
-export async function assertWebhookReplaySchema(
-  client: PostgresQueryable
-): Promise<void> {
-  const requiredConstraints = [
-    'webhook_replay_events_pkey',
-    'webhook_replay_events_event_key_check',
-    'webhook_replay_events_status_check'
-  ]
-  const requiredIndexes = [
-    'webhook_replay_events_pkey',
-    'idx_webhook_replay_events_expires'
-  ]
-  const relation = await client.query<{
-    relname: string
-    relkind: string
-  }>(
-    `SELECT c.relname, c.relkind
-     FROM pg_class AS c
-     INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
-     WHERE n.nspname = current_schema()
-       AND c.relname = ANY($1::text[])`,
-    [webhookReplayTables]
-  )
-  const columns = await client.query<{
-    table_name: string
-    column_name: string
-  }>(
-    `SELECT table_name, column_name
-     FROM information_schema.columns
-     WHERE table_schema = current_schema()
-       AND table_name = ANY($1::text[])`,
-    [webhookReplayTables]
-  )
-  const columnNames = new Set(columns.rows.map((row) => row.column_name))
-  const constraints = await client.query<{ conname: string }>(
-    `SELECT conname
-     FROM pg_constraint
-     WHERE connamespace = current_schema()::regnamespace
-       AND conname = ANY($1::text[])`,
-    [requiredConstraints]
-  )
-  const indexes = await client.query<{ indexname: string }>(
-    `SELECT indexname
-     FROM pg_indexes
-     WHERE schemaname = current_schema()
-       AND indexname = ANY($1::text[])`,
-    [requiredIndexes]
-  )
-  const constraintNames = new Set(
-    constraints.rows.map((constraint) => constraint.conname)
-  )
-  const indexNames = new Set(indexes.rows.map((index) => index.indexname))
-  if (
-    relation.rows.length !== webhookReplayTables.length ||
-    relation.rows[0]?.relkind !== 'r' ||
-    !['event_key', 'status', 'expires_at'].every((column) =>
-      columnNames.has(column)
-    ) ||
-    requiredConstraints.some(
-      (constraint) => !constraintNames.has(constraint)
-    ) ||
-    requiredIndexes.some((index) => !indexNames.has(index))
-  ) {
-    throw new Error('PostgreSQL webhook replay storage is not fully installed')
-  }
-}
-
-function normalizePolicyExpression(expression: string | null): string {
-  return (expression ?? '')
-    .replace(/::text/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\((tenant_isolation_quarantined = false)\)/g, '$1')
-    .replace(
-      /\((tenant_id = NULLIF\(current_setting\('cvg\.tenant_id', true\), ''\))\)/g,
-      '$1'
-    )
-    .replace(/^\((.*)\)$/, '$1')
-}
+export {
+  assertApprovalDecisionAuditDedupe,
+  assertMigrationRoleIsLeastPrivilege,
+  assertMigrationRoleSecurityBoundary,
+  assertRateLimitSchema,
+  assertRuntimeRoleIsLeastPrivilege,
+  assertRuntimeRoleIsNotRlsBypass,
+  assertTenantIsolationMigrationState,
+  assertTenantIsolationSchema,
+  assertWebhookReplaySchema,
+  readCurrentDatabaseRole
+} from './tenant-preflight.ts'
 
 function assertSafeRuntimeSchemaName(schemaName: string | undefined): void {
   if (schemaName && !/^[a-z][a-z0-9_]{0,62}$/.test(schemaName)) {
@@ -4976,327 +4954,18 @@ function createPostgresPool(
     ...(schemaName ? { options: `-c search_path=${schemaName}` } : {})
   })
 }
-
-export async function assertRuntimeRoleIsLeastPrivilege(
-  client: PostgresQueryable,
-  migrationRoleName?: string
-): Promise<void> {
-  const roleResult = await client.query<{
-    rolname: string
-    rolsuper: boolean
-    rolbypassrls: boolean
-    rolcreatedb: boolean
-    rolcreaterole: boolean
-    rolreplication: boolean
-  }>(
-    `SELECT rolname, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication
-     FROM pg_roles
-     WHERE rolname = current_user
-     LIMIT 1`
-  )
-  const role = roleResult.rows[0]
-  if (
-    !role ||
-    role.rolsuper ||
-    role.rolbypassrls ||
-    role.rolcreatedb ||
-    role.rolcreaterole ||
-    role.rolreplication ||
-    role.rolname === migrationRoleName
-  ) {
-    throw new Error(
-      'PostgreSQL runtime role must satisfy least-privilege separation'
-    )
-  }
-
-  const memberships = await client.query<{ granted_role: string }>(
-    `WITH RECURSIVE inherited_roles(role_oid) AS (
-       SELECT oid
-       FROM pg_roles
-       WHERE rolname = current_user
-       UNION
-       SELECT membership.roleid
-       FROM pg_auth_members AS membership
-       INNER JOIN inherited_roles AS parent ON parent.role_oid = membership.member
-     )
-     SELECT granted.rolname AS granted_role
-     FROM inherited_roles
-     INNER JOIN pg_roles AS granted ON granted.oid = inherited_roles.role_oid
-     WHERE granted.rolname <> current_user`
-  )
-  const tablePrivileges = await client.query<{
-    relname: string
-    owner: string
-    can_select: boolean
-    can_insert: boolean
-    can_update: boolean
-    can_delete: boolean
-    can_truncate: boolean
-    can_trigger: boolean
-    can_references: boolean
-  }>(
-    `SELECT c.relname,
-            pg_get_userbyid(c.relowner) AS owner,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'SELECT') AS can_select,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'INSERT') AS can_insert,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'UPDATE') AS can_update,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'DELETE') AS can_delete,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'TRUNCATE') AS can_truncate,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'TRIGGER') AS can_trigger,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'REFERENCES') AS can_references
-     FROM pg_class AS c
-     INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
-     WHERE n.nspname = current_schema()
-       AND c.relname = ANY($1::text[])`,
-    [tenantIsolationTables]
-  )
-  const schemaPrivilege = await client.query<{ can_create: boolean }>(
-    `SELECT has_schema_privilege(current_user, current_schema(), 'CREATE') AS can_create`
-  )
-  const quarantinePrivilege = await client.query<{
-    owner: string
-    can_select: boolean
-    can_insert: boolean
-    can_update: boolean
-    can_delete: boolean
-    can_truncate: boolean
-  }>(
-    `SELECT pg_get_userbyid(c.relowner) AS owner,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'SELECT') AS can_select,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'INSERT') AS can_insert,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'UPDATE') AS can_update,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'DELETE') AS can_delete,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'TRUNCATE') AS can_truncate
-     FROM pg_class AS c
-     INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
-     WHERE n.nspname = current_schema()
-       AND c.relname = ANY($1::text[])`,
-    [tenantIsolationQuarantineTables]
-  )
-  const replayPrivileges = await client.query<{
-    owner: string
-    can_select: boolean
-    can_insert: boolean
-    can_update: boolean
-    can_delete: boolean
-    can_truncate: boolean
-    can_trigger: boolean
-    can_references: boolean
-  }>(
-    `SELECT pg_get_userbyid(c.relowner) AS owner,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'SELECT') AS can_select,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'INSERT') AS can_insert,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'UPDATE') AS can_update,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'DELETE') AS can_delete,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'TRUNCATE') AS can_truncate,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'TRIGGER') AS can_trigger,
-            has_table_privilege(current_user, format('%I.%I', n.nspname, c.relname), 'REFERENCES') AS can_references
-     FROM pg_class AS c
-     INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
-     WHERE n.nspname = current_schema()
-       AND c.relname = ANY($1::text[])`,
-    [webhookReplayTables]
-  )
-  if (
-    tablePrivileges.rows.length !== tenantIsolationTables.length ||
-    tablePrivileges.rows.some(
-      (table) =>
-        table.owner === role.rolname ||
-        !table.can_select ||
-        !table.can_insert ||
-        !table.can_update ||
-        table.can_delete ||
-        table.can_truncate ||
-        table.can_trigger ||
-        table.can_references
-    ) ||
-    memberships.rows.length > 0 ||
-    schemaPrivilege.rows[0]?.can_create ||
-    quarantinePrivilege.rows.length !==
-      tenantIsolationQuarantineTables.length ||
-    quarantinePrivilege.rows.some(
-      (table) =>
-        table.owner === role.rolname ||
-        table.can_select ||
-        table.can_insert ||
-        table.can_update ||
-        table.can_delete ||
-        table.can_truncate
-    ) ||
-    replayPrivileges.rows.length !== webhookReplayTables.length ||
-    replayPrivileges.rows.some(
-      (table) =>
-        table.owner === role.rolname ||
-        !table.can_select ||
-        !table.can_insert ||
-        !table.can_update ||
-        !table.can_delete ||
-        table.can_truncate ||
-        table.can_trigger ||
-        table.can_references
-    )
-  ) {
-    throw new Error(
-      'PostgreSQL runtime role must satisfy least-privilege separation'
-    )
-  }
-}
-
-export async function assertMigrationRoleIsLeastPrivilege(
-  client: PostgresQueryable,
-  runtimeRoleName?: string
-): Promise<void> {
-  const roleResult = await client.query<{
-    rolname: string
-    rolsuper: boolean
-    rolbypassrls: boolean
-    rolcreatedb: boolean
-    rolcreaterole: boolean
-    rolreplication: boolean
-  }>(
-    `SELECT rolname, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication
-     FROM pg_roles
-     WHERE rolname = current_user
-     LIMIT 1`
-  )
-  const role = roleResult.rows[0]
-  if (
-    !role ||
-    role.rolsuper ||
-    role.rolbypassrls ||
-    role.rolcreatedb ||
-    role.rolcreaterole ||
-    role.rolreplication ||
-    role.rolname === runtimeRoleName
-  ) {
-    throw new Error(
-      'PostgreSQL migration role must be a separate non-privileged DDL owner'
-    )
-  }
-
-  const memberships = await client.query<{ granted_role: string }>(
-    `SELECT granted.rolname AS granted_role
-     FROM pg_auth_members AS membership
-     INNER JOIN pg_roles AS member ON member.oid = membership.member
-     INNER JOIN pg_roles AS granted ON granted.oid = membership.roleid
-     WHERE member.rolname = current_user`
-  )
-  const databaseOwner = await client.query<{ owner: string }>(
-    `SELECT pg_get_userbyid(datdba) AS owner
-     FROM pg_database
-     WHERE datname = current_database()`
-  )
-  const schemaPrivilege = await client.query<{
-    can_usage: boolean
-    can_create: boolean
-  }>(
-    `SELECT has_schema_privilege(current_user, current_schema(), 'USAGE') AS can_usage,
-            has_schema_privilege(current_user, current_schema(), 'CREATE') AS can_create`
-  )
-  const managedTables = await client.query<{
-    relname: string
-    owner: string
-  }>(
-    `SELECT c.relname, pg_get_userbyid(c.relowner) AS owner
-     FROM pg_class AS c
-     INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
-     WHERE n.nspname = current_schema()
-       AND c.relname = ANY($1::text[])`,
-    [tenantIsolationMigrationTables]
-  )
-  if (
-    memberships.rows.length > 0 ||
-    databaseOwner.rows[0]?.owner === role.rolname ||
-    !schemaPrivilege.rows[0]?.can_usage ||
-    !schemaPrivilege.rows[0]?.can_create ||
-    managedTables.rows.length !== tenantIsolationMigrationTables.length ||
-    managedTables.rows.some((table) => table.owner !== role.rolname)
-  ) {
-    throw new Error(
-      'PostgreSQL migration role must be a separate non-privileged DDL owner'
-    )
-  }
-}
-
-export async function assertMigrationRoleSecurityBoundary(
-  client: PostgresQueryable,
-  runtimeRoleName?: string
-): Promise<void> {
-  const roleResult = await client.query<{
-    rolname: string
-    rolsuper: boolean
-    rolbypassrls: boolean
-    rolcreatedb: boolean
-    rolcreaterole: boolean
-    rolreplication: boolean
-  }>(
-    `SELECT rolname, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication
-     FROM pg_roles
-     WHERE rolname = current_user
-     LIMIT 1`
-  )
-  const role = roleResult.rows[0]
-  const memberships = await client.query(
-    `SELECT granted.rolname AS granted_role
-     FROM pg_auth_members AS membership
-     INNER JOIN pg_roles AS member ON member.oid = membership.member
-     INNER JOIN pg_roles AS granted ON granted.oid = membership.roleid
-     WHERE member.rolname = current_user`
-  )
-  const databaseOwner = await client.query<{ owner: string }>(
-    `SELECT pg_get_userbyid(datdba) AS owner
-     FROM pg_database
-     WHERE datname = current_database()`
-  )
-  if (
-    !role ||
-    role.rolsuper ||
-    role.rolbypassrls ||
-    role.rolcreatedb ||
-    role.rolcreaterole ||
-    role.rolreplication ||
-    role.rolname === runtimeRoleName ||
-    memberships.rows.length > 0 ||
-    databaseOwner.rows[0]?.owner === role.rolname
-  ) {
-    throw new Error(
-      'PostgreSQL migration role must be a separate non-privileged DDL owner'
-    )
-  }
-}
-
-async function readCurrentDatabaseRole(
-  client: PostgresQueryable
-): Promise<string> {
-  const result = await client.query<{ role_name: string }>(
-    `SELECT current_user::text AS role_name`
-  )
-  const roleName = result.rows[0]?.role_name
-  if (!roleName) {
-    throw new Error('PostgreSQL current role could not be identified')
-  }
-  return roleName
-}
-
-async function assertRuntimeRoleIsNotRlsBypass(
-  client: PostgresQueryable
-): Promise<void> {
-  const result = await client.query<{
-    rolsuper: boolean
-    rolbypassrls: boolean
-  }>(
-    `SELECT rolsuper, rolbypassrls
-     FROM pg_roles
-     WHERE rolname = current_user
-     LIMIT 1`
-  )
-  const role = result.rows[0]
-  if (!role || role.rolsuper || role.rolbypassrls) {
-    throw new Error(
-      'PostgreSQL runtime role must be a non-superuser without BYPASSRLS'
-    )
-  }
-}
+import {
+  assertApprovalDecisionAuditDedupe,
+  assertMigrationRoleIsLeastPrivilege,
+  assertMigrationRoleSecurityBoundary,
+  assertRateLimitSchema,
+  assertRuntimeRoleIsLeastPrivilege,
+  assertRuntimeRoleIsNotRlsBypass,
+  assertTenantIsolationMigrationState,
+  assertTenantIsolationSchema,
+  assertWebhookReplaySchema,
+  readCurrentDatabaseRole
+} from './tenant-preflight.ts'
 
 interface RuntimePersistence {
   /** Legacy direct-client fixtures do not have the tenant-scoped pin columns. */
@@ -5554,7 +5223,9 @@ function createPersistence(
         append: (input, tenantId) =>
           config.kind === 'postgres-pool'
             ? postgres.appendAudit(input, tenantId)
-            : postgres.appendAudit(input),
+            : postgres.appendAudit(
+                tenantId === undefined ? input : { ...input, tenantId }
+              ),
         listBySession: (sessionId, tenantId: TenantId) =>
           postgres.listAuditBySession(sessionId, tenantId),
         listEvidence: (query: AuditEvidenceQuery, tenantId: TenantId) =>
@@ -5776,7 +5447,7 @@ export async function buildServerFromEnv(
       ? parseIdentityMode(env[IDENTITY_MODE_ENV], env.NODE_ENV)
       : env.NODE_ENV === 'production'
         ? ('trusted' as const)
-        : parseIdentityMode(undefined, process.env.NODE_ENV))
+        : parseIdentityMode(undefined, env.NODE_ENV))
   if (env.NODE_ENV === 'production' && identityMode === 'simulation') {
     throw new Error(
       'Production requires trusted operator identity mode; simulation is forbidden'
@@ -5834,6 +5505,13 @@ export async function buildServerFromEnv(
       identityMode,
       durableInbound: durableInbound,
       httpSecurity,
+      ...(env.NODE_ENV === 'test' && identityMode === 'trusted'
+        ? {
+            operatorSessionStore:
+              buildOptions.operatorSessionStore ??
+              createInMemoryOperatorSessionStore()
+          }
+        : {}),
       persistence: { kind: 'memory' }
     })
     if (env.NODE_ENV === 'development') {
@@ -5897,9 +5575,20 @@ export async function buildServerFromEnv(
     env,
     buildOptions.httpSecurity
   )
-
   const schemaName = env.POSTGRES_SCHEMA?.trim() || undefined
   assertSafeRuntimeSchemaName(schemaName)
+  const configuredRateLimitKeyRing =
+    effectiveBuildOptions.rateLimiter === undefined
+      ? createConfiguredRateLimitKeyRing(env)
+      : undefined
+  if (
+    effectiveBuildOptions.rateLimiter === undefined &&
+    !configuredRateLimitKeyRing
+  ) {
+    throw new Error(
+      'CVG_RATE_LIMIT_KEYRING is required for PostgreSQL rate limiting outside test mode'
+    )
+  }
   const pool = createPostgresPool(env.DATABASE_URL, schemaName)
   const migrationPool = env.DATABASE_MIGRATION_URL
     ? createPostgresPool(env.DATABASE_MIGRATION_URL, schemaName)
@@ -5910,8 +5599,11 @@ export async function buildServerFromEnv(
   }
 
   let configuredWebhookVerifier: WebhookVerifier | undefined
+  // AUD19-006: hoisted so the token-replay hook can share the distributed
+  // webhook replay authority (same table, `operator-jti:` prefix).
+  let effectiveReplayStore: WebhookReplayStore | undefined
   try {
-    const effectiveReplayStore =
+    effectiveReplayStore =
       webhookReplayStore ??
       (env.NODE_ENV === 'production'
         ? new PostgresWebhookReplayStore(pool)
@@ -5969,6 +5661,15 @@ export async function buildServerFromEnv(
         migrationClient.release()
       }
     }
+    const rateLimitSchemaClient = await pool.connect()
+    try {
+      await assertRateLimitSchema(rateLimitSchemaClient)
+      if (env.POSTGRES_RLS_ENFORCEMENT !== 'true') {
+        await assertApprovalDecisionAuditDedupe(rateLimitSchemaClient)
+      }
+    } finally {
+      rateLimitSchemaClient.release()
+    }
     if (env.POSTGRES_RLS_ENFORCEMENT === 'true') {
       const migrationRoleClient = await migrationPool.connect()
       try {
@@ -6017,6 +5718,26 @@ export async function buildServerFromEnv(
     ...(env.NODE_ENV === 'production'
       ? { requireAuthenticatedMutations: true }
       : {}),
+    // AUD19-006: the distributed webhook replay authority doubles as the
+    // operator-token replay authority (same table, `operator-jti:` prefix).
+    ...(identityMode === 'trusted' && effectiveReplayStore
+      ? { tokenReplayStore: effectiveReplayStore }
+      : {}),
+    // AUD19-006: durable deployments share one rate-limit budget in
+    // PostgreSQL (migration 0026, guaranteed by the migration preflight).
+    // An explicitly injected limiter always wins.
+    ...(effectiveBuildOptions.rateLimiter === undefined &&
+    (persistenceConfig.kind === 'postgres' ||
+      persistenceConfig.kind === 'postgres-pool')
+      ? {
+          rateLimiter: new PostgresRateLimiter(
+            (persistenceConfig.kind === 'postgres'
+              ? persistenceConfig.client
+              : persistenceConfig.pool) as never,
+            { keyRing: configuredRateLimitKeyRing! }
+          )
+        }
+      : {}),
     identityMode,
     durableInbound: durableInbound,
     httpSecurity: configuredHttpSecurity,
@@ -6027,6 +5748,24 @@ export async function buildServerFromEnv(
     await closePools()
   })
   return app
+}
+
+function safeTelemetry(operation: () => void): void {
+  try {
+    operation()
+  } catch {
+    // Export/telemetry failures must never alter API, readiness or safety flow.
+  }
+}
+
+function httpStatusBucket(
+  statusCode: number
+): '2xx' | '3xx' | '4xx' | '5xx' | 'other' {
+  if (statusCode >= 200 && statusCode <= 299) return '2xx'
+  if (statusCode >= 300 && statusCode <= 399) return '3xx'
+  if (statusCode >= 400 && statusCode <= 499) return '4xx'
+  if (statusCode >= 500 && statusCode <= 599) return '5xx'
+  return 'other'
 }
 
 function createConfiguredWebhookVerifier(

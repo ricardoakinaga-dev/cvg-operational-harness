@@ -1,5 +1,7 @@
 export * from './db.ts'
 export * from './outbox.ts'
+export * from './outbox-content-hash.ts'
+export * from './tenant-schema.ts'
 export * from './journeys.ts'
 export * from './journeys-postgres.ts'
 export * from './restore.ts'

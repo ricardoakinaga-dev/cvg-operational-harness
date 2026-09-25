@@ -20,6 +20,7 @@ export interface WorkerStartupFailure {
     | 'postgres_database_missing'
     | 'postgres_rls_required'
     | 'controlled_mode_required'
+    | 'homolog_arming_required'
     | 'production_controlled_worker_forbidden'
     | 'worker_run_mode_unsupported'
     | 'continuous_durable_adapter_required'
@@ -62,7 +63,12 @@ export function getWorkerStartupFailure(
   const runMode = env.CVG_WORKER_RUN_MODE?.trim()
   const operationalHarness =
     env.CVG_WORKER_RUNTIME?.trim() === 'operational-harness'
-  if (operationalHarness) {
+  // AUD19-008 — homologation composition shares the operational-harness
+  // startup contract (tenant, no run mode, fault-point shape); arming and
+  // database presence are enforced by the homolog runner itself.
+  const homologHarness =
+    env.CVG_WORKER_RUNTIME?.trim() === 'operational-harness-homolog'
+  if (operationalHarness || homologHarness) {
     if (env.NODE_ENV === 'production') {
       return {
         code: 'production_controlled_worker_forbidden',
@@ -74,6 +80,42 @@ export function getWorkerStartupFailure(
       return {
         code: 'controlled_tenant_missing',
         message: 'Operational harness worker tenant is not configured'
+      }
+    }
+    if (env.CVG_WORKER_CONTROLLED_MODE !== 'true') {
+      return {
+        code: 'controlled_mode_required',
+        message:
+          'Operational harness worker requires CVG_WORKER_CONTROLLED_MODE=true'
+      }
+    }
+    if (homologHarness) {
+      if (env.CVG_HOMOLOG_SYNTHETIC_ONLY !== 'true') {
+        return {
+          code: 'homolog_arming_required',
+          message:
+            'Homologation worker requires CVG_HOMOLOG_SYNTHETIC_ONLY=true'
+        }
+      }
+      if (!env.DATABASE_URL?.trim()) {
+        return {
+          code: 'postgres_database_missing',
+          message: 'DATABASE_URL is required for the homologation worker'
+        }
+      }
+      if (env.POSTGRES_RLS_ENFORCEMENT !== 'true') {
+        return {
+          code: 'postgres_rls_required',
+          message:
+            'POSTGRES_RLS_ENFORCEMENT=true is required for the homologation worker'
+        }
+      }
+      if (env.CVG_WORKER_CONTROLLED_MODE !== 'true') {
+        return {
+          code: 'controlled_mode_required',
+          message:
+            'CVG_WORKER_CONTROLLED_MODE=true is required for the homologation worker'
+        }
       }
     }
     if (runMode) {
@@ -113,6 +155,13 @@ export function getWorkerStartupFailure(
   }
 
   if (adapter === 'controlled-memory') {
+    if (env.NODE_ENV === 'production') {
+      return {
+        code: 'production_controlled_worker_forbidden',
+        message:
+          'Controlled memory worker is disabled in production pending external gates'
+      }
+    }
     if (!TenantIdSchema.safeParse(env.CVG_WORKER_TENANT_ID).success) {
       return {
         code: 'controlled_tenant_missing',

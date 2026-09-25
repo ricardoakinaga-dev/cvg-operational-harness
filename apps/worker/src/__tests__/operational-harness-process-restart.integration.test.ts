@@ -327,8 +327,11 @@ describeWithPostgres(
         expect(
           interruptedExit.signal === 'SIGKILL' || interruptedExit.code === 137
         ).toBe(true)
-        expect(parseJsonLines(interrupted.output())).not.toContainEqual(
-          expect.objectContaining({ event: 'worker.operational_harness_ready' })
+        expect(parseJsonLines(interrupted.output())).toContainEqual(
+          expect.objectContaining({
+            event: 'worker.operational_harness_ready',
+            processed: 0
+          })
         )
 
         await waitFor(async () => {
@@ -344,10 +347,18 @@ describeWithPostgres(
         expect(parseJsonLines(recovery.output())).toContainEqual(
           expect.objectContaining({
             event: 'worker.operational_harness_ready',
-            processed: 1,
+            processed: 0,
             durable: true,
             externalEffects: false,
             idleWaitMs: 2000
+          })
+        )
+        expect(parseJsonLines(recovery.output())).toContainEqual(
+          expect.objectContaining({
+            event: 'worker.operational_harness_completed',
+            processed: 1,
+            durable: true,
+            externalEffects: false
           })
         )
 

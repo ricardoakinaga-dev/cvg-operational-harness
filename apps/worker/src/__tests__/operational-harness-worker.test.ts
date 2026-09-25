@@ -10,6 +10,7 @@ import {
   OPERATIONAL_FAULT_POINT_AFTER_CLAIM,
   createOperationalHarnessFaultInjector,
   createOperationalHarnessWorker,
+  assertOperationalHarnessProfilePreflight,
   parseOperationalFaultPoint,
   parseOperationalSyntheticEffect,
   parseOperationalWorkerConcurrency,
@@ -101,6 +102,9 @@ describe('worker operational-harness composition', () => {
       },
       { store, harnessOptions: harnessOptions() }
     )
+    expect(() =>
+      assertOperationalHarnessProfilePreflight(runtime)
+    ).not.toThrow()
     const processed = await runtime.worker.processNext()
     await runtime.close()
 
@@ -127,6 +131,14 @@ describe('worker operational-harness composition', () => {
         NODE_ENV: 'test',
         CVG_WORKER_RUNTIME: OPERATIONAL_HARNESS_WORKER_RUNTIME,
         CVG_WORKER_TENANT_ID: tenantId
+      })
+    ).toMatchObject({ code: 'controlled_mode_required' })
+    expect(
+      getWorkerStartupFailure({
+        NODE_ENV: 'test',
+        CVG_WORKER_RUNTIME: OPERATIONAL_HARNESS_WORKER_RUNTIME,
+        CVG_WORKER_TENANT_ID: tenantId,
+        CVG_WORKER_CONTROLLED_MODE: 'true'
       })
     ).toBeNull()
   })

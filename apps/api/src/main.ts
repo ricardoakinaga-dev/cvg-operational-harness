@@ -2,15 +2,24 @@ import { buildServerFromEnv } from './server.ts'
 import { createConfiguredOperatorIdentityResolver } from './operator-identity.ts'
 import { serializeStartupFailure } from './startup-failure.ts'
 import { createShutdownController, parseEnv } from '@cvg/shared'
+import {
+  CompositeTelemetry,
+  JsonLineObservationExporter
+} from '@cvg/observability'
 
 async function start() {
   parseEnv(process.env)
   const operatorIdentityResolver = createConfiguredOperatorIdentityResolver(
     process.env
   )
+  const telemetry = new CompositeTelemetry({
+    exporters: [new JsonLineObservationExporter({ name: 'api-json-lines' })]
+  })
   const app = await buildServerFromEnv(
     process.env,
-    operatorIdentityResolver ? { operatorIdentityResolver } : {}
+    operatorIdentityResolver
+      ? { operatorIdentityResolver, telemetry }
+      : { telemetry }
   )
   const shutdown = createShutdownController({
     close: () => app.close(),

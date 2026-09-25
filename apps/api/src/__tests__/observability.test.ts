@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { buildServer, type RuntimeLogEntry } from '../server.ts'
+import {
+  CompositeTelemetry,
+  InMemoryObservationExporter,
+  type ObservationExporter
+} from '@cvg/observability'
 
 interface Envelope<T> {
   success: boolean
@@ -86,5 +91,28 @@ describe('api observability', () => {
     expect(
       logs.find((entry) => entry.event === 'inbound.accepted')?.sessionId
     ).toBe(inboundBody.data.sessionId)
+  })
+
+  it('keeps readiness healthy when an injected exporter fails', async () => {
+    const collector = new InMemoryObservationExporter('api-synthetic-collector')
+    const failing: ObservationExporter = {
+      name: 'api-synthetic-failing-exporter',
+      emit: () => {
+        throw new Error('synthetic exporter outage')
+      }
+    }
+    const telemetry = new CompositeTelemetry({
+      exporters: [collector, failing]
+    })
+    const app = buildServer({ telemetry })
+
+    const live = await app.inject({ method: 'GET', url: '/live' })
+    const ready = await app.inject({ method: 'GET', url: '/ready' })
+    await app.close()
+
+    expect(live.statusCode).toBe(200)
+    expect(ready.statusCode).toBe(200)
+    expect(telemetry.exporter.health().status).toBe('degraded')
+    expect(collector.observations().length).toBeGreaterThanOrEqual(4)
   })
 })

@@ -1,20 +1,31 @@
 import { describe, expect, it } from 'vitest'
 import {
   InMemoryOperationalExecutionStore,
+  OperationalExecutionError,
   OperationalExecutionWorker,
   OPERATIONAL_EXECUTION_FAULT_POINT_AFTER_CLAIM,
+  classifyRuntimeResult,
+  computeExecutionRequestHash,
+  deriveExecutionResume,
+  type ExecutionFailure,
+  isExecutionTransitionAllowed,
+  parseExecutionSubmission,
+  toExecutionView,
+  validateExecutionTransitionPayload,
   type ExecutionSubmission
 } from '../execution-spine.ts'
 import { createCapabilityRegistry } from '../capability-boundary.ts'
 import { InMemoryEffectJournal } from '../effect-journal.ts'
 import type {
   ApprovalEngine,
+  ApprovalId,
   AuditEvent,
   CapabilityRegistration,
   ModelGateway,
   Orchestrator,
   PolicyEngine,
   RuntimeInput,
+  RuntimeResult,
   TelemetryEvent,
   ToolRegistry
 } from '@cvg/harness-contracts'
@@ -22,6 +33,8 @@ import type {
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000001'
 const tenantB = 'tenant_00000000-0000-4000-8000-000000000002'
 const workerCapabilityId = 'synthetic.worker.capability'
+
+const approvalId = (value: string): ApprovalId => value as ApprovalId
 
 function runtimeInput(tenantId = tenantA): RuntimeInput {
   return {
@@ -832,5 +845,659 @@ describe('neutral durable execution spine contract', () => {
     expect(processed.record.state).toBe('FAILED_TERMINAL')
     expect(processed.record.failure?.kind).toBe('POLICY_DENIED')
     expect(toolCalls).toBe(0)
+  })
+})
+
+function runtimeResult(
+  stopReason: RuntimeResult['stopReason'],
+  response = `synthetic ${stopReason}`
+): RuntimeResult {
+  return {
+    response,
+    stopReason,
+    steps: 1,
+    modelCalls: 0,
+    toolCalls: 0,
+    usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+  }
+}
+
+describe('execution spine pure boundary helpers', () => {
+  it('normalizes public submissions and keeps request hashes deterministic', () => {
+    const first = submission('hash-order')
+    const second: ExecutionSubmission = {
+      ...first,
+      runtime: {
+        ...first.runtime,
+        context: {
+          ...first.runtime.context,
+          values: { b: 2, a: 1 }
+        }
+      }
+    }
+    const equivalent: ExecutionSubmission = {
+      ...first,
+      runtime: {
+        ...first.runtime,
+        context: {
+          ...first.runtime.context,
+          values: { a: 1, b: 2 }
+        }
+      }
+    }
+    expect(computeExecutionRequestHash(second)).toBe(
+      computeExecutionRequestHash(equivalent)
+    )
+    expect(isExecutionTransitionAllowed('QUEUED', 'CLAIMED')).toBe(true)
+    expect(isExecutionTransitionAllowed('SUCCEEDED', 'QUEUED')).toBe(false)
+
+    expect(() => parseExecutionSubmission(null)).toThrow(/object/i)
+    expect(() => parseExecutionSubmission({ tenantId: 42 })).toThrow(
+      /tenantId must be a string/i
+    )
+    expect(() =>
+      parseExecutionSubmission({ tenantId: tenantB }, tenantA)
+    ).toThrow(/authenticated tenant/i)
+
+    const parsed = parseExecutionSubmission(
+      {
+        tenantId: tenantA,
+        idempotencyKey: 'parse-public',
+        runtime: {
+          ...runtimeInput(),
+          executionId: 'forged-execution',
+          resume: { kind: 'approval', approvalId: 'forged-approval' }
+        }
+      },
+      tenantA
+    )
+    expect(parsed.tenantId).toBe(tenantA)
+    expect(parsed.runtime).not.toHaveProperty('executionId')
+    expect(parsed.runtime).not.toHaveProperty('resume')
+  })
+
+  it('derives only durable resume bindings and exposes a safe view', async () => {
+    const store = new InMemoryOperationalExecutionStore()
+    const created = await store.submit(submission('resume-helper'))
+    const base = created.record
+    expect(deriveExecutionResume(base)).toBeUndefined()
+    expect(
+      deriveExecutionResume({
+        ...base,
+        resume: {
+          kind: 'approval',
+          approvalId: 'approval-durable',
+          boundAt: base.createdAt
+        }
+      })
+    ).toEqual({ kind: 'approval', approvalId: 'approval-durable' })
+    expect(
+      deriveExecutionResume({
+        ...base,
+        resume: { kind: 'user_input', input: '  ', boundAt: base.createdAt }
+      })
+    ).toBeUndefined()
+    expect(
+      deriveExecutionResume({
+        ...base,
+        resume: {
+          kind: 'user_input',
+          input: '2026-10-01',
+          boundAt: base.createdAt
+        }
+      })
+    ).toEqual({ kind: 'user_input', message: '2026-10-01' })
+    expect(toExecutionView(base)).toMatchObject({
+      id: base.id,
+      tenantId: tenantA,
+      state: 'QUEUED'
+    })
+  })
+
+  it('enforces transition payload invariants before persistence', () => {
+    const retryable: ExecutionFailure = {
+      kind: 'TECHNICAL_RETRYABLE',
+      code: 'timeout',
+      message: 'synthetic timeout'
+    }
+    const cancelled: ExecutionFailure = {
+      kind: 'CANCELLED',
+      code: 'cancelled',
+      message: 'synthetic cancellation'
+    }
+    expect(() =>
+      validateExecutionTransitionPayload({ to: 'SUCCEEDED' })
+    ).toThrow(/runtime result/i)
+    expect(() =>
+      validateExecutionTransitionPayload({
+        to: 'SUCCEEDED',
+        result: runtimeResult('COMPLETED'),
+        failure: retryable
+      })
+    ).toThrow(/cannot carry a failure/i)
+    expect(() =>
+      validateExecutionTransitionPayload({ to: 'FAILED_RETRYABLE' })
+    ).toThrow(/requires a failure/i)
+    expect(() =>
+      validateExecutionTransitionPayload({
+        to: 'FAILED_RETRYABLE',
+        failure: cancelled
+      })
+    ).toThrow(/technical retryable/i)
+    expect(() =>
+      validateExecutionTransitionPayload({
+        to: 'CANCELLED',
+        failure: retryable
+      })
+    ).toThrow(/cancellation failure/i)
+    expect(() =>
+      validateExecutionTransitionPayload({
+        to: 'WAITING_APPROVAL',
+        approvalId: approvalId('approval-a'),
+        result: {
+          ...runtimeResult('APPROVAL_REQUIRED'),
+          approvalId: approvalId('approval-b')
+        }
+      })
+    ).toThrow(/approval id/i)
+    expect(() =>
+      validateExecutionTransitionPayload({
+        to: 'WAITING_APPROVAL',
+        approvalId: approvalId('approval-a'),
+        result: runtimeResult('APPROVAL_REQUIRED')
+      })
+    ).not.toThrow()
+  })
+
+  it('classifies every runtime stop family into durable execution states', () => {
+    expect(classifyRuntimeResult(runtimeResult('COMPLETED'))).toMatchObject({
+      state: 'SUCCEEDED'
+    })
+    expect(
+      classifyRuntimeResult(runtimeResult('APPROVAL_REQUIRED'))
+    ).toMatchObject({
+      state: 'FAILED_TERMINAL',
+      failure: { code: 'approval_missing' }
+    })
+    expect(
+      classifyRuntimeResult({
+        ...runtimeResult('APPROVAL_REQUIRED'),
+        approvalId: approvalId('approval-classified')
+      })
+    ).toMatchObject({
+      state: 'WAITING_APPROVAL',
+      approvalId: 'approval-classified'
+    })
+    expect(
+      classifyRuntimeResult(runtimeResult('NEEDS_USER_INPUT'))
+    ).toMatchObject({
+      state: 'WAITING_USER'
+    })
+    for (const stopReason of ['MODEL_FAILURE', 'INTERNAL_FAILURE'] as const) {
+      expect(classifyRuntimeResult(runtimeResult(stopReason))).toMatchObject({
+        state: 'FAILED_RETRYABLE'
+      })
+    }
+    expect(
+      classifyRuntimeResult(
+        runtimeResult('TOOL_FAILURE', 'unknown_effect: reconcile')
+      )
+    ).toMatchObject({
+      state: 'FAILED_TERMINAL',
+      failure: { kind: 'UNKNOWN_EFFECT' }
+    })
+    expect(classifyRuntimeResult(runtimeResult('TOOL_FAILURE'))).toMatchObject({
+      state: 'FAILED_RETRYABLE'
+    })
+    for (const stopReason of [
+      'POLICY_DENIED',
+      'UNSAFE_REQUEST',
+      'INSUFFICIENT_EVIDENCE',
+      'HUMAN_TAKEOVER',
+      'VERIFICATION_FAILED',
+      'LOOP_DETECTED'
+    ] as const) {
+      expect(classifyRuntimeResult(runtimeResult(stopReason))).toMatchObject({
+        state: 'FAILED_TERMINAL'
+      })
+    }
+    expect(classifyRuntimeResult(runtimeResult('CANCELLED'))).toMatchObject({
+      state: 'CANCELLED'
+    })
+    for (const stopReason of [
+      'MAX_STEPS',
+      'MAX_COST',
+      'MAX_DURATION',
+      'MAX_TOKENS',
+      'MAX_MODEL_CALLS',
+      'MAX_TOOL_CALLS',
+      'MAX_REPLANS',
+      'MAX_KNOWLEDGE_CALLS',
+      'MAX_VERIFICATION_CALLS',
+      'STATE_CONFLICT'
+    ] as const) {
+      expect(classifyRuntimeResult(runtimeResult(stopReason))).toMatchObject({
+        state: 'FAILED_TERMINAL'
+      })
+    }
+  })
+
+  it('rejects malformed submissions, clocks, options, and failure payloads', async () => {
+    expect(() => new InMemoryOperationalExecutionStore({ leaseMs: 0 })).toThrow(
+      /positive integer/i
+    )
+    expect(
+      () => new InMemoryOperationalExecutionStore({ maxAttempts: 0 })
+    ).toThrow(/positive integer/i)
+    expect(() => parseExecutionSubmission(42)).toThrow(/object/i)
+    expect(() =>
+      parseExecutionSubmission({
+        tenantId: tenantA,
+        idempotencyKey: 'missing-runtime'
+      })
+    ).toThrow(/tenantId must match runtime/i)
+    expect(() =>
+      parseExecutionSubmission(
+        {
+          tenantId: tenantA,
+          idempotencyKey: 'tenant-mismatch',
+          runtime: { ...runtimeInput(), tenantId: tenantB }
+        },
+        tenantA
+      )
+    ).toThrow(/tenantId must match/i)
+    expect(() =>
+      parseExecutionSubmission({
+        tenantId: tenantA,
+        capabilityFingerprint: 'binding-a',
+        idempotencyKey: 'fingerprint-mismatch',
+        runtime: { ...runtimeInput(), capabilityFingerprint: 'binding-b' }
+      })
+    ).toThrow(/fingerprint/i)
+
+    const store = new InMemoryOperationalExecutionStore()
+    await expect(
+      store.submit({
+        ...submission('missing-runtime'),
+        runtime: null as never
+      })
+    ).rejects.toThrow(/runtime is required/i)
+    await expect(
+      store.submit(submission(), new Date('invalid'))
+    ).rejects.toThrow(/now is invalid/i)
+    await expect(store.get('', 'missing')).rejects.toMatchObject({
+      code: 'validation_failed'
+    })
+
+    const created = await store.submit(submission('invalid-failure'))
+    const claimed = await store.claimNext(tenantA, 'worker-invalid-failure')
+    expect(claimed?.record.id).toBe(created.record.id)
+    await store.transition({
+      tenantId: tenantA,
+      executionId: created.record.id,
+      to: 'RUNNING',
+      workerId: 'worker-invalid-failure',
+      fenceToken: claimed!.record.attempt
+    })
+
+    const transitionBase = {
+      tenantId: tenantA,
+      executionId: created.record.id,
+      to: 'FAILED_RETRYABLE' as const,
+      workerId: 'worker-invalid-failure',
+      fenceToken: claimed!.record.attempt
+    }
+    await expect(
+      store.transition({
+        ...transitionBase,
+        failure: {
+          kind: 'NOT_A_FAILURE',
+          code: 'bad',
+          message: 'bad'
+        } as never
+      })
+    ).rejects.toThrow(/failure.kind/i)
+    await expect(
+      store.transition({
+        ...transitionBase,
+        failure: {
+          kind: 'TECHNICAL_RETRYABLE',
+          code: 'bad',
+          message: 'x'.repeat(501)
+        }
+      })
+    ).rejects.toThrow(/failure.message/i)
+    await expect(
+      store.transition({
+        ...transitionBase,
+        failure: {
+          kind: 'TECHNICAL_RETRYABLE',
+          code: 'bad',
+          message: 'bad',
+          retryAt: 'not-a-date'
+        }
+      })
+    ).rejects.toThrow(/retryAt/i)
+  })
+
+  it('covers durable user and approval resumes, terminal cancellation, and recovery', async () => {
+    const now = new Date('2026-09-17T00:00:00.000Z')
+    const store = new InMemoryOperationalExecutionStore({
+      clock: () => now,
+      leaseMs: 10
+    })
+    expect(await store.claimNext(tenantB, 'worker-empty', now)).toBeNull()
+
+    const userExecution = await store.submit(submission('user-resume'), now)
+    const userClaim = await store.claimNext(tenantA, 'worker-user', now)
+    await store.transition(
+      {
+        tenantId: tenantA,
+        executionId: userExecution.record.id,
+        to: 'RUNNING',
+        workerId: 'worker-user',
+        fenceToken: userClaim!.record.attempt
+      },
+      now
+    )
+    await store.transition(
+      {
+        tenantId: tenantA,
+        executionId: userExecution.record.id,
+        to: 'WAITING_USER',
+        workerId: 'worker-user',
+        fenceToken: userClaim!.record.attempt,
+        result: runtimeResult('NEEDS_USER_INPUT')
+      },
+      now
+    )
+    const queued = await store.provideUserInput(
+      {
+        tenantId: tenantA,
+        executionId: userExecution.record.id,
+        actorId: 'operator-user',
+        message: 'synthetic answer'
+      },
+      now
+    )
+    expect(queued.state).toBe('QUEUED')
+    expect(
+      await store.provideUserInput(
+        {
+          tenantId: tenantA,
+          executionId: userExecution.record.id,
+          actorId: 'operator-user',
+          message: 'synthetic answer'
+        },
+        now
+      )
+    ).toMatchObject({ state: 'QUEUED' })
+    await expect(
+      store.provideUserInput(
+        {
+          tenantId: tenantA,
+          executionId: userExecution.record.id,
+          actorId: 'operator-user',
+          message: 'different answer'
+        },
+        now
+      )
+    ).rejects.toMatchObject({ code: 'invalid_action' })
+
+    const approvalStore = new InMemoryOperationalExecutionStore({
+      clock: () => now,
+      leaseMs: 10
+    })
+    const approvalExecution = await approvalStore.submit(
+      submission('approval-resume'),
+      now
+    )
+    const approvalClaim = await approvalStore.claimNext(
+      tenantA,
+      'worker-approval-boundary',
+      now
+    )
+    await approvalStore.transition(
+      {
+        tenantId: tenantA,
+        executionId: approvalExecution.record.id,
+        to: 'RUNNING',
+        workerId: 'worker-approval-boundary',
+        fenceToken: approvalClaim!.record.attempt
+      },
+      now
+    )
+    const waiting = await approvalStore.transition(
+      {
+        tenantId: tenantA,
+        executionId: approvalExecution.record.id,
+        to: 'WAITING_APPROVAL',
+        workerId: 'worker-approval-boundary',
+        fenceToken: approvalClaim!.record.attempt,
+        approvalId: approvalId('approval-boundary'),
+        result: {
+          ...runtimeResult('APPROVAL_REQUIRED'),
+          approvalId: approvalId('approval-boundary')
+        }
+      },
+      now
+    )
+    expect(waiting.state).toBe('WAITING_APPROVAL')
+    await expect(
+      approvalStore.resolveApproval(
+        {
+          tenantId: tenantA,
+          executionId: approvalExecution.record.id,
+          approvalId: 'wrong-approval',
+          actorId: 'operator-approval',
+          decision: 'APPROVED'
+        },
+        now
+      )
+    ).rejects.toMatchObject({ code: 'conflict' })
+    const resumed = await approvalStore.resolveApproval(
+      {
+        tenantId: tenantA,
+        executionId: approvalExecution.record.id,
+        approvalId: 'approval-boundary',
+        actorId: 'operator-approval',
+        decision: 'APPROVED'
+      },
+      now
+    )
+    expect(resumed.state).toBe('QUEUED')
+    expect(
+      await approvalStore.resolveApproval(
+        {
+          tenantId: tenantA,
+          executionId: approvalExecution.record.id,
+          approvalId: 'approval-boundary',
+          actorId: 'operator-approval',
+          decision: 'APPROVED'
+        },
+        now
+      )
+    ).toMatchObject({ state: 'QUEUED' })
+
+    const terminalStore = new InMemoryOperationalExecutionStore({
+      clock: () => now,
+      leaseMs: 10
+    })
+    const terminal = await terminalStore.submit(
+      submission('terminal-cancel'),
+      now
+    )
+    const terminalClaim = await terminalStore.claimNext(
+      tenantA,
+      'worker-terminal-boundary',
+      now
+    )
+    await terminalStore.transition(
+      {
+        tenantId: tenantA,
+        executionId: terminal.record.id,
+        to: 'RUNNING',
+        workerId: 'worker-terminal-boundary',
+        fenceToken: terminalClaim!.record.attempt
+      },
+      now
+    )
+    await terminalStore.transition(
+      {
+        tenantId: tenantA,
+        executionId: terminal.record.id,
+        to: 'SUCCEEDED',
+        workerId: 'worker-terminal-boundary',
+        fenceToken: terminalClaim!.record.attempt,
+        result: runtimeResult('COMPLETED')
+      },
+      now
+    )
+    await expect(
+      terminalStore.cancel(
+        {
+          tenantId: tenantA,
+          executionId: terminal.record.id,
+          actorId: 'operator-terminal'
+        },
+        now
+      )
+    ).rejects.toMatchObject({ code: 'invalid_action' })
+
+    const recoveryStore = new InMemoryOperationalExecutionStore({
+      clock: () => now,
+      leaseMs: 10
+    })
+    const expired = await recoveryStore.submit(
+      submission('expired-recovery'),
+      now
+    )
+    const expiredClaim = await recoveryStore.claimNext(
+      tenantA,
+      'worker-expired',
+      now
+    )
+    expect(expiredClaim?.record.id).toBe(expired.record.id)
+    const recovered = await recoveryStore.recoverExpired(
+      tenantA,
+      new Date('2026-09-17T00:00:00.011Z')
+    )
+    expect(recovered.map((record) => record.id)).toContain(expired.record.id)
+  })
+
+  it('keeps worker failures, lease loss, observability, and shutdown bounded', async () => {
+    const exceptionStore = new InMemoryOperationalExecutionStore()
+    const exceptionSubmission = await exceptionStore.submit(
+      submission('worker-exception')
+    )
+    const failed = await new OperationalExecutionWorker({
+      store: exceptionStore,
+      workerId: 'worker-exception',
+      tenantId: tenantA,
+      harnessOptions: () => {
+        throw new Error('synthetic worker configuration failure')
+      }
+    }).processNext()
+    expect(failed.kind).toBe('processed')
+    if (failed.kind !== 'processed') return
+    expect(failed.record.id).toBe(exceptionSubmission.record.id)
+    expect(failed.record.state).toBe('FAILED_RETRYABLE')
+
+    class LeaseLostStore extends InMemoryOperationalExecutionStore {
+      override async transition(
+        input: Parameters<InMemoryOperationalExecutionStore['transition']>[0],
+        now?: Date
+      ) {
+        if (input.to === 'SUCCEEDED') {
+          throw new OperationalExecutionError(
+            'lease_lost',
+            'synthetic lease loss'
+          )
+        }
+        return super.transition(input, now)
+      }
+    }
+    const leaseStore = new LeaseLostStore()
+    await leaseStore.submit(submission('worker-lease-loss'))
+    const leaseSignals: string[] = []
+    const leaseResult = await new OperationalExecutionWorker({
+      store: leaseStore,
+      workerId: 'worker-lease-loss',
+      tenantId: tenantA,
+      harnessOptions: harnessOptions().options,
+      onSignal: (name) => leaseSignals.push(name)
+    }).processNext()
+    expect(leaseResult.kind).toBe('processed')
+    expect(leaseSignals).toContain('execution.lease_lost')
+
+    const flushedSignals: string[] = []
+    const observabilityStore = new InMemoryOperationalExecutionStore()
+    await observabilityStore.submit(submission('worker-observability'))
+    const fixtures = harnessOptions()
+    const observabilityResult = await new OperationalExecutionWorker({
+      store: observabilityStore,
+      workerId: 'worker-observability',
+      tenantId: tenantA,
+      harnessOptions: {
+        ...fixtures.options,
+        audit: {
+          append: async () => {
+            throw new Error('audit sink failure')
+          }
+        },
+        telemetry: {
+          record: () => {
+            throw new Error('telemetry sink failure')
+          }
+        }
+      },
+      onSignal: (name) => flushedSignals.push(name)
+    }).processNext()
+    expect(observabilityResult.kind).toBe('processed')
+    expect(flushedSignals).toEqual(
+      expect.arrayContaining([
+        'execution.audit_failed',
+        'execution.telemetry_failed'
+      ])
+    )
+
+    let releaseDecision!: () => void
+    let started!: () => void
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const decisionGate = new Promise<void>((resolve) => {
+      releaseDecision = resolve
+    })
+    const shutdownStore = new InMemoryOperationalExecutionStore()
+    const shutdownSubmission = await shutdownStore.submit(
+      submission('worker-shutdown-wait')
+    )
+    const shutdownWorker = new OperationalExecutionWorker({
+      store: shutdownStore,
+      workerId: 'worker-shutdown-wait',
+      tenantId: tenantA,
+      harnessOptions: {
+        ...harnessOptions().options,
+        orchestrator: {
+          decideNextStep: async () => {
+            started()
+            await decisionGate
+            return {
+              action: 'RESPOND' as const,
+              response: 'synthetic complete'
+            }
+          }
+        }
+      }
+    })
+    const processing = shutdownWorker.processNext()
+    await startedPromise
+    const stopping = shutdownWorker.stop()
+    releaseDecision()
+    await Promise.all([processing, stopping])
+    expect(
+      (await shutdownStore.get(tenantA, shutdownSubmission.record.id))?.state
+    ).toBe('SUCCEEDED')
   })
 })

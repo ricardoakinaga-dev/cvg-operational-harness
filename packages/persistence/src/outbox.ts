@@ -15,6 +15,7 @@ import {
   type TenantId
 } from '@cvg/platform'
 import type { InMemoryDatabase } from './db.ts'
+import { assertSameOutboxContent } from './outbox-content-hash.ts'
 import type {
   AuditEventRecord,
   OutboxAttemptRecord,
@@ -130,6 +131,15 @@ export interface DurableOutboxAdapter {
   requeueDeadLetter(
     input: OutboxRequeueInput
   ): OutboxEventRecord | Promise<OutboxEventRecord>
+  /**
+   * AUD19-004 — convergence read for redeliveries. Optional so existing
+   * adapters keep compiling; callers that re-enqueue on a possibly-seen key
+   * must converge through it when `enqueue` rejects a divergent repeat.
+   */
+  findByIdempotencyKey?(
+    tenantId: TenantId,
+    idempotencyKey: string
+  ): OutboxEventRecord | null | Promise<OutboxEventRecord | null>
 }
 
 /**
@@ -206,7 +216,30 @@ export class OutboxRepository implements DurableOutboxAdapter {
       (event) =>
         event.tenantId === tenantId && event.idempotencyKey === idempotencyKey
     )
-    if (existing) return cloneEvent(existing)
+    if (existing) {
+      // AUD19-004: the same key with different content is rejected
+      // fail-closed instead of silently returning the unrelated winner.
+      assertSameOutboxContent(
+        {
+          tenantId: existing.tenantId ?? '',
+          type: existing.type,
+          envelopeVersion:
+            existing.envelopeVersion ?? DEFAULT_OUTBOX_ENVELOPE_VERSION,
+          payload: existing.payload
+        },
+        {
+          tenantId,
+          type,
+          envelopeVersion:
+            inputOrType.envelopeVersion ?? DEFAULT_OUTBOX_ENVELOPE_VERSION,
+          payload
+        },
+        (message) => {
+          throw new DomainError('conflict', message)
+        }
+      )
+      return cloneEvent(existing)
+    }
 
     const now = this.currentTime()
     const correlationId = inputOrType.correlationId
@@ -263,6 +296,22 @@ export class OutboxRepository implements DurableOutboxAdapter {
       (candidate) =>
         candidate.id === eventId &&
         (!tenantId || candidate.tenantId === tenantId)
+    )
+    return event ? cloneEvent(event) : null
+  }
+
+  /**
+   * AUD19-004 — convergence read for redeliveries (see
+   * `DurableOutboxAdapter.findByIdempotencyKey`).
+   */
+  findByIdempotencyKey(
+    tenantId: TenantId,
+    idempotencyKey: string
+  ): OutboxEventRecord | null {
+    const event = this.db.state.outbox.find(
+      (candidate) =>
+        candidate.tenantId === tenantId &&
+        candidate.idempotencyKey === idempotencyKey
     )
     return event ? cloneEvent(event) : null
   }

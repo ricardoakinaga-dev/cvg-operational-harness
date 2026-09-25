@@ -330,6 +330,32 @@ export async function assertOperationalHarnessPostgresPreflight(
   )
 }
 
+/**
+ * The memory composition has no database/RLS claim surface. Keep that
+ * boundary explicit so the entrypoint cannot accidentally describe it as a
+ * durable preflight; production is rejected when the runtime is constructed.
+ */
+export function assertOperationalHarnessProfilePreflight(
+  runtime: OperationalHarnessWorkerRuntime
+): void {
+  if (runtime.pool) return
+  if (runtime.runtimeProfile === 'single_pass' && runtime.stepStore !== null) {
+    throw new Error(
+      'Single-pass operational harness memory profile cannot expose an iterative step store'
+    )
+  }
+  if (runtime.runtimeProfile === 'iterative' && runtime.stepStore === null) {
+    throw new Error(
+      'Iterative operational harness memory profile requires an in-memory step store'
+    )
+  }
+  if (!runtime.worker || !runtime.store || !runtime.approvalAuthority) {
+    throw new Error(
+      'Operational harness memory profile is missing its synthetic execution boundary'
+    )
+  }
+}
+
 function createSyntheticHarnessOptions(
   approvals: OperationalHarnessOptions['approvals'],
   tools: NonNullable<OperationalHarnessOptions['tools']>

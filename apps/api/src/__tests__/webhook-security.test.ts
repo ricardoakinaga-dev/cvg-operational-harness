@@ -46,7 +46,7 @@ afterEach(() => {
 })
 
 function replayPool(
-  clients: Array<Array<Array<{ event_key: string }>>>
+  clients: Array<Array<Array<Record<string, unknown>>>>
 ): PostgresPoolLike {
   return {
     connect: vi.fn(async () => {
@@ -59,6 +59,18 @@ function replayPool(
       }
     })
   } as unknown as PostgresPoolLike
+}
+
+function reservationRow(
+  eventKey: string,
+  generation = 1,
+  token = `token-${eventKey}`
+) {
+  return {
+    event_key: eventKey,
+    lease_generation: generation,
+    lease_token: token
+  }
 }
 
 const itWithPostgres = testDatabaseUrl ? it : it.skip
@@ -199,11 +211,11 @@ describe('HmacWebhookVerifier', () => {
     const expiresAt = Date.now() + 60_000
     const store = new PostgresWebhookReplayStore(
       replayPool([
-        [[], [{ event_key: 'key-1' }]],
+        [[], [reservationRow('key-1')]],
         [[{ event_key: 'key-1' }]],
-        [[], [], [{ event_key: 'key-2' }]],
+        [[], [], [reservationRow('key-2')]],
         [[{ event_key: 'key-2' }]],
-        [[], [{ event_key: 'key-3' }]],
+        [[], [reservationRow('key-3')]],
         [[]],
         [[{ event_key: 'key-3' }]],
         [[], [], []],
@@ -211,13 +223,23 @@ describe('HmacWebhookVerifier', () => {
       ])
     )
 
-    await expect(store.reserve('key-1', expiresAt)).resolves.toBe(true)
-    await expect(store.commit('key-1')).resolves.toBe(true)
-    await expect(store.reserve('key-2', expiresAt)).resolves.toBe(true)
-    await expect(store.release('key-2')).resolves.toBe(true)
+    const key1 = await store.reserve('key-1', expiresAt)
+    expect(key1).toMatchObject({ key: 'key-1', generation: 1 })
+    if (!key1) throw new Error('fixture failed to reserve key-1')
+    await expect(store.commit(key1)).resolves.toBe(true)
+    const key2 = await store.reserve('key-2', expiresAt)
+    expect(key2).toMatchObject({ key: 'key-2', generation: 1 })
+    if (!key2) throw new Error('fixture failed to reserve key-2')
+    await expect(store.release(key2)).resolves.toBe(true)
     await expect(store.claim('key-3', expiresAt)).resolves.toBe(false)
     await expect(store.claim('key-4', expiresAt)).resolves.toBe(false)
-    await expect(store.release('key-5')).resolves.toBe(false)
+    await expect(
+      store.release({
+        key: 'key-5',
+        generation: 1,
+        token: 'missing'
+      })
+    ).resolves.toBe(false)
     await expect(store.reserve('', expiresAt)).rejects.toThrow(
       'Webhook replay key is invalid'
     )
@@ -227,7 +249,7 @@ describe('HmacWebhookVerifier', () => {
     const query = vi
       .fn()
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ event_key: 'expired-key' }] })
+      .mockResolvedValueOnce({ rows: [reservationRow('expired-key')] })
     const pool = {
       connect: vi.fn(async () => ({
         query,
@@ -238,7 +260,7 @@ describe('HmacWebhookVerifier', () => {
 
     await expect(
       store.reserve('expired-key', Date.now() + 60_000)
-    ).resolves.toBe(true)
+    ).resolves.toMatchObject({ key: 'expired-key', generation: 1 })
     expect(query.mock.calls[0]?.[0]).toContain(
       'DELETE FROM webhook_replay_events'
     )
@@ -259,31 +281,42 @@ describe('HmacWebhookVerifier', () => {
         await client.query(`
           CREATE SCHEMA ${schemaName};
           SET search_path TO ${schemaName};
-          CREATE TABLE webhook_replay_events (
-            event_key text PRIMARY KEY,
-            status text NOT NULL CHECK (status IN ('reserved', 'committed')),
-            expires_at timestamptz NOT NULL,
-            created_at timestamptz NOT NULL DEFAULT now()
-          );
+           CREATE TABLE webhook_replay_events (
+             event_key text PRIMARY KEY CHECK (btrim(event_key) <> ''),
+             status text NOT NULL CHECK (status IN ('reserved', 'committed')),
+             expires_at timestamptz NOT NULL,
+             created_at timestamptz NOT NULL DEFAULT now(),
+             lease_generation bigint NOT NULL DEFAULT 0,
+             lease_token text,
+             CONSTRAINT webhook_replay_events_lease_generation_check
+               CHECK (lease_generation >= 0),
+             CONSTRAINT webhook_replay_events_fencing_check
+               CHECK (
+                 (status = 'reserved' AND lease_generation > 0 AND lease_token IS NOT NULL AND btrim(lease_token) <> '')
+                 OR (status = 'committed' AND lease_token IS NULL)
+               )
+           );
           CREATE INDEX idx_webhook_replay_events_expires
             ON webhook_replay_events (expires_at);
         `)
         const store = new PostgresWebhookReplayStore(pool)
         const expiresAt = Date.now() + 300_000
 
-        await expect(store.reserve('stale-lease', expiresAt)).resolves.toBe(
-          true
-        )
+        const stale = await store.reserve('stale-lease', expiresAt)
+        expect(stale).toMatchObject({ key: 'stale-lease', generation: 1 })
+        if (!stale) throw new Error('fixture failed to reserve stale lease')
         await client.query(
           `UPDATE ${schemaName}.webhook_replay_events
            SET created_at = CURRENT_TIMESTAMP - INTERVAL '31 seconds'
            WHERE event_key = $1`,
           ['stale-lease']
         )
-        await expect(store.reserve('stale-lease', expiresAt)).resolves.toBe(
-          true
-        )
-        await expect(store.commit('stale-lease')).resolves.toBe(true)
+        const fresh = await store.reserve('stale-lease', expiresAt)
+        expect(fresh).toMatchObject({ key: 'stale-lease', generation: 2 })
+        if (!fresh) throw new Error('fixture failed to take over stale lease')
+        await expect(store.commit(stale)).resolves.toBe(false)
+        await expect(store.release(stale)).resolves.toBe(false)
+        await expect(store.commit(fresh)).resolves.toBe(true)
         await expect(store.reserve('stale-lease', expiresAt)).resolves.toBe(
           false
         )
@@ -296,7 +329,7 @@ describe('HmacWebhookVerifier', () => {
         )
         await expect(
           store.reserve('purge-after-expiry', expiresAt)
-        ).resolves.toBe(true)
+        ).resolves.toMatchObject({ key: 'purge-after-expiry', generation: 1 })
         await expect(
           client.query(
             `SELECT count(*)::text AS count
@@ -360,7 +393,11 @@ describe('HmacWebhookVerifier', () => {
       now: () => now,
       replayStore: {
         claim: vi.fn(async () => false),
-        reserve: vi.fn(async () => true),
+        reserve: vi.fn(async () => ({
+          key: 'webhook:whatsapp:lease-commit-failure',
+          generation: 1,
+          token: 'lease-token'
+        })),
         commit: vi.fn(async () => false),
         release: vi.fn(async () => true)
       }
@@ -382,12 +419,25 @@ describe('HmacWebhookVerifier', () => {
     const store = new InMemoryWebhookReplayStore(() => now)
 
     expect(store.reserve('expired', now)).toBe(false)
-    expect(store.commit('missing')).toBe(false)
-    expect(store.reserve('event', now + 1_000)).toBe(true)
-    expect(store.commit('event')).toBe(true)
-    expect(store.release('event')).toBe(false)
+    expect(
+      store.commit({ key: 'missing', generation: 1, token: 'missing' })
+    ).toBe(false)
+    const stale = store.reserve('event', now + 1_000)
+    expect(stale).toMatchObject({ key: 'event', generation: 1 })
+    if (!stale) throw new Error('fixture failed to reserve event')
     now += 2_000
-    expect(store.reserve('event', now + 1_000)).toBe(true)
+    const fresh = store.reserve('event', now + 1_000)
+    expect(fresh).toMatchObject({ key: 'event', generation: 1 })
+    if (!fresh) throw new Error('fixture failed to take over event')
+    expect(store.commit(stale)).toBe(false)
+    expect(store.release(stale)).toBe(false)
+    expect(store.commit(fresh)).toBe(true)
+    expect(store.release(fresh)).toBe(false)
+    now += 2_000
+    expect(store.reserve('event', now + 1_000)).toMatchObject({
+      key: 'event',
+      generation: 1
+    })
   })
 
   it('canonicalizes JSON-safe webhook bodies and rejects invalid signing inputs', () => {

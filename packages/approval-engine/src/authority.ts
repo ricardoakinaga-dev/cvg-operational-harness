@@ -1,5 +1,6 @@
 import type {
   ApprovalRecord,
+  ApprovalDecisionInput,
   ApprovalRequestInput,
   ApprovalReserveInput,
   ApprovalReservation,
@@ -42,13 +43,13 @@ export interface ApprovalAuthority {
   approve(
     tenantId: string,
     approvalId: string,
-    input: { approverId: string; reason?: string }
+    input: ApprovalDecisionInput
   ): ApprovalAuthorityResult<ApprovalRecord>
 
   reject(
     tenantId: string,
     approvalId: string,
-    input: { approverId: string; reason?: string }
+    input: ApprovalDecisionInput
   ): ApprovalAuthorityResult<ApprovalRecord>
 
   cancel(

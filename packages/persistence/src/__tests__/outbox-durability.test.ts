@@ -288,14 +288,30 @@ describe('durable PostgreSQL outbox', () => {
           createdAt: clockNow,
           availableAt: clockNow
         })
-        const duplicate = await b.enqueue({
+        // AUD19-004: an identical replay converges on the winner...
+        const identical = await b.enqueue({
           tenantId: tenantA,
           type: 'synthetic.outbox',
-          payload: { fixture: 'duplicate-is-ignored' },
+          payload: { fixture: true },
           correlationId,
-          idempotencyKey: 'synthetic-outbox-key-101'
+          idempotencyKey: 'synthetic-outbox-key-101',
+          createdAt: clockNow,
+          availableAt: clockNow
         })
-        expect(duplicate.id).toBe(created.id)
+        expect(identical.id).toBe(created.id)
+        // ...while a divergent replay on the same key fails closed instead
+        // of being silently ignored.
+        await expect(
+          b.enqueue({
+            tenantId: tenantA,
+            type: 'synthetic.outbox',
+            payload: { fixture: 'divergent-content-rejected' },
+            correlationId,
+            idempotencyKey: 'synthetic-outbox-key-101',
+            createdAt: clockNow,
+            availableAt: clockNow
+          })
+        ).rejects.toMatchObject({ code: 'conflict' })
 
         const claims = await Promise.all([
           a.claimNext({

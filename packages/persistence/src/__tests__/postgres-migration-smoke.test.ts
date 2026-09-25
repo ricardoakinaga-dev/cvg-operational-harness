@@ -31,6 +31,30 @@ describe('postgres migration smoke', () => {
     )
   })
 
+  it('ships additive webhook replay fencing state', async () => {
+    const migration = await readPostgresMigrationSql(
+      '0025_webhook_replay_fencing'
+    )
+
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS lease_generation')
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS lease_token')
+    expect(migration).toContain('webhook_replay_events_lease_generation_check')
+    expect(migration).toContain('webhook_replay_events_fencing_check')
+    expect(migration).toContain('UPDATE webhook_replay_events')
+  })
+
+  it('ships HMAC rate-limit key hardening without active-row eviction', async () => {
+    const migration = await readPostgresMigrationSql(
+      '0026_rate_limit_key_hardening'
+    )
+
+    expect(migration).toContain('TRUNCATE TABLE rate_limit_buckets')
+    expect(migration).toContain('DROP COLUMN IF EXISTS key')
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS budget_key')
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS key_digest')
+    expect(migration).toContain('rate_limit_buckets_key_digest_check')
+  })
+
   it('keeps the initial migration aligned with operational runtime tables and correlation indexes', async () => {
     const migration = await readFile(migrationPath, 'utf8')
 

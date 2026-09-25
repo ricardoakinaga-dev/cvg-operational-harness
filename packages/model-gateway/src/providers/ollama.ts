@@ -1,5 +1,10 @@
 import { z } from 'zod'
-import { evaluateOutboundUrl } from '@cvg/shared'
+import {
+  evaluateOutboundUrl,
+  fetchWithSsrfGuard,
+  isLoopbackHostname
+} from '@cvg/shared'
+import type { EgressDns } from '@cvg/shared'
 import type {
   ModelProvider,
   ProviderRequest,
@@ -11,6 +16,7 @@ import {
   networkError,
   providerHttpError
 } from './http-errors.ts'
+import { fetchWithResolvedAddress } from './ssrf-node.ts'
 import {
   DEFAULT_MAX_RESPONSE_BYTES,
   combineTimeoutSignal,
@@ -25,6 +31,13 @@ export interface OllamaProviderOptions {
   fetchImpl?: FetchLike
   maxResponseBytes?: number
   allowHttp?: boolean
+  /**
+   * AUD19-007 — explicit opt-in for loopback/private networks (local
+   * homologation). Default false: private/reserved addresses are denied.
+   */
+  allowPrivateNetworks?: boolean
+  /** AUD19-007 — injectable DNS for the composed egress guard (tests). */
+  dnsLookup?: EgressDns['lookup']
 }
 
 const OllamaResponseSchema = z.object({
@@ -49,14 +62,25 @@ export class OllamaProvider implements ModelProvider {
   readonly #fetch: FetchLike
   readonly #maxResponseBytes: number
   readonly #allowedHosts: string[]
+  readonly #allowHttp: boolean
+  readonly #allowPrivateNetworks: boolean
+  readonly #dnsLookup: EgressDns['lookup'] | undefined
+  readonly #boundFetch: typeof fetchWithResolvedAddress | undefined
 
   constructor(options: OllamaProviderOptions) {
     const baseUrl = (options.baseUrl ?? 'http://127.0.0.1:11434')
       .trim()
       .replace(/\/+$/, '')
+    const parsedBaseUrl = new URL(baseUrl)
+    const allowPrivateNetworks = options.allowPrivateNetworks ?? false
+    const allowHttp =
+      parsedBaseUrl.protocol === 'http:' &&
+      allowPrivateNetworks &&
+      isLoopbackHostname(parsedBaseUrl.hostname)
     const guard = evaluateOutboundUrl(baseUrl, {
       allowedHosts: [new URL(baseUrl).hostname.toLowerCase()],
-      allowedProtocols: ['https:', 'http:']
+      allowedProtocols: allowHttp ? ['https:', 'http:'] : ['https:'],
+      allowPrivateNetworks
     })
     if (!guard.allowed) {
       throw new ModelProviderError(
@@ -73,23 +97,15 @@ export class OllamaProvider implements ModelProvider {
     this.#fetch = options.fetchImpl ?? (globalThis.fetch as FetchLike)
     this.#maxResponseBytes =
       options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
-    this.#allowedHosts = [new URL(baseUrl).hostname.toLowerCase()]
+    this.#allowedHosts = [parsedBaseUrl.hostname.toLowerCase()]
+    this.#allowHttp = allowHttp
+    this.#allowPrivateNetworks = allowPrivateNetworks
+    this.#dnsLookup = options.dnsLookup
+    this.#boundFetch = options.fetchImpl ? undefined : fetchWithResolvedAddress
   }
 
   async execute(request: ProviderRequest): Promise<ProviderResult> {
     const endpoint = `${this.#baseUrl}/api/chat`
-    const guarded = evaluateOutboundUrl(endpoint, {
-      allowedHosts: this.#allowedHosts,
-      allowedProtocols: ['https:', 'http:']
-    })
-    if (!guarded.allowed) {
-      throw new ModelProviderError(
-        this.id,
-        'invalid_request',
-        `Ollama endpoint rejected: ${guarded.reason}`
-      )
-    }
-
     const signal = combineTimeoutSignal(request.signal, request.timeoutMs)
     const messages = [
       ...(request.input.system
@@ -112,17 +128,44 @@ export class OllamaProvider implements ModelProvider {
 
     let response: Response
     try {
-      response = await this.#fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {})
+      const fetchImpl = (url: string, requestInit: Record<string, unknown>) =>
+        this.#fetch(url, requestInit as RequestInit)
+      const deps = this.#boundFetch
+        ? {
+            ...(this.#dnsLookup ? { dnsLookup: this.#dnsLookup } : {}),
+            boundFetchImpl: this.#boundFetch
+          }
+        : { ...(this.#dnsLookup ? { dnsLookup: this.#dnsLookup } : {}) }
+      response = await fetchWithSsrfGuard(
+        fetchImpl,
+        endpoint,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {})
+          },
+          body: JSON.stringify(body),
+          signal,
+          redirect: 'manual'
         },
-        body: JSON.stringify(body),
-        signal,
-        redirect: 'error'
-      })
+        {
+          allowedHosts: this.#allowedHosts,
+          allowedProtocols: this.#allowHttp ? ['https:', 'http:'] : ['https:'],
+          allowPrivateNetworks: this.#allowPrivateNetworks,
+          allowLoopbackOnly: this.#allowHttp,
+          maxRedirects: 0
+        },
+        deps
+      )
     } catch (error) {
+      if (error instanceof Error && error.name === 'UnsafeUrlError') {
+        throw new ModelProviderError(
+          this.id,
+          'invalid_request',
+          `Ollama endpoint rejected: ${error.message}`
+        )
+      }
       throw networkError(this.id, error)
     }
 

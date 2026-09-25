@@ -75,6 +75,7 @@ describe('Evolution adapter hardening', () => {
     const adapter = new EvolutionChannelAdapter({
       enabled: true,
       baseUrl: 'https://evolution.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'k',
       instance: 'i',
       fetchImpl: async () => new Response('{}', { status: 200 })
@@ -84,6 +85,7 @@ describe('Evolution adapter hardening', () => {
     const withDefaultClock = new EvolutionChannelAdapter({
       enabled: true,
       baseUrl: 'https://evolution.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'k',
       instance: 'i',
       fetchImpl: async () => new Response('{}', { status: 200 })
@@ -97,6 +99,7 @@ describe('Evolution adapter hardening', () => {
     const adapter = new EvolutionChannelAdapter({
       enabled: true,
       baseUrl: 'https://evolution.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'k',
       instance: 'i',
       clock: () => NOW,
@@ -117,6 +120,7 @@ describe('Evolution adapter hardening', () => {
     const overflow = new EvolutionChannelAdapter({
       enabled: true,
       baseUrl: 'https://evolution.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'k',
       instance: 'i',
       maxResponseBytes: 8,
@@ -129,6 +133,26 @@ describe('Evolution adapter hardening', () => {
 })
 
 describe('Chatwoot adapter hardening', () => {
+  it('covers explicit loopback HTTP and default fetch composition', () => {
+    const loopback = new ChatwootChannelAdapter({
+      enabled: true,
+      baseUrl: 'http://127.0.0.1:32123',
+      allowPrivateNetworks: true,
+      apiKey: 'synthetic-key',
+      accountId: '1',
+      fetchImpl: async () => new Response('{}')
+    })
+    expect(loopback.enabled).toBe(true)
+
+    const withDefaultFetch = new ChatwootChannelAdapter({
+      enabled: true,
+      baseUrl: 'https://chatwoot.example.com',
+      apiKey: 'synthetic-key',
+      accountId: '1'
+    })
+    expect(withDefaultFetch.enabled).toBe(true)
+  })
+
   it('fails closed when disabled by default', async () => {
     const adapter = new ChatwootChannelAdapter()
     expect(adapter.enabled).toBe(false)
@@ -156,6 +180,7 @@ describe('Chatwoot adapter hardening', () => {
     const adapter = new ChatwootChannelAdapter({
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'k',
       accountId: '1',
       clock: () => NOW,
@@ -196,6 +221,7 @@ describe('Chatwoot adapter hardening', () => {
     const adapter = new ChatwootChannelAdapter({
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'k',
       accountId: '1',
       clock: () => NOW,

@@ -24,9 +24,16 @@ afterEach(() => vi.restoreAllMocks())
 
 describe('controlled journeys panel', () => {
   it('walks identify, draft, link and approval-blocked scheduling steps', async () => {
+    const idempotencyKeys: string[] = []
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
+      if (method === 'POST' && init?.body) {
+        const body = JSON.parse(String(init.body)) as {
+          idempotencyKey?: string
+        }
+        if (body.idempotencyKey) idempotencyKeys.push(body.idempotencyKey)
+      }
       if (url.includes('/owners/search')) {
         return envelope({
           matches: [
@@ -120,6 +127,13 @@ describe('controlled journeys panel', () => {
     await waitFor(() =>
       expect(screen.getByText(/Tarefa operacional criada/)).toBeTruthy()
     )
+    expect(idempotencyKeys).toHaveLength(4)
+    expect(new Set(idempotencyKeys).size).toBe(4)
+    for (const key of idempotencyKeys) {
+      expect(key).toMatch(
+        /^journey_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+      )
+    }
     expect(screen.queryByRole('button', { name: /Confirmar/ })).toBeNull()
   })
 })

@@ -16,6 +16,7 @@ describe('controlled Secretary bootstrap', () => {
     const app = await buildServerFromEnv({
       NODE_ENV: 'development',
       API_PERSISTENCE_MODE: 'memory',
+      CVG_IDENTITY_MODE: 'simulation',
       WEBHOOK_SIGNING_SECRET: 'development-only-controlled-secret-123456'
     })
 

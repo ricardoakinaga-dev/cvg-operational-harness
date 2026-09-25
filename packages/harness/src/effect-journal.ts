@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type {
   ToolDefinition,
   ToolExecutionContext,
@@ -82,6 +82,20 @@ function bounded(value: string, label: string): string {
   }
   if (value.length > 500) throw new EffectJournalError(`${label} is too long`)
   return value.trim()
+}
+
+export type EffectAttemptIdFactory = () => string
+
+/**
+ * Generates the fencing identity for one effect attempt. The factory seam is
+ * intentionally explicit so synthetic tests can be deterministic; production
+ * callers use the node:crypto default and never a weak fallback.
+ */
+export function createEffectAttemptId(
+  factory: EffectAttemptIdFactory = randomUUID
+): string {
+  const token = bounded(factory(), 'attemptId token')
+  return bounded(`attempt_${token}`, 'attemptId')
 }
 
 function clone<T>(value: T): T {
@@ -230,6 +244,8 @@ export interface JournaledToolRegistryOptions {
   readonly crashAfterEffectBeforeConfirm?: boolean
   /** Binds effect replay to the exact capability composition. */
   readonly compositionFingerprint?: string
+  /** Deterministic seam for synthetic tests; defaults to node:crypto UUIDs. */
+  readonly attemptIdFactory?: EffectAttemptIdFactory
 }
 
 function proposalHash(
@@ -296,7 +312,7 @@ function journaledTool(
       context: ToolExecutionContext
     ): Promise<ToolResult> => {
       const operationKey = bounded(context.operationKey ?? '', 'operationKey')
-      const attemptId = `attempt_${Date.now()}_${Math.random().toString(16).slice(2)}`
+      const attemptId = createEffectAttemptId(options.attemptIdFactory)
       const reservation = await journal.reserve({
         tenantId: context.tenantId,
         operationKey,

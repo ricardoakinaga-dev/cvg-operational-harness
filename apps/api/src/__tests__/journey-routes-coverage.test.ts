@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { InMemoryRateLimiter } from '../rate-limit.ts'
 import { buildServer } from '../server.ts'
 
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000801'
@@ -401,7 +402,11 @@ describe('journey routes coverage', () => {
     const client = { query: async () => ({ rows: [] }) }
     const app = buildServer({
       persistence: { kind: 'postgres', client: client as never },
-      journeyRepository: null
+      journeyRepository: null,
+      // AUD19-006: the stub client is not a PostgreSQL; pin the
+      // process-local limiter so the test exercises journey fail-closed
+      // behavior instead of limiter fail-closed behavior.
+      rateLimiter: new InMemoryRateLimiter()
     })
     const headers = operatorHeaders()
     const unavailable = [

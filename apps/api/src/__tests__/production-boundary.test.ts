@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildServer } from '../server.ts'
+import { createInMemoryOperatorSessionStore } from '../operator-session.ts'
 
 const operatorHeaders = {
   'x-operator-id': 'operator.production',
@@ -13,7 +14,10 @@ afterEach(() => {
 describe('production boundary authentication', () => {
   it('rejects self-asserted operator headers when no trusted resolver is configured', async () => {
     vi.stubEnv('NODE_ENV', 'production')
-    const app = buildServer({ durableInbound: true })
+    const app = buildServer({
+      durableInbound: true,
+      operatorSessionStore: createInMemoryOperatorSessionStore()
+    })
     const response = await app.inject({
       method: 'GET',
       url: '/v1/tasks',
@@ -38,7 +42,9 @@ describe('production boundary authentication', () => {
         tenantId: 'tenant_00000000-0000-4000-8000-000000000061'
       }),
       webhookVerifier: () => true,
-      inboundTenantResolver: () => 'tenant_00000000-0000-4000-8000-000000000061'
+      inboundTenantResolver: () =>
+        'tenant_00000000-0000-4000-8000-000000000061',
+      operatorSessionStore: createInMemoryOperatorSessionStore()
     })
     const tasks = await app.inject({
       method: 'GET',
@@ -68,7 +74,8 @@ describe('production boundary authentication', () => {
     vi.stubEnv('NODE_ENV', 'production')
     const app = buildServer({
       durableInbound: true,
-      requireAuthenticatedMutations: false
+      requireAuthenticatedMutations: false,
+      operatorSessionStore: createInMemoryOperatorSessionStore()
     })
     const response = await app.inject({
       method: 'POST',
@@ -115,7 +122,10 @@ describe('production boundary authentication', () => {
 
   it('fails closed outside test mode even when NODE_ENV is not production', async () => {
     vi.stubEnv('NODE_ENV', 'development')
-    const app = buildServer({ durableInbound: true })
+    const app = buildServer({
+      durableInbound: true,
+      operatorSessionStore: createInMemoryOperatorSessionStore()
+    })
     const response = await app.inject({
       method: 'POST',
       url: '/v1/tasks',
@@ -139,7 +149,10 @@ describe('production boundary authentication', () => {
 
   it('fails production webhooks closed without a verifier', async () => {
     vi.stubEnv('NODE_ENV', 'production')
-    const app = buildServer({ durableInbound: true })
+    const app = buildServer({
+      durableInbound: true,
+      operatorSessionStore: createInMemoryOperatorSessionStore()
+    })
     const response = await app.inject({
       method: 'POST',
       url: '/v1/webhooks/channels/whatsapp/messages',
@@ -163,7 +176,8 @@ describe('production boundary authentication', () => {
     vi.stubEnv('NODE_ENV', 'production')
     const app = buildServer({
       durableInbound: true,
-      webhookVerifier: () => true
+      webhookVerifier: () => true,
+      operatorSessionStore: createInMemoryOperatorSessionStore()
     })
     const response = await app.inject({
       method: 'POST',
@@ -192,7 +206,8 @@ describe('production boundary authentication', () => {
         operatorId: 'trusted.production',
         role: 'Admin',
         tenantId: 'tenant_00000000-0000-4000-8000-000000000061'
-      })
+      }),
+      operatorSessionStore: createInMemoryOperatorSessionStore()
     })
     const mismatch = await app.inject({
       method: 'GET',
@@ -206,7 +221,8 @@ describe('production boundary authentication', () => {
       operatorIdentityResolver: () => ({
         operatorId: 'trusted.without-tenant',
         role: 'Admin'
-      })
+      }),
+      operatorSessionStore: createInMemoryOperatorSessionStore()
     })
     const missingBinding = await appWithoutTenantBinding.inject({
       method: 'GET',

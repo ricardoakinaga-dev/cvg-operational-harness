@@ -2,10 +2,12 @@ import type { QueryResultRow } from 'pg'
 import {
   ApprovalEngine,
   ApprovalError,
+  ApprovalDecisionActorTypeSchema,
   ApprovalStatusSchema,
   InMemoryApprovalStore,
   type ApprovalAuthority,
   type ApprovalConsumption,
+  type ApprovalDecisionInput,
   type ApprovalEngineOptions,
   type ApprovalRecord,
   type ApprovalRequestInput,
@@ -58,6 +60,9 @@ export interface RuntimeApprovalRow extends QueryResultRow {
   cancelled_at: Date | string | null
   expired_at: Date | string | null
   approver_id: string | null
+  decision_actor_type: string | null
+  decision_correlation_id: string | null
+  decision_command_key: string | null
   decision_reason: string | null
   execution_count: number
   execution_ref: string | null
@@ -93,8 +98,9 @@ const runtimeApprovalColumns = `
   tenant_id, approval_id, operator_id, agent_id, agent_version, action,
   resource_type, resource_id, payload_hash, policy_version, prompt_version,
   correlation_id, status, single_use, requested_at, expires_at, approved_at,
-  executed_at, rejected_at, cancelled_at, expired_at, approver_id,
-  decision_reason, execution_count, execution_ref, reservation_id,
+   executed_at, rejected_at, cancelled_at, expired_at, approver_id,
+   decision_actor_type, decision_correlation_id, decision_command_key,
+   decision_reason, execution_count, execution_ref, reservation_id,
   reservation_owner, reservation_expires_at, reservation_generation,
   used_reservation_ids, reserved_at, executing_at, released_at, failed_at,
   uncertain_at, confirmed_at, confirmation_evidence_ref, proposal_id,
@@ -129,6 +135,9 @@ const persistedColumns = [
   'cancelled_at',
   'expired_at',
   'approver_id',
+  'decision_actor_type',
+  'decision_correlation_id',
+  'decision_command_key',
   'decision_reason',
   'execution_count',
   'execution_ref',
@@ -245,6 +254,19 @@ export function mapRuntimeApprovalRow(row: RuntimeApprovalRow): ApprovalRecord {
       ? { expiredAt: toIsoString(row.expired_at) }
       : {}),
     ...(row.approver_id !== null ? { approverId: row.approver_id } : {}),
+    ...(row.decision_actor_type !== null
+      ? {
+          decisionActorType: ApprovalDecisionActorTypeSchema.parse(
+            row.decision_actor_type
+          )
+        }
+      : {}),
+    ...(row.decision_correlation_id !== null
+      ? { decisionCorrelationId: row.decision_correlation_id }
+      : {}),
+    ...(row.decision_command_key !== null
+      ? { decisionCommandKey: row.decision_command_key }
+      : {}),
     ...(row.decision_reason !== null
       ? { decisionReason: row.decision_reason }
       : {}),
@@ -317,6 +339,9 @@ function recordValues(record: ApprovalRecord): unknown[] {
     record.cancelledAt ?? null,
     record.expiredAt ?? null,
     record.approverId ?? null,
+    record.decisionActorType ?? null,
+    record.decisionCorrelationId ?? null,
+    record.decisionCommandKey ?? null,
     record.decisionReason ?? null,
     record.executionCount,
     record.executionRef ?? null,
@@ -404,7 +429,7 @@ export class PostgresApprovalAuthority implements ApprovalAuthority {
   approve(
     tenantId: string,
     approvalId: string,
-    input: { approverId: string; reason?: string }
+    input: ApprovalDecisionInput
   ): Promise<ApprovalRecord> {
     return this.#mutateRecord(tenantId, approvalId, (engine) =>
       engine.approve(tenantId, approvalId, input)
@@ -414,7 +439,7 @@ export class PostgresApprovalAuthority implements ApprovalAuthority {
   reject(
     tenantId: string,
     approvalId: string,
-    input: { approverId: string; reason?: string }
+    input: ApprovalDecisionInput
   ): Promise<ApprovalRecord> {
     return this.#mutateRecord(tenantId, approvalId, (engine) =>
       engine.reject(tenantId, approvalId, input)

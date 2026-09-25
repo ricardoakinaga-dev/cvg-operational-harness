@@ -25,13 +25,24 @@ describe('durable outbox memory adapter', () => {
       idempotencyKey: 'memory-key-151',
       correlationId
     })
-    const duplicate = repository.enqueue({
+    // AUD19-004: identical replay converges...
+    const identical = repository.enqueue({
       tenantId: tenantA,
       type: 'synthetic.memory',
-      payload: { changed: true },
+      payload: { fixture: true },
       idempotencyKey: 'memory-key-151',
       correlationId
     })
+    // ...divergent content on the same key fails closed...
+    expect(() =>
+      repository.enqueue({
+        tenantId: tenantA,
+        type: 'synthetic.memory',
+        payload: { changed: true },
+        idempotencyKey: 'memory-key-151',
+        correlationId
+      })
+    ).toThrowError(expect.objectContaining({ code: 'conflict' }))
     const otherTenant = repository.enqueue({
       tenantId: tenantB,
       type: 'synthetic.memory',
@@ -39,7 +50,7 @@ describe('durable outbox memory adapter', () => {
       idempotencyKey: 'memory-key-151',
       correlationId
     })
-    expect(duplicate.id).toBe(first.id)
+    expect(identical.id).toBe(first.id)
     expect(otherTenant.id).not.toBe(first.id)
   })
 

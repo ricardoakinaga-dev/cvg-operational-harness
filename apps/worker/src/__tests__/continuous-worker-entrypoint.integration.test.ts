@@ -198,6 +198,20 @@ describeWithPostgres(
         const firstExit = await waitForExit(first.child)
         const firstEvents = parseJsonLines(first.output())
         expect(firstExit).toEqual({ code: 0, signal: null })
+        const readyIndex = firstEvents.findIndex(
+          (event) =>
+            event.event === 'worker.readiness' && event.status === 'ready'
+        )
+        const processedIndex = firstEvents.findIndex(
+          (event) => event.event === 'worker.outbox.processed'
+        )
+        const notReadyIndex = firstEvents.findIndex(
+          (event) =>
+            event.event === 'worker.readiness' && event.status === 'not_ready'
+        )
+        expect(readyIndex).toBeGreaterThanOrEqual(0)
+        expect(processedIndex).toBeGreaterThan(readyIndex)
+        expect(notReadyIndex).toBeGreaterThan(processedIndex)
         expect(firstEvents).toContainEqual(
           expect.objectContaining({
             event: 'worker.shutdown.started',

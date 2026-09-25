@@ -1,8 +1,12 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
+  createConfiguredOperatorIdentityResolver,
+  createLocalIdentityKeyRing,
   createTrustedOperatorIdentityResolver,
-  createTrustedOperatorIdentityToken
+  createTrustedOperatorIdentityToken,
+  decodeTrustedOperatorTokenClaims,
+  TRUSTED_OPERATOR_TOKEN_ISSUER
 } from '../operator-identity.ts'
 
 const NOW_MS = 1_700_000_000_000
@@ -32,6 +36,7 @@ function signedToken(claims: unknown, secret = SECRET): string {
 function validClaims(overrides: Record<string, unknown> = {}) {
   return {
     ...IDENTITY,
+    iss: TRUSTED_OPERATOR_TOKEN_ISSUER,
     aud: 'cvg-api',
     iat: NOW_SECONDS,
     exp: NOW_SECONDS + 300,
@@ -278,6 +283,18 @@ describe('trusted operator identity tokens', () => {
     ).toThrow(/claims/)
     expect(() =>
       resolve({
+        'x-cvg-operator-token': signedToken(
+          validClaims({ iss: 'untrusted-issuer' })
+        )
+      })
+    ).toThrow(/claims/)
+    expect(() =>
+      resolve({
+        'x-cvg-operator-token': signedToken(validClaims({ iss: undefined }))
+      })
+    ).toThrow(/claims/)
+    expect(() =>
+      resolve({
         'x-cvg-operator-token': signedToken(validClaims({ exp: NOW_SECONDS }))
       })
     ).toThrow(/claims/)
@@ -302,6 +319,154 @@ describe('trusted operator identity tokens', () => {
         )
       })
     ).toThrow(/expired or not active/)
+  })
+
+  it('rejects a token whose expiration is exactly the current second', () => {
+    const resolve = createTrustedOperatorIdentityResolver({
+      secret: SECRET,
+      now: () => NOW_MS,
+      maxLifetimeSeconds: 300,
+      clockSkewSeconds: 30
+    })
+
+    expect(() =>
+      resolve({
+        'x-cvg-operator-token': signedToken(
+          validClaims({ iat: NOW_SECONDS - 1, exp: NOW_SECONDS })
+        )
+      })
+    ).toThrow(/expired or not active/)
+  })
+
+  it('supports bounded key rotation and rejects missing or inactive key ids', () => {
+    const previousSecret = 'previous-operator-secret-for-rotation-tests-2026'
+    const currentSecret = 'current-operator-secret-for-rotation-tests-2026'
+    const ring = createLocalIdentityKeyRing({
+      current: { keyId: 'current', secret: currentSecret },
+      previous: [
+        {
+          keyId: 'previous',
+          secret: previousSecret,
+          rotatedAt: NOW_SECONDS - 10
+        }
+      ],
+      rotationWindowSeconds: 60
+    })
+    const resolve = createTrustedOperatorIdentityResolver({
+      keyRing: ring,
+      now: () => NOW_MS
+    })
+    const previousToken = createTrustedOperatorIdentityToken(
+      IDENTITY,
+      { keyId: 'previous', secret: previousSecret },
+      () => NOW_MS
+    )
+    expect(resolve({ 'x-cvg-operator-token': previousToken })).toEqual(IDENTITY)
+
+    const missingKeyId = createTrustedOperatorIdentityToken(
+      IDENTITY,
+      currentSecret,
+      () => NOW_MS
+    )
+    expect(() => resolve({ 'x-cvg-operator-token': missingKeyId })).toThrow(
+      /key identifier/
+    )
+    const expiredRing = createLocalIdentityKeyRing({
+      current: { keyId: 'current', secret: currentSecret },
+      previous: [
+        {
+          keyId: 'previous',
+          secret: previousSecret,
+          rotatedAt: NOW_SECONDS - 10
+        }
+      ],
+      rotationWindowSeconds: 1
+    })
+    expect(expiredRing.keysAt(NOW_SECONDS)).toEqual([
+      { keyId: 'current', secret: currentSecret }
+    ])
+    const expiredResolve = createTrustedOperatorIdentityResolver({
+      keyRing: expiredRing,
+      now: () => NOW_MS
+    })
+    expect(() =>
+      expiredResolve({ 'x-cvg-operator-token': previousToken })
+    ).toThrow(/not active/)
+    expect(() =>
+      createLocalIdentityKeyRing({
+        current: { keyId: 'current', secret: currentSecret },
+        previous: [
+          {
+            keyId: 'current',
+            secret: previousSecret,
+            rotatedAt: NOW_SECONDS
+          }
+        ]
+      })
+    ).toThrow(/duplicate/)
+  })
+
+  it('parses configured key rings and safely decodes replay claims', () => {
+    const current = {
+      keyId: 'configured',
+      secret: 'configured-operator-secret-for-tests-2026'
+    }
+    const raw = JSON.stringify({ current, previous: [], revokedKeyIds: [] })
+    const resolver = createConfiguredOperatorIdentityResolver({
+      NODE_ENV: 'production',
+      CVG_IDENTITY_MODE: 'trusted',
+      CVG_OPERATOR_IDENTITY_KEYRING: raw
+    })
+    expect(resolver).toBeTypeOf('function')
+    const configuredNow = Math.floor(Date.now() / 1000)
+    const token = createTrustedOperatorIdentityToken(
+      IDENTITY,
+      current,
+      () => configuredNow * 1_000
+    )
+    expect(resolver?.({ 'x-cvg-operator-token': token })).toEqual(IDENTITY)
+    expect(decodeTrustedOperatorTokenClaims(token)).toMatchObject({
+      iat: configuredNow,
+      exp: configuredNow + 300
+    })
+    expect(decodeTrustedOperatorTokenClaims(undefined)).toBeNull()
+    expect(decodeTrustedOperatorTokenClaims('not-a-token')).toBeNull()
+    expect(decodeTrustedOperatorTokenClaims(`${token}.extra`)).toBeNull()
+    expect(
+      decodeTrustedOperatorTokenClaims('not*base64url.signature')
+    ).toBeNull()
+
+    expect(
+      createConfiguredOperatorIdentityResolver({
+        NODE_ENV: 'test',
+        CVG_IDENTITY_MODE: undefined,
+        CVG_OPERATOR_IDENTITY_KEYRING: undefined
+      })
+    ).toBeUndefined()
+    expect(
+      createConfiguredOperatorIdentityResolver({
+        NODE_ENV: 'production',
+        CVG_IDENTITY_MODE: 'simulation',
+        CVG_OPERATOR_IDENTITY_KEYRING: raw
+      })
+    ).toBeUndefined()
+    expect(() =>
+      createConfiguredOperatorIdentityResolver({
+        NODE_ENV: 'production',
+        CVG_IDENTITY_MODE: 'trusted',
+        CVG_OPERATOR_IDENTITY_KEYRING: '{invalid'
+      })
+    ).toThrow(/KEYRING.*invalid/i)
+    expect(() =>
+      createConfiguredOperatorIdentityResolver({
+        NODE_ENV: 'production',
+        CVG_IDENTITY_MODE: 'trusted',
+        CVG_OPERATOR_IDENTITY_KEYRING: JSON.stringify({
+          current: { keyId: 'configured', secret: current.secret },
+          revokedKeyIds: ['bad', 1]
+        })
+      })
+    ).toThrow(/KEYRING.*invalid/i)
   })
 })
 

@@ -90,13 +90,18 @@ describe('in-memory durable outbox', () => {
   it('deduplicates by tenant and idempotency key without changing the first envelope', () => {
     const { repository } = createRepository()
     const first = enqueue(repository)
-    const duplicate = repository.enqueue({
-      tenantId: tenantA,
-      type: 'message.outbound',
-      payload: { changed: true },
-      idempotencyKey: 'outbox-key-1',
-      correlationId
-    })
+    // AUD19-004: identical replay converges on the first envelope...
+    const identical = enqueue(repository)
+    // ...divergent content on the same key fails closed.
+    expect(() =>
+      repository.enqueue({
+        tenantId: tenantA,
+        type: 'message.outbound',
+        payload: { changed: true },
+        idempotencyKey: 'outbox-key-1',
+        correlationId
+      })
+    ).toThrowError(expect.objectContaining({ code: 'conflict' }))
     const otherTenant = repository.enqueue({
       tenantId: tenantB,
       type: 'message.outbound',
@@ -105,8 +110,8 @@ describe('in-memory durable outbox', () => {
       correlationId
     })
 
-    expect(duplicate.id).toBe(first.id)
-    expect(duplicate.payload).toEqual({
+    expect(identical.id).toBe(first.id)
+    expect(identical.payload).toEqual({
       fixture: true,
       body: '[redacted-outbox-body]'
     })

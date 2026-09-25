@@ -38,6 +38,11 @@ export interface OperatorIdentity {
   tenantId?: string
 }
 
+export interface OperatorSessionView {
+  identity: OperatorIdentity
+  expiresAt: string
+}
+
 export class ApiRequestError extends Error {
   constructor(
     message: string,
@@ -51,6 +56,161 @@ export class ApiRequestError extends Error {
 
 export function isApiConflict(error: unknown): boolean {
   return error instanceof ApiRequestError && error.status === 409
+}
+
+/**
+ * AUD19-010 — auth header adapters. Simulation reproduces the historical
+ * header bytes; the token adapter sends the trusted operator token instead
+ * (homologation path, mirroring the server trusted flow from AUD19-006) and
+ * never mixes simulation headers alongside it.
+ */
+export interface AuthHeadersProvider {
+  headersFor(identity: OperatorIdentity): Record<string, string>
+}
+
+export const simulationAuthHeaders: AuthHeadersProvider = {
+  headersFor(identity: OperatorIdentity): Record<string, string> {
+    const headers: Record<string, string> = {
+      'x-operator-id': identity.operatorId,
+      'x-operator-role': identity.role
+    }
+    if (identity.tenantId) headers['x-tenant-id'] = identity.tenantId
+    return headers
+  }
+}
+
+/**
+ * REM21-005 — trusted browser requests use the HttpOnly server session. The
+ * browser intentionally emits no operator, role or tenant authority headers.
+ */
+export const trustedSessionAuthHeaders: AuthHeadersProvider = {
+  headersFor(): Record<string, string> {
+    return {}
+  }
+}
+
+function defaultAuthHeaders(): AuthHeadersProvider {
+  const controlledTestProfile =
+    __CVG_WEB_MODE__ === 'test' || __CVG_WEB_CONTROLLED_TEST__
+  return controlledTestProfile
+    ? simulationAuthHeaders
+    : trustedSessionAuthHeaders
+}
+
+export function tokenAuthHeaders(
+  getToken: () => string | null
+): AuthHeadersProvider {
+  return {
+    headersFor(): Record<string, string> {
+      const token = getToken()?.trim()
+      if (!token) {
+        throw new ApiRequestError(
+          'Operator token is required',
+          401,
+          'unauthorized'
+        )
+      }
+      return { 'x-cvg-operator-token': token }
+    }
+  }
+}
+
+export interface ApiClientOptions {
+  auth?: AuthHeadersProvider
+  timeoutMs?: number
+  maxGetRetries?: number
+  onUnauthorized?: () => void
+}
+
+const DEFAULT_TIMEOUT_MS = 30_000
+const DEFAULT_MAX_GET_RETRIES = 2
+
+interface ResolvedApiClientOptions {
+  auth: AuthHeadersProvider
+  timeoutMs: number
+  maxGetRetries: number
+  onUnauthorized: () => void
+}
+
+const defaultApiClientOptions: ResolvedApiClientOptions = {
+  auth: defaultAuthHeaders(),
+  timeoutMs: DEFAULT_TIMEOUT_MS,
+  maxGetRetries: DEFAULT_MAX_GET_RETRIES,
+  onUnauthorized: () => undefined
+}
+
+/**
+ * AUD19-010 — ambient client configuration (auth, timeout, retry, 401
+ * hook). Tests reset with `resetApiClientOptions()`. Files run isolated in
+ * workers; configure once per file with reset in `afterEach`.
+ */
+export function configureApiClientOptions(options: ApiClientOptions): void {
+  if (options.auth) defaultApiClientOptions.auth = options.auth
+  if (options.timeoutMs !== undefined) {
+    if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) {
+      throw new Error('timeoutMs must be a positive finite number')
+    }
+    defaultApiClientOptions.timeoutMs = options.timeoutMs
+  }
+  if (options.maxGetRetries !== undefined) {
+    if (!Number.isInteger(options.maxGetRetries) || options.maxGetRetries < 0) {
+      throw new Error('maxGetRetries must be a non-negative integer')
+    }
+    defaultApiClientOptions.maxGetRetries = options.maxGetRetries
+  }
+  if (options.onUnauthorized) {
+    defaultApiClientOptions.onUnauthorized = options.onUnauthorized
+  }
+}
+
+export function resetApiClientOptions(): void {
+  defaultApiClientOptions.auth = defaultAuthHeaders()
+  defaultApiClientOptions.timeoutMs = DEFAULT_TIMEOUT_MS
+  defaultApiClientOptions.maxGetRetries = DEFAULT_MAX_GET_RETRIES
+  defaultApiClientOptions.onUnauthorized = () => undefined
+}
+
+/**
+ * AUD19-010 — operator session with identity binding. `setIdentity` clears
+ * the token and advances the generation so late responses from a previous
+ * identity or tenant can be discarded via `isStale`. `noteUnauthorized`
+ * clears the token (default 401 behavior: force re-authentication).
+ */
+export class ApiSession {
+  private generationValue = 0
+  private tokenValue: string | null = null
+
+  constructor(private identityValue: OperatorIdentity) {}
+
+  get identity(): OperatorIdentity {
+    return this.identityValue
+  }
+
+  get token(): string | null {
+    return this.tokenValue
+  }
+
+  get generation(): number {
+    return this.generationValue
+  }
+
+  setToken(token: string | null): void {
+    this.tokenValue = token?.trim() ? token : null
+  }
+
+  setIdentity(identity: OperatorIdentity): void {
+    this.identityValue = identity
+    this.tokenValue = null
+    this.generationValue += 1
+  }
+
+  isStale(generation: number): boolean {
+    return generation !== this.generationValue
+  }
+
+  noteUnauthorized(): void {
+    this.tokenValue = null
+  }
 }
 
 export interface PlatformAgentView {
@@ -444,25 +604,128 @@ export interface AuditEvidenceCheckpointView {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = init ? await fetch(path, init) : await fetch(path)
-  const envelope = (await response.json()) as ApiEnvelope<T>
-  if (!envelope.success || !envelope.data) {
-    throw new ApiRequestError(
-      envelope.error?.message ?? 'Request failed',
-      response.status,
-      envelope.error?.code ?? 'request_failed'
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const idempotent = method === 'GET' || method === 'HEAD'
+  const maxAttempts = idempotent ? 1 + defaultApiClientOptions.maxGetRetries : 1
+  let attempt = 0
+  for (;;) {
+    attempt += 1
+    try {
+      return await requestOnce<T>(path, init)
+    } catch (error) {
+      if (
+        attempt >= maxAttempts ||
+        !isRetryable(error) ||
+        init?.signal?.aborted
+      ) {
+        throw error
+      }
+      // Bounded immediate retry for idempotent reads only; no backoff
+      // budget is spent on mutations, auth failures or aborted calls.
+    }
+  }
+}
+
+function isRetryable(error: unknown): boolean {
+  if (error instanceof ApiRequestError) {
+    return (
+      error.status === 429 ||
+      error.status >= 500 ||
+      error.code === 'network_unavailable'
     )
   }
-  return envelope.data
+  return false
+}
+
+async function requestOnce<T>(path: string, init?: RequestInit): Promise<T> {
+  const controller = new AbortController()
+  let timedOut = false
+  const timeout = setTimeout(() => {
+    timedOut = true
+    controller.abort(new Error('Request timed out'))
+  }, defaultApiClientOptions.timeoutMs)
+  try {
+    const signal = init?.signal
+      ? linkSignals(init.signal, controller)
+      : controller.signal
+    let response: Response
+    try {
+      response = await fetch(path, {
+        ...init,
+        credentials: init?.credentials ?? 'include',
+        signal
+      })
+    } catch (error) {
+      if (timedOut) {
+        throw new ApiRequestError('Request timed out', 0, 'timeout')
+      }
+      if (signal.aborted) {
+        throw new ApiRequestError('Request was aborted', 0, 'aborted')
+      }
+      throw new ApiRequestError(
+        error instanceof Error ? error.message : 'Network request failed',
+        0,
+        'network_unavailable'
+      )
+    }
+    if (response.status === 401) {
+      defaultApiClientOptions.onUnauthorized()
+    }
+    let envelope: ApiEnvelope<T>
+    try {
+      envelope = (await response.json()) as ApiEnvelope<T>
+    } catch {
+      throw new ApiRequestError(
+        `Unexpected non-JSON response (${response.status})`,
+        response.status,
+        'request_failed'
+      )
+    }
+    if (
+      typeof envelope !== 'object' ||
+      envelope === null ||
+      !envelope.success ||
+      !('data' in envelope) ||
+      envelope.data === undefined ||
+      envelope.data === null
+    ) {
+      const failure = (envelope as ApiEnvelope<T>)?.error
+      throw new ApiRequestError(
+        typeof failure?.message === 'string' && failure.message
+          ? failure.message
+          : 'Request failed',
+        response.status,
+        typeof failure?.code === 'string' && failure.code
+          ? failure.code
+          : 'request_failed'
+      )
+    }
+    return envelope.data
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+/**
+ * Links an outer caller signal to the timeout controller: aborting the
+ * caller aborts the request, and the timeout still guards hangs.
+ */
+function linkSignals(
+  outer: AbortSignal,
+  controller: AbortController
+): AbortSignal {
+  if (outer.aborted) {
+    controller.abort(outer.reason)
+  } else {
+    outer.addEventListener('abort', () => controller.abort(outer.reason), {
+      once: true
+    })
+  }
+  return controller.signal
 }
 
 function operatorHeaders(identity: OperatorIdentity) {
-  const headers: Record<string, string> = {
-    'x-operator-id': identity.operatorId,
-    'x-operator-role': identity.role
-  }
-  if (identity.tenantId) headers['x-tenant-id'] = identity.tenantId
-  return headers
+  return defaultApiClientOptions.auth.headersFor(identity)
 }
 
 function requireAgentId(agentId: string): string {
@@ -479,11 +742,28 @@ function operatorInit(
 ): RequestInit {
   return {
     headers: operatorHeaders(identity),
+    credentials: 'include',
     ...(signal ? { signal } : {})
   }
 }
 
 export const apiClient = {
+  async getSession(
+    bootstrapToken: string | null = null
+  ): Promise<OperatorSessionView> {
+    return request('/v1/session', {
+      headers: bootstrapToken ? { 'x-cvg-operator-token': bootstrapToken } : {},
+      credentials: 'include'
+    })
+  },
+
+  async logoutSession(): Promise<void> {
+    await request('/v1/session/logout', {
+      method: 'POST',
+      credentials: 'include'
+    })
+  },
+
   async listConversations(
     identity: OperatorIdentity,
     input: { limit: number; offset: number } = { limit: 25, offset: 0 }

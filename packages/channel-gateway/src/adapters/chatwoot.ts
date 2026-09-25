@@ -1,4 +1,9 @@
-import { evaluateOutboundUrl } from '@cvg/shared'
+import {
+  evaluateOutboundUrl,
+  fetchWithSsrfGuard,
+  isLoopbackHostname
+} from '@cvg/shared'
+import type { EgressDns } from '@cvg/shared'
 import {
   CanonicalEnvelopeSchema,
   canonicalIdempotencyKey,
@@ -11,6 +16,7 @@ import {
 } from '../contracts.ts'
 import { ChannelError } from '../errors.ts'
 import type { FetchLike } from './evolution.ts'
+import { fetchWithResolvedAddress } from './ssrf-node.ts'
 
 export interface ChatwootAdapterOptions {
   enabled?: boolean
@@ -20,6 +26,13 @@ export interface ChatwootAdapterOptions {
   fetchImpl?: FetchLike
   clock?: () => Date
   maxResponseBytes?: number
+  /**
+   * AUD19-007 — explicit opt-in for loopback/private networks (local
+   * homologation). Default false: private/reserved addresses are denied.
+   */
+  allowPrivateNetworks?: boolean
+  /** AUD19-007 — injectable DNS for the composed egress guard (tests). */
+  dnsLookup?: EgressDns['lookup']
 }
 
 interface ChatwootWebhook {
@@ -57,6 +70,10 @@ export class ChatwootChannelAdapter
   readonly #clock: () => Date
   readonly #maxResponseBytes: number
   readonly #allowedHosts: string[]
+  readonly #allowPrivateNetworks: boolean
+  readonly #allowHttp: boolean
+  readonly #dnsLookup: EgressDns['lookup'] | undefined
+  readonly #boundFetch: typeof fetchWithResolvedAddress | undefined
 
   constructor(options: ChatwootAdapterOptions = {}) {
     this.enabled = options.enabled ?? false
@@ -71,7 +88,24 @@ export class ChatwootChannelAdapter
           'Chatwoot requires baseUrl, apiKey and accountId when enabled'
         )
       }
-      const guard = evaluateOutboundUrl(baseUrl, { allowHttp: true })
+      let parsedBaseUrl: URL
+      try {
+        parsedBaseUrl = new URL(baseUrl)
+      } catch {
+        throw new ChannelError(
+          'url_rejected',
+          'Chatwoot base URL rejected: malformed_url'
+        )
+      }
+      const allowPrivateNetworks = options.allowPrivateNetworks ?? false
+      const allowHttp =
+        parsedBaseUrl.protocol === 'http:' &&
+        allowPrivateNetworks &&
+        isLoopbackHostname(parsedBaseUrl.hostname)
+      const guard = evaluateOutboundUrl(baseUrl, {
+        allowedProtocols: allowHttp ? ['https:', 'http:'] : ['https:'],
+        allowPrivateNetworks
+      })
       if (!guard.allowed) {
         throw new ChannelError(
           'url_rejected',
@@ -82,9 +116,18 @@ export class ChatwootChannelAdapter
       this.#apiKey = options.apiKey
       this.#accountId = options.accountId
       this.#fetch = options.fetchImpl ?? (globalThis.fetch as FetchLike)
-      this.#allowedHosts = [new URL(baseUrl).hostname.toLowerCase()]
+      this.#allowedHosts = [parsedBaseUrl.hostname.toLowerCase()]
+      this.#allowPrivateNetworks = allowPrivateNetworks
+      this.#allowHttp = allowHttp
+      this.#dnsLookup = options.dnsLookup
+      this.#boundFetch = options.fetchImpl
+        ? undefined
+        : fetchWithResolvedAddress
     } else {
       this.#allowedHosts = []
+      this.#allowPrivateNetworks = false
+      this.#allowHttp = false
+      this.#boundFetch = undefined
     }
   }
 
@@ -148,35 +191,59 @@ export class ChatwootChannelAdapter
   async send(message: CanonicalOutboundMessage): Promise<OutboundResult> {
     this.#assertEnabled()
     const endpoint = `${this.#baseUrl}/api/v1/accounts/${this.#accountId}/conversations/${message.conversationId}/messages`
-    const guard = evaluateOutboundUrl(endpoint, {
-      allowedHosts: this.#allowedHosts,
-      allowedProtocols: ['https:', 'http:']
-    })
-    if (!guard.allowed) {
-      throw new ChannelError(
-        'url_rejected',
-        `Chatwoot endpoint rejected: ${guard.reason}`
-      )
-    }
-    let response: Response
+    // AUD21-REM21-004 — validate every hop and bind the default Node socket
+    // to the addresses returned by that same validation.
     try {
-      response = await this.#fetch!(endpoint, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          api_access_token: this.#apiKey ?? ''
+      const fetchImpl = (url: string, requestInit: Record<string, unknown>) =>
+        this.#fetch!(url, requestInit as RequestInit)
+      const deps = this.#boundFetch
+        ? {
+            ...(this.#dnsLookup ? { dnsLookup: this.#dnsLookup } : {}),
+            boundFetchImpl: this.#boundFetch
+          }
+        : { ...(this.#dnsLookup ? { dnsLookup: this.#dnsLookup } : {}) }
+      const response = await fetchWithSsrfGuard(
+        fetchImpl,
+        endpoint,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            api_access_token: this.#apiKey ?? ''
+          },
+          body: JSON.stringify({
+            content: message.body.text,
+            message_type: 'outgoing'
+          }),
+          redirect: 'manual'
         },
-        body: JSON.stringify({
-          content: message.body.text,
-          message_type: 'outgoing'
-        }),
-        redirect: 'error'
-      })
-    } catch {
+        {
+          allowedHosts: this.#allowedHosts,
+          allowedProtocols: this.#allowHttp ? ['https:', 'http:'] : ['https:'],
+          allowPrivateNetworks: this.#allowPrivateNetworks,
+          allowLoopbackOnly: this.#allowHttp
+        },
+        deps
+      )
+      return this.#mapResponse(response, message)
+    } catch (error) {
+      if (error instanceof ChannelError) throw error
+      if (error instanceof Error && error.name === 'UnsafeUrlError') {
+        throw new ChannelError(
+          'url_rejected',
+          `Chatwoot endpoint rejected: ${error.message}`
+        )
+      }
       throw new ChannelError('send_failed', 'Chatwoot request failed', true, {
         effectUnknown: true
       })
     }
+  }
+
+  async #mapResponse(
+    response: Response,
+    message: CanonicalOutboundMessage
+  ): Promise<OutboundResult> {
     if (!response.ok) {
       throw new ChannelError(
         'provider_rejected',

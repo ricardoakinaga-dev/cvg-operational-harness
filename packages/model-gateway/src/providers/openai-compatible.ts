@@ -1,5 +1,10 @@
 import { z } from 'zod'
-import { evaluateOutboundUrl } from '@cvg/shared'
+import {
+  evaluateOutboundUrl,
+  fetchWithSsrfGuard,
+  isLoopbackHostname
+} from '@cvg/shared'
+import type { EgressDns } from '@cvg/shared'
 import type {
   ModelLocation,
   ModelProvider,
@@ -12,6 +17,7 @@ import {
   networkError,
   providerHttpError
 } from './http-errors.ts'
+import { fetchWithResolvedAddress } from './ssrf-node.ts'
 
 export const DEFAULT_MAX_RESPONSE_BYTES = 256 * 1024
 
@@ -27,6 +33,13 @@ export interface OpenAICompatibleProviderOptions {
   fetchImpl?: FetchLike
   maxResponseBytes?: number
   allowHttp?: boolean
+  /**
+   * AUD19-007 — explicit opt-in for loopback/private networks (local
+   * homologation). Default false: private/reserved addresses are denied.
+   */
+  allowPrivateNetworks?: boolean
+  /** AUD19-007 — injectable DNS for the composed egress guard (tests). */
+  dnsLookup?: EgressDns['lookup']
 }
 
 const OpenAIResponseSchema = z.object({
@@ -63,14 +76,24 @@ export class OpenAICompatibleProvider implements ModelProvider {
   readonly #maxResponseBytes: number
   readonly #allowedHosts: string[]
   readonly #allowHttp: boolean
+  readonly #allowPrivateNetworks: boolean
+  readonly #dnsLookup: EgressDns['lookup'] | undefined
+  readonly #boundFetch: typeof fetchWithResolvedAddress | undefined
 
   constructor(options: OpenAICompatibleProviderOptions) {
     const baseUrl = options.baseUrl.trim().replace(/\/+$/, '')
     const hostname = new URL(baseUrl).hostname.toLowerCase()
     const isLocal = options.location === 'local'
+    const allowPrivateNetworks = options.allowPrivateNetworks ?? false
+    const allowHttp =
+      options.allowHttp === true &&
+      isLocal &&
+      allowPrivateNetworks &&
+      isLoopbackHostname(hostname)
     const guard = evaluateOutboundUrl(baseUrl, {
-      allowedProtocols: options.allowHttp ? ['https:', 'http:'] : ['https:'],
-      ...(isLocal ? { allowedHosts: [hostname] } : {})
+      allowedProtocols: allowHttp ? ['https:', 'http:'] : ['https:'],
+      ...(isLocal ? { allowedHosts: [hostname] } : {}),
+      allowPrivateNetworks
     })
     if (!guard.allowed) {
       throw new ModelProviderError(
@@ -98,23 +121,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.#maxResponseBytes =
       options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
     this.#allowedHosts = [new URL(baseUrl).hostname.toLowerCase()]
-    this.#allowHttp = options.allowHttp ?? false
+    this.#allowHttp = allowHttp
+    this.#allowPrivateNetworks = allowPrivateNetworks
+    this.#dnsLookup = options.dnsLookup
+    this.#boundFetch = options.fetchImpl ? undefined : fetchWithResolvedAddress
   }
 
   async execute(request: ProviderRequest): Promise<ProviderResult> {
     const endpoint = `${this.#baseUrl}/chat/completions`
-    const guarded = evaluateOutboundUrl(endpoint, {
-      allowedHosts: this.#allowedHosts,
-      allowedProtocols: this.#allowHttp ? ['https:', 'http:'] : ['https:']
-    })
-    if (!guarded.allowed) {
-      throw new ModelProviderError(
-        this.id,
-        'invalid_request',
-        `Provider endpoint rejected: ${guarded.reason}`
-      )
-    }
-
     const signal = combineTimeoutSignal(request.signal, request.timeoutMs)
     const messages = [
       ...(request.input.system
@@ -135,17 +149,44 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
     let response: Response
     try {
-      response = await this.#fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {})
+      const fetchImpl = (url: string, requestInit: Record<string, unknown>) =>
+        this.#fetch(url, requestInit as RequestInit)
+      const deps = this.#boundFetch
+        ? {
+            ...(this.#dnsLookup ? { dnsLookup: this.#dnsLookup } : {}),
+            boundFetchImpl: this.#boundFetch
+          }
+        : { ...(this.#dnsLookup ? { dnsLookup: this.#dnsLookup } : {}) }
+      response = await fetchWithSsrfGuard(
+        fetchImpl,
+        endpoint,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {})
+          },
+          body: JSON.stringify(body),
+          signal,
+          redirect: 'manual'
         },
-        body: JSON.stringify(body),
-        signal,
-        redirect: 'error'
-      })
+        {
+          allowedHosts: this.#allowedHosts,
+          allowedProtocols: this.#allowHttp ? ['https:', 'http:'] : ['https:'],
+          allowPrivateNetworks: this.#allowPrivateNetworks,
+          allowLoopbackOnly: this.#allowHttp && this.location === 'local',
+          maxRedirects: 0
+        },
+        deps
+      )
     } catch (error) {
+      if (error instanceof Error && error.name === 'UnsafeUrlError') {
+        throw new ModelProviderError(
+          this.id,
+          'invalid_request',
+          `Provider endpoint rejected: ${error.message}`
+        )
+      }
       throw networkError(this.id, error)
     }
 

@@ -1,7 +1,6 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { evaluateOutboundUrl } from '@cvg/shared'
+import { afterEach, describe, expect, it } from 'vitest'
 import { ModelProviderError } from '../errors.ts'
 import { OllamaProvider } from '../providers/ollama.ts'
 import {
@@ -9,11 +8,6 @@ import {
   type FetchLike
 } from '../providers/openai-compatible.ts'
 import type { ProviderRequest } from '../contracts.ts'
-
-vi.mock('@cvg/shared', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@cvg/shared')>()
-  return { ...actual, evaluateOutboundUrl: vi.fn(actual.evaluateOutboundUrl) }
-})
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
 
@@ -104,6 +98,7 @@ describe('OpenAI-compatible provider against a local fake server', () => {
       )
     })
     const provider = new OpenAICompatibleProvider({
+      allowPrivateNetworks: true,
       id: 'local-openai',
       baseUrl,
       model: 'local-model',
@@ -141,6 +136,7 @@ describe('OpenAI-compatible provider against a local fake server', () => {
       response.end(JSON.stringify({ error: 'unavailable' }))
     })
     const provider = new OpenAICompatibleProvider({
+      allowPrivateNetworks: true,
       id: 'local-openai',
       baseUrl,
       model: 'local-model',
@@ -159,6 +155,7 @@ describe('OpenAI-compatible provider against a local fake server', () => {
       )
     })
     const defaultUsage = new OpenAICompatibleProvider({
+      allowPrivateNetworks: true,
       id: 'local-openai',
       baseUrl: okUrl,
       model: 'local-model',
@@ -177,6 +174,7 @@ describe('OpenAI-compatible provider against a local fake server', () => {
       response.end(JSON.stringify({ choices: [] }))
     })
     const malformed = new OpenAICompatibleProvider({
+      allowPrivateNetworks: true,
       id: 'local-openai',
       baseUrl: malformedUrl,
       model: 'local-model',
@@ -194,6 +192,7 @@ describe('OpenAI-compatible provider against a local fake server', () => {
       )
     })
     const oversized = new OpenAICompatibleProvider({
+      allowPrivateNetworks: true,
       id: 'local-openai',
       baseUrl: oversizedUrl,
       model: 'local-model',
@@ -209,6 +208,7 @@ describe('OpenAI-compatible provider against a local fake server', () => {
   it('times out and cancels against a stalled loopback server', async () => {
     const baseUrl = await startServer(() => undefined)
     const timeoutProvider = new OpenAICompatibleProvider({
+      allowPrivateNetworks: true,
       id: 'local-openai',
       baseUrl,
       model: 'local-model',
@@ -239,6 +239,7 @@ describe('OpenAI-compatible provider against a local fake server', () => {
     const provider = new OpenAICompatibleProvider({
       id: 'local-openai',
       baseUrl: 'http://127.0.0.1:9',
+      allowPrivateNetworks: true,
       model: 'local-model',
       location: 'local',
       allowHttp: true,
@@ -250,21 +251,15 @@ describe('OpenAI-compatible provider against a local fake server', () => {
   })
 
   it('rejects endpoints that stop matching the pinned host before sending', async () => {
-    const mocked = vi.mocked(evaluateOutboundUrl)
-    mocked.mockReturnValueOnce({
-      allowed: true,
-      url: new URL('http://127.0.0.1:9/')
-    })
-    mocked.mockReturnValueOnce({
-      allowed: false,
-      reason: 'host_not_allowlisted'
-    })
+    // AUD19-007: the composed guard re-validates the endpoint at send time
+    // through injected DNS — a hostname that rebinds to a private address
+    // is rejected even though it was allowlisted at construction.
     const provider = new OpenAICompatibleProvider({
       id: 'local-openai',
-      baseUrl: 'http://127.0.0.1:9',
+      baseUrl: 'https://provider.example.test:11434',
       model: 'local-model',
       location: 'local',
-      allowHttp: true
+      dnsLookup: async () => ['10.0.0.9']
     })
     await expect(provider.execute(providerRequest())).rejects.toMatchObject({
       kind: 'invalid_request'
@@ -292,6 +287,7 @@ describe('Ollama provider against a local fake server', () => {
       )
     })
     const provider = new OllamaProvider({
+      allowPrivateNetworks: true,
       id: 'local-ollama',
       baseUrl,
       model: 'llama-local',
@@ -326,7 +322,11 @@ describe('Ollama provider against a local fake server', () => {
       response.writeHead(200, { 'content-type': 'application/json' })
       response.end(JSON.stringify({ response: 'legacy answer' }))
     })
-    const provider = new OllamaProvider({ model: 'llama-local', baseUrl })
+    const provider = new OllamaProvider({
+      model: 'llama-local',
+      baseUrl,
+      allowPrivateNetworks: true
+    })
     const result = await provider.execute(providerRequest())
     expect(result.text).toBe('legacy answer')
     expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 0 })
@@ -337,7 +337,11 @@ describe('Ollama provider against a local fake server', () => {
       response.writeHead(503, { 'content-type': 'application/json' })
       response.end(JSON.stringify({ error: 'busy' }))
     })
-    const failing = new OllamaProvider({ model: 'm', baseUrl: failingUrl })
+    const failing = new OllamaProvider({
+      model: 'm',
+      baseUrl: failingUrl,
+      allowPrivateNetworks: true
+    })
     await expect(failing.execute(providerRequest())).rejects.toMatchObject({
       kind: 'unavailable',
       status: 503
@@ -347,7 +351,11 @@ describe('Ollama provider against a local fake server', () => {
       response.writeHead(200, { 'content-type': 'application/json' })
       response.end(JSON.stringify({ message: { content: 42 } }))
     })
-    const malformed = new OllamaProvider({ model: 'm', baseUrl: malformedUrl })
+    const malformed = new OllamaProvider({
+      model: 'm',
+      baseUrl: malformedUrl,
+      allowPrivateNetworks: true
+    })
     await expect(malformed.execute(providerRequest())).rejects.toMatchObject({
       kind: 'malformed_response'
     })
@@ -357,6 +365,7 @@ describe('Ollama provider against a local fake server', () => {
       response.end(JSON.stringify({ response: 'x'.repeat(200) }))
     })
     const oversized = new OllamaProvider({
+      allowPrivateNetworks: true,
       model: 'm',
       baseUrl: oversizedUrl,
       maxResponseBytes: 16
@@ -378,6 +387,7 @@ describe('Ollama provider against a local fake server', () => {
     const provider = new OllamaProvider({
       model: 'm',
       baseUrl: 'http://127.0.0.1:9',
+      allowPrivateNetworks: true,
       fetchImpl: failingFetch
     })
     await expect(provider.execute(providerRequest())).rejects.toMatchObject({
@@ -387,7 +397,11 @@ describe('Ollama provider against a local fake server', () => {
 
   it('times out against a stalled loopback server', async () => {
     const baseUrl = await startServer(() => undefined)
-    const provider = new OllamaProvider({ model: 'm', baseUrl })
+    const provider = new OllamaProvider({
+      model: 'm',
+      baseUrl,
+      allowPrivateNetworks: true
+    })
     await expect(
       provider.execute(providerRequest({ timeoutMs: 50 }))
     ).rejects.toMatchObject({ kind: 'timeout' })
@@ -398,24 +412,20 @@ describe('Ollama provider against a local fake server', () => {
       () =>
         new OllamaProvider({
           model: 'm',
-          baseUrl: 'http://user:pass@127.0.0.1:11434'
+          baseUrl: 'http://user:pass@127.0.0.1:11434',
+          allowPrivateNetworks: true
         })
     ).toThrow(ModelProviderError)
 
-    const mocked = vi.mocked(evaluateOutboundUrl)
-    mocked.mockReturnValueOnce({
-      allowed: true,
-      url: new URL('http://127.0.0.1:9/')
-    })
-    mocked.mockReturnValueOnce({
-      allowed: false,
-      reason: 'host_not_allowlisted'
-    })
-    const provider = new OllamaProvider({
+    // AUD19-007: the composed guard re-validates the endpoint at send time
+    // through injected DNS — a hostname that rebinds to a private address
+    // is rejected even though it was allowlisted at construction.
+    const rebound = new OllamaProvider({
       model: 'm',
-      baseUrl: 'http://127.0.0.1:9'
+      baseUrl: 'https://ollama.example.test:11434',
+      dnsLookup: async () => ['169.254.169.254']
     })
-    await expect(provider.execute(providerRequest())).rejects.toMatchObject({
+    await expect(rebound.execute(providerRequest())).rejects.toMatchObject({
       kind: 'invalid_request'
     })
   })

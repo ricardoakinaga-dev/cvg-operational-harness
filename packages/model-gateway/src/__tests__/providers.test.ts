@@ -35,6 +35,20 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('OpenAI-compatible provider', () => {
+  it('rejects public HTTP even when an external API key is configured', () => {
+    expect(
+      () =>
+        new OpenAICompatibleProvider({
+          id: 'openai',
+          baseUrl: 'http://api.example.com/v1',
+          model: 'gpt-test',
+          location: 'external',
+          apiKey: 'test-key',
+          allowHttp: true
+        })
+    ).toThrowError(expect.objectContaining({ kind: 'invalid_request' }))
+  })
+
   it('parses a successful completion and requests JSON mode for structured output', async () => {
     const fetchImpl = vi.fn<FetchLike>(async () =>
       jsonResponse({
@@ -47,6 +61,7 @@ describe('OpenAI-compatible provider', () => {
     const provider = new OpenAICompatibleProvider({
       id: 'openai',
       baseUrl: 'https://api.example.com/v1',
+      dnsLookup: async () => ['93.184.216.34'],
       model: 'gpt-test',
       location: 'external',
       apiKey: 'test-key',
@@ -60,7 +75,7 @@ describe('OpenAI-compatible provider', () => {
     expect(result.externalCall).toBe(true)
     const [url, init] = fetchImpl.mock.calls[0] ?? []
     expect(url).toBe('https://api.example.com/v1/chat/completions')
-    expect(init?.redirect).toBe('error')
+    expect(init?.redirect).toBe('manual')
     expect(init?.signal).toBeInstanceOf(AbortSignal)
     const payload = JSON.parse(String(init?.body)) as Record<string, unknown>
     expect(payload.response_format).toEqual({ type: 'json_object' })
@@ -80,6 +95,7 @@ describe('OpenAI-compatible provider', () => {
     const provider = new OpenAICompatibleProvider({
       id: 'openai',
       baseUrl: 'https://api.example.com/v1',
+      dnsLookup: async () => ['93.184.216.34'],
       model: 'gpt-test',
       location: 'external',
       apiKey: 'test-key',
@@ -95,6 +111,7 @@ describe('OpenAI-compatible provider', () => {
     const malformed = new OpenAICompatibleProvider({
       id: 'openai',
       baseUrl: 'https://api.example.com/v1',
+      dnsLookup: async () => ['93.184.216.34'],
       model: 'gpt-test',
       location: 'external',
       apiKey: 'k',
@@ -107,6 +124,7 @@ describe('OpenAI-compatible provider', () => {
     const oversized = new OpenAICompatibleProvider({
       id: 'openai',
       baseUrl: 'https://api.example.com/v1',
+      dnsLookup: async () => ['93.184.216.34'],
       model: 'gpt-test',
       location: 'external',
       apiKey: 'k',
@@ -127,6 +145,7 @@ describe('OpenAI-compatible provider', () => {
         new OpenAICompatibleProvider({
           id: 'openai',
           baseUrl: 'https://api.example.com/v1',
+          dnsLookup: async () => ['93.184.216.34'],
           model: 'gpt-test',
           location: 'external'
         })
@@ -151,6 +170,7 @@ describe('OpenAI-compatible provider', () => {
     const provider = new OpenAICompatibleProvider({
       id: 'vllm',
       baseUrl: 'http://127.0.0.1:8000/v1',
+      allowPrivateNetworks: true,
       model: 'local-model',
       location: 'local',
       requiresApiKey: false,
@@ -175,6 +195,7 @@ describe('Ollama provider', () => {
       })
     )
     const provider = new OllamaProvider({
+      allowPrivateNetworks: true,
       model: 'llama-test',
       fetchImpl
     })
@@ -187,6 +208,7 @@ describe('Ollama provider', () => {
 
   it('maps provider failures and malformed payloads', async () => {
     const failing = new OllamaProvider({
+      allowPrivateNetworks: true,
       model: 'llama-test',
       fetchImpl: async () => jsonResponse({ error: 'busy' }, 503)
     })
@@ -195,6 +217,7 @@ describe('Ollama provider', () => {
     })
 
     const malformed = new OllamaProvider({
+      allowPrivateNetworks: true,
       model: 'llama-test',
       fetchImpl: async () => new Response('nope', { status: 200 })
     })

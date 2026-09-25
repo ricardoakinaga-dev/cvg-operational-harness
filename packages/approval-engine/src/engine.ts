@@ -2,10 +2,12 @@ import { createDomainId } from '@cvg/shared'
 import {
   ApprovalRequestSchema,
   ApprovalReserveSchema,
+  ApprovalDecisionInputSchema,
   EffectEvidenceSchema,
   approvalMatchesAction,
   computeApprovalPayloadHash,
   type ApprovalRecord,
+  type ApprovalDecisionInput,
   type ApprovalRequestInput,
   type ApprovalReservation,
   type ApprovalReserveInput,
@@ -234,9 +236,15 @@ export class ApprovalEngine {
   approve(
     tenantId: string,
     approvalId: string,
-    input: { approverId: string; reason?: string }
+    rawInput: ApprovalDecisionInput
   ): ApprovalRecord {
+    const input = ApprovalDecisionInputSchema.parse(rawInput)
     const record = this.#require(tenantId, approvalId)
+    // AUD19-003: identical repeats converge (retry after a crash between the
+    // decision and its effects). Checked before expiry so a decided record
+    // never blocks convergence; divergent repeats fail closed below.
+    const replay = this.#replayDecision(record, 'APPROVED', input)
+    if (replay) return replay
     this.#assertNotExpired(record)
     if (!this.#allowSelfApproval && record.operatorId === input.approverId) {
       throw new ApprovalError(
@@ -252,6 +260,15 @@ export class ApprovalEngine {
         ...current,
         status: 'APPROVED',
         approverId: input.approverId,
+        ...(input.decisionActorType !== undefined
+          ? { decisionActorType: input.decisionActorType }
+          : {}),
+        ...(input.decisionCorrelationId !== undefined
+          ? { decisionCorrelationId: input.decisionCorrelationId }
+          : {}),
+        ...(input.commandKey !== undefined
+          ? { decisionCommandKey: input.commandKey }
+          : {}),
         approvedAt: this.#clock().toISOString(),
         ...(input.reason !== undefined ? { decisionReason: input.reason } : {})
       })
@@ -275,9 +292,13 @@ export class ApprovalEngine {
   reject(
     tenantId: string,
     approvalId: string,
-    input: { approverId: string; reason?: string }
+    rawInput: ApprovalDecisionInput
   ): ApprovalRecord {
+    const input = ApprovalDecisionInputSchema.parse(rawInput)
     const record = this.#require(tenantId, approvalId)
+    // AUD19-003: identical repeats converge; see approve().
+    const replay = this.#replayDecision(record, 'REJECTED', input)
+    if (replay) return replay
     this.#assertNotExpired(record)
     const updated = this.#store.update(
       tenantId,
@@ -287,6 +308,15 @@ export class ApprovalEngine {
         ...current,
         status: 'REJECTED',
         approverId: input.approverId,
+        ...(input.decisionActorType !== undefined
+          ? { decisionActorType: input.decisionActorType }
+          : {}),
+        ...(input.decisionCorrelationId !== undefined
+          ? { decisionCorrelationId: input.decisionCorrelationId }
+          : {}),
+        ...(input.commandKey !== undefined
+          ? { decisionCommandKey: input.commandKey }
+          : {}),
         rejectedAt: this.#clock().toISOString(),
         ...(input.reason !== undefined ? { decisionReason: input.reason } : {})
       })
@@ -1221,6 +1251,32 @@ export class ApprovalEngine {
       throw new ApprovalError('not_found', 'Approval not found for this tenant')
     }
     return record
+  }
+
+  /**
+   * AUD19-003 — idempotent decision replay. A repeat of the recorded verdict
+   * by the same approver is a no-op success (retry convergence); the stored
+   * note is annotation and never blocks convergence. Any other repeat on a
+   * decided record (opposite verdict, different approver) fails closed
+   * without mutating the winner and without re-emitting lifecycle events.
+   * Returns null while the record is still undecided so the caller proceeds
+   * with the fresh path.
+   */
+  #replayDecision(
+    record: ApprovalRecord,
+    status: 'APPROVED' | 'REJECTED',
+    input: ApprovalDecisionInput
+  ): ApprovalRecord | null {
+    if (record.status === 'PENDING' || record.status === 'REQUESTED') {
+      return null
+    }
+    if (record.status === status && record.approverId === input.approverId) {
+      return cloneRecord(record)
+    }
+    throw new ApprovalError(
+      'invalid_state',
+      `Approval is ${record.status}; refusing a divergent repeat of the recorded decision`
+    )
   }
 
   #assertNotExpired(record: ApprovalRecord): void {

@@ -1,13 +1,14 @@
 import { spawn } from 'node:child_process'
 import { createHmac } from 'node:crypto'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { buildServerFromEnv } from '../server.ts'
 import {
   OPERATOR_IDENTITY_KEYRING_ENV,
   createConfiguredOperatorIdentityResolver,
   createTrustedOperatorIdentityResolver,
-  createTrustedOperatorIdentityToken
+  createTrustedOperatorIdentityToken,
+  TRUSTED_OPERATOR_TOKEN_ISSUER
 } from '../operator-identity.ts'
 
 const SECRET = 'composition-wiring-synthetic-secret-0001-abcdef'
@@ -94,6 +95,7 @@ describe('identity composition wiring', () => {
     )
     const validClaims = {
       ...identity,
+      iss: TRUSTED_OPERATOR_TOKEN_ISSUER,
       aud: 'cvg-api',
       iat: NOW_SECONDS,
       exp: NOW_SECONDS + 300,
@@ -144,6 +146,128 @@ describe('identity composition wiring', () => {
     expect(first.statusCode).toBe(200)
     expect(replay.statusCode).toBe(401)
     expect((replay.json() as Envelope<never>).error?.code).toBe('unauthorized')
+  })
+
+  it('authenticates before a distributed replay claim', async () => {
+    const now = () => NOW_MS
+    const claim = vi.fn(
+      async (key: string, expiresAt: number) => key.length > 0 && expiresAt > 0
+    )
+    const app = await buildServerFromEnv(
+      { NODE_ENV: 'test', API_PERSISTENCE_MODE: 'memory' },
+      {
+        identityMode: 'trusted',
+        operatorIdentityResolver: createTrustedOperatorIdentityResolver({
+          secret: SECRET,
+          now
+        }),
+        tokenReplayStore: { claim }
+      }
+    )
+    const token = createTrustedOperatorIdentityToken(identity, SECRET, now)
+    const [encodedClaims] = token.split('.')
+    if (!encodedClaims) throw new Error('synthetic token payload is missing')
+    const forged = `${encodedClaims}.${sign(encodedClaims, 'forged-secret')}`
+
+    const denied = await app.inject({
+      method: 'GET',
+      url: '/v1/tasks',
+      headers: { 'x-cvg-operator-token': forged }
+    })
+    expect(denied.statusCode).toBe(401)
+    expect(claim).not.toHaveBeenCalled()
+
+    const allowed = await app.inject({
+      method: 'GET',
+      url: '/v1/tasks',
+      headers: { 'x-cvg-operator-token': token }
+    })
+    await app.close()
+
+    expect(allowed.statusCode).toBe(200)
+    expect(claim).toHaveBeenCalledTimes(1)
+    expect(claim.mock.calls[0]?.[0]).toMatch(/^operator-jti:jti_[0-9a-f-]+$/)
+  })
+
+  it('allows at most one concurrent legitimate claim across trusted instances', async () => {
+    const now = () => NOW_MS
+    const claimedKeys = new Set<string>()
+    const claim = vi.fn(async (key: string) => {
+      if (claimedKeys.has(key)) return false
+      claimedKeys.add(key)
+      return true
+    })
+    const appA = await buildServerFromEnv(
+      { NODE_ENV: 'test', API_PERSISTENCE_MODE: 'memory' },
+      {
+        identityMode: 'trusted',
+        operatorIdentityResolver: createTrustedOperatorIdentityResolver({
+          secret: SECRET,
+          now
+        }),
+        tokenReplayStore: { claim }
+      }
+    )
+    const appB = await buildServerFromEnv(
+      { NODE_ENV: 'test', API_PERSISTENCE_MODE: 'memory' },
+      {
+        identityMode: 'trusted',
+        operatorIdentityResolver: createTrustedOperatorIdentityResolver({
+          secret: SECRET,
+          now
+        }),
+        tokenReplayStore: { claim }
+      }
+    )
+    const token = createTrustedOperatorIdentityToken(identity, SECRET, now)
+    const responses = await Promise.all(
+      [appA, appB].map((app) =>
+        app.inject({
+          method: 'GET',
+          url: '/v1/tasks',
+          headers: { 'x-cvg-operator-token': token }
+        })
+      )
+    )
+    await appA.close()
+    await appB.close()
+
+    expect(
+      responses.map((response) => [response.statusCode, response.body]).sort()
+    ).toEqual([
+      [200, expect.any(String)],
+      [401, expect.any(String)]
+    ])
+    expect(claim).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails closed when the distributed replay store errors', async () => {
+    const now = () => NOW_MS
+    const claim = vi.fn(async (key: string, expiresAt: number) => {
+      if (!key || expiresAt <= 0) throw new Error('invalid synthetic claim')
+      throw new Error('synthetic replay store outage')
+    })
+    const app = await buildServerFromEnv(
+      { NODE_ENV: 'test', API_PERSISTENCE_MODE: 'memory' },
+      {
+        identityMode: 'trusted',
+        operatorIdentityResolver: createTrustedOperatorIdentityResolver({
+          secret: SECRET,
+          now
+        }),
+        tokenReplayStore: { claim }
+      }
+    )
+    const token = createTrustedOperatorIdentityToken(identity, SECRET, now)
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/tasks',
+      headers: { 'x-cvg-operator-token': token }
+    })
+    await app.close()
+
+    expect(response.statusCode).toBe(401)
+    expect(claim).toHaveBeenCalledTimes(1)
   })
 
   it('rejects unknown identity modes and simulation mode in production startup', async () => {

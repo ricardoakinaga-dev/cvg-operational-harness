@@ -6,7 +6,10 @@ import {
   OperationalExecutionError,
   type ExecutionSubmission
 } from '@cvg/harness'
-import { PostgresOperationalExecutionStore } from '../operational-execution-postgres.ts'
+import {
+  createOperationalExecutionId,
+  PostgresOperationalExecutionStore
+} from '../operational-execution-postgres.ts'
 import { readPostgresMigrationSql, runPostgresMigrations } from '../postgres.ts'
 import type { PostgresPoolLike } from '../tenant-scoped-postgres.ts'
 
@@ -63,6 +66,15 @@ function submission(
 }
 
 describe('operational execution migration artifact', () => {
+  it('uses secure UUIDs by default and permits deterministic synthetic IDs', () => {
+    expect(createOperationalExecutionId(() => 'fixture-execution')).toBe(
+      'exec_fixture-execution'
+    )
+    expect(createOperationalExecutionId()).toMatch(
+      /^exec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    )
+  })
+
   it('ships bounded retry and state invariants as additive SQL', async () => {
     const migration = await readPostgresMigrationSql(
       '0018_operational_execution_invariants'

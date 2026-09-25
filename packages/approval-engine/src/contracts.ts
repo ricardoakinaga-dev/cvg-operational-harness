@@ -18,6 +18,15 @@ export const ApprovalStatusSchema = z.enum([
 
 export type ApprovalStatus = z.infer<typeof ApprovalStatusSchema>
 
+export const ApprovalDecisionActorTypeSchema = z.enum([
+  'Approver',
+  'Supervisor'
+])
+
+export type ApprovalDecisionActorType = z.infer<
+  typeof ApprovalDecisionActorTypeSchema
+>
+
 export const ApprovalResourceSchema = z
   .object({
     type: z.string().min(1).max(120),
@@ -142,6 +151,24 @@ export interface ApprovalReservation {
 export type ApprovalRequestInput = z.input<typeof ApprovalRequestSchema>
 export type NormalizedApprovalRequest = z.output<typeof ApprovalRequestSchema>
 
+export const ApprovalDecisionInputSchema = z
+  .object({
+    approverId: z.string().trim().min(3).max(80),
+    reason: z.string().max(500).optional(),
+    decisionActorType: ApprovalDecisionActorTypeSchema.optional(),
+    decisionCorrelationId: z.string().trim().min(8).max(120).optional(),
+    commandKey: z
+      .string()
+      .trim()
+      .min(8)
+      .max(200)
+      .regex(/^[A-Za-z0-9._:-]+$/)
+      .optional()
+  })
+  .strict()
+
+export type ApprovalDecisionInput = z.input<typeof ApprovalDecisionInputSchema>
+
 export interface ApprovalRecord {
   approvalId: string
   tenantId: string
@@ -164,6 +191,9 @@ export interface ApprovalRecord {
   cancelledAt?: string
   expiredAt?: string
   approverId?: string
+  decisionActorType?: ApprovalDecisionActorType
+  decisionCorrelationId?: string
+  decisionCommandKey?: string
   decisionReason?: string
   executionCount: number
   executionRef?: string

@@ -26,7 +26,7 @@ import {
   decision,
   phase3AgentProfile,
   phase3RuntimeInput
-} from '../__tests__/fixtures/phase3-fixtures.ts'
+} from './phase3-fixtures.ts'
 
 export type LoopEvalCategory =
   | 'tool-selection'

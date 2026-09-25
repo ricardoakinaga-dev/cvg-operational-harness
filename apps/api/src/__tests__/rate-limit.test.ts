@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { InMemoryRateLimiter } from '../rate-limit.ts'
+import {
+  createConfiguredRateLimitKeyRing,
+  InMemoryRateLimiter,
+  RATE_LIMIT_KEYRING_ENV
+} from '../rate-limit.ts'
 import { buildServer } from '../server.ts'
 
 describe('in-memory API rate limiter', () => {
@@ -40,7 +44,7 @@ describe('in-memory API rate limiter', () => {
     })
   })
 
-  it('bounds bucket cardinality and evicts the active bucket with the earliest reset', () => {
+  it('does not evict an active budget when capacity is full', () => {
     const limiter = new InMemoryRateLimiter({
       now: () => 1_000,
       maxBuckets: 2
@@ -50,10 +54,9 @@ describe('in-memory API rate limiter', () => {
     limiter.check('client-b', { max: 1, windowMs: 20_000 })
     const beforeEviction = limiter.snapshot()
 
-    expect(limiter.check('client-c', { max: 1, windowMs: 10_000 })).toEqual({
-      allowed: true,
-      retryAfterSeconds: 0
-    })
+    expect(() =>
+      limiter.check('client-c', { max: 1, windowMs: 10_000 })
+    ).toThrow(/capacity/i)
     expect(limiter.snapshot()).toEqual({ bucketCount: 2, maxBuckets: 2 })
     expect(beforeEviction).toEqual({ bucketCount: 2, maxBuckets: 2 })
     expect(
@@ -61,7 +64,7 @@ describe('in-memory API rate limiter', () => {
     ).toBe(false)
     expect(
       limiter.check('client-a', { max: 1, windowMs: 10_000 }).allowed
-    ).toBe(true)
+    ).toBe(false)
   })
 
   it('rejects invalid policies and keys without exposing bucket keys', () => {
@@ -98,11 +101,28 @@ describe('in-memory API rate limiter', () => {
     expect(limiter.snapshot()).toEqual({ bucketCount: 1, maxBuckets: 4_096 })
   })
 
+  it('requires explicit key material outside the controlled test profile', () => {
+    expect(
+      createConfiguredRateLimitKeyRing({ NODE_ENV: 'development' })
+    ).toBeUndefined()
+    expect(() =>
+      createConfiguredRateLimitKeyRing({
+        NODE_ENV: 'production',
+        [RATE_LIMIT_KEYRING_ENV]: JSON.stringify({})
+      })
+    ).toThrow(/CVG_RATE_LIMIT_KEYRING is invalid/)
+  })
+
   it('returns a stable 429 envelope after the API window is exhausted', async () => {
     const app = buildServer()
     let response
+    // AUD19-006: infrastructure probes (/health, /live, /ready) are never
+    // rate-billed; exercise the billed API surface instead.
     for (let index = 0; index <= 300; index += 1) {
-      response = await app.inject({ method: 'GET', url: '/health' })
+      response = await app.inject({
+        method: 'GET',
+        url: '/v1/conversations?limit=1'
+      })
     }
     await app.close()
 

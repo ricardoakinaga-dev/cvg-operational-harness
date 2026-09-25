@@ -1,4 +1,9 @@
-import { evaluateOutboundUrl } from '@cvg/shared'
+import {
+  evaluateOutboundUrl,
+  fetchWithSsrfGuard,
+  isLoopbackHostname
+} from '@cvg/shared'
+import type { EgressDns } from '@cvg/shared'
 import {
   CanonicalEnvelopeSchema,
   canonicalIdempotencyKey,
@@ -10,6 +15,7 @@ import {
   type OutboundResult
 } from '../contracts.ts'
 import { ChannelError } from '../errors.ts'
+import { fetchWithResolvedAddress } from './ssrf-node.ts'
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
 
@@ -22,6 +28,13 @@ export interface EvolutionAdapterOptions {
   fetchImpl?: FetchLike
   clock?: () => Date
   maxResponseBytes?: number
+  /**
+   * AUD19-007 — explicit opt-in for loopback/private networks (local
+   * homologation). Default false: private/reserved addresses are denied.
+   */
+  allowPrivateNetworks?: boolean
+  /** AUD19-007 — injectable DNS for the composed egress guard (tests). */
+  dnsLookup?: EgressDns['lookup']
 }
 
 interface EvolutionWebhook {
@@ -52,6 +65,10 @@ export class EvolutionChannelAdapter
   readonly #clock: () => Date
   readonly #maxResponseBytes: number
   readonly #allowedHosts: string[]
+  readonly #allowPrivateNetworks: boolean
+  readonly #allowHttp: boolean
+  readonly #dnsLookup: EgressDns['lookup'] | undefined
+  readonly #boundFetch: typeof fetchWithResolvedAddress | undefined
 
   constructor(options: EvolutionAdapterOptions = {}) {
     this.enabled = options.enabled ?? false
@@ -66,7 +83,24 @@ export class EvolutionChannelAdapter
           'EvolutionAPI requires baseUrl, apiKey and instance when enabled'
         )
       }
-      const guard = evaluateOutboundUrl(baseUrl, { allowHttp: true })
+      let parsedBaseUrl: URL
+      try {
+        parsedBaseUrl = new URL(baseUrl)
+      } catch {
+        throw new ChannelError(
+          'url_rejected',
+          'EvolutionAPI base URL rejected: malformed_url'
+        )
+      }
+      const allowPrivateNetworks = options.allowPrivateNetworks ?? false
+      const allowHttp =
+        parsedBaseUrl.protocol === 'http:' &&
+        allowPrivateNetworks &&
+        isLoopbackHostname(parsedBaseUrl.hostname)
+      const guard = evaluateOutboundUrl(baseUrl, {
+        allowedProtocols: allowHttp ? ['https:', 'http:'] : ['https:'],
+        allowPrivateNetworks
+      })
       if (!guard.allowed) {
         throw new ChannelError(
           'url_rejected',
@@ -77,9 +111,18 @@ export class EvolutionChannelAdapter
       this.#apiKey = options.apiKey
       this.#instance = options.instance
       this.#fetch = options.fetchImpl ?? (globalThis.fetch as FetchLike)
-      this.#allowedHosts = [new URL(baseUrl).hostname.toLowerCase()]
+      this.#allowedHosts = [parsedBaseUrl.hostname.toLowerCase()]
+      this.#allowPrivateNetworks = allowPrivateNetworks
+      this.#allowHttp = allowHttp
+      this.#dnsLookup = options.dnsLookup
+      this.#boundFetch = options.fetchImpl
+        ? undefined
+        : fetchWithResolvedAddress
     } else {
       this.#allowedHosts = []
+      this.#allowPrivateNetworks = false
+      this.#allowHttp = false
+      this.#boundFetch = undefined
     }
   }
 
@@ -137,31 +180,49 @@ export class EvolutionChannelAdapter
   async send(message: CanonicalOutboundMessage): Promise<OutboundResult> {
     this.#assertEnabled()
     const endpoint = `${this.#baseUrl}/message/sendText/${this.#instance}`
-    const guard = evaluateOutboundUrl(endpoint, {
-      allowedHosts: this.#allowedHosts,
-      allowedProtocols: ['https:', 'http:']
-    })
-    if (!guard.allowed) {
-      throw new ChannelError(
-        'url_rejected',
-        `EvolutionAPI endpoint rejected: ${guard.reason}`
-      )
-    }
-    let response: Response
+    // AUD21-REM21-004 — validate every hop and bind the default Node socket
+    // to the addresses returned by that same validation.
     try {
-      response = await this.#fetch!(endpoint, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          apikey: this.#apiKey ?? ''
+      const fetchImpl = (url: string, requestInit: Record<string, unknown>) =>
+        this.#fetch!(url, requestInit as RequestInit)
+      const deps = this.#boundFetch
+        ? {
+            ...(this.#dnsLookup ? { dnsLookup: this.#dnsLookup } : {}),
+            boundFetchImpl: this.#boundFetch
+          }
+        : { ...(this.#dnsLookup ? { dnsLookup: this.#dnsLookup } : {}) }
+      const response = await fetchWithSsrfGuard(
+        fetchImpl,
+        endpoint,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            apikey: this.#apiKey ?? ''
+          },
+          body: JSON.stringify({
+            number: message.recipient.id,
+            text: message.body.text
+          }),
+          redirect: 'manual'
         },
-        body: JSON.stringify({
-          number: message.recipient.id,
-          text: message.body.text
-        }),
-        redirect: 'error'
-      })
-    } catch {
+        {
+          allowedHosts: this.#allowedHosts,
+          allowedProtocols: this.#allowHttp ? ['https:', 'http:'] : ['https:'],
+          allowPrivateNetworks: this.#allowPrivateNetworks,
+          allowLoopbackOnly: this.#allowHttp
+        },
+        deps
+      )
+      return this.#mapResponse(response, message)
+    } catch (error) {
+      if (error instanceof ChannelError) throw error
+      if (error instanceof Error && error.name === 'UnsafeUrlError') {
+        throw new ChannelError(
+          'url_rejected',
+          `EvolutionAPI endpoint rejected: ${error.message}`
+        )
+      }
       throw new ChannelError(
         'send_failed',
         'EvolutionAPI request failed',
@@ -169,6 +230,12 @@ export class EvolutionChannelAdapter
         { effectUnknown: true }
       )
     }
+  }
+
+  async #mapResponse(
+    response: Response,
+    message: CanonicalOutboundMessage
+  ): Promise<OutboundResult> {
     if (!response.ok) {
       throw new ChannelError(
         'provider_rejected',

@@ -10,6 +10,7 @@ import {
 } from '@cvg/shared'
 
 export const TRUSTED_OPERATOR_TOKEN_HEADER = 'x-cvg-operator-token'
+export const TRUSTED_OPERATOR_TOKEN_ISSUER = 'cvg-operator'
 export const OPERATOR_IDENTITY_KEYRING_ENV = 'CVG_OPERATOR_IDENTITY_KEYRING'
 export const DEFAULT_ROTATION_WINDOW_SECONDS = 3_600
 export const MAX_ROTATION_WINDOW_SECONDS = 86_400
@@ -20,6 +21,7 @@ const DEFAULT_REPLAY_CACHE_SIZE = 4_096
 const MAX_REPLAY_CACHE_SIZE = 100_000
 
 interface TrustedOperatorTokenClaims extends OperatorIdentity {
+  iss: typeof TRUSTED_OPERATOR_TOKEN_ISSUER
   aud: typeof TRUSTED_OPERATOR_TOKEN_AUDIENCE
   iat: number
   exp: number
@@ -73,6 +75,7 @@ export function createTrustedOperatorIdentityToken(
   const issuedAt = Math.floor(now() / 1000)
   const claims: TrustedOperatorTokenClaims = {
     ...OperatorIdentitySchema.parse(identity),
+    iss: TRUSTED_OPERATOR_TOKEN_ISSUER,
     aud: TRUSTED_OPERATOR_TOKEN_AUDIENCE,
     iat: issuedAt,
     exp: issuedAt + lifetimeSeconds,
@@ -148,6 +151,7 @@ export function createTrustedOperatorIdentityResolver(
       throw new Error('Trusted operator token must include a tenant')
     }
     if (
+      claims.iss !== TRUSTED_OPERATOR_TOKEN_ISSUER ||
       claims.aud !== TRUSTED_OPERATOR_TOKEN_AUDIENCE ||
       !Number.isInteger(claims.iat) ||
       !Number.isInteger(claims.exp) ||
@@ -406,6 +410,42 @@ function isTrustedOperatorTokenId(value: unknown): value is string {
       value
     )
   )
+}
+
+export interface DecodedOperatorTokenIdentity {
+  jti: string
+  iat: number
+  exp: number
+}
+
+/**
+ * REM21-003 / AUD19-006 — post-authenticated claim extraction for distributed
+ * replay. Reads (jti, iat, exp) WITHOUT verifying the signature, so callers
+ * must invoke this only after the trusted resolver has authenticated the same
+ * header. Malformed tokens return null and callers must fail closed.
+ */
+export function decodeTrustedOperatorTokenClaims(
+  token: unknown
+): DecodedOperatorTokenIdentity | null {
+  if (typeof token !== 'string') return null
+  const [encodedClaims, encodedSignature, ...extraParts] = token.split('.')
+  if (!encodedClaims || !encodedSignature || extraParts.length > 0) {
+    return null
+  }
+  let claims: TrustedOperatorTokenClaims
+  try {
+    claims = decodeClaims(encodedClaims)
+  } catch {
+    return null
+  }
+  if (
+    !isTrustedOperatorTokenId(claims.jti) ||
+    !Number.isInteger(claims.iat) ||
+    !Number.isInteger(claims.exp)
+  ) {
+    return null
+  }
+  return { jti: claims.jti, iat: claims.iat, exp: claims.exp }
 }
 
 function pruneReplayedTokenIds(

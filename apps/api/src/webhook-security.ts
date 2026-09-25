@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { PostgresPoolLike } from '@cvg/persistence'
 
 export interface WebhookSigningInput {
@@ -22,11 +22,23 @@ export interface WebhookVerificationLease {
   release(): void | Promise<void>
 }
 
+export interface WebhookReplayReservation {
+  key: string
+  generation: number
+  token: string
+}
+
 export interface WebhookReplayStore {
   claim(key: string, expiresAtMs: number): boolean | Promise<boolean>
-  reserve?(key: string, expiresAtMs: number): boolean | Promise<boolean>
-  commit?(key: string): boolean | Promise<boolean>
-  release?(key: string): boolean | Promise<boolean>
+  reserve?(
+    key: string,
+    expiresAtMs: number
+  ):
+    | WebhookReplayReservation
+    | false
+    | Promise<WebhookReplayReservation | false>
+  commit?(reservation: WebhookReplayReservation): boolean | Promise<boolean>
+  release?(reservation: WebhookReplayReservation): boolean | Promise<boolean>
 }
 
 interface HmacWebhookVerifierOptions {
@@ -39,6 +51,8 @@ interface HmacWebhookVerifierOptions {
 interface ReplayEntry {
   expiresAt: number
   status: 'reserved' | 'committed'
+  generation: number
+  token: string
 }
 
 const DEFAULT_TOLERANCE_SECONDS = 300
@@ -56,51 +70,67 @@ export class InMemoryWebhookReplayStore implements WebhookReplayStore {
   constructor(private readonly now: () => number = Date.now) {}
 
   claim(key: string, expiresAtMs: number): boolean {
-    if (!this.reserve(key, expiresAtMs)) return false
-    this.entries = new Map(this.entries).set(key, {
-      expiresAt: expiresAtMs,
-      status: 'committed'
-    })
-    return true
+    const reservation = this.reserve(key, expiresAtMs)
+    if (!reservation) return false
+    if (this.commit(reservation)) return true
+    this.release(reservation)
+    return false
   }
 
-  reserve(key: string, expiresAtMs: number): boolean {
+  reserve(key: string, expiresAtMs: number): WebhookReplayReservation | false {
     const activeEntries = this.activeEntries()
     const currentTime = this.now()
     if (expiresAtMs <= currentTime || activeEntries.has(key)) {
       this.entries = activeEntries
       return false
     }
+    const reservation: WebhookReplayReservation = {
+      key,
+      generation: 1,
+      token: randomUUID()
+    }
     this.entries = new Map(activeEntries).set(key, {
       expiresAt: expiresAtMs,
-      status: 'reserved'
+      status: 'reserved',
+      generation: reservation.generation,
+      token: reservation.token
     })
-    return true
+    return reservation
   }
 
-  commit(key: string): boolean {
+  commit(reservation: WebhookReplayReservation): boolean {
     const activeEntries = this.activeEntries()
-    const entry = activeEntries.get(key)
-    if (!entry) {
+    const entry = activeEntries.get(reservation.key)
+    if (
+      !entry ||
+      entry.status !== 'reserved' ||
+      entry.generation !== reservation.generation ||
+      entry.token !== reservation.token
+    ) {
       this.entries = activeEntries
       return false
     }
-    this.entries = new Map(activeEntries).set(key, {
+    this.entries = new Map(activeEntries).set(reservation.key, {
       ...entry,
       status: 'committed'
     })
     return true
   }
 
-  release(key: string): boolean {
+  release(reservation: WebhookReplayReservation): boolean {
     const activeEntries = this.activeEntries()
-    const entry = activeEntries.get(key)
-    if (!entry || entry.status === 'committed') {
+    const entry = activeEntries.get(reservation.key)
+    if (
+      !entry ||
+      entry.status !== 'reserved' ||
+      entry.generation !== reservation.generation ||
+      entry.token !== reservation.token
+    ) {
       this.entries = activeEntries
       return false
     }
     const releasedEntries = new Map(activeEntries)
-    releasedEntries.delete(key)
+    releasedEntries.delete(reservation.key)
     this.entries = releasedEntries
     return true
   }
@@ -122,60 +152,70 @@ export class PostgresWebhookReplayStore implements WebhookReplayStore {
   constructor(private readonly pool: PostgresPoolLike) {}
 
   async claim(key: string, expiresAtMs: number): Promise<boolean> {
-    if (!(await this.reserve(key, expiresAtMs))) return false
-    const committed = await this.commit(key)
+    const reservation = await this.reserve(key, expiresAtMs)
+    if (!reservation) return false
+    const committed = await this.commit(reservation)
     if (committed) return true
-    await this.release(key)
+    await this.release(reservation)
     return false
   }
 
-  async reserve(key: string, expiresAtMs: number): Promise<boolean> {
+  async reserve(
+    key: string,
+    expiresAtMs: number
+  ): Promise<WebhookReplayReservation | false> {
     validateReplayEntry(key, expiresAtMs)
+    const token = randomUUID()
     const client = await this.pool.connect()
     try {
       await client.query(
         `DELETE FROM webhook_replay_events
          WHERE expires_at <= CURRENT_TIMESTAMP`
       )
-      const inserted = await client.query(
-        `INSERT INTO webhook_replay_events (event_key, status, expires_at)
-         VALUES ($1, 'reserved', $2)
+      const inserted = await client.query<ReplayReservationRow>(
+        `INSERT INTO webhook_replay_events
+           (event_key, status, expires_at, lease_generation, lease_token)
+         VALUES ($1, 'reserved', $2, 1, $3)
          ON CONFLICT (event_key) DO NOTHING
-         RETURNING event_key`,
-        [key, new Date(expiresAtMs)]
+         RETURNING event_key, lease_generation, lease_token`,
+        [key, new Date(expiresAtMs), token]
       )
-      if (inserted.rows.length > 0) return true
-      const reused = await client.query(
+      if (inserted.rows[0]) return mapReplayReservation(inserted.rows[0])
+      const reused = await client.query<ReplayReservationRow>(
         `UPDATE webhook_replay_events
-         SET status = 'reserved', expires_at = $2, created_at = CURRENT_TIMESTAMP
-         WHERE event_key = $1
-           AND (
-             expires_at <= CURRENT_TIMESTAMP
-             OR (
-               status = 'reserved'
-               AND created_at <= CURRENT_TIMESTAMP - INTERVAL '${RESERVATION_LEASE_SECONDS} seconds'
-             )
-           )
-         RETURNING event_key`,
-        [key, new Date(expiresAtMs)]
+          SET status = 'reserved',
+              expires_at = $2,
+              created_at = CURRENT_TIMESTAMP,
+              lease_generation = lease_generation + 1,
+              lease_token = $3
+          WHERE event_key = $1
+            AND status = 'reserved'
+            AND (
+              expires_at <= CURRENT_TIMESTAMP
+              OR created_at <= CURRENT_TIMESTAMP - INTERVAL '${RESERVATION_LEASE_SECONDS} seconds'
+            )
+          RETURNING event_key, lease_generation, lease_token`,
+        [key, new Date(expiresAtMs), token]
       )
-      return reused.rows.length > 0
+      return reused.rows[0] ? mapReplayReservation(reused.rows[0]) : false
     } finally {
       client.release()
     }
   }
 
-  async commit(key: string): Promise<boolean> {
+  async commit(reservation: WebhookReplayReservation): Promise<boolean> {
     const client = await this.pool.connect()
     try {
       const result = await client.query(
         `UPDATE webhook_replay_events
-         SET status = 'committed'
-         WHERE event_key = $1
-           AND status = 'reserved'
-           AND expires_at > CURRENT_TIMESTAMP
-         RETURNING event_key`,
-        [key]
+          SET status = 'committed', lease_token = NULL
+          WHERE event_key = $1
+            AND status = 'reserved'
+            AND expires_at > CURRENT_TIMESTAMP
+            AND lease_generation = $2
+            AND lease_token = $3
+          RETURNING event_key`,
+        [reservation.key, reservation.generation, reservation.token]
       )
       return result.rows.length > 0
     } finally {
@@ -183,14 +223,17 @@ export class PostgresWebhookReplayStore implements WebhookReplayStore {
     }
   }
 
-  async release(key: string): Promise<boolean> {
+  async release(reservation: WebhookReplayReservation): Promise<boolean> {
     const client = await this.pool.connect()
     try {
       const result = await client.query(
         `DELETE FROM webhook_replay_events
-         WHERE event_key = $1 AND status = 'reserved'
-         RETURNING event_key`,
-        [key]
+          WHERE event_key = $1
+            AND status = 'reserved'
+            AND lease_generation = $2
+            AND lease_token = $3
+          RETURNING event_key`,
+        [reservation.key, reservation.generation, reservation.token]
       )
       return result.rows.length > 0
     } finally {
@@ -269,11 +312,11 @@ export class HmacWebhookVerifier {
       return {
         verified: true,
         commit: async () => {
-          const committed = await this.replayStore.commit!(prepared.key)
+          const committed = await this.replayStore.commit!(reserved)
           if (!committed) throw new Error('Webhook replay commit failed')
         },
         release: async () => {
-          await this.replayStore.release!(prepared.key)
+          await this.replayStore.release!(reserved)
         }
       }
     } catch {
@@ -409,5 +452,31 @@ function validateReplayEntry(key: string, expiresAtMs: number): void {
   }
   if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
     throw new Error('Webhook replay expiry is invalid')
+  }
+}
+
+interface ReplayReservationRow {
+  event_key: string
+  lease_generation: number | string
+  lease_token: string | null
+}
+
+function mapReplayReservation(
+  row: ReplayReservationRow
+): WebhookReplayReservation {
+  const generation = Number(row.lease_generation)
+  if (
+    !row.event_key ||
+    !Number.isSafeInteger(generation) ||
+    generation <= 0 ||
+    typeof row.lease_token !== 'string' ||
+    row.lease_token.trim() === ''
+  ) {
+    throw new Error('Webhook replay reservation fencing state is invalid')
+  }
+  return {
+    key: row.event_key,
+    generation,
+    token: row.lease_token
   }
 }

@@ -29,6 +29,7 @@ describe('Chatwoot adapter edges', () => {
     return new ChatwootChannelAdapter({
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'k',
       accountId: '1',
       fetchImpl
@@ -60,6 +61,7 @@ describe('Chatwoot adapter edges', () => {
     const small = new ChatwootChannelAdapter({
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'k',
       accountId: '1',
       fetchImpl: async () => new Response('x'.repeat(100), { status: 200 }),
@@ -125,6 +127,7 @@ describe('Evolution and gateway edges', () => {
     const network = new EvolutionChannelAdapter({
       enabled: true,
       baseUrl: 'https://evolution.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'k',
       instance: 'i',
       fetchImpl: async () => {
@@ -138,6 +141,7 @@ describe('Evolution and gateway edges', () => {
     const rejected = new EvolutionChannelAdapter({
       enabled: true,
       baseUrl: 'https://evolution.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'k',
       instance: 'i',
       fetchImpl: async () => new Response('{}', { status: 400 })

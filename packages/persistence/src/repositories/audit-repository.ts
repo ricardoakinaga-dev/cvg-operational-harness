@@ -34,6 +34,17 @@ export class AuditRepository {
     rawTenantId?: TenantId
   ): AuditEventRecord {
     const tenantId = rawTenantId ? TenantIdSchema.parse(rawTenantId) : undefined
+    // AUD19-003: exactly-once approval decisions. A repeated
+    // `approval_decision` for the same (tenant, approvalId, decision)
+    // converges on the recorded event instead of duplicating it, so route
+    // retries after a crash between resume and audit stay consistent.
+    if (input.type === 'approval_decision') {
+      const replay = this.findApprovalDecision(
+        input.payload,
+        tenantId ?? input.tenantId
+      )
+      if (replay) return replay
+    }
     const event: AuditEventRecord = {
       ...input,
       ...(tenantId ? { tenantId } : {}),
@@ -43,6 +54,37 @@ export class AuditRepository {
     }
     this.db.state.auditEvents = [...this.db.state.auditEvents, event]
     return event
+  }
+
+  /**
+   * AUD19-003 — idempotency read for approval decisions. Matches the
+   * Postgres `appendAudit` predicate (tenant, payload approvalId, payload
+   * decision) so memory and durable stores converge identically.
+   */
+  findApprovalDecision(
+    payload: unknown,
+    tenantId?: TenantId
+  ): AuditEventRecord | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as { approvalId?: unknown; decision?: unknown }
+    if (
+      typeof record.approvalId !== 'string' ||
+      typeof record.decision !== 'string'
+    ) {
+      return null
+    }
+    return (
+      this.db.state.auditEvents.find(
+        (event) =>
+          event.type === 'approval_decision' &&
+          (!tenantId || this.eventBelongsToTenant(event, tenantId)) &&
+          typeof event.payload === 'object' &&
+          event.payload !== null &&
+          (event.payload as { approvalId?: unknown }).approvalId ===
+            record.approvalId &&
+          (event.payload as { decision?: unknown }).decision === record.decision
+      ) ?? null
+    )
   }
 
   listByCorrelation(

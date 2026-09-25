@@ -126,6 +126,7 @@ describe('router and provider edge paths', () => {
   it('maps Ollama failure paths', async () => {
     const rejecting = new OllamaProvider({
       model: 'm',
+      allowPrivateNetworks: true,
       fetchImpl: async () => {
         throw new Error('network down')
       }
@@ -135,6 +136,7 @@ describe('router and provider edge paths', () => {
     })
     const invalidJson = new OllamaProvider({
       model: 'm',
+      allowPrivateNetworks: true,
       fetchImpl: async () => new Response('nope', { status: 200 })
     })
     await expect(invalidJson.execute(request())).rejects.toMatchObject({

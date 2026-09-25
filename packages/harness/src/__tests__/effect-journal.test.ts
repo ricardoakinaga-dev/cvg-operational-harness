@@ -3,6 +3,7 @@ import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
 import { createOperationalHarness } from '../createOperationalHarness.ts'
 import {
   InMemoryEffectJournal,
+  createEffectAttemptId,
   createJournaledToolRegistry
 } from '../effect-journal.ts'
 import type {
@@ -129,6 +130,15 @@ function options(tools: ToolRegistry, journal: InMemoryEffectJournal) {
 }
 
 describe('synthetic effect journal boundary', () => {
+  it('uses a secure default and a deterministic factory seam for attempt IDs', () => {
+    expect(createEffectAttemptId(() => 'fixture-attempt')).toBe(
+      'attempt_fixture-attempt'
+    )
+    expect(createEffectAttemptId()).toMatch(
+      /^attempt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    )
+  })
+
   it('replays a confirmed result without executing the effect twice', async () => {
     const counter = { value: 0 }
     const journal = new InMemoryEffectJournal()

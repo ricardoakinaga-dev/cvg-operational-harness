@@ -4,7 +4,7 @@ import {
   HybridOrchestrator,
   OrchestratorDecisionError,
   ScriptedModelGateway
-} from '@cvg/harness-orchestrator'
+} from '../index.ts'
 
 function stepContext(overrides: Partial<StepContext> = {}): StepContext {
   return {

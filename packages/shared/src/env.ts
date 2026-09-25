@@ -16,6 +16,17 @@ const EnvTrustedProxyHopsSchema = z.preprocess((value) => {
 export const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']),
   API_PERSISTENCE_MODE: z.enum(['memory', 'postgres']).default('memory'),
+  CVG_IDENTITY_MODE: z.preprocess(
+    (value) =>
+      typeof value === 'string' && value.trim() === ''
+        ? undefined
+        : typeof value === 'string'
+          ? value.trim()
+          : value,
+    z.enum(['simulation', 'trusted']).optional()
+  ),
+  CVG_OPERATOR_IDENTITY_KEYRING: z.string().optional(),
+  CVG_RATE_LIMIT_KEYRING: z.string().optional(),
   DATABASE_URL: z.string().url().optional(),
   DATABASE_MIGRATION_URL: z.string().url().optional(),
   INBOUND_TENANT_ID: z.string().optional(),
@@ -27,10 +38,17 @@ export const EnvSchema = z.object({
   API_TRUSTED_PROXY_HOPS: EnvTrustedProxyHopsSchema,
   POSTGRES_AUTO_MIGRATE: EnvBooleanSchema,
   POSTGRES_RLS_ENFORCEMENT: EnvBooleanSchema,
-  POSTGRES_SCHEMA: z
-    .string()
-    .regex(/^[a-z][a-z0-9_]{0,62}$/)
-    .optional(),
+  POSTGRES_SCHEMA: z.preprocess(
+    (value) =>
+      typeof value === 'string' && value.trim() === '' ? undefined : value,
+    z
+      .string()
+      .regex(/^[a-z][a-z0-9_]{0,62}$/)
+      .optional()
+  ),
+  OUTBOX_DURABLE_INBOUND: EnvBooleanSchema,
+  PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
+  CVG_API_PORT: z.coerce.number().int().min(1).max(65_535).default(3100),
   OPENAI_API_KEY: z.string().min(1).default('replace_me'),
   ENABLE_REAL_CHANNELS: EnvBooleanSchema,
   ENABLE_REAL_RAG: EnvBooleanSchema,
@@ -49,6 +67,11 @@ export function parseEnv(input: NodeJS.ProcessEnv): AppEnv {
     throw new Error('A production provider secret must be configured')
   }
   if (env.NODE_ENV === 'production') {
+    if (env.CVG_IDENTITY_MODE === 'simulation') {
+      throw new Error(
+        'Production requires trusted operator identity mode; simulation is forbidden'
+      )
+    }
     const webhookSecret = env.WEBHOOK_SIGNING_SECRET?.trim() ?? ''
     if (
       webhookSecret.length < 32 ||

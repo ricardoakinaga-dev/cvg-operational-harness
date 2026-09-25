@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlledFakeChannelAdapter } from '../adapters/fake.ts'
 import { EvolutionChannelAdapter } from '../adapters/evolution.ts'
 import { ChatwootChannelAdapter } from '../adapters/chatwoot.ts'
@@ -22,6 +24,20 @@ const context = {
   conversationId: 'conv_1',
   correlationId: CORRELATION
 }
+
+const servers: Server[] = []
+
+afterEach(async () => {
+  await Promise.all(
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          server.closeAllConnections()
+          server.close(() => resolve())
+        })
+    )
+  )
+})
 
 function outbound(overrides: Partial<CanonicalOutboundMessageInput> = {}) {
   return CanonicalOutboundMessageSchema.parse({
@@ -163,6 +179,7 @@ describe('EvolutionAPI adapter', () => {
     const adapter = new EvolutionChannelAdapter({
       enabled: true,
       baseUrl: 'https://evolution.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'secret',
       instance: 'cvg',
       clock: () => NOW,
@@ -193,6 +210,7 @@ describe('EvolutionAPI adapter', () => {
     const adapter = new EvolutionChannelAdapter({
       enabled: true,
       baseUrl: 'https://evolution.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'secret',
       instance: 'cvg',
       fetchImpl: async () => new Response('{}')
@@ -226,11 +244,65 @@ describe('EvolutionAPI adapter', () => {
     ).toThrowError(expect.objectContaining({ code: 'url_rejected' }))
   })
 
+  it('requires HTTPS for public base URLs and permits only explicit loopback HTTP', async () => {
+    expect(
+      () =>
+        new EvolutionChannelAdapter({
+          enabled: true,
+          baseUrl: 'http://evolution.example.com',
+          apiKey: 'k',
+          instance: 'i'
+        })
+    ).toThrowError(expect.objectContaining({ code: 'url_rejected' }))
+    expect(
+      () =>
+        new ChatwootChannelAdapter({
+          enabled: true,
+          baseUrl: 'http://chatwoot.example.com',
+          apiKey: 'k',
+          accountId: '1'
+        })
+    ).toThrowError(expect.objectContaining({ code: 'url_rejected' }))
+
+    let seenHost: string | undefined
+    let seenBody = ''
+    const server = createServer((request, response) => {
+      seenHost = request.headers.host
+      request.on('data', (chunk) => {
+        seenBody += String(chunk)
+      })
+      request.on('end', () => {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end('{}')
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    servers.push(server)
+    const port = (server.address() as AddressInfo).port
+    const loopback = new EvolutionChannelAdapter({
+      enabled: true,
+      baseUrl: `http://127.0.0.1:${port}`,
+      allowPrivateNetworks: true,
+      apiKey: 'synthetic-key',
+      instance: 'i',
+      clock: () => NOW
+    })
+
+    const result = await loopback.send(outbound())
+    expect(result.accepted).toBe(true)
+    expect(seenHost).toBe(`127.0.0.1:${port}`)
+    expect(JSON.parse(seenBody)).toEqual({
+      number: '5511999999999',
+      text: 'ola'
+    })
+  })
+
   it('sends through the configured endpoint with bounded failure mapping', async () => {
     const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }))
     const adapter = new EvolutionChannelAdapter({
       enabled: true,
       baseUrl: 'https://evolution.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'secret',
       instance: 'cvg',
       fetchImpl,
@@ -240,12 +312,30 @@ describe('EvolutionAPI adapter', () => {
     expect(result.accepted).toBe(true)
     expect(fetchImpl).toHaveBeenCalledWith(
       'https://evolution.example.com/message/sendText/cvg',
-      expect.objectContaining({ redirect: 'error' })
+      expect.objectContaining({ redirect: 'manual' })
     )
+
+    // AUD19-007: an allowlisted hostname that resolves to a private
+    // address is rejected before any fetch happens (no DNS-rebinding
+    // bypass through the allowlist).
+    const reboundFetch = vi.fn(async () => new Response('{}', { status: 200 }))
+    const rebound = new EvolutionChannelAdapter({
+      enabled: true,
+      baseUrl: 'https://evolution.example.com',
+      dnsLookup: async () => ['169.254.169.254'],
+      apiKey: 'secret',
+      instance: 'cvg',
+      fetchImpl: reboundFetch
+    })
+    await expect(rebound.send(outbound())).rejects.toMatchObject({
+      code: 'url_rejected'
+    })
+    expect(reboundFetch).not.toHaveBeenCalled()
 
     const failing = new EvolutionChannelAdapter({
       enabled: true,
       baseUrl: 'https://evolution.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'secret',
       instance: 'cvg',
       fetchImpl: async () => new Response('{}', { status: 503 })
@@ -262,6 +352,7 @@ describe('Chatwoot adapter', () => {
     const adapter = new ChatwootChannelAdapter({
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
       apiKey: 'secret',
       accountId: '1',
       clock: () => NOW,

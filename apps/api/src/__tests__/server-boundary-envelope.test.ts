@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryCapabilityApprovalAuthority } from '@cvg/platform'
 import { buildServer } from '../server.ts'
+import { createInMemoryOperatorSessionStore } from '../operator-session.ts'
 
 interface Envelope<T> {
   success: boolean
@@ -52,7 +53,8 @@ describe('server boundary envelopes', () => {
         tenantId: operatorHeaders['x-tenant-id']
       }),
       webhookVerifier: () => true,
-      inboundTenantResolver: () => operatorHeaders['x-tenant-id']
+      inboundTenantResolver: () => operatorHeaders['x-tenant-id'],
+      operatorSessionStore: createInMemoryOperatorSessionStore()
     })
     const ready = await app.inject({ method: 'GET', url: '/ready' })
     await app.close()
@@ -459,7 +461,8 @@ describe('server boundary envelopes', () => {
         role: 'Operator'
       }),
       webhookVerifier: () => true,
-      inboundTenantResolver: () => operatorHeaders['x-tenant-id']
+      inboundTenantResolver: () => operatorHeaders['x-tenant-id'],
+      operatorSessionStore: createInMemoryOperatorSessionStore()
     })
     const response = await app.inject({ method: 'GET', url: '/v1/tasks' })
     await app.close()

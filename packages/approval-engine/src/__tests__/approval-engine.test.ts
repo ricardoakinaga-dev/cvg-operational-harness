@@ -254,7 +254,7 @@ describe('approval engine', () => {
     )
     const record = engine.request(requestInput())
     expect(() =>
-      engine.approve(TENANT, record.approvalId, { approverId: 'x' })
+      engine.approve(TENANT, record.approvalId, { approverId: 'op_approver' })
     ).toThrowError(expect.objectContaining({ code: 'invalid_state' }))
     expect(() =>
       engine.verifyAndConsume({

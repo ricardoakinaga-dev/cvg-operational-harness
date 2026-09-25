@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AuditPanel } from './features/audit/index.tsx'
 import { ApprovalsPanel } from './features/approvals/index.tsx'
 import { ConversationsPanel } from './features/conversations/index.tsx'
@@ -6,8 +6,12 @@ import { TasksPanel } from './features/tasks/index.tsx'
 import { JourneysPanel } from './features/journeys/index.tsx'
 import { PlatformPanel } from './features/platform/index.tsx'
 import {
+  ApiRequestError,
   apiClient,
+  configureApiClientOptions,
   isApiConflict,
+  simulationAuthHeaders,
+  trustedSessionAuthHeaders,
   type ApprovalDecision,
   type ApprovalView,
   type AuditEvidenceCheckpointView,
@@ -20,6 +24,14 @@ import {
   type TaskView,
   type TimelineItem
 } from './api/client.ts'
+import {
+  createTrustedSessionBootstrap,
+  getDefaultWebIdentityMode,
+  type SessionBootstrap,
+  type TrustedWebSession,
+  type WebIdentityMode,
+  type WebSessionStatus
+} from './auth/session.ts'
 
 interface PanelState<T> {
   data: T
@@ -48,8 +60,35 @@ function canReviewAuditEvidence(role: OperatorRole): boolean {
 }
 
 const auditEvidenceLimit = 10
+const maxBrowserTimeoutMs = 2_147_483_647
+const defaultTrustedSessionBootstrap = createTrustedSessionBootstrap()
+const controlledTestProfile =
+  __CVG_WEB_MODE__ === 'test' || __CVG_WEB_CONTROLLED_TEST__
 
-export function App() {
+function formatSessionExpiry(expiresAt: string): string {
+  const timestamp = Date.parse(expiresAt)
+  return Number.isFinite(timestamp)
+    ? new Date(timestamp).toISOString()
+    : 'Expiração inválida'
+}
+
+export interface AppProps {
+  identityMode?: WebIdentityMode
+  sessionBootstrap?: SessionBootstrap
+}
+
+export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
+  const resolvedIdentityMode = identityMode ?? getDefaultWebIdentityMode()
+  const trustedMode = resolvedIdentityMode === 'trusted'
+  const simulationMode = controlledTestProfile && !trustedMode
+  if (!trustedMode && !simulationMode) {
+    throw new Error(
+      'Simulation web identity mode requires an explicit controlled test profile'
+    )
+  }
+  const effectiveSessionBootstrap =
+    sessionBootstrap ?? defaultTrustedSessionBootstrap
+
   const [conversations, setConversations] = useState<
     PanelState<ConversationView[]>
   >(loading([]))
@@ -95,13 +134,163 @@ export function App() {
     role: 'Operator'
   })
   const [tenantId, setTenantId] = useState('')
+  const [trustedSession, setTrustedSession] =
+    useState<TrustedWebSession | null>(null)
+  const [sessionStatus, setSessionStatus] = useState<WebSessionStatus>(
+    trustedMode ? 'loading' : 'authenticated'
+  )
+  const [sessionError, setSessionError] = useState<string | null>(null)
+  const trustedBootstrapAttemptRef = useRef(0)
+  const trustedBootstrapInFlightRef = useRef<{
+    attempt: number
+    promise: Promise<TrustedWebSession>
+  } | null>(null)
+  const sessionActionRef = useRef<HTMLButtonElement | null>(null)
+
+  const loadTrustedSession = useCallback(
+    async (nextStatus: 'loading' | 'reauthenticating') => {
+      const currentAttempt = trustedBootstrapAttemptRef.current
+      const inFlight = trustedBootstrapInFlightRef.current
+      const attempt =
+        inFlight?.attempt === currentAttempt
+          ? currentAttempt
+          : currentAttempt + 1
+      if (attempt !== currentAttempt) {
+        trustedBootstrapAttemptRef.current = attempt
+      }
+      setSessionStatus(nextStatus)
+      setSessionError(null)
+      const promise =
+        inFlight?.attempt === attempt
+          ? inFlight.promise
+          : Promise.resolve().then(() => effectiveSessionBootstrap.load())
+      if (!inFlight || inFlight.attempt !== attempt) {
+        trustedBootstrapInFlightRef.current = { attempt, promise }
+      }
+      try {
+        const session = await promise
+        if (trustedBootstrapAttemptRef.current !== attempt) return
+        setTrustedSession(session)
+        setSessionStatus('authenticated')
+      } catch (error) {
+        if (trustedBootstrapAttemptRef.current !== attempt) return
+        setTrustedSession(null)
+        setSessionStatus('authentication_required')
+        setSessionError(
+          error instanceof ApiRequestError && error.status === 401
+            ? 'Uma sessão confiável é necessária para continuar.'
+            : 'Não foi possível autenticar a sessão operacional.'
+        )
+      } finally {
+        if (trustedBootstrapInFlightRef.current?.attempt === attempt) {
+          trustedBootstrapInFlightRef.current = null
+        }
+      }
+    },
+    [effectiveSessionBootstrap]
+  )
+
+  useEffect(() => {
+    configureApiClientOptions({
+      auth: simulationMode ? simulationAuthHeaders : trustedSessionAuthHeaders,
+      onUnauthorized: trustedMode
+        ? () => {
+            trustedBootstrapAttemptRef.current += 1
+            setTrustedSession(null)
+            setSessionStatus('authentication_required')
+            setSessionError('A sessão operacional expirou. Reautentique-se.')
+          }
+        : () => undefined
+    })
+  }, [simulationMode, trustedMode])
+
+  useEffect(() => {
+    if (simulationMode) {
+      trustedBootstrapAttemptRef.current += 1
+      setTrustedSession(null)
+      setSessionStatus('authenticated')
+      setSessionError(null)
+      return
+    }
+    void loadTrustedSession('loading')
+  }, [loadTrustedSession, simulationMode, trustedMode])
+
+  useEffect(() => {
+    if (!trustedMode || !trustedSession) return
+    const expiresAt = Date.parse(trustedSession.expiresAt)
+    if (!Number.isFinite(expiresAt)) {
+      setTrustedSession(null)
+      setSessionStatus('expired')
+      setSessionError('A sessão operacional tem uma expiração inválida.')
+      return
+    }
+    let active = true
+    let timeout: number | undefined
+    const scheduleExpiryCheck = () => {
+      if (!active) return
+      const remainingMs = expiresAt - Date.now()
+      if (remainingMs <= 0) {
+        trustedBootstrapAttemptRef.current += 1
+        setTrustedSession(null)
+        setSessionStatus('expired')
+        setSessionError('A sessão operacional expirou. Reautentique-se.')
+        return
+      }
+      timeout = window.setTimeout(
+        scheduleExpiryCheck,
+        Math.min(remainingMs, maxBrowserTimeoutMs)
+      )
+    }
+    scheduleExpiryCheck()
+    return () => {
+      active = false
+      if (timeout !== undefined) window.clearTimeout(timeout)
+    }
+  }, [trustedMode, trustedSession])
+
+  useEffect(() => {
+    if (!trustedMode) return
+    if (
+      sessionStatus === 'authentication_required' ||
+      sessionStatus === 'expired'
+    ) {
+      sessionActionRef.current?.focus()
+    }
+  }, [sessionStatus, trustedMode])
+
+  const endTrustedSession = async () => {
+    trustedBootstrapAttemptRef.current += 1
+    try {
+      await effectiveSessionBootstrap.logout()
+    } catch {
+      setSessionError('Não foi possível encerrar a sessão no servidor.')
+    } finally {
+      setTrustedSession(null)
+      setSessionStatus('authentication_required')
+    }
+  }
 
   const normalizedOperatorId = operatorIdentity.operatorId.trim()
   const normalizedTenantId = tenantId.trim()
+  const trustedSessionExpiry = trustedSession
+    ? Date.parse(trustedSession.expiresAt)
+    : Number.NaN
+  const trustedSessionHasValidExpiry = Number.isFinite(trustedSessionExpiry)
+  const currentIdentity = simulationMode
+    ? normalizedOperatorId.length > 0
+      ? {
+          operatorId: normalizedOperatorId,
+          role: operatorIdentity.role,
+          ...(normalizedTenantId ? { tenantId: normalizedTenantId } : {})
+        }
+      : null
+    : trustedSession && trustedSessionHasValidExpiry
+      ? trustedSession.identity
+      : null
   const identityKey = JSON.stringify([
-    normalizedOperatorId,
-    operatorIdentity.role,
-    normalizedTenantId
+    currentIdentity?.operatorId ?? '',
+    currentIdentity?.role ?? '',
+    currentIdentity?.tenantId ?? ''
   ])
   const identityScopeRef = useRef(identityKey)
   const identityChanged = identityScopeRef.current !== identityKey
@@ -128,13 +317,7 @@ export function App() {
     `${viewScopeRef.current.generation}:${viewScopeRef.current.key}` === scope
 
   const currentOperatorIdentity = (): OperatorIdentity | null => {
-    return normalizedOperatorId.length > 0
-      ? {
-          operatorId: normalizedOperatorId,
-          role: operatorIdentity.role,
-          ...(normalizedTenantId ? { tenantId: normalizedTenantId } : {})
-        }
-      : null
+    return currentIdentity
   }
 
   useEffect(() => {
@@ -617,16 +800,31 @@ export function App() {
     }
   }
 
-  const identityReady = operatorIdentity.operatorId.trim().length > 0
+  const identityReady = currentIdentity !== null
   const canDecideApproval =
     identityReady &&
-    (operatorIdentity.role === 'Approver' ||
-      operatorIdentity.role === 'Supervisor')
+    (currentIdentity?.role === 'Approver' ||
+      currentIdentity?.role === 'Supervisor')
   const canAssumeHandoff =
-    identityReady && operatorIdentity.role === 'Supervisor'
-  const canUpdateTasks = identityReady && operatorIdentity.role === 'Operator'
+    identityReady && currentIdentity?.role === 'Supervisor'
+  const canUpdateTasks = identityReady && currentIdentity?.role === 'Operator'
   const canReviewEvidence =
-    identityReady && canReviewAuditEvidence(operatorIdentity.role)
+    identityReady && canReviewAuditEvidence(currentIdentity?.role ?? 'Operator')
+  const platformTenantId = currentIdentity?.tenantId
+  const platformIdentity =
+    currentIdentity?.role === 'Admin' &&
+    platformTenantId !== undefined &&
+    /^tenant_[0-9a-f-]{36}$/.test(platformTenantId)
+      ? { ...currentIdentity, tenantId: platformTenantId }
+      : null
+
+  const sessionStatusLabel: Record<WebSessionStatus, string> = {
+    loading: 'Autenticando…',
+    authenticated: simulationMode ? 'Simulação controlada' : 'Sessão confiável',
+    authentication_required: 'Autenticação necessária',
+    expired: 'Sessão expirada',
+    reauthenticating: 'Reautenticando…'
+  }
 
   return (
     <main className="shell">
@@ -643,73 +841,126 @@ export function App() {
           </p>
         </div>
         <form className="identityControls" aria-label="Identidade operacional">
-          <label>
-            ID do operador
-            <input
-              aria-label="ID do operador"
-              value={operatorIdentity.operatorId}
-              onChange={(event) =>
-                setOperatorIdentity({
-                  ...operatorIdentity,
-                  operatorId: event.target.value
-                })
-              }
-              placeholder="operator.shift-a"
-            />
-          </label>
-          <label>
-            Papel operacional
-            <select
-              aria-label="Papel operacional"
-              value={operatorIdentity.role}
-              onChange={(event) =>
-                setOperatorIdentity({
-                  ...operatorIdentity,
-                  role: event.target.value as OperatorRole
-                })
-              }
-            >
-              <option value="Operator">Operator</option>
-              <option value="Approver">Approver</option>
-              <option value="Supervisor">Supervisor</option>
-              <option value="Admin">Admin</option>
-            </select>
-          </label>
-          <label>
-            Tenant ID
-            <input
-              aria-label="Tenant ID"
-              value={tenantId}
-              onChange={(event) => setTenantId(event.target.value)}
-              placeholder="tenant_<uuid>"
-            />
-          </label>
-          <span className="status">{operatorIdentity.role}</span>
-          <span
-            className="scopeSummary"
-            title={tenantId.trim() || 'Tenant não definido'}
-          >
-            <span>Escopo</span>
-            <code>{tenantId.trim() || 'Não definido'}</code>
-          </span>
-          <button
-            type="button"
-            className="sessionButton"
-            onClick={() => {
-              setOperatorIdentity({ operatorId: '', role: 'Operator' })
-              setTenantId('')
-            }}
-          >
-            Encerrar sessão
-          </button>
+          {!simulationMode ? (
+            <>
+              <span className="status">
+                {sessionStatusLabel[sessionStatus]}
+              </span>
+              {trustedSession ? (
+                <span
+                  className="scopeSummary"
+                  title={
+                    trustedSession.identity.tenantId ?? 'Tenant não definido'
+                  }
+                >
+                  <span>Operador</span>
+                  <code>{trustedSession.identity.operatorId}</code>
+                  <span>Papel</span>
+                  <code>{trustedSession.identity.role}</code>
+                  <span>Escopo</span>
+                  <code>
+                    {trustedSession.identity.tenantId ?? 'Não definido'}
+                  </code>
+                  <span>Expira</span>
+                  <time dateTime={trustedSession.expiresAt}>
+                    {formatSessionExpiry(trustedSession.expiresAt)}
+                  </time>
+                </span>
+              ) : null}
+              {trustedSession ? (
+                <button
+                  type="button"
+                  className="sessionButton"
+                  ref={sessionActionRef}
+                  onClick={() => void endTrustedSession()}
+                >
+                  Encerrar sessão
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="sessionButton"
+                  ref={sessionActionRef}
+                  onClick={() => void loadTrustedSession('reauthenticating')}
+                >
+                  Reautenticar
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <label>
+                ID do operador
+                <input
+                  aria-label="ID do operador"
+                  value={operatorIdentity.operatorId}
+                  onChange={(event) =>
+                    setOperatorIdentity({
+                      ...operatorIdentity,
+                      operatorId: event.target.value
+                    })
+                  }
+                  placeholder="operator.shift-a"
+                />
+              </label>
+              <label>
+                Papel operacional
+                <select
+                  aria-label="Papel operacional"
+                  value={operatorIdentity.role}
+                  onChange={(event) =>
+                    setOperatorIdentity({
+                      ...operatorIdentity,
+                      role: event.target.value as OperatorRole
+                    })
+                  }
+                >
+                  <option value="Operator">Operator</option>
+                  <option value="Approver">Approver</option>
+                  <option value="Supervisor">Supervisor</option>
+                  <option value="Admin">Admin</option>
+                </select>
+              </label>
+              <label>
+                Tenant ID
+                <input
+                  aria-label="Tenant ID"
+                  value={tenantId}
+                  onChange={(event) => setTenantId(event.target.value)}
+                  placeholder="tenant_<uuid>"
+                />
+              </label>
+              <span className="status">{operatorIdentity.role}</span>
+              <span
+                className="scopeSummary"
+                title={tenantId.trim() || 'Tenant não definido'}
+              >
+                <span>Escopo</span>
+                <code>{tenantId.trim() || 'Não definido'}</code>
+              </span>
+              <button
+                type="button"
+                className="sessionButton"
+                onClick={() => {
+                  setOperatorIdentity({ operatorId: '', role: 'Operator' })
+                  setTenantId('')
+                }}
+              >
+                Encerrar sessão
+              </button>
+            </>
+          )}
         </form>
+        {trustedMode && sessionStatus !== 'authenticated' ? (
+          <p className="sessionNotice" role="status">
+            {sessionError ?? sessionStatusLabel[sessionStatus]}
+          </p>
+        ) : null}
       </header>
       <nav className="sectionNav" aria-label="Seções do console">
         <a href="#console-operacional">Operação</a>
         <a href="#journeys-panel">Jornadas</a>
-        {operatorIdentity.role === 'Admin' ? (
-          <a href="#platform-panel">Admin console</a>
-        ) : null}
+        {platformIdentity ? <a href="#platform-panel">Admin console</a> : null}
       </nav>
       <section
         className="grid"
@@ -799,16 +1050,7 @@ export function App() {
         identity={currentOperatorIdentity()}
         selectedSessionId={selectedSessionId}
       />
-      {operatorIdentity.role === 'Admin' &&
-      /^tenant_[0-9a-f-]{36}$/.test(tenantId.trim()) ? (
-        <PlatformPanel
-          identity={{
-            operatorId: operatorIdentity.operatorId,
-            role: operatorIdentity.role,
-            tenantId: tenantId.trim()
-          }}
-        />
-      ) : null}
+      {platformIdentity ? <PlatformPanel identity={platformIdentity} /> : null}
     </main>
   )
 }

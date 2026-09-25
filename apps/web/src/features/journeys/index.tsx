@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { createDomainId } from '@cvg/shared'
 import {
   apiClient,
   type JourneyAppointmentDraftView,
@@ -14,8 +15,7 @@ export interface JourneysPanelProps {
   selectedSessionId?: string | null
 }
 
-const emptyKey = () =>
-  `journey-ui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+const emptyKey = () => createDomainId('journey')
 
 export function JourneysPanel({
   identity,

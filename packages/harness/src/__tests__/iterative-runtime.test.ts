@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   HYBRID_ORCHESTRATOR_VERSION,
   RUNTIME_V2_VERSION,
+  type AgenticKnowledgeProvider,
+  type ApprovalEngine,
+  type ApprovalExecutionPort,
+  type AuditSink,
   type Claim,
+  type CompletionEvaluator,
   type ExecutionCheckpoint,
   type IterativeOrchestratorTurn,
   type LoopDecision,
@@ -58,17 +63,29 @@ function buildHarness(options: {
   readonly staticDecision?: LoopDecision
   readonly tools?: ReturnType<typeof createPhase3ToolRegistry>
   readonly knowledge?: SyntheticKnowledgeProvider
+  readonly knowledgeProvider?: AgenticKnowledgeProvider
   readonly sufficiency?: CategorySufficiencyEvaluator
   readonly policy?: ScriptedPolicyEngine
   readonly approvals?: InMemoryApprovalEngine
+  readonly approvalEngine?: ApprovalEngine
   readonly store?: InMemoryExecutionStepStore
-  readonly modelResponses?: readonly string[]
+  readonly modelResponses?: readonly (
+    | string
+    | {
+        readonly text: string
+        readonly inputTokens?: number
+        readonly outputTokens?: number
+        readonly costUsd?: number
+      }
+  )[]
   readonly model?: ThrowingModelGateway
   readonly claimExtractor?: (response: string) => readonly Claim[]
   readonly completionStrategy?: 'DETERMINISTIC' | 'EVIDENCE_BASED' | 'HYBRID'
   readonly loopDetection?: { repeatThreshold: number }
   readonly maxObservationPayloadChars?: number
   readonly capabilityFingerprint?: string
+  readonly completionEvaluator?: CompletionEvaluator
+  readonly audit?: AuditSink
 }): RuntimeHarness {
   const store = options.store ?? new InMemoryExecutionStepStore()
   const audit = new RecordingAuditSink()
@@ -100,14 +117,17 @@ function buildHarness(options: {
     policy,
     approvals,
     tools,
-    audit,
+    audit: options.audit ?? audit,
     telemetry,
     stepStore: store,
     ...(options.capabilityFingerprint
       ? { capabilityFingerprint: options.capabilityFingerprint }
       : {}),
+    ...(options.approvalEngine ? { approvals: options.approvalEngine } : {}),
     contextEngine: new DefaultContextEngine(),
-    ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+    ...(options.knowledge || options.knowledgeProvider
+      ? { knowledge: options.knowledgeProvider ?? options.knowledge }
+      : {}),
     ...(options.sufficiency
       ? { sufficiencyEvaluator: options.sufficiency }
       : {}),
@@ -117,6 +137,9 @@ function buildHarness(options: {
     ...(options.loopDetection ? { loopDetection: options.loopDetection } : {}),
     ...(options.maxObservationPayloadChars
       ? { maxObservationPayloadChars: options.maxObservationPayloadChars }
+      : {}),
+    ...(options.completionEvaluator
+      ? { completionEvaluator: options.completionEvaluator }
       : {})
   })
   return {
@@ -136,6 +159,51 @@ function operationalInput(overrides: Partial<RuntimeInput> = {}): RuntimeInput {
   return phase3RuntimeInput({
     agent: phase3AgentProfile(),
     ...overrides
+  })
+}
+
+function checkpointFor(
+  input: RuntimeInput,
+  options: {
+    readonly runtimeProfile?: ExecutionCheckpoint['runtimeProfile']
+    readonly runtimeVersion?: string
+    readonly capabilityFingerprint?: string
+    readonly stopReason?: ExecutionCheckpoint['state']['stopReason']
+  } = {}
+): ExecutionCheckpoint {
+  return sealCheckpoint({
+    executionId: input.executionId ?? 'exec_phase3_fixture',
+    tenantId: input.tenantId,
+    checkpointVersion: 1,
+    runtimeProfile: options.runtimeProfile ?? 'iterative',
+    runtimeVersion: options.runtimeVersion ?? RUNTIME_V2_VERSION,
+    orchestratorVersion: HYBRID_ORCHESTRATOR_VERSION,
+    stepNumber: 1,
+    state: {
+      goal: input.agent.objective,
+      ...(options.capabilityFingerprint
+        ? { capabilityFingerprint: options.capabilityFingerprint }
+        : {}),
+      stepNumber: 1,
+      observations: [],
+      openQuestions: [],
+      resolvedInputs: {},
+      loopSignatures: [],
+      ...(options.stopReason ? { stopReason: options.stopReason } : {})
+    },
+    budgetUsage: {
+      steps: 1,
+      modelCalls: 0,
+      toolCalls: 0,
+      knowledgeCalls: 0,
+      verificationCalls: 0,
+      replans: 0,
+      decisionRepairs: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 0,
+      activeDurationMs: 0
+    }
   })
 }
 
@@ -1188,5 +1256,581 @@ describe('P3-STEP-STORE — checkpoint integrity', () => {
     })
     const steps = await store.listSteps('tenant_order', 'exec_order')
     expect(steps.map((step) => step.status)).toEqual(['SUCCEEDED', 'SUCCEEDED'])
+  })
+})
+
+describe('P3-BOUNDARY — iterative runtime rejection paths', () => {
+  it('fails closed before loading a checkpoint for invalid budgets and bindings', async () => {
+    const harness = buildHarness({ staticDecision: respondDecision })
+    await expect(
+      harness.runtime.execute(
+        operationalInput({
+          agent: phase3AgentProfile({ id: '' as never })
+        })
+      )
+    ).resolves.toMatchObject({ stopReason: 'UNSAFE_REQUEST', steps: 0 })
+    await expect(
+      harness.runtime.execute(
+        operationalInput({
+          budget: { ...operationalInput().budget, maxSteps: 0 }
+        })
+      )
+    ).resolves.toMatchObject({ stopReason: 'MAX_STEPS' })
+    await expect(
+      harness.runtime.execute(
+        operationalInput({
+          budget: { ...operationalInput().budget, maxDurationMs: 0 }
+        })
+      )
+    ).resolves.toMatchObject({ stopReason: 'MAX_DURATION' })
+
+    const loadFailure = new InMemoryExecutionStepStore()
+    loadFailure.loadCheckpoint = async () => {
+      throw new Error('synthetic checkpoint store failure')
+    }
+    await expect(
+      buildHarness({
+        store: loadFailure,
+        staticDecision: respondDecision
+      }).runtime.execute(operationalInput())
+    ).resolves.toMatchObject({ stopReason: 'STATE_CONFLICT' })
+
+    await expect(
+      buildHarness({
+        capabilityFingerprint: 'composition-a',
+        staticDecision: respondDecision
+      }).runtime.execute(
+        operationalInput({ capabilityFingerprint: 'composition-b' })
+      )
+    ).resolves.toMatchObject({ stopReason: 'STATE_CONFLICT' })
+  })
+
+  it('rejects decisions that are unavailable, unbound, or outside the profile', async () => {
+    const noKnowledge = buildHarness({
+      staticDecision: decision({
+        decisionType: 'SEARCH_KNOWLEDGE',
+        reasonCode: 'EVIDENCE_INCOMPLETE',
+        query: 'synthetic'
+      })
+    })
+    await expect(
+      noKnowledge.runtime.execute(
+        operationalInput({
+          agent: phase3AgentProfile({
+            tools: [],
+            completionStrategy: 'EVIDENCE_BASED'
+          })
+        })
+      )
+    ).resolves.toMatchObject({ stopReason: 'STATE_CONFLICT' })
+
+    const absentTool = buildHarness({
+      staticDecision: decision({
+        decisionType: 'CALL_TOOL',
+        reasonCode: 'TOOL_REQUIRED',
+        toolId: 'synthetic.absent'
+      })
+    })
+    await expect(
+      absentTool.runtime.execute(operationalInput())
+    ).resolves.toMatchObject({
+      stopReason: 'STATE_CONFLICT'
+    })
+
+    const notExposed = buildHarness({ staticDecision: reserveDecision })
+    await expect(
+      notExposed.runtime.execute(
+        operationalInput({
+          agent: phase3AgentProfile({ tools: [PHASE3_TOOL_AVAILABILITY] })
+        })
+      )
+    ).resolves.toMatchObject({ stopReason: 'STATE_CONFLICT' })
+  })
+
+  it('fails closed on unsupported and failing policy decisions', async () => {
+    const decisionInput = operationalInput()
+    const unsupported = buildHarness({
+      staticDecision: availabilityDecision,
+      policy: {
+        evaluate: async () => ({ outcome: 'UNKNOWN' }) as never
+      } as never
+    })
+    await expect(
+      unsupported.runtime.execute(decisionInput)
+    ).resolves.toMatchObject({
+      stopReason: 'INSUFFICIENT_EVIDENCE'
+    })
+
+    const throwing = buildHarness({
+      staticDecision: availabilityDecision,
+      policy: {
+        evaluate: async () => {
+          throw new Error('synthetic policy failure')
+        }
+      } as never
+    })
+    await expect(
+      throwing.runtime.execute(decisionInput)
+    ).resolves.toMatchObject({
+      stopReason: 'POLICY_DENIED'
+    })
+  })
+
+  it('covers approval execution lifecycle failures without replaying the tool', async () => {
+    const approvalExecutionEvents: string[] = []
+    const approvals = new InMemoryApprovalEngine() as InMemoryApprovalEngine & {
+      execution: {
+        begin: () => Promise<{ approvalId: string; reservationId: string }>
+        complete: () => Promise<void>
+        fail: () => Promise<void>
+        uncertain: () => Promise<void>
+      }
+    }
+    approvals.approveOnRequest = true
+    approvals.execution = {
+      begin: async () => {
+        approvalExecutionEvents.push('begin')
+        return {
+          approvalId: 'approval-execution',
+          reservationId: 'reservation-1'
+        }
+      },
+      complete: async () => {
+        approvalExecutionEvents.push('complete')
+      },
+      fail: async () => {
+        approvalExecutionEvents.push('fail')
+      },
+      uncertain: async () => {
+        approvalExecutionEvents.push('uncertain')
+      }
+    }
+    const approvalDecision = decision({
+      decisionType: 'REQUEST_APPROVAL',
+      reasonCode: 'POLICY_REQUIRED',
+      toolId: PHASE3_TOOL_RESERVE,
+      toolInput: { resource: 'resource-x' }
+    })
+    const successful = buildHarness({
+      decisions: [approvalDecision, respondDecision],
+      approvals
+    })
+    const first = await successful.runtime.execute(operationalInput())
+    expect(first.stopReason).toBe('COMPLETED')
+    expect(approvalExecutionEvents).toEqual(['begin', 'complete'])
+
+    approvalExecutionEvents.length = 0
+    approvals.execution.complete = async () => {
+      approvalExecutionEvents.push('complete')
+      throw new Error('synthetic confirmation failure')
+    }
+    const confirmationFailure = buildHarness({
+      decisions: [approvalDecision, respondDecision],
+      approvals
+    })
+    const second = await confirmationFailure.runtime.execute(
+      operationalInput({ executionId: 'exec_approval_confirmation_failure' })
+    )
+    expect(second.stopReason).toBe('TOOL_FAILURE')
+    expect(second.response).toContain('unknown_effect')
+    expect(approvalExecutionEvents).toEqual(['begin', 'complete'])
+  })
+
+  it('rejects incompatible checkpoint profiles, bindings, and terminal resumes', async () => {
+    const cases: Array<{
+      readonly checkpoint: Parameters<typeof checkpointFor>[1]
+      readonly input?: Partial<RuntimeInput>
+      readonly capabilityFingerprint?: string
+    }> = [
+      { checkpoint: { runtimeProfile: 'single_pass' } },
+      { checkpoint: { runtimeVersion: '9.9.9' } },
+      {
+        checkpoint: {},
+        input: { runtimeProfile: 'single_pass' }
+      },
+      {
+        checkpoint: { capabilityFingerprint: 'composition-a' },
+        input: { capabilityFingerprint: 'composition-b' },
+        capabilityFingerprint: 'composition-b'
+      },
+      { checkpoint: { stopReason: 'COMPLETED' } }
+    ]
+
+    for (const [index, entry] of cases.entries()) {
+      const input = operationalInput({
+        executionId: `exec_checkpoint_rejection_${index}`,
+        ...entry.input
+      })
+      const store = new InMemoryExecutionStepStore()
+      await store.saveCheckpoint(checkpointFor(input, entry.checkpoint))
+      const result = await buildHarness({
+        store,
+        staticDecision: respondDecision,
+        ...(entry.capabilityFingerprint
+          ? { capabilityFingerprint: entry.capabilityFingerprint }
+          : {})
+      }).runtime.execute(input)
+      expect(result.stopReason).toBe('STATE_CONFLICT')
+    }
+  })
+
+  it('bounds decision repair, model usage, policy handoff, and response composition', async () => {
+    await expect(
+      buildHarness({
+        staticDecision: decision({
+          decisionType: 'CALL_TOOL',
+          reasonCode: 'TOOL_REQUIRED'
+        }) as never
+      }).runtime.execute(operationalInput())
+    ).resolves.toMatchObject({ stopReason: 'MODEL_FAILURE' })
+
+    await expect(
+      buildHarness({ staticDecision: respondDecision }).runtime.execute(
+        operationalInput({
+          budget: { ...operationalInput().budget, maxModelCalls: 0 }
+        })
+      )
+    ).resolves.toMatchObject({ stopReason: 'MAX_MODEL_CALLS' })
+
+    await expect(
+      buildHarness({
+        decisions: [
+          {
+            decision: respondDecision,
+            usage: {
+              modelCalls: 0,
+              inputTokens: 100,
+              outputTokens: 100,
+              costUsd: 0
+            }
+          }
+        ]
+      }).runtime.execute(
+        operationalInput({
+          budget: { ...operationalInput().budget, maxTokens: 10 }
+        })
+      )
+    ).resolves.toMatchObject({ stopReason: 'MAX_TOKENS' })
+
+    await expect(
+      buildHarness({
+        decisions: [availabilityDecision],
+        policy: new ScriptedPolicyEngine([], [PHASE3_TOOL_AVAILABILITY])
+      }).runtime.execute(operationalInput())
+    ).resolves.toMatchObject({ stopReason: 'HUMAN_TAKEOVER' })
+
+    await expect(
+      buildHarness({
+        decisions: [
+          decision({
+            decisionType: 'RESPOND',
+            reasonCode: 'GOAL_SATISFIED'
+          })
+        ]
+      }).runtime.execute(operationalInput())
+    ).resolves.toMatchObject({ stopReason: 'INSUFFICIENT_EVIDENCE' })
+
+    await expect(
+      buildHarness({
+        decisions: [
+          decision({
+            decisionType: 'RESPOND',
+            reasonCode: 'GOAL_SATISFIED',
+            responseIntent: 'compose an answer'
+          })
+        ],
+        modelResponses: ['composed answer']
+      }).runtime.execute(operationalInput())
+    ).resolves.toMatchObject({
+      stopReason: 'COMPLETED',
+      response: 'composed answer'
+    })
+
+    await expect(
+      buildHarness({
+        decisions: [
+          decision({
+            decisionType: 'RESPOND',
+            reasonCode: 'GOAL_SATISFIED',
+            responseIntent: 'compose an answer'
+          })
+        ],
+        modelResponses: [
+          { text: 'too many tokens', inputTokens: 100, outputTokens: 100 }
+        ]
+      }).runtime.execute(
+        operationalInput({
+          budget: { ...operationalInput().budget, maxTokens: 10 }
+        })
+      )
+    ).resolves.toMatchObject({ stopReason: 'MAX_TOKENS' })
+  })
+
+  it('covers knowledge, verification, replan, and claim-grounding branches', async () => {
+    const noVersionKnowledge: AgenticKnowledgeProvider = {
+      search: async () => ({
+        query: 'synthetic',
+        items: [
+          {
+            itemId: 'knowledge-item',
+            text: 'synthetic evidence',
+            sourceId: 'synthetic-source',
+            sourceVersion: 'v1',
+            category: 'synthetic'
+          }
+        ],
+        provenance: []
+      })
+    }
+    const sufficient = {
+      evaluate: async () => ({
+        level: 'SUFFICIENT' as const,
+        reasonCode: 'SYNTHETIC_SUFFICIENT',
+        missingCategories: [],
+        conflictingSources: [],
+        coveredCategories: ['synthetic']
+      })
+    }
+    const knowledgeResult = await buildHarness({
+      decisions: [
+        decision({
+          decisionType: 'SEARCH_KNOWLEDGE',
+          reasonCode: 'EVIDENCE_INCOMPLETE',
+          query: 'synthetic',
+          knowledgeCategories: ['synthetic']
+        }),
+        decision({
+          decisionType: 'VERIFY',
+          reasonCode: 'EVIDENCE_INCOMPLETE',
+          verificationTarget: 'evidence-coverage'
+        }),
+        decision({
+          decisionType: 'RESPOND',
+          reasonCode: 'GOAL_SATISFIED',
+          responseText: 'synthetic evidence'
+        })
+      ],
+      knowledgeProvider: noVersionKnowledge,
+      sufficiency: sufficient
+    }).runtime.execute(
+      operationalInput({
+        agent: phase3AgentProfile({
+          tools: [],
+          completionStrategy: 'EVIDENCE_BASED'
+        })
+      })
+    )
+    expect(knowledgeResult.stopReason).toBe('COMPLETED')
+
+    const unsupportedVerification = await buildHarness({
+      decisions: [
+        decision({
+          decisionType: 'VERIFY',
+          reasonCode: 'VERIFICATION_FAILED',
+          verificationTarget: 'unsupported-target'
+        }),
+        respondDecision
+      ]
+    }).runtime.execute(operationalInput())
+    expect(unsupportedVerification.stopReason).toBe('COMPLETED')
+
+    const failedKnowledge = await buildHarness({
+      decisions: [
+        decision({
+          decisionType: 'SEARCH_KNOWLEDGE',
+          reasonCode: 'EVIDENCE_INCOMPLETE',
+          query: 'synthetic'
+        })
+      ],
+      knowledgeProvider: {
+        search: async () => {
+          throw new Error('synthetic knowledge failure')
+        }
+      }
+    }).runtime.execute(
+      operationalInput({
+        agent: phase3AgentProfile({
+          tools: [],
+          completionStrategy: 'EVIDENCE_BASED'
+        })
+      })
+    )
+    expect(failedKnowledge.stopReason).toBe('INSUFFICIENT_EVIDENCE')
+
+    const claimExtractor = (): readonly Claim[] => [
+      { text: 'unsupported claim', evidenceRefs: ['missing-ref'] }
+    ]
+    const claimResult = await buildHarness({
+      decisions: [
+        decision({
+          decisionType: 'RESPOND',
+          reasonCode: 'GOAL_SATISFIED',
+          responseText: 'unsupported claim'
+        })
+      ],
+      claimExtractor,
+      completionEvaluator: {
+        evaluate: async () => ({
+          outcome: 'INCOMPLETE' as const,
+          reasonCode: 'EVIDENCE_INCOMPLETE' as const,
+          deterministic: true
+        })
+      }
+    }).runtime.execute(
+      operationalInput({
+        budget: { ...operationalInput().budget, maxVerificationCalls: 0 }
+      })
+    )
+    expect(claimResult.stopReason).toBe('VERIFICATION_FAILED')
+  })
+
+  it('maps evaluator outcomes and approval states without opening the loop', async () => {
+    const evaluations = [
+      ['FAILED', 'VERIFICATION_FAILED'],
+      ['INSUFFICIENT_EVIDENCE', 'INSUFFICIENT_EVIDENCE']
+    ] as const
+    for (const [outcome, stopReason] of evaluations) {
+      const result = await buildHarness({
+        decisions: [respondDecision],
+        completionEvaluator: {
+          evaluate: async () => ({
+            outcome,
+            reasonCode:
+              outcome === 'FAILED'
+                ? ('VERIFICATION_FAILED' as const)
+                : ('EVIDENCE_INCOMPLETE' as const),
+            deterministic: true,
+            detail: 'synthetic evaluation'
+          })
+        }
+      }).runtime.execute(operationalInput())
+      expect(result.stopReason).toBe(stopReason)
+    }
+
+    const stopped = await buildHarness({
+      decisions: [
+        decision({ decisionType: 'STOP', reasonCode: 'USER_REQUESTED_STOP' })
+      ],
+      completionEvaluator: {
+        evaluate: async () => ({
+          outcome: 'COMPLETE' as const,
+          reasonCode: 'COMPLETION_CONFIRMED' as const,
+          deterministic: true
+        })
+      }
+    }).runtime.execute(operationalInput())
+    expect(stopped.stopReason).toBe('COMPLETED')
+
+    const approvalDecision = decision({
+      decisionType: 'REQUEST_APPROVAL',
+      reasonCode: 'POLICY_REQUIRED',
+      toolId: PHASE3_TOOL_RESERVE,
+      toolInput: { resource: 'resource-x' }
+    })
+    for (const approval of [
+      { status: 'DENIED', reason: 'synthetic denial' },
+      { status: 'UNSUPPORTED', reason: 'synthetic unsupported' },
+      { status: 'APPROVED', reason: 'missing identity' }
+    ]) {
+      const result = await buildHarness({
+        decisions: [approvalDecision],
+        approvalEngine: {
+          request: async () => approval as never
+        }
+      }).runtime.execute(operationalInput())
+      expect(['POLICY_DENIED', 'INSUFFICIENT_EVIDENCE']).toContain(
+        result.stopReason
+      )
+    }
+  })
+
+  it('handles timeout and failure paths after an approved effect reservation', async () => {
+    const events: string[] = []
+    const execution: ApprovalExecutionPort = {
+      begin: async () => ({
+        approvalId: 'approval-runtime-v2' as never,
+        reservationId: 'reservation-runtime-v2'
+      }),
+      complete: async () => undefined,
+      fail: async () => {
+        events.push('fail')
+      },
+      uncertain: async () => {
+        events.push('uncertain')
+      }
+    }
+    const approvalEngine: ApprovalEngine = {
+      request: async () => ({
+        status: 'APPROVED',
+        approvalId: 'approval-runtime-v2' as never,
+        reason: 'approved'
+      }),
+      execution
+    }
+    const approvalDecision = decision({
+      decisionType: 'REQUEST_APPROVAL',
+      reasonCode: 'POLICY_REQUIRED',
+      toolId: PHASE3_TOOL_RESERVE,
+      toolInput: { resource: 'resource-x' }
+    })
+    const failed = await buildHarness({
+      decisions: [approvalDecision],
+      approvalEngine,
+      tools: createPhase3ToolRegistry({
+        availability: 'AVAILABLE',
+        reserveFails: true
+      })
+    }).runtime.execute(operationalInput())
+    expect(failed.stopReason).toBe('TOOL_FAILURE')
+    expect(events).toEqual(['fail'])
+
+    events.length = 0
+    const throwingTools = createPhase3ToolRegistry({
+      availability: 'AVAILABLE'
+    })
+    const throwingRegistry = {
+      list: throwingTools.list,
+      resolve: (toolId: string, version?: string) => {
+        const tool = throwingTools.resolve(toolId, version)
+        return tool?.id === PHASE3_TOOL_RESERVE
+          ? {
+              ...tool,
+              execute: async () => {
+                throw new Error('synthetic effect throw')
+              }
+            }
+          : tool
+      }
+    }
+    const thrown = await buildHarness({
+      decisions: [approvalDecision],
+      approvalEngine,
+      tools: throwingRegistry
+    }).runtime.execute(operationalInput())
+    expect(thrown.stopReason).toBe('TOOL_FAILURE')
+    expect(thrown.response).toContain('unknown_effect')
+    expect(events).toEqual(['uncertain'])
+
+    const pendingKnowledge = await buildHarness({
+      decisions: [
+        decision({
+          decisionType: 'SEARCH_KNOWLEDGE',
+          reasonCode: 'EVIDENCE_INCOMPLETE',
+          query: 'slow'
+        })
+      ],
+      knowledgeProvider: {
+        search: () => new Promise(() => undefined)
+      }
+    }).runtime.execute(
+      operationalInput({
+        agent: phase3AgentProfile({
+          tools: [],
+          completionStrategy: 'EVIDENCE_BASED'
+        }),
+        budget: { ...operationalInput().budget, maxDurationMs: 10 }
+      })
+    )
+    expect(pendingKnowledge.stopReason).toBe('MAX_DURATION')
   })
 })

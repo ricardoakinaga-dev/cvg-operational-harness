@@ -6,6 +6,7 @@ import {
   createTrustedOperatorIdentityResolver,
   createTrustedOperatorIdentityToken
 } from '../operator-identity.ts'
+import { createInMemoryOperatorSessionStore } from '../operator-session.ts'
 
 const tenantA = 'tenant_00000000-0000-4000-8000-0000000009a1'
 const tenantB = 'tenant_00000000-0000-4000-8000-0000000009a2'
@@ -33,7 +34,10 @@ interface Envelope<T> {
 
 describe('trusted identity mode', () => {
   it('does not fall back to simulation headers when no trusted resolver is configured', async () => {
-    const app = buildServer({ identityMode: 'trusted' })
+    const app = buildServer({
+      identityMode: 'trusted',
+      operatorSessionStore: createInMemoryOperatorSessionStore()
+    })
     const read = await app.inject({
       method: 'GET',
       url: '/v1/tasks',
@@ -62,7 +66,8 @@ describe('trusted identity mode', () => {
         operatorId: 'trusted.operator',
         role: 'Operator',
         tenantId: tenantA
-      })
+      }),
+      operatorSessionStore: createInMemoryOperatorSessionStore()
     })
     const promoted = await app.inject({
       method: 'GET',
@@ -100,7 +105,8 @@ describe('trusted identity mode', () => {
           role: 'Supervisor',
           tenantId: tenantA
         }
-      }
+      },
+      operatorSessionStore: createInMemoryOperatorSessionStore()
     })
     const denied = await app.inject({
       method: 'GET',
@@ -130,7 +136,8 @@ describe('trusted identity mode', () => {
       operatorIdentityResolver: () => ({
         operatorId: 'trusted.operator',
         role: 'Supervisor'
-      })
+      }),
+      operatorSessionStore: createInMemoryOperatorSessionStore()
     })
     const response = await app.inject({
       method: 'GET',
@@ -158,7 +165,8 @@ describe('trusted identity mode', () => {
           role: 'Operator',
           tenantId: tenantA
         }
-      }
+      },
+      operatorSessionStore: createInMemoryOperatorSessionStore()
     })
     const anonymous = await app.inject({
       method: 'POST',
@@ -218,7 +226,8 @@ describe('trusted identity mode', () => {
     )
     const app = buildServer({
       identityMode: 'trusted',
-      operatorIdentityResolver: resolver
+      operatorIdentityResolver: resolver,
+      operatorSessionStore: createInMemoryOperatorSessionStore()
     })
     try {
       const first = await app.inject({

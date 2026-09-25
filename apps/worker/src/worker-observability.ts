@@ -1,4 +1,9 @@
-import { redactFields, type Telemetry } from '@cvg/observability'
+import {
+  CompositeTelemetry,
+  type Observation,
+  type ObservationExporter,
+  type Telemetry
+} from '@cvg/observability'
 
 export type WorkerLogLevel = 'debug' | 'info' | 'warn' | 'error'
 
@@ -32,29 +37,65 @@ export function createJsonWorkerTelemetry(
   const clock = options.clock ?? (() => new Date())
   const write =
     options.write ?? ((line: string) => process.stdout.write(`${line}\n`))
+  const telemetry = new CompositeTelemetry({
+    clock,
+    exporters: [new WorkerJsonObservationExporter(write)]
+  })
 
   return {
     log(event, fields = {}, level = 'info') {
-      write(
-        JSON.stringify({
-          event,
-          level,
-          timestamp: clock().toISOString(),
-          ...redactFields(fields)
-        })
-      )
+      telemetry.log(level, event, fields)
     },
     metric(name, value, attributes = {}) {
-      write(
+      telemetry.recordMetric(name, value, attributes)
+    }
+  }
+}
+
+class WorkerJsonObservationExporter implements ObservationExporter {
+  readonly name = 'worker-json-lines'
+  readonly #write: (line: string) => void
+
+  constructor(write: (line: string) => void) {
+    this.#write = write
+  }
+
+  emit(observation: Observation): void {
+    if (observation.kind === 'log') {
+      this.#write(
         JSON.stringify({
-          event: 'worker.metric',
-          name,
-          value,
-          attributes: redactFields(attributes) as Record<string, unknown>,
-          timestamp: clock().toISOString()
+          event: observation.log.message,
+          level: observation.log.level,
+          timestamp: observation.log.timestamp,
+          ...observation.log.fields
         })
       )
+      return
     }
+    if (observation.kind === 'metric') {
+      this.#write(
+        JSON.stringify({
+          event: 'worker.metric',
+          name: observation.metric.name,
+          value: observation.metric.value,
+          attributes: observation.metric.attributes,
+          timestamp: observation.metric.timestamp
+        })
+      )
+      return
+    }
+    this.#write(
+      JSON.stringify({
+        event: 'worker.span',
+        name: observation.span.name,
+        traceId: observation.span.traceId,
+        spanId: observation.span.spanId,
+        correlationId: observation.span.correlationId,
+        status: observation.span.status,
+        durationMs: observation.span.durationMs,
+        timestamp: observation.span.endedAt
+      })
+    )
   }
 }
 

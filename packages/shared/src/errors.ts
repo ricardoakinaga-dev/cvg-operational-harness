@@ -26,7 +26,8 @@ export const ErrorCodes = {
   unsupported_media_type: 'unsupported_media_type',
   payload_too_large: 'payload_too_large',
   not_found: 'not_found',
-  request_uri_too_long: 'request_uri_too_long'
+  request_uri_too_long: 'request_uri_too_long',
+  configuration_error: 'configuration_error'
 } as const
 
 export type ErrorCode = keyof typeof ErrorCodes

@@ -4,7 +4,8 @@ import {
   MAX_ROTATION_WINDOW_SECONDS,
   createLocalIdentityKeyRing,
   createTrustedOperatorIdentityResolver,
-  createTrustedOperatorIdentityToken
+  createTrustedOperatorIdentityToken,
+  TRUSTED_OPERATOR_TOKEN_ISSUER
 } from '../operator-identity.ts'
 
 const NOW_SECONDS = 1_700_000_000
@@ -184,6 +185,7 @@ describe('identity key ring rotation', () => {
     const mismatchedSignature = signedClaims(
       {
         ...IDENTITY,
+        iss: TRUSTED_OPERATOR_TOKEN_ISSUER,
         aud: 'cvg-api',
         iat: NOW_SECONDS,
         exp: NOW_SECONDS + 300,

@@ -2,19 +2,25 @@ import { createHash, randomBytes } from 'node:crypto'
 import { Client, type QueryResult, type QueryResultRow } from 'pg'
 import { describe, expect, it } from 'vitest'
 import {
+  assertApprovalDecisionAuditDedupe,
   assertTenantIsolationSchema,
   assertTenantIsolationMigrationState,
   assertMigrationRoleIsLeastPrivilege,
   assertMigrationRoleSecurityBoundary,
+  assertRateLimitSchema,
+  assertRuntimeRoleIsNotRlsBypass,
   assertRuntimeRoleIsLeastPrivilege,
   assertWebhookReplaySchema,
   buildServer,
-  buildServerFromEnv
+  buildServerFromEnv,
+  readCurrentDatabaseRole
 } from '../server.ts'
 import {
   runInitialPostgresMigration,
   readPostgresMigrationSql,
   runPostgresMigrations,
+  TENANT_ONLY_TABLES,
+  TENANT_SCHEMA_TABLES,
   PostgresControlPlaneRepository,
   TenantScopedPostgresRuntimeRepository,
   type PostgresPoolLike,
@@ -32,6 +38,7 @@ import {
 } from '@cvg/platform'
 import { createCorrelationId } from '@cvg/shared'
 import { PostgresWebhookReplayStore } from '../webhook-security.ts'
+import { createInMemoryOperatorSessionStore } from '../operator-session.ts'
 
 interface Envelope<T> {
   success: boolean
@@ -44,6 +51,15 @@ const testDatabaseUrl = process.env.TEST_DATABASE_URL
 const postgresTenantA = 'tenant_00000000-0000-4000-8000-000000000081'
 const postgresTenantB = 'tenant_00000000-0000-4000-8000-000000000082'
 const postgresInboundAgent = 'agent_00000000-0000-4000-8000-000000000081'
+const rateLimitKeyRingEnv = JSON.stringify({
+  budgetSecret:
+    'synthetic-rate-limit-budget-secret-for-postgres-tests-2026-09-21-0001',
+  current: {
+    keyId: 'rl-postgres-test-v1',
+    secret: 'synthetic-rate-limit-hmac-secret-for-postgres-tests-2026-09-21-01'
+  },
+  previous: []
+})
 
 const trustedProductionIdentity = () => ({
   operatorId: 'fixture.production',
@@ -97,6 +113,107 @@ function atomicTrace(
     conversationId,
     sessionId,
     createdAt: new Date()
+  }
+}
+
+function tenantIsolationSchemaClient(
+  missing?: 'tenant-columns' | 'outbox-columns' | 'constraints' | 'indexes'
+): PostgresQueryable {
+  return {
+    async query<T extends QueryResultRow = QueryResultRow>(
+      text: string,
+      values?: unknown[]
+    ): Promise<QueryResult<T>> {
+      const names = (values?.[0] as string[] | undefined) ?? []
+      if (text.includes('FROM pg_class') && !text.includes('pg_attribute')) {
+        return queryResult(
+          names.map((relname) => ({
+            relname,
+            relrowsecurity: true,
+            relforcerowsecurity: true
+          }))
+        ) as unknown as QueryResult<T>
+      }
+      if (text.includes('FROM pg_policies')) {
+        return queryResult(
+          names.map((tablename) => {
+            const expression =
+              TENANT_ONLY_TABLES.has(tablename) ||
+              tablename === 'outbox_quarantine'
+                ? "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
+                : "tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
+            return {
+              tablename,
+              policyname: `${tablename}_tenant_isolation`,
+              permissive: 'PERMISSIVE',
+              roles: '{public}',
+              cmd: 'ALL',
+              qual: expression,
+              with_check: expression
+            }
+          })
+        ) as unknown as QueryResult<T>
+      }
+      if (text.includes('pg_attribute')) {
+        return queryResult(
+          names.flatMap((table_name) => [
+            ...(missing === 'tenant-columns' && table_name === 'sessions'
+              ? []
+              : [{ table_name, column_name: 'tenant_id' }]),
+            ...(TENANT_ONLY_TABLES.has(table_name) ||
+            table_name === 'outbox_quarantine'
+              ? []
+              : [{ table_name, column_name: 'tenant_isolation_quarantined' }]),
+            ...(table_name === 'sessions'
+              ? [
+                  { table_name, column_name: 'agent_id' },
+                  { table_name, column_name: 'agent_version_id' }
+                ]
+              : []),
+            ...(missing === 'outbox-columns' && table_name === 'outbox_events'
+              ? []
+              : table_name === 'outbox_events'
+                ? [{ table_name, column_name: 'payload_protection_version' }]
+                : []),
+            ...(missing === 'outbox-columns' && table_name === 'outbox_effects'
+              ? []
+              : table_name === 'outbox_effects'
+                ? [{ table_name, column_name: 'result_protection_version' }]
+                : [])
+          ])
+        ) as unknown as QueryResult<T>
+      }
+      if (text.includes('FROM pg_constraint')) {
+        const selected = missing === 'constraints' ? names.slice(1) : names
+        return queryResult(
+          selected.map((conname) => ({ conname }))
+        ) as unknown as QueryResult<T>
+      }
+      if (text.includes('FROM pg_index AS')) {
+        const selected = missing === 'indexes' ? [] : names
+        return queryResult(
+          selected.map((index_name) => ({
+            index_name,
+            table_name: 'audit_events',
+            indisunique: true,
+            indisvalid: true,
+            indisready: true,
+            indnkeyatts: 3,
+            indnatts: 3,
+            expressions:
+              "COALESCE(tenant_id, ''::text), (payload ->> 'approvalId'::text), (payload ->> 'decision'::text)",
+            predicate: "(type = 'approval_decision'::text)"
+          }))
+        ) as unknown as QueryResult<T>
+      }
+      if (text.includes('FROM pg_indexes')) {
+        const selected = missing === 'indexes' ? names.slice(1) : names
+        return queryResult(
+          selected.map((indexname) => ({ indexname }))
+        ) as unknown as QueryResult<T>
+      }
+      return queryResult([]) as unknown as QueryResult<T>
+    }
   }
 }
 
@@ -220,7 +337,14 @@ describe('api PostgreSQL persistence mode', () => {
       '0016_operational_execution_spine',
       '0017_runtime_approval_execution_binding',
       '0018_operational_execution_invariants',
-      '0019_iterative_execution_steps'
+      '0019_iterative_execution_steps',
+      '0020_conversation_intelligence',
+      '0021_approval_decision_audit_dedupe',
+      '0022_conversation_policy_standardization',
+      '0023_rate_limit_buckets',
+      '0024_approval_decision_causality',
+      '0025_webhook_replay_fencing',
+      '0026_rate_limit_key_hardening'
     ] as const
     const rows: Array<{
       version: string
@@ -361,7 +485,9 @@ describe('api PostgreSQL persistence mode', () => {
               can_select: true,
               can_insert: true,
               can_update: true,
-              can_delete: relationNames.includes('webhook_replay_events'),
+              can_delete:
+                relationNames.includes('webhook_replay_events') ||
+                relationNames.includes('rate_limit_buckets'),
               can_truncate: false,
               can_trigger: false,
               can_references: false
@@ -438,6 +564,165 @@ describe('api PostgreSQL persistence mode', () => {
     await expect(assertRuntimeRoleIsLeastPrivilege(client)).rejects.toThrow(
       'least-privilege'
     )
+  })
+
+  it.each([
+    ['table', []],
+    ['index', ['rate_limit_buckets_pkey']]
+  ] as const)(
+    'rejects an incomplete rate-limit %s catalog',
+    async (_kind, indexes) => {
+      const client: PostgresQueryable = {
+        async query<T extends QueryResultRow = QueryResultRow>(
+          text: string
+        ): Promise<QueryResult<T>> {
+          if (text.includes('FROM pg_class')) {
+            return queryResult(
+              _kind === 'table'
+                ? []
+                : [
+                    {
+                      relname: 'rate_limit_buckets',
+                      relkind: 'r',
+                      relrowsecurity: false,
+                      relforcerowsecurity: false
+                    }
+                  ]
+            ) as unknown as QueryResult<T>
+          }
+          if (text.includes('pg_attribute')) {
+            return queryResult(
+              [
+                'budget_key',
+                'key_version',
+                'key_digest',
+                'count',
+                'reset_at'
+              ].map((column_name) => ({
+                table_name: 'rate_limit_buckets',
+                column_name
+              }))
+            ) as unknown as QueryResult<T>
+          }
+          if (text.includes('FROM pg_constraint')) {
+            return queryResult([
+              { conname: 'rate_limit_buckets_pkey' },
+              { conname: 'rate_limit_buckets_count_check' },
+              { conname: 'rate_limit_buckets_key_version_check' },
+              { conname: 'rate_limit_buckets_key_digest_check' }
+            ]) as unknown as QueryResult<T>
+          }
+          return queryResult(
+            indexes.map((indexname) => ({ indexname }))
+          ) as unknown as QueryResult<T>
+        }
+      }
+
+      await expect(assertRateLimitSchema(client)).rejects.toThrow(
+        'rate-limit storage'
+      )
+    }
+  )
+
+  it('accepts a complete rate-limit catalog and rejects each structural defect', async () => {
+    type RateLimitCatalog = {
+      relation: Array<{
+        relname: string
+        relkind: string
+        relrowsecurity: boolean
+        relforcerowsecurity: boolean
+      }>
+      columns: string[]
+      constraints: string[]
+      indexes: string[]
+    }
+
+    const complete: RateLimitCatalog = {
+      relation: [
+        {
+          relname: 'rate_limit_buckets',
+          relkind: 'r',
+          relrowsecurity: false,
+          relforcerowsecurity: false
+        }
+      ],
+      columns: ['budget_key', 'key_version', 'key_digest', 'count', 'reset_at'],
+      constraints: [
+        'rate_limit_buckets_pkey',
+        'rate_limit_buckets_count_check',
+        'rate_limit_buckets_key_version_check',
+        'rate_limit_buckets_key_digest_check'
+      ],
+      indexes: ['rate_limit_buckets_pkey', 'idx_rate_limit_buckets_reset_at']
+    }
+
+    const clientFor = (catalog: RateLimitCatalog): PostgresQueryable => ({
+      async query<T extends QueryResultRow = QueryResultRow>(
+        text: string
+      ): Promise<QueryResult<T>> {
+        if (text.includes('pg_attribute')) {
+          return queryResult(
+            catalog.columns.map((column_name) => ({
+              table_name: 'rate_limit_buckets',
+              column_name
+            }))
+          ) as unknown as QueryResult<T>
+        }
+        if (text.includes('FROM pg_class')) {
+          return queryResult(catalog.relation) as unknown as QueryResult<T>
+        }
+        if (text.includes('FROM pg_constraint')) {
+          return queryResult(
+            catalog.constraints.map((conname) => ({ conname }))
+          ) as unknown as QueryResult<T>
+        }
+        return queryResult(
+          catalog.indexes.map((indexname) => ({ indexname }))
+        ) as unknown as QueryResult<T>
+      }
+    })
+
+    await expect(
+      assertRateLimitSchema(clientFor(complete))
+    ).resolves.toBeUndefined()
+
+    const defects: RateLimitCatalog[] = [
+      { ...complete, relation: [] },
+      {
+        ...complete,
+        relation: [{ ...complete.relation[0]!, relkind: 'v' }]
+      },
+      {
+        ...complete,
+        relation: [{ ...complete.relation[0]!, relrowsecurity: true }]
+      },
+      {
+        ...complete,
+        columns: [
+          'budget_key',
+          'key_version',
+          'key_digest',
+          'count',
+          'reset_at',
+          'key'
+        ]
+      },
+      { ...complete, columns: ['budget_key', 'count'] },
+      {
+        ...complete,
+        constraints: ['rate_limit_buckets_pkey']
+      },
+      {
+        ...complete,
+        indexes: ['rate_limit_buckets_pkey']
+      }
+    ]
+
+    for (const defect of defects) {
+      await expect(assertRateLimitSchema(clientFor(defect))).rejects.toThrow(
+        'rate-limit storage'
+      )
+    }
   })
 
   it('rejects runtime table trigger or reference privileges', async () => {
@@ -586,6 +871,95 @@ describe('api PostgreSQL persistence mode', () => {
     ).resolves.toBeUndefined()
   })
 
+  it('fails closed when the migration role owns an incomplete managed catalog', async () => {
+    const client: PostgresQueryable = {
+      async query<T extends QueryResultRow = QueryResultRow>(
+        text: string,
+        values?: unknown[]
+      ): Promise<QueryResult<T>> {
+        if (text.includes('FROM pg_roles')) {
+          return queryResult([
+            {
+              rolname: 'migration_user',
+              rolsuper: false,
+              rolbypassrls: false,
+              rolcreatedb: false,
+              rolcreaterole: false,
+              rolreplication: false
+            }
+          ]) as unknown as QueryResult<T>
+        }
+        if (text.includes('FROM pg_auth_members'))
+          return queryResult([]) as unknown as QueryResult<T>
+        if (text.includes('FROM pg_database'))
+          return queryResult([
+            { owner: 'postgres' }
+          ]) as unknown as QueryResult<T>
+        if (text.includes('has_schema_privilege'))
+          return queryResult([
+            { can_usage: true, can_create: true }
+          ]) as unknown as QueryResult<T>
+        if (text.includes('FROM pg_class')) {
+          const names = (values?.[0] as string[] | undefined) ?? []
+          return queryResult(
+            names
+              .slice(1)
+              .map((relname) => ({ relname, owner: 'migration_user' }))
+          ) as unknown as QueryResult<T>
+        }
+        return queryResult([]) as unknown as QueryResult<T>
+      }
+    }
+
+    await expect(
+      assertMigrationRoleIsLeastPrivilege(client, 'runtime_user')
+    ).rejects.toThrow('separate non-privileged DDL owner')
+  })
+
+  it('identifies the current role and rejects RLS bypass identities', async () => {
+    const cleanClient: PostgresQueryable = {
+      async query<T extends QueryResultRow = QueryResultRow>(
+        text: string
+      ): Promise<QueryResult<T>> {
+        if (text.includes('current_user::text')) {
+          return queryResult([
+            { role_name: 'runtime_user' }
+          ]) as unknown as QueryResult<T>
+        }
+        return queryResult([
+          { rolsuper: false, rolbypassrls: false }
+        ]) as unknown as QueryResult<T>
+      }
+    }
+
+    await expect(readCurrentDatabaseRole(cleanClient)).resolves.toBe(
+      'runtime_user'
+    )
+    await expect(
+      assertRuntimeRoleIsNotRlsBypass(cleanClient)
+    ).resolves.toBeUndefined()
+
+    const bypassClient: PostgresQueryable = {
+      async query<T extends QueryResultRow = QueryResultRow>(
+        text: string
+      ): Promise<QueryResult<T>> {
+        if (text.includes('current_user::text')) {
+          return queryResult([]) as unknown as QueryResult<T>
+        }
+        return queryResult([
+          { rolsuper: false, rolbypassrls: true }
+        ]) as unknown as QueryResult<T>
+      }
+    }
+
+    await expect(readCurrentDatabaseRole(bypassClient)).rejects.toThrow(
+      'current role could not be identified'
+    )
+    await expect(assertRuntimeRoleIsNotRlsBypass(bypassClient)).rejects.toThrow(
+      'without BYPASSRLS'
+    )
+  })
+
   it('fails closed when the runtime database is missing the complete RLS catalog contract', async () => {
     const client: PostgresQueryable = {
       async query<T extends QueryResultRow = QueryResultRow>(): Promise<
@@ -623,10 +997,17 @@ describe('api PostgreSQL persistence mode', () => {
           return queryResult(
             names.flatMap((table_name) => [
               { table_name, column_name: 'tenant_id' },
+              // AUD19-005: tenant-only tables carry no quarantine column
+              // (mirrors TENANT_ONLY_TABLES in @cvg/persistence tenant-schema).
               ...(table_name === 'runtime_approvals' ||
               table_name === 'outbox_effects' ||
               table_name === 'outbox_attempts' ||
-              table_name === 'outbox_quarantine'
+              table_name === 'outbox_quarantine' ||
+              table_name === 'channel_effect_journal' ||
+              table_name === 'effect_journal' ||
+              table_name === 'journey_owner_drafts' ||
+              table_name === 'journey_patient_drafts' ||
+              table_name === 'journey_appointment_drafts'
                 ? []
                 : [
                     { table_name, column_name: 'tenant_isolation_quarantined' }
@@ -651,6 +1032,22 @@ describe('api PostgreSQL persistence mode', () => {
             names.map((conname) => ({ conname }))
           ) as unknown as QueryResult<T>
         }
+        if (text.includes('FROM pg_index AS')) {
+          return queryResult(
+            names.map((index_name) => ({
+              index_name,
+              table_name: 'audit_events',
+              indisunique: true,
+              indisvalid: true,
+              indisready: true,
+              indnkeyatts: 3,
+              indnatts: 3,
+              expressions:
+                "COALESCE(tenant_id, ''::text), (payload ->> 'approvalId'::text), (payload ->> 'decision'::text)",
+              predicate: "(type = 'approval_decision'::text)"
+            }))
+          ) as unknown as QueryResult<T>
+        }
         if (text.includes('FROM pg_indexes')) {
           return queryResult(
             names.map((indexname) => ({ indexname }))
@@ -666,18 +1063,29 @@ describe('api PostgreSQL persistence mode', () => {
             permissive: 'PERMISSIVE',
             roles: '{public}',
             cmd: 'ALL',
+            // AUD19-005: tenant-only set mirrors TENANT_ONLY_TABLES.
             qual:
               tablename === 'runtime_approvals' ||
               tablename === 'outbox_effects' ||
               tablename === 'outbox_attempts' ||
-              tablename === 'outbox_quarantine'
+              tablename === 'outbox_quarantine' ||
+              tablename === 'channel_effect_journal' ||
+              tablename === 'effect_journal' ||
+              tablename === 'journey_owner_drafts' ||
+              tablename === 'journey_patient_drafts' ||
+              tablename === 'journey_appointment_drafts'
                 ? "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
                 : "tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')",
             with_check:
               tablename === 'runtime_approvals' ||
               tablename === 'outbox_effects' ||
               tablename === 'outbox_attempts' ||
-              tablename === 'outbox_quarantine'
+              tablename === 'outbox_quarantine' ||
+              tablename === 'channel_effect_journal' ||
+              tablename === 'effect_journal' ||
+              tablename === 'journey_owner_drafts' ||
+              tablename === 'journey_patient_drafts' ||
+              tablename === 'journey_appointment_drafts'
                 ? "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
                 : "tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
           }))
@@ -686,6 +1094,92 @@ describe('api PostgreSQL persistence mode', () => {
     }
 
     await expect(assertTenantIsolationSchema(client)).resolves.toBeUndefined()
+  })
+
+  it.each([
+    ['missing', null],
+    ['wrong table', { table_name: 'other_events' }],
+    ['not unique', { indisunique: false }],
+    ['not valid', { indisvalid: false }],
+    ['not ready', { indisready: false }],
+    ['wrong key count', { indnkeyatts: 2 }],
+    ['wrong attribute count', { indnatts: 2 }],
+    [
+      'wrong expressions',
+      { expressions: "COALESCE(tenant_id, ''), (payload ->> 'other')" }
+    ],
+    ['wrong predicate', { predicate: "type = 'other'" }]
+  ] as const)(
+    'rejects approval dedupe catalog when %s',
+    async (_name, change) => {
+      const base = {
+        index_name: 'uq_audit_approval_decision',
+        table_name: 'audit_events',
+        indisunique: true,
+        indisvalid: true,
+        indisready: true,
+        indnkeyatts: 3,
+        indnatts: 3,
+        expressions:
+          "COALESCE(tenant_id, ''::text), (payload ->> 'approvalId'::text), (payload ->> 'decision'::text)",
+        predicate: "(type = 'approval_decision'::text)"
+      }
+      const client: PostgresQueryable = {
+        async query<T extends QueryResultRow = QueryResultRow>(
+          text: string
+        ): Promise<QueryResult<T>> {
+          if (!text.includes('FROM pg_index AS')) {
+            return queryResult([]) as unknown as QueryResult<T>
+          }
+          const row = change === null ? [] : [{ ...base, ...change }]
+          return queryResult(row) as unknown as QueryResult<T>
+        }
+      }
+
+      await expect(assertApprovalDecisionAuditDedupe(client)).rejects.toThrow(
+        'approval decision dedupe index'
+      )
+    }
+  )
+
+  it.each([
+    ['tenant-columns', 'tenant isolation columns are incomplete'],
+    ['outbox-columns', 'outbox payload protection columns are incomplete'],
+    ['constraints', 'tenant isolation constraints are incomplete'],
+    ['indexes', 'tenant isolation indexes are incomplete']
+  ] as const)(
+    'rejects an incomplete RLS %s catalog',
+    async (missing, message) => {
+      await expect(
+        assertTenantIsolationSchema(tenantIsolationSchemaClient(missing))
+      ).rejects.toThrow(message)
+    }
+  )
+
+  it('rejects a runtime role that is also configured as the migration role', async () => {
+    const client: PostgresQueryable = {
+      async query<T extends QueryResultRow = QueryResultRow>(
+        text: string
+      ): Promise<QueryResult<T>> {
+        if (text.includes('FROM pg_roles')) {
+          return queryResult([
+            {
+              rolname: 'runtime_user',
+              rolsuper: false,
+              rolbypassrls: false,
+              rolcreatedb: false,
+              rolcreaterole: false,
+              rolreplication: false
+            }
+          ]) as unknown as QueryResult<T>
+        }
+        return queryResult([]) as unknown as QueryResult<T>
+      }
+    }
+
+    await expect(
+      assertRuntimeRoleIsLeastPrivilege(client, 'runtime_user')
+    ).rejects.toThrow('least-privilege')
   })
 
   it('requires the complete durable webhook replay catalog contract', async () => {
@@ -707,6 +1201,14 @@ describe('api PostgreSQL persistence mode', () => {
             {
               table_name: 'webhook_replay_events',
               column_name: 'expires_at'
+            },
+            {
+              table_name: 'webhook_replay_events',
+              column_name: 'lease_generation'
+            },
+            {
+              table_name: 'webhook_replay_events',
+              column_name: 'lease_token'
             }
           ]) as unknown as QueryResult<T>
         }
@@ -896,12 +1398,21 @@ describe('api PostgreSQL persistence mode', () => {
         await client.query(`
           CREATE SCHEMA ${schemaName};
           SET search_path TO ${schemaName};
-          CREATE TABLE webhook_replay_events (
-            event_key text PRIMARY KEY,
-            status text NOT NULL CHECK (status IN ('reserved', 'committed')),
-            expires_at timestamptz NOT NULL,
-            created_at timestamptz NOT NULL DEFAULT now()
-          );
+           CREATE TABLE webhook_replay_events (
+             event_key text PRIMARY KEY CHECK (btrim(event_key) <> ''),
+             status text NOT NULL CHECK (status IN ('reserved', 'committed')),
+             expires_at timestamptz NOT NULL,
+             created_at timestamptz NOT NULL DEFAULT now(),
+             lease_generation bigint NOT NULL DEFAULT 0,
+             lease_token text,
+             CONSTRAINT webhook_replay_events_lease_generation_check
+               CHECK (lease_generation >= 0),
+             CONSTRAINT webhook_replay_events_fencing_check
+               CHECK (
+                 (status = 'reserved' AND lease_generation > 0 AND lease_token IS NOT NULL AND btrim(lease_token) <> '')
+                 OR (status = 'committed' AND lease_token IS NULL)
+               )
+           );
           CREATE INDEX idx_webhook_replay_events_expires
             ON webhook_replay_events (expires_at);
         `)
@@ -915,11 +1426,16 @@ describe('api PostgreSQL persistence mode', () => {
         const eventKey = `webhook:whatsapp:pg-replay-${Date.now()}`
         const expiresAt = Date.now() + 60_000
 
-        await expect(store.reserve(eventKey, expiresAt)).resolves.toBe(true)
+        const first = await store.reserve(eventKey, expiresAt)
+        expect(first).toMatchObject({ key: eventKey, generation: 1 })
+        if (!first) throw new Error('fixture failed to reserve replay event')
         await expect(store.reserve(eventKey, expiresAt)).resolves.toBe(false)
-        await expect(store.release(eventKey)).resolves.toBe(true)
-        await expect(store.reserve(eventKey, expiresAt)).resolves.toBe(true)
-        await expect(store.commit(eventKey)).resolves.toBe(true)
+        await expect(store.release(first)).resolves.toBe(true)
+        const second = await store.reserve(eventKey, expiresAt)
+        expect(second).toMatchObject({ key: eventKey, generation: 1 })
+        if (!second)
+          throw new Error('fixture failed to re-reserve replay event')
+        await expect(store.commit(second)).resolves.toBe(true)
         await expect(store.claim(eventKey, expiresAt)).resolves.toBe(false)
         await expect(
           client.query(
@@ -1206,7 +1722,8 @@ describe('api PostgreSQL persistence mode', () => {
             OUTBOX_DURABLE_INBOUND: 'true',
             API_ALLOWED_ORIGINS: 'https://console.example.test',
             API_REQUIRE_HTTPS: 'true',
-            API_TRUSTED_PROXY_HOPS: '0'
+            API_TRUSTED_PROXY_HOPS: '0',
+            CVG_RATE_LIMIT_KEYRING: rateLimitKeyRingEnv
           },
           {
             webhookVerifier: () => true,
@@ -1233,37 +1750,27 @@ describe('api PostgreSQL persistence mode', () => {
       migrationUrl.username = migrationRoleName
       migrationUrl.password = migrationPassword
       let app: Awaited<ReturnType<typeof buildServerFromEnv>> | undefined
-      const protectedTables = [
-        'conversations',
-        'messages',
-        'sessions',
-        'agent_runs',
-        'tool_calls',
-        'approval_requests',
-        'tasks',
-        'audit_events',
-        'idempotency',
-        'outbox_events',
-        'outbox_effects',
-        'outbox_attempts',
-        'platform_agents',
-        'platform_agent_versions',
-        'platform_test_runs',
-        'platform_execution_traces',
-        'platform_capability_approvals',
-        'platform_test_suites',
-        'platform_test_suite_runs',
-        'platform_plugin_catalog',
-        'platform_knowledge_sources',
-        'platform_release_candidates',
-        'audit_evidence_checkpoints',
-        'runtime_approvals',
-        'operational_executions',
-        'operational_execution_outbox',
-        'operational_execution_events',
-        'operational_effect_journal',
-        'webhook_replay_events'
-      ]
+      // AUD19-005: the runtime role must hold SELECT/INSERT/UPDATE on every
+      // tenant-scoped table in the canonical inventory (deployment
+      // obligation); the fixture derives the list so it cannot drift.
+      // webhook_replay_events keeps its own preflight branch (with DELETE).
+      const protectedTables = [...TENANT_SCHEMA_TABLES, 'webhook_replay_events']
+      const serverEnv = {
+        NODE_ENV: 'production' as const,
+        API_PERSISTENCE_MODE: 'postgres',
+        DATABASE_URL: runtimeUrl.toString(),
+        DATABASE_MIGRATION_URL: migrationUrl.toString(),
+        INBOUND_TENANT_ID: postgresTenantA,
+        INBOUND_AGENT_ID: postgresInboundAgent,
+        POSTGRES_AUTO_MIGRATE: 'true',
+        POSTGRES_RLS_ENFORCEMENT: 'true',
+        OUTBOX_DURABLE_INBOUND: 'true',
+        API_ALLOWED_ORIGINS: 'https://console.example.test',
+        API_REQUIRE_HTTPS: 'true',
+        API_TRUSTED_PROXY_ADDRESSES: '127.0.0.1',
+        POSTGRES_SCHEMA: schemaName,
+        CVG_RATE_LIMIT_KEYRING: rateLimitKeyRingEnv
+      }
 
       await admin.connect()
       try {
@@ -1294,43 +1801,79 @@ describe('api PostgreSQL persistence mode', () => {
         await admin.query(
           `GRANT DELETE ON ${schemaName}.webhook_replay_events TO ${roleName}`
         )
+        await expect(
+          buildServerFromEnv(serverEnv, {
+            webhookVerifier: () => true,
+            operatorIdentityResolver: trustedProductionIdentity
+          })
+        ).rejects.toThrow('least-privilege')
+        await admin.query(
+          `GRANT SELECT, INSERT, UPDATE, DELETE ON ${schemaName}.rate_limit_buckets TO ${roleName}`
+        )
         await admin.query(
           `ALTER ROLE ${roleName} SET search_path TO ${schemaName}`
         )
 
-        app = await buildServerFromEnv(
-          {
-            NODE_ENV: 'production',
-            API_PERSISTENCE_MODE: 'postgres',
-            DATABASE_URL: runtimeUrl.toString(),
-            DATABASE_MIGRATION_URL: migrationUrl.toString(),
-            INBOUND_TENANT_ID: postgresTenantA,
-            INBOUND_AGENT_ID: postgresInboundAgent,
-            POSTGRES_AUTO_MIGRATE: 'true',
-            POSTGRES_RLS_ENFORCEMENT: 'true',
-            OUTBOX_DURABLE_INBOUND: 'true',
-            API_ALLOWED_ORIGINS: 'https://console.example.test',
-            API_REQUIRE_HTTPS: 'true',
-            API_TRUSTED_PROXY_ADDRESSES: '127.0.0.1',
-            POSTGRES_SCHEMA: schemaName
-          },
-          {
-            webhookVerifier: () => true,
-            operatorIdentityResolver: trustedProductionIdentity
-          }
-        )
+        app = await buildServerFromEnv(serverEnv, {
+          webhookVerifier: () => true,
+          operatorIdentityResolver: trustedProductionIdentity,
+          operatorSessionStore: createInMemoryOperatorSessionStore()
+        })
         const health = await app.inject({
           method: 'GET',
           url: '/health',
           headers: { 'x-forwarded-proto': 'https' }
         })
         expect(health.statusCode).toBe(200)
+        const ordinary = await app.inject({
+          method: 'GET',
+          url: '/v1/conversations?limit=1',
+          headers: { 'x-forwarded-proto': 'https' }
+        })
+        expect(ordinary.statusCode).toBe(200)
       } finally {
         await app?.close()
         await admin.query(`DROP OWNED BY ${roleName}`)
         await admin.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`)
         await admin.query(`DROP ROLE IF EXISTS ${roleName}`)
         await admin.query(`DROP ROLE IF EXISTS ${migrationRoleName}`)
+        await admin.end()
+      }
+    }
+  )
+
+  itWithPostgres(
+    'rejects missing rate-limit table or index before PostgreSQL startup',
+    async () => {
+      const admin = new Client({ connectionString: testDatabaseUrl })
+      const schemaName = `cvg_rate_limit_preflight_${Date.now()}`
+      await admin.connect()
+      const env = {
+        NODE_ENV: 'test' as const,
+        API_PERSISTENCE_MODE: 'postgres',
+        DATABASE_URL: testDatabaseUrl as string,
+        POSTGRES_AUTO_MIGRATE: 'false',
+        POSTGRES_SCHEMA: schemaName
+      }
+
+      try {
+        await runPostgresMigrations(admin, { schemaName })
+        await admin.query(
+          `DROP INDEX ${schemaName}.idx_rate_limit_buckets_reset_at`
+        )
+        await expect(
+          buildServerFromEnv(env, { webhookVerifier: () => true })
+        ).rejects.toThrow(/rate-limit storage.*index/i)
+
+        await admin.query(
+          `CREATE INDEX idx_rate_limit_buckets_reset_at ON ${schemaName}.rate_limit_buckets (reset_at)`
+        )
+        await admin.query(`DROP TABLE ${schemaName}.rate_limit_buckets`)
+        await expect(
+          buildServerFromEnv(env, { webhookVerifier: () => true })
+        ).rejects.toThrow(/rate-limit storage.*table/i)
+      } finally {
+        await admin.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`)
         await admin.end()
       }
     }

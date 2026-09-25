@@ -28,7 +28,24 @@ import { createSyntheticServiceDeskProfile } from '../../../../examples/phase4a/
 const disposablePgEnabled =
   Boolean(process.env.TEST_DATABASE_URL) &&
   process.env.PHASE4A_DISPOSABLE_PG === '1'
-const postgresIt = disposablePgEnabled ? it : it.skip
+// AUD19-002: fail-closed skip policy. Ad-hoc runs without a disposable
+// database keep the historical skip; any required Phase 4A gate sets
+// PHASE4A_PG_REQUIRED=1 and a missing database becomes a hard failure.
+const pgRequired = process.env.PHASE4A_PG_REQUIRED === '1'
+type PostgresIt = (name: string, fn: () => Promise<void>) => void
+function missingPgIt(name: string, fn: () => Promise<void>): void {
+  void fn
+  it(name, () => {
+    throw new Error(
+      'MISSING_DISPOSABLE_PG: set TEST_DATABASE_URL and PHASE4A_DISPOSABLE_PG=1 to a disposable database; refusing to pass this required gate with a skip'
+    )
+  })
+}
+const postgresIt: PostgresIt = disposablePgEnabled
+  ? it
+  : pgRequired
+    ? missingPgIt
+    : it.skip
 const profile = createSyntheticServiceDeskProfile()
 const profileAuthority = createStaticConversationProfileAuthority([profile])
 
