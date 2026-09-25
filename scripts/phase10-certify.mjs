@@ -27,7 +27,8 @@ import {
 } from './lib/certification-rules.mjs'
 import {
   CLOSURE_REGISTRY_PATH,
-  computeCurrentFindings
+  computeCurrentFindings,
+  issueClosureRegistry
 } from './lib/finding-governance.mjs'
 import { buildSkipInventory, loadSkipCatalog } from './lib/skip-governance.mjs'
 
@@ -256,6 +257,11 @@ if (
     `ci_candidate_mismatch:${process.env.CI_CANDIDATE_ID}:${candidate.candidateId}`
   )
 }
+issueClosureRegistry({
+  root,
+  candidateId: candidate.candidateId,
+  runId
+})
 const computedFindings = computeCurrentFindings({
   root,
   candidateId: candidate.candidateId,

@@ -217,6 +217,7 @@ export const CANDIDATE_EXCLUDED_FILES = [
   'certification/phase10-result.json',
   'certification/candidate-manifest.json',
   'certification/findings.json',
+  'certification/finding-closure.json',
   'certification/candidate-qualification.json',
   'certification/sbom.cyclonedx.json',
   'certification/license-report.json',

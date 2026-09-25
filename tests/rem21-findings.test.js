@@ -5,9 +5,11 @@ import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   AUTHORITATIVE_FINDINGS_PATH,
+  CLOSURE_ADJUDICATION_PATH,
   CLOSURE_REGISTRY_PATH,
   computeCurrentFindings,
   findingsProjection,
+  issueClosureRegistry,
   verifyComputedFindings
 } from '../scripts/lib/finding-governance.mjs'
 import {
@@ -349,5 +351,82 @@ describe('REM21-002 computed finding governance', () => {
         requireClosureRegistry: true
       })
     ).toThrow(/findings_closure_invalid:registry_missing/)
+  })
+})
+
+describe('AUD53 run-bound closure registry issuance', () => {
+  function makeIssuanceRoot() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rem21-issue-'))
+    roots.push(root)
+    const copy = (relativePath) => {
+      const target = path.join(root, relativePath)
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.copyFileSync(path.join(process.cwd(), relativePath), target)
+    }
+    copy(AUTHORITATIVE_FINDINGS_PATH)
+    copy(CLOSURE_ADJUDICATION_PATH)
+    const adjudication = JSON.parse(
+      fs.readFileSync(
+        path.join(process.cwd(), CLOSURE_ADJUDICATION_PATH),
+        'utf8'
+      )
+    )
+    for (const entry of adjudication.entries) {
+      for (const reference of entry.evidence ?? []) copy(reference.path)
+    }
+    return root
+  }
+
+  it('re-issues the run binding from the immutable adjudication', () => {
+    const root = makeIssuanceRoot()
+    const issuedCandidateId = 'b'.repeat(64)
+    const issuedRunId = 'run-aud53-fixture-0001'
+
+    const issued = issueClosureRegistry({
+      root,
+      candidateId: issuedCandidateId,
+      runId: issuedRunId
+    })
+
+    expect(issued.path).toBe(CLOSURE_REGISTRY_PATH)
+    expect(issued.candidateId).toBe(issuedCandidateId)
+    expect(issued.runId).toBe(issuedRunId)
+    expect(issued.entries).toHaveLength(26)
+
+    const written = JSON.parse(
+      fs.readFileSync(path.join(root, CLOSURE_REGISTRY_PATH), 'utf8')
+    )
+    expect(written.adjudication.path).toBe(CLOSURE_ADJUDICATION_PATH)
+    expect(written.adjudication.sha256).toBe(
+      createHash('sha256')
+        .update(fs.readFileSync(path.join(root, CLOSURE_ADJUDICATION_PATH)))
+        .digest('hex')
+    )
+
+    const findings = computeCurrentFindings({
+      root,
+      candidateId: issuedCandidateId,
+      runId: issuedRunId,
+      requireClosureRegistry: true
+    })
+    expect(findings.closureRegistry.path).toBe(CLOSURE_REGISTRY_PATH)
+    expect(findings.closureRegistry.candidateId).toBe(issuedCandidateId)
+  })
+
+  it('fails closed when the adjudication is not bound to the authoritative report', () => {
+    const root = makeIssuanceRoot()
+    const adjudication = JSON.parse(
+      fs.readFileSync(path.join(root, CLOSURE_ADJUDICATION_PATH), 'utf8')
+    )
+    adjudication.source.sha256 = 'c'.repeat(64)
+    fs.writeFileSync(
+      path.join(root, CLOSURE_ADJUDICATION_PATH),
+      JSON.stringify(adjudication)
+    )
+
+    expect(() => issueClosureRegistry({ root, candidateId, runId })).toThrow(
+      /adjudication_source_hash_mismatch/
+    )
+    expect(fs.existsSync(path.join(root, CLOSURE_REGISTRY_PATH))).toBe(false)
   })
 })

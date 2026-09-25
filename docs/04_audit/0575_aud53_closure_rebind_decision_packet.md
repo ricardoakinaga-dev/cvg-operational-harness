@@ -88,6 +88,33 @@ O que **não** está pedido: reescrever `finding-closure.json` de REM21-019, mud
 status/rationale dos 26 findings, afrouxar `run_id_mismatch` ou a janela de 24h,
 ou tocar `sha256sums.txt`.
 
+## Resultado — Opção A aplicada e verificada
+
+- Aprovação: “vamos de opção A”, 2026-09-25, instrução direta do usuário. O
+  hash não foi citado literalmente; a aprovação está registrada verbatim e o
+  escopo é o deste packet.
+- Implementação: `issueClosureRegistry` em `finding-governance.mjs`; a
+  adjudicação de REM21-019 permanece byte-idêntica e passou a ser a fonte
+  `CLOSURE_ADJUDICATION_PATH`; `CLOSURE_REGISTRY_PATH` aponta para
+  `certification/finding-closure.json`, artefato gerado, excluído do candidato
+  e ignorado pelo git; `certify` emite antes de computar findings.
+- Verificação: `npm run certify` com `CI_RUN_ID=run-aud53-20260925` → 16 gates
+  `PASS`, 0 `FAIL`, registry com `candidateId de68730e…` e 26 entries;
+  `npm run certification:verify` → exit 0, com `findings are current and
+candidate-bound` e `verified 37 artifact hashes`.
+- Efeito: `gate certify` e `gate certification-verify` deixam de depender de um
+  valor pré-computado e passam a funcionar em CI, onde `CI_RUN_ID` é novo a
+  cada execução.
+- Incidente registrado: a primeira versão do teste de emissão escrevia no
+  `certification/` do repositório e o gate `coverage` do `certify` sobrescreveu
+  o registry real, invalidando aquele ciclo. O teste foi tornado hermético
+  (root temporário com fonte, adjudicação e os 26 arquivos de evidência
+  copiados) e o `certify` foi reexecutado do zero. A falha está registrada aqui
+  porque o ciclo anterior foi descartado.
+- Limite: nenhum status, rationale ou evidência dos 26 findings foi alterado;
+  a janela de 24h e as checagens de vínculo não foram afrouxadas; RA25-05
+  continua `BLOCKED_BY_C1M`.
+
 ## Hash deste packet
 
 O SHA-256 da revisão commitada é reportado no `docs/20_master_execution_log.md`

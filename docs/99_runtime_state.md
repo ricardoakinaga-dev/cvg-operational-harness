@@ -1,3 +1,12 @@
+# AUD53 — closure registry vinculado à execução — 2026-09-25
+
+- status: `COMPLETED`. RA25-11 fechado sob aprovação direta do usuário (“vamos de opção A”). M07-S1 `FAIL / OPEN`; RA25-05 `BLOCKED_BY_C1M`; produção `NO_GO`.
+- last_completed_action: separei adjudicação de vínculo no certificado. A adjudicação dos 26 findings de REM21-019 ficou byte-idêntica; `issueClosureRegistry` passou a emitir `certification/finding-closure.json` com candidato, runId e generatedAt correntes; o artefato é gerado, excluído do candidato e ignorado pelo git.
+- current_evidence: [0575](04_audit/0575_aud53_closure_rebind_decision_packet.md) (packet + resultado), [SPEC-CERT-001](02_spec/0132_run_bound_closure_registry.md), [RA25-11](03_build/0351_audit0573_backlog.md).
+- verification_state: `npm run certify` com `CI_RUN_ID=run-aud53-20260925` → 16 gates `PASS`, 0 `FAIL`, candidato `de68730e…`, 26 entries; `npm run certification:verify` → exit 0 com `findings are current and candidate-bound` e `verified 37 artifact hashes`. Ambos os gates de CI que estavam vermelhos desde antes da rodada passaram a verde.
+- blocking_state: nada bloqueia RA25-11. Permanecem: RA25-05 (`BLOCKED_BY_C1M`), RA25-07 e RA25-04 `NOT_EXECUTED`, revisão humana das SPECs `NOT_RUN`.
+- next_action: RA25-04 (refresh dos três ponteiros + reconciliação pós-AUD53) e RA25-07 (fatia 1 com SPEC própria). Remover `cvg-raid25-pg-20260925` antes de nova rodada de Postgres.
+
 # AUD-0573 — execução do roadmap — 2026-09-25
 
 - status: `IN_PROGRESS` com D0, D1 parcial, D2 e D4 documental executados; RA25-07 e RA25-04 `NOT_EXECUTED`; RA25-05 segue `BLOCKED_BY_C1M`. M07-S1 `FAIL / OPEN`; produção `NO_GO`.

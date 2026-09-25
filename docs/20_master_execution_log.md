@@ -1,3 +1,12 @@
+# AUD53 — certificado verde por registry vinculado à execução — 25/09/2026
+
+- Aprovação: usuário respondeu “vamos de opção A” sobre o packet [0575](04_audit/0575_aud53_closure_rebind_decision_packet.md); hash do packet não citado literalmente, aprovação registrada verbatim.
+- Diagnóstico: `certify` era estruturalmente incapaz de passar em CI — registry lido de caminho constante, `runId` obrigatoriamente igual ao da execução e validade de 24h, contra um `CI_RUN_ID` novo por job e nenhum escritor do registry. O certificado de 2026-09-22 dependia de `CI_RUN_ID=run-rem21-019-final-3` exportado à mão.
+- Correção: adjudicação imutável de REM21-019 separada do vínculo gerado. `issueClosureRegistry` emite `certification/finding-closure.json` com candidato, runId e generatedAt correntes; artefato gerado, excluído do candidato e ignorado pelo git. SPEC em [0132](02_spec/0132_run_bound_closure_registry.md); item RA25-11 em [0351](03_build/0351_audit0573_backlog.md).
+- Verificação: `npm run certify` com `CI_RUN_ID=run-aud53-20260925` → 16 gates `PASS`, 0 `FAIL`; `npm run certification:verify` → exit 0, `findings are current and candidate-bound`, `verified 37 artifact hashes`. Os dois gates de CI vermelhos passaram a verde.
+- Incidente: a primeira versão do teste de emissão escrevia no `certification/` do repositório e o gate `coverage` sobrescreveu o registry real, invalidando aquele ciclo; o teste foi tornado hermético e o `certify` reexecutado do zero. Nenhum status, rationale ou evidência dos 26 findings foi alterado.
+- Limite: RA25-05 segue `BLOCKED_BY_C1M`; RA25-07 e RA25-04 `NOT_EXECUTED`; revisão humana das SPECs `NOT_RUN`; produção `NO_GO`.
+
 # AUD53 — packet de decisão hash-bound do closure registry — 25/09/2026
 
 - Decisões do usuário nesta data: AUD53 primeiro; corrigir o certificado por decisão hash-bound; refresh mínimo dos três ponteiros; confirmar a licença ISC.

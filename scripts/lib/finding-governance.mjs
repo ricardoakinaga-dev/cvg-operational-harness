@@ -4,8 +4,19 @@ import { sha256Bytes } from './certification-rules.mjs'
 
 export const AUTHORITATIVE_FINDINGS_PATH =
   'docs/04_audit/0566_comprehensive_repository_audit_2026-09-21.md'
-export const CLOSURE_REGISTRY_PATH =
+/**
+ * Human adjudication of the 26 A21 findings. Immutable audit evidence, locked
+ * by docs/04_audit/evidence/AUD-20260921/REM21-019/sha256sums.txt.
+ */
+export const CLOSURE_ADJUDICATION_PATH =
   'docs/04_audit/evidence/AUD-20260921/REM21-019/finding-closure.json'
+/**
+ * Run-bound registry generated from the adjudication by
+ * `issueClosureRegistry`. It carries the current candidateId/runId and a
+ * generatedAt that expires in 24h, so it is a generated artifact, never a
+ * committed one.
+ */
+export const CLOSURE_REGISTRY_PATH = 'certification/finding-closure.json'
 
 const EXPECTED_IDS = Array.from(
   { length: 26 },
@@ -275,6 +286,67 @@ function loadClosureRegistry({
     runId,
     entries
   }
+}
+
+/**
+ * Issues the run-bound closure registry from the human adjudication. The
+ * adjudication stays byte-identical audit evidence; only the candidate, run
+ * and generation bindings are re-issued, and the written file is validated by
+ * `loadClosureRegistry` before it is returned.
+ */
+export function issueClosureRegistry({
+  root,
+  candidateId,
+  runId,
+  generatedAt = new Date().toISOString()
+}) {
+  assertCandidateId(candidateId)
+  assertRunId(runId)
+  const source = loadAuthoritativeSource(root)
+  const adjudicationAbsolute = path.join(root, CLOSURE_ADJUDICATION_PATH)
+  if (!fs.existsSync(adjudicationAbsolute)) {
+    fail(`adjudication_missing:${CLOSURE_ADJUDICATION_PATH}`)
+  }
+  const adjudicationBytes = fs.readFileSync(adjudicationAbsolute)
+  let adjudication
+  try {
+    adjudication = JSON.parse(adjudicationBytes.toString('utf8'))
+  } catch (error) {
+    fail(
+      `adjudication_json_invalid:${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  if (adjudication?.schemaVersion !== 1) fail('adjudication_schema_version')
+  if (adjudication?.kind !== 'a21-closure-registry') fail('adjudication_kind')
+  if (adjudication.source?.path !== source.sourcePath) {
+    fail('adjudication_source_path_mismatch')
+  }
+  if (adjudication.source?.sha256 !== source.sourceSha256) {
+    fail('adjudication_source_hash_mismatch')
+  }
+  if (!Array.isArray(adjudication.entries)) {
+    fail('adjudication_entries_missing')
+  }
+  const issued = {
+    schemaVersion: 1,
+    kind: 'a21-closure-registry',
+    generatedAt,
+    candidateId,
+    runId,
+    adjudication: {
+      path: CLOSURE_ADJUDICATION_PATH,
+      sha256: sha256Bytes(adjudicationBytes)
+    },
+    source: {
+      path: source.sourcePath,
+      sha256: source.sourceSha256
+    },
+    entries: adjudication.entries
+  }
+  const target = path.join(root, CLOSURE_REGISTRY_PATH)
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.writeFileSync(target, Buffer.from(`${JSON.stringify(issued, null, 2)}\n`))
+  return loadClosureRegistry({ root, source, candidateId, runId })
 }
 
 function computedFinding(entry, context, closureEntry) {

@@ -172,6 +172,27 @@ registro do ciclo M07-S1. Produção `NO_GO`.
 - Critério de pronto: política registrada em `docs/`; após aplicação,
   `npm run evidence:check-hygiene` exit 0 e `npm run docs:check-links` exit 0.
 
+## AUD53 — correção estrutural do certificado
+
+### RA25-11 — Closure registry vinculado à execução
+
+- Estado: `COMPLETED` sob aprovação direta do usuário (“vamos de opção A”,
+  2026-09-25) sobre o packet
+  [0575](../04_audit/0575_aud53_closure_rebind_decision_packet.md).
+- O que/onde: `scripts/lib/finding-governance.mjs`, `scripts/phase10-certify.mjs`,
+  `scripts/lib/certification-rules.mjs`, `.gitignore`,
+  `tests/rem21-findings.test.js`.
+- Como: separar adjudicação (imutável, em REM21-019) de vínculo (gerado por
+  execução). `issueClosureRegistry` emite `certification/finding-closure.json`
+  com candidato, `runId` e `generatedAt` correntes; o arquivo passa a ser
+  artefato gerado, excluído do candidato, e continua registrado no manifesto.
+- Critério de pronto: `npm run certify` com 16 gates `PASS` sob `CI_RUN_ID`
+  fixado e `npm run certification:verify` exit 0 com os 37 hashes verificados.
+  **Cumprido** — ver [0575](../04_audit/0575_aud53_closure_rebind_decision_packet.md)
+  e a SPEC [0132](../02_spec/0132_run_bound_closure_registry.md).
+- Limite: não adjudica findings; `RA25-05` continua `BLOCKED_BY_C1M` e a janela
+  de 24h e as checagens de vínculo não foram afrouxadas.
+
 ## Fora de escopo deste backlog
 
 - M07-S2/S3/S4, M05 e os 50 melhoria de `0339`/`0340`/`0341` seguem os

@@ -1,3 +1,10 @@
+# AUD53 — RA25-11 fechado; certificado verde — 25/09/2026
+
+- `COMPLETED`: RA25-11 (closure registry vinculado à execução). A adjudicação dos 26 findings de REM21-019 permanece byte-idêntica; o vínculo (candidato, runId, generatedAt) passou a ser gerado por execução em `certification/finding-closure.json`. Evidência: [0575](04_audit/0575_aud53_closure_rebind_decision_packet.md), SPEC [0132](02_spec/0132_run_bound_closure_registry.md).
+- Gates: `npm run certify` 16 gates `PASS` (0 `FAIL`) e `npm run certification:verify` exit 0 com `findings are current and candidate-bound` e 37 hashes verificados. Os dois gates de CI que estavam vermelhos desde antes da rodada AUD-0573 passaram a verde.
+- Aprovação: usuário, “vamos de opção A”, sobre o packet com SHA-256 `ca2ae0001b4807f94131f9bedf68bdd8ad06eb16b49eae5bae852ddcc43a9743`.
+- Em aberto: RA25-05 `BLOCKED_BY_C1M`; RA25-07 e RA25-04 `NOT_EXECUTED`; revisão humana das SPECs `NOT_RUN`; produção `NO_GO`.
+
 # AUD-0573 — roadmap executado; RA25-07 e RA25-04 em aberto — 25/09/2026
 
 - `COMPLETED`: RA25-01, RA25-02, RA25-03, RA25-06, RA25-08, RA25-09 e RA25-10 (política registrada, aplicação pendente). Evidência: [0574](04_audit/0574_aud0573_execution_evidence_2026-09-25.md).
