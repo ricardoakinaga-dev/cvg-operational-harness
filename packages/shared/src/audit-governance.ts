@@ -182,6 +182,10 @@ export function sanitizeOutboxPayload(
 
 export function redactSensitiveText(text: string): string {
   return text
+    .replace(
+      /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/:@]+):([^\s@]*)@/gi,
+      '$1[redacted-credentials]@'
+    )
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted-email]')
     .replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, '[redacted-cpf]')
     .replace(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, '[redacted-cnpj]')

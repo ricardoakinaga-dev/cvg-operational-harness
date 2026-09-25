@@ -120,6 +120,33 @@ describe('free text redaction patterns', () => {
     const uuid = '00000000-0000-4000-8000-000000000001'
     expect(redactSensitiveText(`ref ${uuid}`)).toBe(`ref ${uuid}`)
   })
+
+  it('redacts credentials embedded in URL userinfo without hiding the host', () => {
+    expect(
+      redactSensitiveText(
+        'dial tcp postgres://cvg_app:s3nh4-XYZ@10.0.0.7:5432/cvg refused'
+      )
+    ).toBe(
+      'dial tcp postgres://[redacted-credentials]@10.0.0.7:5432/cvg refused'
+    )
+    expect(
+      redactSensitiveText(
+        'postgresql://analista:segredo123@db.internal/cvg_test falhou'
+      )
+    ).toBe('postgresql://[redacted-credentials]@db.internal/cvg_test falhou')
+    expect(
+      redactSensitiveText('GET https://user:pass@intranet.local/api falhou')
+    ).toBe('GET https://[redacted-credentials]@intranet.local/api falhou')
+  })
+
+  it('leaves URLs without a password untouched', () => {
+    expect(redactSensitiveText('rota em https://api.exemplo.com/docs')).toBe(
+      'rota em https://api.exemplo.com/docs'
+    )
+    expect(
+      redactSensitiveText('connect em postgres://db.internal:5432/cvg')
+    ).toBe('connect em postgres://db.internal:5432/cvg')
+  })
 })
 
 describe('outbox payload sanitization', () => {

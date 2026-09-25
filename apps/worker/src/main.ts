@@ -31,6 +31,7 @@ import {
   runOperationalHarnessHomologWorker
 } from './homolog-worker.ts'
 import { createWorkerReadiness } from './readiness.ts'
+import { redactStartupErrorMessage } from './startup-error.ts'
 
 const startupFailure = getWorkerStartupFailure()
 
@@ -39,7 +40,10 @@ if (startupFailure) {
     JSON.stringify({
       event: 'worker.startup_failed',
       code: startupFailure.code,
-      message: startupFailure.message
+      message: redactStartupErrorMessage(
+        startupFailure.message,
+        'Worker startup failed'
+      )
     })
   )
   process.exitCode = 1
@@ -49,7 +53,7 @@ if (startupFailure) {
       JSON.stringify({
         event: 'worker.controlled_failed',
         code: 'controlled_worker_failed',
-        message: error instanceof Error ? error.message : 'Worker failed'
+        message: redactStartupErrorMessage(error, 'Worker failed')
       })
     )
     process.exitCode = 1
@@ -62,10 +66,10 @@ if (startupFailure) {
       JSON.stringify({
         event: 'worker.operational_harness_failed',
         code: 'operational_harness_failed',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Operational harness worker failed'
+        message: redactStartupErrorMessage(
+          error,
+          'Operational harness worker failed'
+        )
       })
     )
     process.exitCode = 1
@@ -80,8 +84,7 @@ if (startupFailure) {
         JSON.stringify({
           event: 'worker.homolog_failed',
           code: 'homolog_worker_failed',
-          message:
-            error instanceof Error ? error.message : 'Homolog worker failed'
+          message: redactStartupErrorMessage(error, 'Homolog worker failed')
         })
       )
       process.exitCode = 1
@@ -97,8 +100,7 @@ if (startupFailure) {
         JSON.stringify({
           event: 'worker.continuous_failed',
           code: 'continuous_worker_failed',
-          message:
-            error instanceof Error ? error.message : 'Continuous worker failed'
+          message: redactStartupErrorMessage(error, 'Continuous worker failed')
         })
       )
       process.exitCode = 1
