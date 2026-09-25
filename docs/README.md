@@ -5,7 +5,20 @@ e estados: [glossário operacional](architecture/GLOSSARY.md).
 
 Navegação derivada dos registros correntes: [índice operacional](99_operational_index.md).
 
-## Navegação corrente — 24/09/2026 — AUD52 / C1L interrompido
+## Navegação corrente — 25/09/2026 — AUD-0573 / AUD53
+
+- [AUD-0573: auditoria com gates executados](04_audit/0573_repository_audit_executed_gates_2026-09-24.md)
+- [AUD-0573: evidência de execução do roadmap](04_audit/0574_aud0573_execution_evidence_2026-09-25.md)
+- [Roadmap AUD-0573](03_build/0350_audit0573_roadmap.md) e [backlog RA25-01–11](03_build/0351_audit0573_backlog.md)
+- [AUD53: packet e resultado do closure registry](04_audit/0575_aud53_closure_rebind_decision_packet.md)
+- [SPEC-CERT-001: closure registry vinculado à execução](02_spec/0132_run_bound_closure_registry.md)
+- [SPEC-OPS-001: redação de erro no entrypoint do worker](02_spec/0131_worker_startup_error_redaction.md)
+- [SPEC-DOC-002: extração do checker de links](02_spec/0130_doc_link_checker_extraction.md)
+- [Política de retenção de evidência](08_runtime/0801_evidence_retention_policy.md)
+- [M07: backlog corretivo da reauditoria](03_build/0344_reaudit_m07_backlog.md) — `A24-03-C1M-PACKET` `IN_PROGRESS / DOCUMENTARY`, baseline a rederivar
+- [C1L: resultado final — FAIL / OPEN](04_audit/evidence/AUD-20260924/M07-S1-C1L/final-gate-result.md)
+
+## Histórico — Navegação em 24/09/2026 — AUD52 / C1L interrompido
 
 - [AUD52: roadmap e estado C1L](03_build/0346_aud29_roadmap.md)
 - [AUD52: backlog A29-01–A29-11](03_build/0347_aud29_backlog.md)

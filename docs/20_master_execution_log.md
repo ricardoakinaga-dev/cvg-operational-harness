@@ -1,3 +1,10 @@
+# RA25-04 — ponteiros de navegação reconciliados — 25/09/2026
+
+- Escopo: [RA25-04](03_build/0351_audit0573_backlog.md). `README.md` raiz, `docs/README.md` e `docs/99_operational_index.md` passaram a apontar o ciclo corrente AUD-0573 / AUD53; os blocos anteriores foram relabelados como histórico, sem apagar nenhum `FAIL / OPEN` nem alterar hashes citados.
+- Reconciliação 0344: o topo de [0344](03_build/0344_reaudit_m07_backlog.md) já estava em AUD53, e os ledgers mestres agora também — a divergência AUD52/AUD53 deixou de existir. Registrada a consequência factual: `docs/02_spec/0190_spec_validation.md` mudou de `9e4432…` (C1L) para `443f6a…` porque as SPECs 0130, 0131 e 0132 foram registradas nele; o preview C1M precisa ser rederivado e nenhuma aprovação C1M/C1L foi reaproveitada.
+- Gates: `format:check` exit 0; `docs:check-links` exit 0; testes documentais 15/15 PASS. A alteração muda o candidato, então o certificado commitado passa a ser pontual e deve ser reemitido por `npm run certify` no próximo ciclo.
+- Limite: trabalho documental; nenhum código, gate de produto ou produção afetado. Produção `NO_GO`.
+
 # AUD53 — certificado verde por registry vinculado à execução — 25/09/2026
 
 - Aprovação: usuário respondeu “vamos de opção A” sobre o packet [0575](04_audit/0575_aud53_closure_rebind_decision_packet.md); hash do packet não citado literalmente, aprovação registrada verbatim.

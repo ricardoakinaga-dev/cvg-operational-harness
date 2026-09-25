@@ -1,6 +1,8 @@
 # Backlog corretivo da reauditoria M07 — atualizado em 24/09/2026
 
 > Estado corrente AUD53: task documental `A24-03-C1M-PACKET` em andamento para preparar baseline refreshed sem alterar baseline C1J/C1L. A inspeção estática encontrou somente um tuple divergente em 973 inputs: `docs/02_spec/0190_spec_validation.md`; ainda não há pedido de gate C1M nem edição de produto. C1L continua [FAIL / OPEN](../04_audit/evidence/AUD-20260924/M07-S1-C1L/final-gate-result.md); M07-S1 permanece aberta.
+>
+> Atualização 2026-09-25 (ciclo AUD-0573 / AUD53): o único tuple divergente mudou de novo. `docs/02_spec/0190_spec_validation.md` passou de `9e4432…` (observado em C1L) para `443f6a…`, porque as SPECs [0130](../02_spec/0130_doc_link_checker_extraction.md), [0131](../02_spec/0131_worker_startup_error_redaction.md) e [0132](../02_spec/0132_run_bound_closure_registry.md) foram registradas nele. O preview C1M precisa ser rederivado a partir desse hash antes de qualquer pedido de gate; nenhuma baseline, preview ou aprovação C1M/C1L foi reaproveitada, e `A24-03-C1M-PACKET` continua `IN_PROGRESS / DOCUMENTARY` sem gate aprovado. O ciclo AUD-0573 e a correção do certificado estão em [0574](../04_audit/0574_aud0573_execution_evidence_2026-09-25.md) e [0575](../04_audit/0575_aud53_closure_rebind_decision_packet.md).
 
 ## AUD53 — Preparar reconciliação de baseline para C1M — 24/09/2026
 

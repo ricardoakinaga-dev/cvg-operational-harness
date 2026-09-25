@@ -1,9 +1,10 @@
 # AUD53 — RA25-11 fechado; certificado verde — 25/09/2026
 
-- `COMPLETED`: RA25-11 (closure registry vinculado à execução). A adjudicação dos 26 findings de REM21-019 permanece byte-idêntica; o vínculo (candidato, runId, generatedAt) passou a ser gerado por execução em `certification/finding-closure.json`. Evidência: [0575](04_audit/0575_aud53_closure_rebind_decision_packet.md), SPEC [0132](02_spec/0132_run_bound_closure_registry.md).
+- `COMPLETED`: RA25-11 (closure registry vinculado à execução) e RA25-04 (ponteiros `README.md`, `docs/README.md` e `docs/99_operational_index.md` no ciclo corrente, com os blocos anteriores relabelados como histórico). A adjudicação dos 26 findings de REM21-019 permanece byte-idêntica; o vínculo (candidato, runId, generatedAt) passou a ser gerado por execução em `certification/finding-closure.json`. Evidência: [0575](04_audit/0575_aud53_closure_rebind_decision_packet.md), SPEC [0132](02_spec/0132_run_bound_closure_registry.md).
+- Consequência registrada: `docs/02_spec/0190_spec_validation.md` mudou para `443f6a…` ao receber as SPECs 0130/0131/0132, então o preview da baseline C1M precisa ser rederivado; nenhuma aprovação C1M/C1L foi reaproveitada.
 - Gates: `npm run certify` 16 gates `PASS` (0 `FAIL`) e `npm run certification:verify` exit 0 com `findings are current and candidate-bound` e 37 hashes verificados. Os dois gates de CI que estavam vermelhos desde antes da rodada AUD-0573 passaram a verde.
 - Aprovação: usuário, “vamos de opção A”, sobre o packet com SHA-256 `ca2ae0001b4807f94131f9bedf68bdd8ad06eb16b49eae5bae852ddcc43a9743`.
-- Em aberto: RA25-05 `BLOCKED_BY_C1M`; RA25-07 e RA25-04 `NOT_EXECUTED`; revisão humana das SPECs `NOT_RUN`; produção `NO_GO`.
+- Em aberto: RA25-05 `BLOCKED_BY_C1M`; RA25-07 `NOT_EXECUTED`; revisão humana das SPECs `NOT_RUN`; produção `NO_GO`.
 
 # AUD-0573 — roadmap executado; RA25-07 e RA25-04 em aberto — 25/09/2026
 

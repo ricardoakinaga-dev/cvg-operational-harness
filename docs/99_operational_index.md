@@ -12,7 +12,18 @@ infer approval, certification or production access.
 - [master backlog](30_backlog_master.md)
 - [AUD21 executable backlog](03_build/0337_comprehensive_remediation_backlog.md)
 
-## Current controlled work — AUD52
+## Current controlled work — AUD-0573 / AUD53
+
+- [Current runtime state](99_runtime_state.md)
+- [Current master execution log](20_master_execution_log.md)
+- [Current consolidated backlog](30_backlog_master.md)
+- [AUD-0573 execution evidence](04_audit/0574_aud0573_execution_evidence_2026-09-25.md)
+- [AUD-0573 roadmap](03_build/0350_audit0573_roadmap.md) and [RA25 backlog](03_build/0351_audit0573_backlog.md)
+- [AUD53 closure registry packet and outcome](04_audit/0575_aud53_closure_rebind_decision_packet.md)
+- [Evidence retention policy](08_runtime/0801_evidence_retention_policy.md)
+- [Detailed M07 recovery backlog](03_build/0344_reaudit_m07_backlog.md) — `A24-03-C1M-PACKET` `IN_PROGRESS / DOCUMENTARY`
+
+## Histórico — Current controlled work — AUD52
 
 - [Current runtime state](99_runtime_state.md)
 - [Current master execution log](20_master_execution_log.md)

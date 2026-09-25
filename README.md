@@ -2,7 +2,34 @@
 
 CVG Operational Harness is a governed runtime foundation for reusable operational AI agents across the CVG ecosystem.
 
-## Estado atual — 2026-09-20
+## Estado atual — 2026-09-25 — AUD-0573 / AUD53
+
+- O ciclo [AUD-0573](docs/04_audit/0573_repository_audit_executed_gates_2026-09-24.md)
+  foi executado: RA25-01, RA25-02, RA25-03, RA25-06, RA25-08, RA25-09 e RA25-10
+  concluídos; RA25-05 segue `BLOCKED_BY_C1M`; RA25-07 (fatias de hotspot) e
+  RA25-04 permanecem abertos. Evidência em
+  [0574](docs/04_audit/0574_aud0573_execution_evidence_2026-09-25.md).
+- O certificado foi corrigido em AUD53: a adjudicação dos 26 findings de
+  `AUD-20260921/REM21-019` permanece imutável e o vínculo de candidato/runId
+  passou a ser gerado por execução. `npm run certify` (16 gates) e
+  `npm run certification:verify` passaram a verde. Ver
+  [0575](docs/04_audit/0575_aud53_closure_rebind_decision_packet.md) e
+  [SPEC-CERT-001](docs/02_spec/0132_run_bound_closure_registry.md).
+- Gates correntes: `npm test` 324 arquivos / 2 293 testes; cobertura
+  92,6 / 87,71 / 94,95 / 93,58; `test:postgres`, `test:chaos`, `test:restore`,
+  `test:load` e `test:evals` exit 0; `audit:security` 0 vulnerabilidades.
+- Certificado mecânico `CONDITIONAL_GO / AAA_CONTROLLED`. M07-S1 continua
+  `FAIL / OPEN` e o packet `A24-03-C1M-PACKET` segue documental, sem gate
+  aprovado — a baseline C1M precisa ser rederivada porque
+  `docs/02_spec/0190_spec_validation.md` mudou para `443f6a…`.
+- Navegação: [`docs/README.md`](docs/README.md),
+  [`docs/99_operational_index.md`](docs/99_operational_index.md),
+  [`docs/30_backlog_master.md`](docs/30_backlog_master.md) e
+  [`docs/99_runtime_state.md`](docs/99_runtime_state.md).
+- Produção permanece `NO_GO`: nenhum dado real, provider/canal, credencial,
+  deploy ou ação sensível está autorizado neste repositório.
+
+## Histórico — Estado em 2026-09-20
 
 - Runtime V1 (single-pass governado), Runtime V2 (loop iterativo), fronteira
   de capacidade Phase 4 (`PHASE_4_HANDOFF=VERIFIED`, controlada/sintética) e
