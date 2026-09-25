@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "artifactRole": "RA25-09_GATE_RERUN_ROUNDED_REPORTS",
+  "generatedAt": "2026-09-25T03:29:00.000Z",
+  "round": "2026-09-25-raid25",
+  "origin": "docs/03_build/0351_audit0573_backlog.md (RA25-09)",
+  "environment": {
+    "node": "v22.23.2",
+    "npmToolchain": "nvm use 22 (.nvmrc 22.23.2)",
+    "postgresql": "16.15 postgres:16-alpine (disposable container cvg-raid25-pg-20260925 on 127.0.0.1:5434)",
+    "database": "cvg_test",
+    "testDatabaseUrlEnv": "TEST_DATABASE_URL set; PHASE4A_DISPOSABLE_PG=1",
+    "realData": false
+  },
+  "historicalPreservation": {
+    "logsHistoricalUntouched": true,
+    "baselineLogsUntouched": true,
+    "overwrittenCurrentArtifacts": [
+      "certification/load-report.json",
+      "certification/restore-report.json",
+      "certification/sbom.cyclonedx.json"
+    ],
+    "archivedBeforeRerun": "certification/logs/historical/2026-09-22-phase10/ (full 2026-09-22 round snapshot: reports, gate logs, baseline-logs, mutation-logs)",
+    "note": "Only the gates' own current-round outputs were rewritten by running them (load, restore, sbom). certification/logs/historical/ and certification/baseline-logs/ were not modified."
+  },
+  "gates": [
+    {
+      "id": "verify",
+      "command": "npm run verify",
+      "exitCode": 0,
+      "durationSeconds": 1019,
+      "startedAt": "2026-09-25T03:08:02Z",
+      "log": "verify.log",
+      "evidence": {
+        "testFiles": 323,
+        "testsPassed": 2287,
+        "testsFailed": 0,
+        "coverage": {
+          "statements": 92.59,
+          "branches": 87.7,
+          "functions": 94.95,
+          "lines": 93.58
+        },
+        "securityVulnerabilities": 0,
+        "stages": [
+          "format:check",
+          "typecheck",
+          "lint",
+          "build",
+          "test",
+          "test:coverage",
+          "audit:security"
+        ]
+      }
+    },
+    {
+      "id": "postgres",
+      "command": "npm run test:postgres",
+      "exitCode": 0,
+      "durationSeconds": 74,
+      "log": "postgres.log",
+      "evidence": { "testFiles": 35, "testsPassed": 258, "testsFailed": 0 }
+    },
+    {
+      "id": "chaos",
+      "command": "npm run test:chaos",
+      "exitCode": 0,
+      "log": "chaos.log",
+      "evidence": { "testFiles": 3, "testsPassed": 20, "testsFailed": 0 }
+    },
+    {
+      "id": "restore",
+      "command": "npm run test:restore",
+      "exitCode": 0,
+      "log": "restore.log",
+      "evidence": {
+        "kind": "phase10-restore-report",
+        "digestMatches": true,
+        "outboxPreserved": true,
+        "tenantIsolation": true,
+        "restoredEvents": 250,
+        "rpoRtoVerdict": "NOT_VALIDATED_ON_PRODUCTION_INFRASTRUCTURE"
+      }
+    },
+    {
+      "id": "load",
+      "command": "npm run test:load",
+      "exitCode": 0,
+      "log": "load.log",
+      "evidence": {
+        "kind": "phase10-load-report",
+        "events": 10000,
+        "processed": 10000,
+        "loss": 0,
+        "duplicates": 0,
+        "throughputPerSecond": 680.19,
+        "scope": "in-memory outbox contract; synthetic payloads; not a production benchmark"
+      }
+    },
+    {
+      "id": "evals",
+      "command": "npm run test:evals",
+      "exitCode": 0,
+      "log": "evals.log",
+      "evidence": { "testFiles": 2, "testsPassed": 11, "testsFailed": 0 }
+    }
+  ],
+  "certificationVerifier": {
+    "command": "npm run certification:verify",
+    "exitCode": 1,
+    "preExisting": true,
+    "proof": [
+      "registry candidateId 8a889682d378c1d3e82a71c079c00390e98307ce4d6e5314f69f02c7c8cf3132 (docs/04_audit/evidence/AUD-20260921/REM21-019/finding-closure.json, locked by sha256sums.txt line 8)",
+      "20 candidate files carry mtime between the last certify (2026-09-22T13:29:50Z) and the start of this round (2026-09-24T23:41Z) — e.g. docs/04_audit/0568_50_melhorias_priorizadas_2026-09-23.md, docs/04_audit/0571_c1j_review_packet_reconciliation_2026-09-24.md, docs/08_runtime/checkpoint_2026-09-24_ra24.md, docs/99_operational_index.md, docs/README.md",
+      "the pre-session working tree committed as e671ed5 already carried 3 manifest mismatches (skip-inventory, critical-coverage, mutation-guard) out of 37 recorded artifacts",
+      "at commit 05d1f33 the manifest matched 28/29 artifacts, confirming the drift was introduced by post-2026-09-22 working-tree edits made by earlier rounds, not by this round"
+    ],
+    "attempted": "npm run certify",
+    "certifyExitCode": 1,
+    "certifyFailure": "findings_closure_invalid:candidate_id_mismatch",
+    "notPursuedBecause": [
+      "re-binding requires rewriting docs/04_audit/evidence/AUD-20260921/REM21-019/finding-closure.json, which is sha256-locked and would be forging audit evidence",
+      "no npm script regenerates the closure registry; re-binding is a new audit round (AUD53 / C1M), the same hash-bound human decision that blocks RA25-05",
+      "the aborted certify's partial write to certification/candidate-manifest.json was reverted with git checkout; findings.json was never reached"
+    ],
+    "ciNote": "CI runs `gate certify` before `gate certification-verify`, so both are red upstream of this round; they are not part of the RA25-09 acceptance criteria (npm run verify exit 0 plus dated reports)."
+  },
+  "limits": [
+    "Execution of the five historical gates plus npm run verify only; no candidate freeze, inventory, or M07-S1 matrix was run.",
+    "RA25-05 remains BLOCKED_BY_C1M and needs a hash-bound human decision plus I1 and Final Critic.",
+    "Production remains NO_GO; no real data, provider, channel, credential or external service was used.",
+    "The disposable PostgreSQL container is local-only and must be removed after the round.",
+    "Restore/load reports are in-process measurements, not production RPO/RTO evidence."
+  ]
+}
