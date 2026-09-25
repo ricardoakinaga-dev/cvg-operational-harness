@@ -5,7 +5,7 @@
 - current_evidence: [0575](04_audit/0575_aud53_closure_rebind_decision_packet.md) (packet + resultado), [SPEC-CERT-001](02_spec/0132_run_bound_closure_registry.md), [RA25-11](03_build/0351_audit0573_backlog.md).
 - verification_state: `npm run certify` com `CI_RUN_ID=run-aud53-20260925` → 16 gates `PASS`, 0 `FAIL`, candidato `de68730e…`, 26 entries; `npm run certification:verify` → exit 0 com `findings are current and candidate-bound` e `verified 37 artifact hashes`. Ambos os gates de CI que estavam vermelhos desde antes da rodada passaram a verde.
 - blocking_state: nada bloqueia RA25-11 nem RA25-04 (concluído em 25/09/2026). Permanecem: RA25-05 (`BLOCKED_BY_C1M`), RA25-07 `NOT_EXECUTED`, revisão humana das SPECs `NOT_RUN`.
-- next_action: RA25-07 (fatia 1 com SPEC própria e gate de BUILD). O packet `A24-03-C1M-PACKET` precisa de baseline rederivada porque `docs/02_spec/0190_spec_validation.md` mudou para `443f6a…`. Reexecutar `npm run certify` após o próximo commit que toque o candidato.
+- next_action: RA25-07 — o recon está em [SPEC-STRUCT-001](02_spec/0133_iterative_runtime_slice_extraction.md); abrir o gate de BUILD da primeira fatia (extração de ~1 000 linhas em `packages/harness/src/iterative-runtime.ts`, sem mudança de comportamento). O packet `A24-03-C1M-PACKET` precisa de baseline rederivada porque `docs/02_spec/0190_spec_validation.md` mudou para `443f6a…`. Reexecutar `npm run certify` em máquina ociosa — a última tentativa (candidato `ae77bd1d…`) falhou só no gate `postgres` por flake de SIGTERM sob load average 23,7.
 
 # AUD-0573 — execução do roadmap — 2026-09-25
 

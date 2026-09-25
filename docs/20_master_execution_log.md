@@ -1,3 +1,11 @@
+# RA25-07 — recon medido e plano da fatia; BUILD não autorizado — 25/09/2026
+
+- Escopo: [RA25-07](03_build/0351_audit0573_backlog.md). Fiz o recon e escrevi [SPEC-STRUCT-001](02_spec/0133_iterative_runtime_slice_extraction.md); nenhuma linha de código foi extraída.
+- Recon: `IterativeGovernedRuntime` em `packages/harness/src/iterative-runtime.ts` é uma god-class — classe aberta na linha 312, 49 métodos somando 2 302 linhas, só ~130 linhas de funções puras de topo. `dispatchTool` sozinho tem 500 linhas e usa 10 membros de `this`. O domínio de dispatch inteiro soma ~773 linhas, o que deixaria o arquivo em ~1 655 — acima do alvo de ~1 500 do critério. Uma fatia válida precisa mover ~1 000 linhas, somando o ciclo de vida ou abrindo duas fatias.
+- Motivo de não executar: o orçamento de execução do ciclo (contexto 273 851/200 000 e elapsed 11 806s/7 200s) terminou antes de abrir a fatia, e o backlog exige task e gate de BUILD próprios por fatia. Iniciar agora arriscaria deixar o runtime governado pela metade sem verificação.
+- Estado do arquivo: intocado; nenhum drift atribuível a RA25-07. `apps/api/src/server.ts`, `packages/persistence/src/postgres.ts` e `packages/agent-runtime/src/runtime.ts` continuam exigindo SPEC própria.
+- Limite: trabalho documental; produção `NO_GO`.
+
 # Reemissão do certificado pós-RA25-04 — flake sob carga — 25/09/2026
 
 - Contexto: RA25-04 mudou o candidato, então reexecutei `npm run certify` para reemitir o certificado (candidato `ae77bd1d…`, run `run-aud53-20260925b`).

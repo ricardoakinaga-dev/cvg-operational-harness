@@ -144,6 +144,10 @@ registro do ciclo M07-S1. Produção `NO_GO`.
 ### RA25-07 — Reduzir hotspots de arquivo
 
 - Estado: `PROPOSED / SPEC_AND_BUILD_GATE_REQUIRED`.
+- Recon: [SPEC-STRUCT-001](../02_spec/0133_iterative_runtime_slice_extraction.md)
+  mede a god-class de `packages/harness/src/iterative-runtime.ts` (classe aberta
+  na linha 312, 49 métodos, 2 302 linhas) e fixa o plano da primeira fatia.
+  Nenhuma linha extraída ainda; o BUILD exige gate próprio.
 - O que/onde: `apps/api/src/server.ts` (5.857 linhas),
   `packages/persistence/src/postgres.ts` (3.354),
   `packages/agent-runtime/src/runtime.ts` (2.603),
