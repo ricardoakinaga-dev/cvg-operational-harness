@@ -430,7 +430,12 @@ function certify() {
     axisScores !== null &&
     Object.entries(axisFloors).some(([key, floor]) => axisScores[key] < floor)
   const hasFailure =
-    !checksPass || critics.status === 'BLOCK' || axisFloorFailure
+    !checksPass ||
+    critics.status === 'BLOCK' ||
+    axisFloorFailure ||
+    // AUD19-002: disposable PostgreSQL is mandatory. A skipped durability
+    // recorte can no longer certify as CONDITIONAL_PASS; it fails the gate.
+    !pgAvailable
   const hasPartial =
     Object.values(statuses).some((status) => status !== 'PROVEN_CONTROLLED') ||
     critics.status !== 'APPROVE' ||

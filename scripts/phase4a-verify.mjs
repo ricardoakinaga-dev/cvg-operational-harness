@@ -143,6 +143,9 @@ report('phase4a.verify.structural_pass', {
   assertions: structuralChecks.length
 })
 
+// AUD19-002: fail-closed skip policy. The required gate refuses to pass with
+// a skipped PostgreSQL recorte: the flag turns the integration file's skip
+// into a hard failure, and any residual skip in the output fails here too.
 const testResult = spawnSync(
   'npx',
   [
@@ -153,12 +156,24 @@ const testResult = spawnSync(
     'packages/persistence/src/__tests__/conversation-intelligence-migration.test.ts',
     '--reporter=dot'
   ],
-  { stdio: 'inherit', env: { ...process.env, CI: '1' } }
+  {
+    encoding: 'utf8',
+    env: { ...process.env, CI: '1', PHASE4A_PG_REQUIRED: '1' }
+  }
 )
+process.stdout.write(testResult.stdout ?? '')
+process.stderr.write(testResult.stderr ?? '')
 if (testResult.status !== 0) {
   fail('behavioral Phase 4A test suite failed', {
     exitCode: testResult.status ?? 1
   })
+}
+const combinedOutput = `${testResult.stdout ?? ''}\n${testResult.stderr ?? ''}`
+if (/\bskipped\b/i.test(combinedOutput)) {
+  fail(
+    'behavioral Phase 4A suite reported skipped tests; required gate demands zero skips',
+    {}
+  )
 }
 
 report('phase4a.verify.completed', {

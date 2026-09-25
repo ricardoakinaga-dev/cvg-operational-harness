@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "kind": "risk-mutation-manifest",
+  "contract": "rem21-013-v1",
+  "mutations": [
+    {
+      "id": "global-threshold-inclusive-boundary",
+      "domain": "coverage",
+      "mode": "driver",
+      "source": "scripts/lib/coverage-gate.mjs",
+      "from": "value < threshold",
+      "to": "value <= threshold",
+      "sourceSha256": "6646c80f18edf5c482c85db686c9e6878d1a95efd0401f0a4b7672279aa82014",
+      "budgetMs": 120000,
+      "owner": "quality-gates",
+      "driver": "const summary = { total: {\n  statements: { total: 100, covered: 90 },\n  lines: { total: 100, covered: 90 },\n  functions: { total: 100, covered: 90 },\n  branches: { total: 100, covered: 85 }\n}}\nconst result = gate.evaluateGlobalCoverage(summary)\nif (!result.pass || result.metrics.statements.pct !== 90) process.exit(1)"
+    },
+    {
+      "id": "critical-threshold-inclusive-boundary",
+      "domain": "coverage",
+      "mode": "driver",
+      "source": "scripts/lib/coverage-gate.mjs",
+      "from": "branchPct < threshold",
+      "to": "branchPct <= threshold",
+      "sourceSha256": "6646c80f18edf5c482c85db686c9e6878d1a95efd0401f0a4b7672279aa82014",
+      "budgetMs": 120000,
+      "owner": "quality-gates",
+      "driver": "const summary = { '/fixture/packages/critical.ts': {\n  statements: { total: 100, covered: 95 },\n  lines: { total: 100, covered: 95 },\n  functions: { total: 100, covered: 95 },\n  branches: { total: 100, covered: 95 }\n}}\nconst manifest = { branchThreshold: 95, groups: [{ id: 'critical', paths: ['packages/critical.ts'] }] }\nconst result = gate.evaluateCriticalCoverage(summary, manifest)\nif (!result.pass || result.groups[0].metrics.branches.pct !== 95) process.exit(1)"
+    },
+    {
+      "id": "coverage-weighted-denominator",
+      "domain": "coverage",
+      "mode": "driver",
+      "source": "scripts/lib/coverage-gate.mjs",
+      "from": "(dimension.covered / dimension.total) * 100",
+      "to": "(dimension.covered / dimension.covered) * 100",
+      "sourceSha256": "6646c80f18edf5c482c85db686c9e6878d1a95efd0401f0a4b7672279aa82014",
+      "budgetMs": 120000,
+      "owner": "quality-gates",
+      "driver": "const summary = { total: {\n  statements: { total: 100, covered: 90 },\n  lines: { total: 100, covered: 90 },\n  functions: { total: 100, covered: 90 },\n  branches: { total: 100, covered: 85 }\n}}\nconst result = gate.evaluateGlobalCoverage(summary)\nif (result.metrics.statements.pct !== 90 || !result.pass) process.exit(1)"
+    },
+    {
+      "id": "identity-expiry-inclusive-boundary",
+      "domain": "identity",
+      "mode": "vitest",
+      "source": "apps/api/src/operator-identity.ts",
+      "from": "claims.exp <= currentTime",
+      "to": "claims.exp < currentTime",
+      "sourceSha256": "dc66e441757b83871be6b09e329fa3053c1fc4c249b9b1484d512782fceb46c4",
+      "testFiles": ["apps/api/src/__tests__/trusted-operator-identity.test.ts"],
+      "budgetMs": 120000,
+      "owner": "runtime-security"
+    },
+    {
+      "id": "replay-cache-membership",
+      "domain": "replay",
+      "mode": "vitest",
+      "source": "apps/api/src/operator-identity.ts",
+      "from": "replayedTokenIds.has(claims.jti)",
+      "to": "!replayedTokenIds.has(claims.jti)",
+      "sourceSha256": "dc66e441757b83871be6b09e329fa3053c1fc4c249b9b1484d512782fceb46c4",
+      "testFiles": ["apps/api/src/__tests__/trusted-operator-identity.test.ts"],
+      "budgetMs": 120000,
+      "owner": "runtime-security"
+    },
+    {
+      "id": "policy-deny-effect",
+      "domain": "policy",
+      "mode": "vitest",
+      "source": "packages/policy-engine/src/engine.ts",
+      "from": "effect === 'DENY'",
+      "to": "effect !== 'DENY'",
+      "sourceSha256": "70fdc4f16de73df51a814c07dadd127c10830cdf489ab36a8a67bf3b66525d05",
+      "testFiles": [
+        "packages/policy-engine/src/__tests__/policy-engine-branch-hardening.test.ts"
+      ],
+      "budgetMs": 120000,
+      "owner": "policy-security"
+    },
+    {
+      "id": "ssrf-private-network-operator",
+      "domain": "ssrf",
+      "mode": "vitest",
+      "source": "packages/shared/src/ssrf.ts",
+      "from": "!options.allowPrivateNetworks && isPrivateIpAddress(hostname)",
+      "to": "!options.allowPrivateNetworks || isPrivateIpAddress(hostname)",
+      "sourceSha256": "57cdb8f623278fa46a582e60cc58b42f55b741e14cf084940a6bd523217ec7af",
+      "testFiles": [
+        "packages/shared/src/__tests__/ssrf-egress.test.ts",
+        "packages/shared/src/__tests__/ssrf.test.ts"
+      ],
+      "budgetMs": 120000,
+      "owner": "egress-security"
+    },
+    {
+      "id": "approval-self-approval-comparator",
+      "domain": "approval",
+      "mode": "vitest",
+      "source": "packages/approval-engine/src/engine.ts",
+      "from": "record.operatorId === input.approverId",
+      "to": "record.operatorId !== input.approverId",
+      "sourceSha256": "601f4981653897d11d2cd6bc34c8a3fa6b00aafa17f8ce46200b94c71540f837",
+      "testFiles": [
+        "packages/approval-engine/src/__tests__/approval-engine.test.ts"
+      ],
+      "budgetMs": 120000,
+      "owner": "approval-security"
+    },
+    {
+      "id": "rate-limit-max-boundary",
+      "domain": "rate-limiter",
+      "mode": "vitest",
+      "source": "apps/api/src/rate-limit.ts",
+      "from": "existing.count >= policy.max",
+      "to": "existing.count > policy.max",
+      "sourceSha256": "a4a9df2f39783d6ab5339264519463d7b312c79b0f0d0785a5ab7fd8b5be050b",
+      "testFiles": ["apps/api/src/__tests__/rate-limit.test.ts"],
+      "budgetMs": 120000,
+      "owner": "runtime-security"
+    },
+    {
+      "id": "persistence-content-mismatch-comparator",
+      "domain": "persistence",
+      "mode": "vitest",
+      "source": "packages/persistence/src/outbox-content-hash.ts",
+      "from": "computeOutboxContentHash(winner) !== computeOutboxContentHash(incoming)",
+      "to": "computeOutboxContentHash(winner) === computeOutboxContentHash(incoming)",
+      "sourceSha256": "439d7e45ecfafffb4e5507c1dadd57fc9c990979545175a746d20e81af0eef32",
+      "testFiles": [
+        "packages/persistence/src/__tests__/outbox-content-binding.test.ts"
+      ],
+      "budgetMs": 120000,
+      "owner": "persistence-security"
+    }
+  ]
+}

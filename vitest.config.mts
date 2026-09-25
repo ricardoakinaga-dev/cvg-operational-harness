@@ -8,6 +8,13 @@ const isCoverageRun = process.argv.some(
 const workspaceRoot = process.cwd()
 
 export default defineConfig({
+  define: {
+    __CVG_WEB_IDENTITY_MODE__: JSON.stringify(
+      process.env.VITE_CVG_WEB_IDENTITY_MODE ?? ''
+    ),
+    __CVG_WEB_CONTROLLED_TEST__: 'true',
+    __CVG_WEB_MODE__: JSON.stringify('test')
+  },
   test: {
     environment: 'jsdom',
     testTimeout: 15000,
@@ -28,10 +35,10 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json-summary'],
       thresholds: {
-        statements: 80,
-        branches: 80,
-        functions: 80,
-        lines: 80
+        statements: 90,
+        branches: 85,
+        functions: 90,
+        lines: 90
       },
       include: ['packages/**/*.ts', 'apps/**/*.ts', 'apps/**/*.tsx'],
       // Process bootstraps, browser rendering, and PostgreSQL adapters have
@@ -43,6 +50,7 @@ export default defineConfig({
         '**/*.test.ts',
         '**/*.test.tsx',
         '**/node_modules/**',
+        '**/dist/**',
         '**/main.ts',
         '**/main.tsx',
         'apps/web/src/**',

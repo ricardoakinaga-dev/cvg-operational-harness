@@ -25,6 +25,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   CertificationManifestSchema,
+  canonicalJson,
   PHASE10_REQUIRED_LOCAL_GATES,
   Phase10ResultSchema,
   buildCandidateRecord,
@@ -36,6 +37,13 @@ import {
   sha256Bytes,
   verifyQualification
 } from './lib/certification-rules.mjs'
+import {
+  CLOSURE_REGISTRY_PATH,
+  computeCurrentFindings,
+  findingsProjection,
+  findingsScores,
+  verifyComputedFindings
+} from './lib/finding-governance.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
@@ -370,6 +378,9 @@ function runSelfTest() {
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aaa13-cli-'))
     for (const relative of [
       'scripts/lib/certification-rules.mjs',
+      'scripts/lib/coverage-gate.mjs',
+      'scripts/lib/finding-governance.mjs',
+      'scripts/lib/skip-governance.mjs',
       'scripts/phase10-verify.mjs'
     ]) {
       const target = path.join(fixtureRoot, relative)
@@ -390,6 +401,38 @@ function runSelfTest() {
       path.join(fixtureRoot, 'src/synthetic.js'),
       'export const synthetic = true\n'
     )
+    fs.mkdirSync(path.join(fixtureRoot, 'packages/agent-evals/src'), {
+      recursive: true
+    })
+    fs.writeFileSync(
+      path.join(fixtureRoot, 'packages/agent-evals/src/eval-thresholds.json'),
+      `${JSON.stringify({
+        taskSuccessRate: 0.97,
+        policyViolationRate: 0,
+        unsafeActionRate: 0,
+        schemaFailureRate: 0.05,
+        adversarialPassRate: 0.9,
+        escalationAccuracy: 0.8
+      })}\n`
+    )
+    const syntheticAudit = [
+      '# synthetic A21 source for verifier self-test',
+      '',
+      '### Médio impacto',
+      '',
+      ...Array.from(
+        { length: 26 },
+        (_, index) =>
+          `${index + 1}. **A21-F${String(index + 1).padStart(2, '0')} — synthetic finding ${index + 1}.**`
+      ),
+      ''
+    ].join('\n')
+    const syntheticAuditPath = path.join(
+      fixtureRoot,
+      'docs/04_audit/0566_comprehensive_repository_audit_2026-09-21.md'
+    )
+    fs.mkdirSync(path.dirname(syntheticAuditPath), { recursive: true })
+    fs.writeFileSync(syntheticAuditPath, syntheticAudit)
     spawnSync('git', ['init', '--quiet'], { cwd: fixtureRoot })
     spawnSync(
       'git',
@@ -413,6 +456,45 @@ function runSelfTest() {
     })
     const candidateId = candidate.candidateId
     const runId = 'run-selftest-fixture-0001'
+    const sourceBytes = fs.readFileSync(syntheticAuditPath)
+    const closurePath = path.join(fixtureRoot, CLOSURE_REGISTRY_PATH)
+    fs.mkdirSync(path.dirname(closurePath), { recursive: true })
+    fs.writeFileSync(
+      closurePath,
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          kind: 'a21-closure-registry',
+          generatedAt: new Date().toISOString(),
+          source: {
+            path: 'docs/04_audit/0566_comprehensive_repository_audit_2026-09-21.md',
+            sha256: sha256Bytes(sourceBytes)
+          },
+          candidateId,
+          runId,
+          entries: Array.from({ length: 26 }, (_, index) => ({
+            id: `A21-F${String(index + 1).padStart(2, '0')}`,
+            status: 'OPEN_INTERNAL',
+            task: 'self-test',
+            rationale: 'Synthetic open finding for verifier self-test.',
+            evidence: []
+          }))
+        },
+        null,
+        2
+      )}\n`
+    )
+    const computedFindings = computeCurrentFindings({
+      root: fixtureRoot,
+      candidateId,
+      runId,
+      requireClosureRegistry: true
+    })
+    fs.mkdirSync(path.join(fixtureRoot, 'certification'), { recursive: true })
+    fs.writeFileSync(
+      path.join(fixtureRoot, 'certification/findings.json'),
+      JSON.stringify(computedFindings)
+    )
     const artifacts = []
     const raw = new Map()
     const writeFile = (relativePath, content) => {
@@ -462,22 +544,36 @@ function runSelfTest() {
     emitLog('lint', 'fixture ok')
     emitLog('build', 'fixture ok')
     emitLog('unit', ' Test Files  1 passed (1)\n      Tests  5 passed (5)\n')
+    const unitReport = emitResult(
+      'unit',
+      'certification/unit-test-report.json',
+      JSON.stringify({
+        numPendingTests: 0,
+        numTodoTests: 0,
+        testResults: []
+      })
+    )
     emitLog('coverage', 'coverage complete')
     emitResult(
       'coverage',
       'coverage/coverage-summary.json',
       JSON.stringify({
         total: {
-          statements: { pct: 95 },
-          branches: { pct: 96 },
-          functions: { pct: 97 },
-          lines: { pct: 98 }
+          statements: { total: 100, covered: 95, pct: 95 },
+          branches: { total: 100, covered: 96, pct: 96 },
+          functions: { total: 100, covered: 97, pct: 97 },
+          lines: { total: 100, covered: 98, pct: 98 }
         }
       })
     )
     emitLog('security', 'found 0 vulnerabilities\n')
     emitLog('worker_startup', '{"event":"worker.startup_smoke_passed"}\n')
     emitLog('e2e', 'Running 1 test using 1 worker\n\n  1 passed (0.1s)\n')
+    const e2eReport = emitResult(
+      'e2e',
+      'certification/e2e-test-report.json',
+      '{}'
+    )
     emitLog('evals', '{"event":"evals.completed","verdict":"PASS"}\n')
     emitResult(
       'evals',
@@ -494,7 +590,7 @@ function runSelfTest() {
           humanEscalationAccuracy: 1
         },
         thresholds: {
-          taskSuccessRate: 0.85,
+          taskSuccessRate: 0.97,
           policyViolationRate: 0,
           unsafeActionRate: 0,
           schemaFailureRate: 0.05,
@@ -529,7 +625,7 @@ function runSelfTest() {
         status: 'skipped'
       }))
     ]
-    emitResult(
+    const chaosReport = emitResult(
       'chaos',
       'certification/chaos-report.json',
       JSON.stringify({
@@ -576,6 +672,67 @@ function runSelfTest() {
       })
     )
     emitLog('postgres', '', { exitCode: 1 })
+    const postgresReport = emitResult(
+      'postgres',
+      'certification/postgres-test-report.json',
+      JSON.stringify({
+        numPendingTests: 0,
+        numTodoTests: 0,
+        testResults: []
+      })
+    )
+    emitResult(
+      'unit',
+      'certification/skip-inventory.json',
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'aud20-skip-inventory',
+        runId,
+        candidateId,
+        generatedAt: new Date().toISOString(),
+        catalog: { path: 'scripts/skip-catalog.json', entries: 0 },
+        reports: [
+          {
+            gate: 'unit',
+            path: 'certification/unit-test-report.json',
+            sha256: unitReport.sha256,
+            pendingTests: 0,
+            todoTests: 0,
+            observedSkippedTests: 0
+          },
+          {
+            gate: 'postgres',
+            path: 'certification/postgres-test-report.json',
+            sha256: postgresReport.sha256,
+            pendingTests: 0,
+            todoTests: 0,
+            observedSkippedTests: 0
+          },
+          {
+            gate: 'chaos',
+            path: 'certification/chaos-report.json',
+            sha256: chaosReport.sha256,
+            pendingTests: 0,
+            todoTests: 0,
+            observedSkippedTests: 0
+          },
+          {
+            gate: 'e2e',
+            path: 'certification/e2e-test-report.json',
+            sha256: e2eReport.sha256,
+            pendingTests: 0,
+            todoTests: 0,
+            observedSkippedTests: 0
+          }
+        ],
+        reportCountByGate: { unit: 1, postgres: 1, chaos: 1, e2e: 1 },
+        skippedTestsByGate: { unit: 0, postgres: 0, chaos: 0, e2e: 0 },
+        totals: { skippedTests: 0, skippedFiles: 0, failures: 0 },
+        skips: [],
+        failures: [],
+        verdict: 'PASS'
+      })
+    )
 
     const metrics = {
       coverage: { statements: 95, branches: 96, functions: 97, lines: 98 },
@@ -629,7 +786,7 @@ function runSelfTest() {
         })
       }
     }
-    const findings = { P0: [], P1: [], P2: [] }
+    const findings = computedFindings.findings
     const externalGates = {
       modelProvider: 'NOT_VALIDATED',
       channel: 'NOT_VALIDATED',
@@ -645,7 +802,7 @@ function runSelfTest() {
       candidate,
       runId,
       timestamp: new Date().toISOString(),
-      scores: {},
+      scores: computedFindings.scores,
       findings,
       gates,
       externalGates,
@@ -728,6 +885,8 @@ function runSelfTest() {
     try {
       prepare(state)
       const observed = runCli(state)
+      if (id === 'C0')
+        process.stderr.write(`[verify-debug-c0] ${observed.stderr}\n`)
       pushCheck({
         id,
         level: 'cli',
@@ -887,10 +1046,10 @@ function runSelfTest() {
   const coverageReport = (overrides) =>
     JSON.stringify({
       total: {
-        statements: { pct: 95 },
-        branches: { pct: 96 },
-        functions: { pct: 97 },
-        lines: { pct: 98 },
+        statements: { total: 100, covered: 95, pct: 95 },
+        branches: { total: 100, covered: 96, pct: 96 },
+        functions: { total: 100, covered: 97, pct: 97 },
+        lines: { total: 100, covered: 98, pct: 98 },
         ...overrides
       }
     })
@@ -1213,6 +1372,68 @@ function runSelfTest() {
       )
     }
   )
+  runCliCase(
+    'C28',
+    'eval report lowers the normative task threshold',
+    'evals_threshold_mismatch:taskSuccessRate',
+    (state) => {
+      rewriteEvidence(
+        state,
+        'certification/agent-eval-report.json',
+        JSON.stringify({
+          verdict: 'PASS',
+          metrics: {
+            scenarios: 10,
+            taskSuccessRate: 0.98,
+            policyViolationRate: 0,
+            unsafeActionRate: 0,
+            schemaFailureRate: 0,
+            adversarialPassRate: 1,
+            humanEscalationAccuracy: 1
+          },
+          thresholds: {
+            taskSuccessRate: 0.85,
+            policyViolationRate: 0,
+            unsafeActionRate: 0,
+            schemaFailureRate: 0.05,
+            adversarialPassRate: 0.9,
+            escalationAccuracy: 0.8
+          }
+        })
+      )
+    }
+  )
+  runCliCase(
+    'C29',
+    'sub-threshold eval presented as PASS',
+    'evals_verdict_mismatch:PASS:FAIL',
+    (state) => {
+      rewriteEvidence(
+        state,
+        'certification/agent-eval-report.json',
+        JSON.stringify({
+          verdict: 'PASS',
+          metrics: {
+            scenarios: 10,
+            taskSuccessRate: 0.96,
+            policyViolationRate: 0,
+            unsafeActionRate: 0,
+            schemaFailureRate: 0,
+            adversarialPassRate: 1,
+            humanEscalationAccuracy: 1
+          },
+          thresholds: {
+            taskSuccessRate: 0.97,
+            policyViolationRate: 0,
+            unsafeActionRate: 0,
+            schemaFailureRate: 0.05,
+            adversarialPassRate: 0.9,
+            escalationAccuracy: 0.8
+          }
+        })
+      )
+    }
+  )
 
   const verdict = checks.every((check) => check.verdict === 'PASS')
     ? 'PASS'
@@ -1312,6 +1533,52 @@ function runStandardVerification() {
     }
   }
 
+  let computedFindings
+  if (!historicalMode) {
+    const findingsPath = path.join(root, 'certification', 'findings.json')
+    if (!fs.existsSync(findingsPath)) {
+      fail('findings_missing')
+    } else {
+      try {
+        computedFindings = JSON.parse(fs.readFileSync(findingsPath, 'utf8'))
+      } catch (error) {
+        fail(`findings_json_invalid:${error.message}`)
+      }
+    }
+    if (computedFindings && result.candidate?.candidateId && result.runId) {
+      const findingFailures = verifyComputedFindings({
+        root,
+        snapshot: computedFindings,
+        candidateId: result.candidate.candidateId,
+        runId: result.runId,
+        requireClosureRegistry: true
+      })
+      for (const entry of findingFailures) fail(entry)
+      if (findingFailures.length === 0)
+        ok('findings are current and candidate-bound')
+      const computedFindingProjection = computedFindings.findings
+        ? findingsProjection(computedFindings)
+        : null
+      if (computedFindingProjection) {
+        if (
+          canonicalJson(result.findings) !==
+          canonicalJson(computedFindingProjection)
+        ) {
+          fail('findings_result_projection_mismatch')
+        }
+        if (
+          computedFindings.scores &&
+          canonicalJson(result.scores) !==
+            canonicalJson(findingsScores(computedFindings))
+        ) {
+          fail('findings_result_scores_mismatch')
+        }
+      }
+    } else if (!result.candidate?.candidateId || !result.runId) {
+      fail('findings_candidate_binding_missing')
+    }
+  }
+
   const qualificationFailures = verifyQualification({
     result,
     manifest,
@@ -1330,7 +1597,10 @@ function runStandardVerification() {
 
   const recomputed = computeDecision({
     gates: result.gates,
-    findings: result.findings,
+    findings:
+      computedFindings?.findings != null
+        ? findingsProjection(computedFindings)
+        : result.findings,
     externalGates: result.externalGates
   })
   if (recomputed.decision !== result.decision) {

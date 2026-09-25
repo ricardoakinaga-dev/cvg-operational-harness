@@ -25,6 +25,11 @@ import {
   parseVitestSummary,
   sha256Bytes
 } from './lib/certification-rules.mjs'
+import {
+  CLOSURE_REGISTRY_PATH,
+  computeCurrentFindings
+} from './lib/finding-governance.mjs'
+import { buildSkipInventory, loadSkipCatalog } from './lib/skip-governance.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const certificationDir = path.join(root, 'certification')
@@ -36,12 +41,28 @@ const commands = [
   { id: 'typecheck', command: 'npm run typecheck' },
   { id: 'lint', command: 'npm run lint' },
   { id: 'build', command: 'npm run build' },
-  { id: 'unit', command: 'npm test' },
-  { id: 'coverage', command: 'npm run test:coverage' },
+  {
+    id: 'unit',
+    command:
+      'npm test -- --reporter=default --reporter=json --outputFile=certification/unit-test-report.json'
+  },
+  {
+    id: 'coverage',
+    command:
+      'npm run test:coverage && npm run coverage:critical && npm run mutation:guard'
+  },
   { id: 'security', command: 'npm run audit:security' },
   { id: 'worker_startup', command: 'npm run test:worker:startup' },
-  { id: 'postgres', command: 'npm run test:postgres' },
-  { id: 'e2e', command: 'npm run test:e2e' },
+  {
+    id: 'postgres',
+    command:
+      'npm run test:postgres -- --reporter=default --reporter=json --outputFile=certification/postgres-test-report.json'
+  },
+  {
+    id: 'e2e',
+    command:
+      'PLAYWRIGHT_JSON_OUTPUT_NAME=certification/e2e-test-report.json npm run test:e2e'
+  },
   { id: 'evals', command: 'npx tsx scripts/phase10-eval-report.ts' },
   {
     id: 'chaos',
@@ -56,11 +77,10 @@ const commands = [
 
 function run(entry, { runId, candidateId }) {
   const startedAt = Date.now()
+  // CI provides a disposable PostgreSQL service. Keep it available to every
+  // certification subgate so unit/coverage/chaos cannot silently lower their
+  // denominator through conditional integration skips.
   const environment = { ...process.env, CI: process.env.CI ?? 'true' }
-  // Keep the database-only catalog isolated from the broad local gates. Several
-  // unit and smoke suites conditionally enable integration paths when this
-  // variable is present, which can make the certification run non-terminating.
-  if (entry.id !== 'postgres') delete environment.TEST_DATABASE_URL
   const result = spawnSync(entry.command, {
     cwd: root,
     shell: true,
@@ -70,14 +90,20 @@ function run(entry, { runId, candidateId }) {
     env: environment
   })
   const durationMs = Date.now() - startedAt
-  const log = [
-    `$ ${entry.command}`,
-    `# runId=${runId} candidateId=${candidateId} gate=${entry.id} command=${entry.command}`,
-    `# exitCode=${result.status ?? 1} durationMs=${durationMs}`,
-    '',
-    result.stdout ?? '',
-    result.stderr ?? ''
-  ].join('\n')
+  const log =
+    [
+      `$ ${entry.command}`,
+      `# runId=${runId} candidateId=${candidateId} gate=${entry.id} command=${entry.command}`,
+      `# exitCode=${result.status ?? 1} durationMs=${durationMs}`,
+      '',
+      result.stdout ?? '',
+      result.stderr ?? ''
+    ]
+      .join('\n')
+      .split('\n')
+      .map((line) => line.trimEnd())
+      .join('\n')
+      .trimEnd() + '\n'
   const logPath = path.join(logDir, `${entry.id}.log`)
   fs.writeFileSync(logPath, log)
   const sha256 = createHash('sha256').update(log).digest('hex')
@@ -144,6 +170,9 @@ function skipJustificationFor(entryId, metrics) {
   if (!entry || entry.skipPolicy !== 'declared' || !metrics) return undefined
   const skipped = (metrics.testsSkipped ?? 0) + (metrics.filesSkipped ?? 0)
   if (skipped === 0) return undefined
+  if (entry.skipPolicy === 'catalogued') {
+    return 'certification/skip-inventory.json is bound to the raw Vitest reports'
+  }
   return 'conditional skips reported by the raw runner inventory; see certification log'
 }
 
@@ -216,7 +245,37 @@ const candidate = buildCandidateRecord({
 })
 const candidatePath = path.join(certificationDir, 'candidate-manifest.json')
 fs.writeFileSync(candidatePath, `${JSON.stringify(candidate, null, 2)}\n`)
-const runId = `run-${candidate.candidateId.slice(0, 12)}-${Date.now().toString(36)}`
+const runId =
+  process.env.CI_RUN_ID ??
+  `run-${candidate.candidateId.slice(0, 12)}-${Date.now().toString(36)}`
+if (
+  process.env.CI_CANDIDATE_ID &&
+  process.env.CI_CANDIDATE_ID !== candidate.candidateId
+) {
+  throw new Error(
+    `ci_candidate_mismatch:${process.env.CI_CANDIDATE_ID}:${candidate.candidateId}`
+  )
+}
+const computedFindings = computeCurrentFindings({
+  root,
+  candidateId: candidate.candidateId,
+  runId,
+  requireClosureRegistry: true
+})
+fs.writeFileSync(
+  path.join(certificationDir, 'findings.json'),
+  `${JSON.stringify(computedFindings, null, 2)}\n`
+)
+for (const generatedPath of [
+  'certification/unit-test-report.json',
+  'certification/postgres-test-report.json',
+  'certification/e2e-test-report.json',
+  'certification/skip-inventory.json',
+  'certification/skip-negative-validation.json'
+]) {
+  const absolute = path.join(root, generatedPath)
+  if (fs.existsSync(absolute)) fs.rmSync(absolute)
+}
 process.stderr.write(
   `[certify] candidate=${candidate.candidateId} run=${runId} files=${candidate.files.length} dirty=${candidate.git.dirty}\n`
 )
@@ -224,6 +283,13 @@ process.stderr.write(
 const gates = []
 const gateOutputs = new Map()
 const gateEvidence = new Map()
+const extraResultsByGate = {
+  coverage: [
+    'certification/critical-coverage.json',
+    'certification/mutation-guard.json',
+    'scripts/critical-coverage-manifest.json'
+  ]
+}
 for (const entry of commands) {
   const record = run(entry, { runId, candidateId: candidate.candidateId })
   const logContent = fs.readFileSync(path.join(root, record.log), 'utf8')
@@ -238,7 +304,10 @@ for (const entry of commands) {
       runId
     }
   ]
-  for (const artifactPath of matrix?.results ?? []) {
+  for (const artifactPath of [
+    ...(matrix?.results ?? []),
+    ...(extraResultsByGate[entry.id] ?? [])
+  ]) {
     const absolute = path.join(root, artifactPath)
     if (!fs.existsSync(absolute)) continue
     const content = fs.readFileSync(absolute)
@@ -258,6 +327,53 @@ for (const entry of commands) {
   gates.push(record)
   gateEvidence.set(entry.id, evidence)
   gateOutputs.set(entry.id, logContent)
+}
+
+const skipInventory = buildSkipInventory({
+  root,
+  catalog: loadSkipCatalog(root),
+  reports: [
+    {
+      gate: 'unit',
+      path: 'certification/unit-test-report.json'
+    },
+    {
+      gate: 'postgres',
+      path: 'certification/postgres-test-report.json'
+    },
+    {
+      gate: 'chaos',
+      path: 'certification/chaos-report.json'
+    },
+    {
+      gate: 'e2e',
+      path: 'certification/e2e-test-report.json'
+    }
+  ],
+  runId,
+  candidateId: candidate.candidateId
+})
+const skipInventoryPath = 'certification/skip-inventory.json'
+fs.writeFileSync(
+  path.join(root, skipInventoryPath),
+  `${JSON.stringify(skipInventory, null, 2)}\n`
+)
+const skipInventoryContent = fs.readFileSync(path.join(root, skipInventoryPath))
+const unitGate = gates.find((gate) => gate.id === 'unit')
+if (unitGate) {
+  const evidence = {
+    path: skipInventoryPath,
+    sha256: sha256Bytes(skipInventoryContent),
+    size: skipInventoryContent.byteLength,
+    kind: 'result',
+    runId
+  }
+  unitGate.evidence = [...(unitGate.evidence ?? []), evidence]
+  gateEvidence.set('unit', [...(gateEvidence.get('unit') ?? []), evidence])
+  if (skipInventory.verdict !== 'PASS') {
+    unitGate.status = 'FAIL'
+    unitGate.skipJustification = `skip inventory rejected: ${skipInventory.failures.join(', ')}`
+  }
 }
 
 const driftFindings = diffCandidateFiles(
@@ -286,9 +402,9 @@ if (!candidateUnchanged) {
   )
 }
 
-const findingsFile = JSON.parse(
-  fs.readFileSync(path.join(certificationDir, 'findings.json'), 'utf8')
-)
+// findings.json is a materialized output for inspection and artifact hashing;
+// the authoritative value is the snapshot computed above from the A21 report.
+const findingsFile = computedFindings
 const externalGates = JSON.parse(
   fs.readFileSync(path.join(certificationDir, 'external-gates.json'), 'utf8')
 )
@@ -377,7 +493,8 @@ const metadataPaths = [
   'certification/phase10-result.json',
   'certification/baseline.json',
   'certification/negative-validation.json',
-  'certification/candidate-manifest.json'
+  'certification/candidate-manifest.json',
+  CLOSURE_REGISTRY_PATH
 ].filter((relativePath) => fs.existsSync(path.join(root, relativePath)))
 
 const artifacts = metadataPaths.map((relativePath) => ({

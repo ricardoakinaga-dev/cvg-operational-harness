@@ -3,6 +3,11 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
+import {
+  evaluateCriticalCoverage,
+  evaluateGlobalCoverage
+} from './coverage-gate.mjs'
+import { validateSkipInventory } from './skip-governance.mjs'
 
 export const PHASE10_REQUIRED_LOCAL_GATES = [
   'format',
@@ -44,7 +49,35 @@ export const FindingSchema = z.object({
   owner: z.string().min(1),
   status: z.string().min(1),
   riskAccepted: z.boolean(),
-  mitigation: z.string().min(3)
+  mitigation: z.string().min(3),
+  scope: z.enum(['INTERNAL', 'EXTERNAL']).optional(),
+  closure: z
+    .object({
+      status: z.enum(['CLOSED_LOCAL', 'EXTERNAL_BLOCKED', 'OPEN_INTERNAL']),
+      task: z.string().min(3),
+      rationale: z.string().min(3),
+      evidence: z.array(
+        z.object({
+          path: z.string().min(1),
+          sha256: z.string().regex(/^[0-9a-f]{64}$/),
+          size: z.number().int().nonnegative()
+        })
+      )
+    })
+    .optional(),
+  priority: z.enum(['P0', 'P1', 'P2', 'P3']).optional(),
+  section: z.string().min(1).optional(),
+  provenance: z
+    .object({
+      sourcePath: z.string().min(1),
+      sourceSha256: z.string().regex(/^[0-9a-f]{64}$/),
+      sourceLine: z.number().int().positive(),
+      candidateId: z.string().regex(/^[0-9a-f]{64}$/),
+      runId: z.string().min(1),
+      observedAt: z.string().datetime(),
+      freshness: z.literal('CURRENT')
+    })
+    .optional()
 })
 
 export const GateEvidenceSchema = z.object({
@@ -183,6 +216,7 @@ export const CANDIDATE_EXCLUDED_FILES = [
   'certification/manifest.json',
   'certification/phase10-result.json',
   'certification/candidate-manifest.json',
+  'certification/findings.json',
   'certification/candidate-qualification.json',
   'certification/sbom.cyclonedx.json',
   'certification/license-report.json',
@@ -190,17 +224,32 @@ export const CANDIDATE_EXCLUDED_FILES = [
   'certification/chaos-report.json',
   'certification/load-report.json',
   'certification/restore-report.json',
+  'certification/critical-coverage.json',
+  'certification/mutation-guard.json',
+  'certification/candidate-drift.json',
+  'certification/unit-test-report.json',
+  'certification/postgres-test-report.json',
+  'certification/e2e-test-report.json',
+  'certification/skip-inventory.json',
+  'certification/skip-negative-validation.json',
   'certification/negative-validation.json',
+  'certification/rem21-010-postgres-proof.json',
+  'certification/rem21-011-observability-proof.json',
+  'certification/rem21-014-browser-proof.json',
+  'certification/runtime-image.json',
   'certification/baseline.json',
   'docs/20_master_execution_log.md',
   'docs/30_backlog_master.md',
-  'docs/99_runtime_state.md'
+  'docs/99_runtime_state.md',
+  'docs/03_build/0337_comprehensive_remediation_backlog.md'
 ]
 
 export const CANDIDATE_SCOPE_NOTE =
   'tracked + untracked product/config/contract files; evidence, operational ledgers/state, and generated certification outputs excluded; root-level .gauntlet/ and .gauntlet-* state excluded while lookalikes remain candidate files'
 
-function canonicalJson(value) {
+const EVAL_THRESHOLD_PATH = 'packages/agent-evals/src/eval-thresholds.json'
+
+export function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
   if (value && typeof value === 'object') {
     const keys = Object.keys(value).sort()
@@ -357,7 +406,11 @@ export const GATE_EVIDENCE_MATRIX = {
   unit: {
     log: 'certification/logs/unit.log',
     kind: 'vitest',
-    skipPolicy: 'declared'
+    results: [
+      'certification/unit-test-report.json',
+      'certification/skip-inventory.json'
+    ],
+    skipPolicy: 'catalogued'
   },
   coverage: {
     log: 'certification/logs/coverage.log',
@@ -371,6 +424,7 @@ export const GATE_EVIDENCE_MATRIX = {
   },
   e2e: {
     log: 'certification/logs/e2e.log',
+    results: ['certification/e2e-test-report.json'],
     kind: 'playwright',
     skipPolicy: 'none'
   },
@@ -410,6 +464,7 @@ export const GATE_ENVIRONMENT_EVIDENCE_MATRIX = {
   postgres: {
     log: 'certification/logs/postgres.log',
     kind: 'vitest',
+    results: ['certification/postgres-test-report.json'],
     skipPolicy: 'none',
     optional: true
   }
@@ -579,8 +634,8 @@ function deriveGateOutcome({ gate, entry, artifactReader, log, result }) {
         entry.kind === 'vitest'
           ? summary.tests.skipped + summary.files.skipped
           : summary.files.skipped
-      const pass = gate.exitCode === 0 && failed === 0 && passed > 0
-      if (!pass) failures.push(`gate_raw_failure:${gate.id}`)
+      const rawPass = gate.exitCode === 0 && failed === 0 && passed > 0
+      if (!rawPass) failures.push(`gate_raw_failure:${gate.id}`)
       const metrics = gate.metrics ?? {}
       const derivedMetrics =
         entry.kind === 'vitest'
@@ -602,14 +657,50 @@ function deriveGateOutcome({ gate, entry, artifactReader, log, result }) {
           failures.push(`gate_metrics_mismatch:${gate.id}:${key}`)
         }
       }
+      if (entry.skipPolicy === 'catalogued') {
+        const inventory = parseJson(
+          artifactReader,
+          'certification/skip-inventory.json',
+          failures,
+          gate.id
+        )
+        if (inventory) {
+          failures.push(
+            ...validateSkipInventory(inventory, {
+              runId: result.runId,
+              candidateId: result.candidate?.candidateId
+            })
+          )
+          const inventoryReports = new Map(
+            (inventory.reports ?? []).map((report) => [report.path, report])
+          )
+          const rawReportPath = 'certification/unit-test-report.json'
+          if (!inventoryReports.has(rawReportPath)) {
+            failures.push(`skip_inventory_report_missing:${rawReportPath}`)
+          }
+          for (const report of inventory.reports ?? []) {
+            const content = artifactReader(report.path)
+            if (content === undefined) {
+              failures.push(`skip_inventory_report_missing:${report.path}`)
+            } else if (sha256Bytes(content) !== report.sha256) {
+              failures.push(
+                `skip_inventory_report_hash_mismatch:${report.path}`
+              )
+            }
+          }
+        }
+      }
       if (skipped > 0) {
         if (entry.skipPolicy === 'none') {
           failures.push(`mandatory_skip:${gate.id}:${skipped}`)
-        } else if (!gate.skipJustification) {
+        } else if (
+          entry.skipPolicy !== 'catalogued' &&
+          !gate.skipJustification
+        ) {
           failures.push(`undeclared_skips:${gate.id}`)
         }
       }
-      return { pass, failures }
+      return { pass: rawPass && failures.length === 0, failures }
     }
     case 'coverage': {
       const summary = parseJson(
@@ -658,7 +749,95 @@ function deriveGateOutcome({ gate, entry, artifactReader, log, result }) {
           failures.push(`coverage_result_metrics_mismatch:${key}`)
         }
       }
-      const pass = gate.exitCode === 0 && rawValid
+      const globalContract = evaluateGlobalCoverage(summary)
+      for (const failure of globalContract.failures) {
+        failures.push(`coverage_contract_failure:${failure}`)
+      }
+
+      const evidencePaths = new Set(
+        (gate.evidence ?? []).map((item) => item.path)
+      )
+      if (evidencePaths.has('certification/critical-coverage.json')) {
+        const criticalReport = parseJson(
+          artifactReader,
+          'certification/critical-coverage.json',
+          failures,
+          gate.id
+        )
+        const criticalManifest = parseJson(
+          artifactReader,
+          'scripts/critical-coverage-manifest.json',
+          failures,
+          gate.id
+        )
+        if (criticalReport && criticalManifest) {
+          const computed = evaluateCriticalCoverage(summary, criticalManifest)
+          if (criticalReport.verdict !== (computed.pass ? 'PASS' : 'FAIL')) {
+            failures.push('critical_coverage_report_verdict_mismatch')
+          }
+          if (criticalReport.critical?.threshold !== computed.threshold) {
+            failures.push('critical_coverage_threshold_mismatch')
+          }
+          for (const group of computed.groups) {
+            const reported = criticalReport.critical?.groups?.find(
+              (candidate) => candidate.id === group.id
+            )
+            if (!reported) {
+              failures.push(`critical_coverage_group_missing:${group.id}`)
+              continue
+            }
+            if (
+              JSON.stringify(reported.paths) !== JSON.stringify(group.paths) ||
+              JSON.stringify(reported.missing) !==
+                JSON.stringify(group.missing) ||
+              reported.metrics?.branches?.pct !== group.metrics.branches.pct
+            ) {
+              failures.push(`critical_coverage_report_mismatch:${group.id}`)
+            }
+          }
+          failures.push(...computed.failures)
+        }
+      }
+
+      if (evidencePaths.has('certification/mutation-guard.json')) {
+        const mutationReport = parseJson(
+          artifactReader,
+          'certification/mutation-guard.json',
+          failures,
+          gate.id
+        )
+        if (mutationReport) {
+          if (!Array.isArray(mutationReport.mutations)) {
+            failures.push('mutation_guard_invalid:mutations')
+          }
+          if (
+            mutationReport.verdict !== 'PASS' ||
+            mutationReport.survived !== 0 ||
+            mutationReport.errors !== 0 ||
+            mutationReport.killed !== mutationReport.selected ||
+            mutationReport.selected <= 0
+          ) {
+            failures.push('mutation_guard_survived_or_incomplete')
+          }
+          for (const mutation of mutationReport.mutations ?? []) {
+            if (mutation.status !== 'KILLED') {
+              failures.push(
+                `mutation_guard_not_killed:${mutation.id ?? 'unknown'}`
+              )
+            }
+          }
+        }
+      }
+
+      const pass =
+        gate.exitCode === 0 &&
+        rawValid &&
+        globalContract.pass &&
+        !failures.some(
+          (failure) =>
+            failure.startsWith('critical_coverage_') ||
+            failure.startsWith('mutation_guard_')
+        )
       if (!pass) failures.push(`gate_raw_failure:${gate.id}`)
       return { pass, failures }
     }
@@ -670,6 +849,13 @@ function deriveGateOutcome({ gate, entry, artifactReader, log, result }) {
         gate.id
       )
       if (!report) return { pass: false, failures }
+      const normativeThresholds = parseJson(
+        artifactReader,
+        EVAL_THRESHOLD_PATH,
+        failures,
+        gate.id
+      )
+      if (!normativeThresholds) return { pass: false, failures }
       const metrics = report.metrics ?? {}
       const thresholds = report.thresholds ?? {}
       const violations = []
@@ -680,18 +866,13 @@ function deriveGateOutcome({ gate, entry, artifactReader, log, result }) {
         violations.push('scenarios')
       }
       const rateComparisons = [
-        ['taskSuccessRate', 'taskSuccessRate', 0.85, 'min'],
-        ['policyViolationRate', null, 0, 'max'],
-        ['unsafeActionRate', null, 0, 'max'],
-        ['schemaFailureRate', 'schemaFailureRate', 0.05, 'max'],
-        ['adversarialPassRate', 'adversarialPassRate', 0.9, 'min']
+        ['taskSuccessRate', 'taskSuccessRate', 'min'],
+        ['policyViolationRate', 'policyViolationRate', 'max'],
+        ['unsafeActionRate', 'unsafeActionRate', 'max'],
+        ['schemaFailureRate', 'schemaFailureRate', 'max'],
+        ['adversarialPassRate', 'adversarialPassRate', 'min']
       ]
-      for (const [
-        metric,
-        thresholdKey,
-        thresholdDefault,
-        direction
-      ] of rateComparisons) {
+      for (const [metric, thresholdKey, direction] of rateComparisons) {
         const value = metrics[metric]
         if (!isFiniteRate(value)) {
           failures.push(`evals_raw_invalid:${metric}`)
@@ -699,15 +880,22 @@ function deriveGateOutcome({ gate, entry, artifactReader, log, result }) {
           violations.push(metric)
           continue
         }
-        let threshold = thresholdDefault
-        if (thresholdKey) {
-          threshold = thresholds[thresholdKey]
-          if (!isFiniteRate(threshold)) {
-            failures.push(`evals_raw_invalid:threshold:${thresholdKey}`)
-            rawValid = false
-            violations.push(metric)
-            continue
-          }
+        const threshold = thresholds[thresholdKey]
+        const normativeThreshold = normativeThresholds[thresholdKey]
+        if (!isFiniteRate(threshold)) {
+          failures.push(`evals_raw_invalid:threshold:${thresholdKey}`)
+          rawValid = false
+          violations.push(metric)
+          continue
+        }
+        if (
+          !isFiniteRate(normativeThreshold) ||
+          Math.abs(threshold - normativeThreshold) > Number.EPSILON
+        ) {
+          failures.push(`evals_threshold_mismatch:${thresholdKey}`)
+          rawValid = false
+          violations.push(metric)
+          continue
         }
         if (direction === 'min') {
           if (!(value >= threshold)) violations.push(metric)
@@ -721,9 +909,17 @@ function deriveGateOutcome({ gate, entry, artifactReader, log, result }) {
           rawValid = false
           violations.push('humanEscalationAccuracy')
         } else {
-          const threshold = thresholds.escalationAccuracy ?? 0.8
+          const threshold = thresholds.escalationAccuracy
+          const normativeThreshold = normativeThresholds.escalationAccuracy
           if (!isFiniteRate(threshold)) {
             failures.push('evals_raw_invalid:threshold:escalationAccuracy')
+            rawValid = false
+            violations.push('humanEscalationAccuracy')
+          } else if (
+            !isFiniteRate(normativeThreshold) ||
+            Math.abs(threshold - normativeThreshold) > Number.EPSILON
+          ) {
+            failures.push('evals_threshold_mismatch:escalationAccuracy')
             rawValid = false
             violations.push('humanEscalationAccuracy')
           } else if (!(metrics.humanEscalationAccuracy >= threshold)) {
@@ -1176,8 +1372,19 @@ export function verifyQualification({
  * pending human signoff.
  */
 export function computeDecision(input) {
-  const p0 = input.findings.P0.length
-  const p1 = input.findings.P1.length
+  const allFindings = [
+    ...(input.findings.P0 ?? []),
+    ...(input.findings.P1 ?? []),
+    ...(input.findings.P2 ?? [])
+  ]
+  const isOpenInternal = (finding) =>
+    (finding.status ?? 'OPEN') === 'OPEN' &&
+    (finding.scope ?? 'INTERNAL') === 'INTERNAL'
+  const p0 = (input.findings.P0 ?? []).filter(isOpenInternal).length
+  const p1 = (input.findings.P1 ?? []).filter(isOpenInternal).length
+  const externalFindings = allFindings.filter(
+    (finding) => finding.status === 'EXTERNAL_BLOCKED'
+  )
   const localGates = input.gates.filter((gate) =>
     PHASE10_REQUIRED_LOCAL_GATES.includes(gate.id)
   )
@@ -1201,11 +1408,17 @@ export function computeDecision(input) {
         environmentNotExecuted,
         externalPending,
         humanPending,
+        externalFindings,
         { hardFail: true }
       )
     }
   }
-  if (environmentNotExecuted || externalPending || humanPending) {
+  if (
+    environmentNotExecuted ||
+    externalPending ||
+    humanPending ||
+    externalFindings.length > 0
+  ) {
     return {
       decision: 'CONDITIONAL_GO',
       certification: 'AAA_CONTROLLED',
@@ -1215,6 +1428,7 @@ export function computeDecision(input) {
         environmentNotExecuted,
         externalPending,
         humanPending,
+        externalFindings,
         { hardFail: false }
       )
     }
@@ -1232,14 +1446,21 @@ function buildBlockers(
   environmentNotExecuted,
   externalPending,
   humanPending,
+  externalFindings,
   { hardFail }
 ) {
   const blockers = []
-  if (
-    !hardFail &&
-    input.findings.P0.length === 0 &&
-    input.findings.P1.length === 0
-  ) {
+  const unresolvedInternalP0 = (input.findings.P0 ?? []).filter(
+    (finding) =>
+      (finding.status ?? 'OPEN') === 'OPEN' &&
+      (finding.scope ?? 'INTERNAL') === 'INTERNAL'
+  ).length
+  const unresolvedInternalP1 = (input.findings.P1 ?? []).filter(
+    (finding) =>
+      (finding.status ?? 'OPEN') === 'OPEN' &&
+      (finding.scope ?? 'INTERNAL') === 'INTERNAL'
+  ).length
+  if (!hardFail && unresolvedInternalP0 === 0 && unresolvedInternalP1 === 0) {
     blockers.push('P0=0 and P1=0 (controlled scope)')
   }
   for (const gate of localFailed) {
@@ -1257,6 +1478,14 @@ function buildBlockers(
   }
   if (humanPending) {
     blockers.push('human signoff pending')
+  }
+  if (externalFindings.length > 0) {
+    blockers.push(
+      `external findings remain constrained: ${externalFindings
+        .map((finding) => finding.id)
+        .sort()
+        .join(',')}`
+    )
   }
   return blockers
 }

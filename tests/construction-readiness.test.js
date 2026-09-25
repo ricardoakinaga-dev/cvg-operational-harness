@@ -68,12 +68,13 @@ describe('construction readiness 95 gate', () => {
   it('requires CI to reproduce local gates', () => {
     const workflow = read('.github/workflows/verify.yml')
 
-    expect(workflow).toContain('npm ci')
-    expect(workflow).toContain('npm run verify')
-    expect(workflow).toContain('npm run test:postgres')
-    expect(workflow).toContain('npm run test:e2e')
+    expect(workflow).toContain('node-version-file: .nvmrc')
+    expect(workflow).toContain('node scripts/ci-bar.mjs gate install')
+    expect(workflow).toContain('node scripts/ci-bar.mjs gate postgres')
+    expect(workflow).toContain('node scripts/ci-bar.mjs gate certify')
+    expect(workflow).toContain('node scripts/ci-bar.mjs gate e2e')
     expect(workflow).toContain('postgres:16-alpine')
-    expect(workflow).toContain('node-version: 22')
+    expect(workflow).toContain('name: REM21 CI bar (Node 22)')
   })
 
   it('requires a non-placeholder persistence migration for construction entry', () => {
