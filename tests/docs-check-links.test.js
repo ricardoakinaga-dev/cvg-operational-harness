@@ -53,6 +53,86 @@ test('doc link checker keeps absolute and missing targets distinct', () => {
   assert.equal(output.unallowlistedNonPortableAbsolute.length, 1)
 })
 
+test('doc link checker masks link syntax inside inline code and fences', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ra25-03-mask-'))
+  mkdirSync(join(root, 'docs'))
+  writeFileSync(join(root, 'docs', 'real.md'), 'export const x = 1\n')
+  writeFileSync(
+    join(root, 'docs', 'grammar.md'),
+    [
+      'A extracao suporta somente `[label](destination)`,',
+      'e tambem `[label](<destination>)` em prosa.',
+      'Um `[label](` com sintaxe quebrada e erro, nao texto literal.',
+      '     `[` nao escapado seguido na mesma linha por um primeiro `](` nao escapado',
+      '     — falhar como `UNSUPPORTED_INDENTED_LINK` com arquivo/linha.',
+      'Antes do fence.',
+      '```md',
+      '[broken](nao-existe-dentro-do-fence.md)',
+      '```',
+      'Depois do fence.',
+      '[ok](real.md)',
+      ''
+    ].join('\n')
+  )
+
+  const result = run(linkChecker, [join(root, 'docs')])
+  assert.equal(result.status, 0, result.stderr)
+  const output = JSON.parse(result.stdout)
+  assert.deepEqual(output.broken, [])
+  assert.deepEqual(output.unallowlistedNonPortableAbsolute, [])
+})
+
+test('doc link checker still rejects a real broken link next to code', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ra25-03-regression-'))
+  mkdirSync(join(root, 'docs'))
+  writeFileSync(join(root, 'present.md'), 'export const present = 1\n')
+  writeFileSync(
+    join(root, 'docs', 'source.md'),
+    [
+      'Veja `[exemplo](nao-existe-no-code-span.md)` para contexto.',
+      '```ts',
+      'const link = "[exemplo](nao-existe-no-fence.md)"',
+      '```',
+      '[quebrado](nao-existe-de-verdade.md)',
+      '[ok](../present.md)',
+      ''
+    ].join('\n')
+  )
+
+  const result = run(linkChecker, [join(root, 'docs')])
+  assert.equal(result.status, 1)
+  const output = JSON.parse(result.stdout)
+  assert.equal(output.broken.length, 1, JSON.stringify(output.broken))
+  assert.equal(output.broken[0].target, 'nao-existe-de-verdade.md')
+})
+
+test('doc link checker does not let a destination cross a line ending', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ra25-03-multiline-'))
+  mkdirSync(join(root, 'docs'))
+  writeFileSync(join(root, 'docs', 'real.md'), 'export const x = 1\n')
+  writeFileSync(
+    join(root, 'docs', 'source.md'),
+    'Veja [texto](parte-a\nparte-b) que atravessa linha.\n[ok](real.md)\n'
+  )
+
+  const result = run(linkChecker, [join(root, 'docs')])
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout).broken, [])
+})
+
+test('doc link checker ignores unmatched backtick runs as literal text', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ra25-03-unpaired-'))
+  mkdirSync(join(root, 'docs'))
+  writeFileSync(
+    join(root, 'docs', 'source.md'),
+    'Conta ` impar e [quebrado](nao-existe-impar.md) ainda e detectado.\n'
+  )
+
+  const result = run(linkChecker, [join(root, 'docs')])
+  assert.equal(result.status, 1)
+  assert.equal(JSON.parse(result.stdout).broken.length, 1)
+})
+
 test('evidence hygiene requires explicit records for empty artifacts', () => {
   const root = mkdtempSync(join(tmpdir(), 'rem21-017-evidence-'))
   writeFileSync(join(root, 'empty.log'), '')
