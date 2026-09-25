@@ -1,0 +1,655 @@
+{
+  "schema_version": 1,
+  "run_id": "m07-s1-c1l-20260924-1",
+  "purpose": "Fresh C1L candidate, local test/fix cycle, inventory, and evidence capture. Probe failures may be captured to permit the one approved repair cycle; final acceptance requires the selected final run to meet every local criterion.",
+  "environment": {
+    "prepend_path": [
+      "/home/ricardo/.nvm/versions/node/v22.23.2/bin"
+    ],
+    "set": {
+      "npm_config_offline": "true"
+    },
+    "unset": [
+      "DATABASE_URL",
+      "TEST_DATABASE_URL",
+      "PGHOST",
+      "PGPORT",
+      "PGDATABASE",
+      "PGUSER",
+      "PGPASSWORD"
+    ]
+  },
+  "repair_policy": {
+    "maximum_cycles": 1,
+    "trigger": "Any initial C1L product check exits nonzero or violates its expected semantic result.",
+    "action": "Prepare repair-01.patch only for an observed cause within the three product paths; record its hash before applying, then use only the repair-01 steps below.",
+    "terminal": "If the repair cycle does not pass or the cause is outside scope, stop and preserve all evidence."
+  },
+  "steps": [
+    {
+      "id": "packet-integrity-preflight",
+      "argv": [
+        "python3",
+        "-c",
+        "import hashlib,json,pathlib,sys; root=pathlib.Path('.'); out=root/'docs/04_audit/evidence/AUD-20260924/M07-S1-C1L'; req=out/'approval-request.md'; d=json.loads((out/'decision-record.json').read_text()); s=json.loads((out/'source-evidence.json').read_text()); p=json.loads((out/'command-plan.json').read_text()); r=json.loads((out/'command-records.json').read_text()); h=lambda q:hashlib.sha256(q.read_bytes()).hexdigest(); changed=[]; [(changed.append(e['path'])) for e in s['sources'] if (e.get('sha256_before_c1l') or e.get('sha256_c1j_snapshot')) and h(root/e['path'])!=(e.get('sha256_before_c1l') or e.get('sha256_c1j_snapshot'))]; approved=d.get('decision')=='APPROVED' and d.get('approval_request_sha256')==h(req) and bool(str(d.get('decision_text') or '').strip()); product={'config/workspace-dependency-policy.json','scripts/workspace-dependency-audit.mjs','tests/workspace-dependency-audit.test.js'}; side_effects=[root/x.rstrip('/') for step in p['steps'] for x in step.get('declared_side_effects',[]) if x not in product]; absent=all(not q.exists() for q in side_effects); not_started=r.get('state')=='NOT_STARTED' and r.get('records')==[]; ok=approved and not changed and absent and not_started; print(json.dumps({'approval_bound':approved,'changed_sources':changed,'declared_outputs_absent':absent,'records_not_started':not_started,'pass':ok})); sys.exit(0 if ok else 1)"
+      ],
+      "expected_exit_codes": [
+        0
+      ]
+    },
+    {
+      "id": "node-version-preflight",
+      "argv": [
+        "node",
+        "--version"
+      ],
+      "depends_on": [
+        "packet-integrity-preflight"
+      ],
+      "expected_exit_codes": [
+        0
+      ]
+    },
+    {
+      "id": "typescript-version-preflight",
+      "argv": [
+        "node",
+        "-p",
+        "require('typescript').version"
+      ],
+      "depends_on": [
+        "node-version-preflight"
+      ],
+      "expected_exit_codes": [
+        0
+      ]
+    },
+    {
+      "id": "npm-version-preflight",
+      "argv": [
+        "npm",
+        "--version"
+      ],
+      "depends_on": [
+        "typescript-version-preflight"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "stdout_copy_to": "npm-version.txt",
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/npm-version.txt"
+      ]
+    },
+    {
+      "id": "create-rollback-directory",
+      "argv": [
+        "mkdir",
+        "-p",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/rollback"
+      ],
+      "depends_on": [
+        "npm-version-preflight"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/rollback/"
+      ]
+    },
+    {
+      "id": "snapshot-policy",
+      "argv": [
+        "cp",
+        "--no-clobber",
+        "--",
+        "config/workspace-dependency-policy.json",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/rollback/workspace-dependency-policy.json"
+      ],
+      "depends_on": [
+        "create-rollback-directory"
+      ],
+      "expected_exit_codes": [
+        0
+      ]
+    },
+    {
+      "id": "snapshot-scanner",
+      "argv": [
+        "cp",
+        "--no-clobber",
+        "--",
+        "scripts/workspace-dependency-audit.mjs",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/rollback/workspace-dependency-audit.mjs"
+      ],
+      "depends_on": [
+        "snapshot-policy"
+      ],
+      "expected_exit_codes": [
+        0
+      ]
+    },
+    {
+      "id": "snapshot-scanner-test",
+      "argv": [
+        "cp",
+        "--no-clobber",
+        "--",
+        "tests/workspace-dependency-audit.test.js",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/rollback/workspace-dependency-audit.test.js"
+      ],
+      "depends_on": [
+        "snapshot-scanner"
+      ],
+      "expected_exit_codes": [
+        0
+      ]
+    },
+    {
+      "id": "apply-c1l-preview-check",
+      "argv": [
+        "git",
+        "apply",
+        "--check",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/correction-preview.patch"
+      ],
+      "depends_on": [
+        "snapshot-scanner-test"
+      ],
+      "expected_exit_codes": [
+        0
+      ]
+    },
+    {
+      "id": "apply-c1l-preview",
+      "argv": [
+        "git",
+        "apply",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/correction-preview.patch"
+      ],
+      "depends_on": [
+        "apply-c1l-preview-check"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        "config/workspace-dependency-policy.json",
+        "scripts/workspace-dependency-audit.mjs",
+        "tests/workspace-dependency-audit.test.js"
+      ]
+    },
+    {
+      "id": "candidate-freeze-initial",
+      "argv": [
+        "node",
+        "scripts/workspace-dependency-audit.mjs",
+        "--candidate-only",
+        "--npm-version-file",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/npm-version.txt",
+        "--format",
+        "json",
+        "--output",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/execution-candidate-initial.json"
+      ],
+      "depends_on": [
+        "apply-c1l-preview"
+      ],
+      "expected_exit_codes": [
+        0,
+        64
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/execution-candidate-initial.json"
+      ]
+    },
+    {
+      "id": "candidate-verify-initial",
+      "argv": [
+        "node",
+        "scripts/workspace-dependency-audit.mjs",
+        "--verify-candidate",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/execution-candidate-initial.json",
+        "--npm-version-file",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/npm-version.txt"
+      ],
+      "depends_on": [
+        "candidate-freeze-initial"
+      ],
+      "expected_exit_codes": [
+        0,
+        64
+      ]
+    },
+    {
+      "id": "inventory-initial",
+      "argv": [
+        "node",
+        "scripts/workspace-dependency-audit.mjs",
+        "--policy",
+        "config/workspace-dependency-policy.json",
+        "--profile",
+        "inventory",
+        "--format",
+        "json",
+        "--output",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/workspace-dependency-report-initial.json"
+      ],
+      "depends_on": [
+        "candidate-verify-initial"
+      ],
+      "expected_exit_codes": [
+        0,
+        1,
+        64
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/workspace-dependency-report-initial.json"
+      ]
+    },
+    {
+      "id": "inventory-semantic-check-initial",
+      "argv": [
+        "python3",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/inventory_semantic_check.py",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/execution-candidate-initial.json",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/workspace-dependency-report-initial.json"
+      ],
+      "depends_on": [
+        "inventory-initial"
+      ],
+      "expected_exit_codes": [
+        0,
+        1,
+        64
+      ]
+    },
+    {
+      "id": "focused-tests-initial",
+      "argv": [
+        "npm",
+        "test",
+        "--",
+        "tests/workspace-dependency-audit.test.js",
+        "tests/architecture/dependency-direction.test.ts",
+        "packages/conversation/src/__tests__/postgres-store.unit.test.ts"
+      ],
+      "depends_on": [
+        "inventory-semantic-check-initial"
+      ],
+      "expected_exit_codes": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "full-suite-initial",
+      "argv": [
+        "npm",
+        "test"
+      ],
+      "depends_on": [
+        "focused-tests-initial"
+      ],
+      "expected_exit_codes": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "typecheck-initial",
+      "argv": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "depends_on": [
+        "full-suite-initial"
+      ],
+      "expected_exit_codes": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "id": "lint-initial",
+      "argv": [
+        "npm",
+        "run",
+        "lint"
+      ],
+      "depends_on": [
+        "typecheck-initial"
+      ],
+      "expected_exit_codes": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "coverage-initial",
+      "argv": [
+        "npm",
+        "run",
+        "test:coverage",
+        "--",
+        "--coverage.reportsDirectory=docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/coverage/initial"
+      ],
+      "depends_on": [
+        "lint-initial"
+      ],
+      "expected_exit_codes": [
+        0,
+        1
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/coverage/initial"
+      ]
+    },
+    {
+      "id": "candidate-postcheck-initial",
+      "argv": [
+        "node",
+        "scripts/workspace-dependency-audit.mjs",
+        "--verify-candidate",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/execution-candidate-initial.json",
+        "--npm-version-file",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/npm-version.txt"
+      ],
+      "depends_on": [
+        "coverage-initial"
+      ],
+      "expected_exit_codes": [
+        0,
+        64
+      ]
+    },
+    {
+      "id": "repair-01-patch-hash",
+      "argv": [
+        "sha256sum",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/repair-01.patch"
+      ],
+      "depends_on": [
+        "candidate-postcheck-initial"
+      ],
+      "expected_exit_codes": [
+        0
+      ]
+    },
+    {
+      "id": "repair-01-validate-patch",
+      "argv": [
+        "python3",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/validate_repair_patch.py",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/repair-01.patch"
+      ],
+      "depends_on": [
+        "repair-01-patch-hash"
+      ],
+      "expected_exit_codes": [
+        0
+      ]
+    },
+    {
+      "id": "repair-01-apply-check",
+      "argv": [
+        "git",
+        "apply",
+        "--check",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/repair-01.patch"
+      ],
+      "depends_on": [
+        "repair-01-validate-patch"
+      ],
+      "expected_exit_codes": [
+        0
+      ]
+    },
+    {
+      "id": "repair-01-apply",
+      "argv": [
+        "git",
+        "apply",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/repair-01.patch"
+      ],
+      "depends_on": [
+        "repair-01-apply-check"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        "config/workspace-dependency-policy.json",
+        "scripts/workspace-dependency-audit.mjs",
+        "tests/workspace-dependency-audit.test.js"
+      ]
+    },
+    {
+      "id": "candidate-freeze-repair-01",
+      "argv": [
+        "node",
+        "scripts/workspace-dependency-audit.mjs",
+        "--candidate-only",
+        "--npm-version-file",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/npm-version.txt",
+        "--format",
+        "json",
+        "--output",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/execution-candidate-repair-01.json"
+      ],
+      "depends_on": [
+        "repair-01-apply"
+      ],
+      "expected_exit_codes": [
+        0,
+        64
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/execution-candidate-repair-01.json"
+      ]
+    },
+    {
+      "id": "candidate-verify-repair-01",
+      "argv": [
+        "node",
+        "scripts/workspace-dependency-audit.mjs",
+        "--verify-candidate",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/execution-candidate-repair-01.json",
+        "--npm-version-file",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/npm-version.txt"
+      ],
+      "depends_on": [
+        "candidate-freeze-repair-01"
+      ],
+      "expected_exit_codes": [
+        0,
+        64
+      ]
+    },
+    {
+      "id": "inventory-repair-01",
+      "argv": [
+        "node",
+        "scripts/workspace-dependency-audit.mjs",
+        "--policy",
+        "config/workspace-dependency-policy.json",
+        "--profile",
+        "inventory",
+        "--format",
+        "json",
+        "--output",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/workspace-dependency-report-repair-01.json"
+      ],
+      "depends_on": [
+        "candidate-verify-repair-01"
+      ],
+      "expected_exit_codes": [
+        1,
+        64
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/workspace-dependency-report-repair-01.json"
+      ]
+    },
+    {
+      "id": "inventory-semantic-check-repair-01",
+      "argv": [
+        "python3",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/inventory_semantic_check.py",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/execution-candidate-repair-01.json",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/workspace-dependency-report-repair-01.json"
+      ],
+      "depends_on": [
+        "inventory-repair-01"
+      ],
+      "expected_exit_codes": [
+        0,
+        1,
+        64
+      ]
+    },
+    {
+      "id": "focused-tests-repair-01",
+      "argv": [
+        "npm",
+        "test",
+        "--",
+        "tests/workspace-dependency-audit.test.js",
+        "tests/architecture/dependency-direction.test.ts",
+        "packages/conversation/src/__tests__/postgres-store.unit.test.ts"
+      ],
+      "depends_on": [
+        "inventory-semantic-check-repair-01"
+      ],
+      "expected_exit_codes": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "full-suite-repair-01",
+      "argv": [
+        "npm",
+        "test"
+      ],
+      "depends_on": [
+        "focused-tests-repair-01"
+      ],
+      "expected_exit_codes": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "typecheck-repair-01",
+      "argv": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "depends_on": [
+        "full-suite-repair-01"
+      ],
+      "expected_exit_codes": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "id": "lint-repair-01",
+      "argv": [
+        "npm",
+        "run",
+        "lint"
+      ],
+      "depends_on": [
+        "typecheck-repair-01"
+      ],
+      "expected_exit_codes": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "coverage-repair-01",
+      "argv": [
+        "npm",
+        "run",
+        "test:coverage",
+        "--",
+        "--coverage.reportsDirectory=docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/coverage/repair-01"
+      ],
+      "depends_on": [
+        "lint-repair-01"
+      ],
+      "expected_exit_codes": [
+        0,
+        1
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/coverage/repair-01"
+      ]
+    },
+    {
+      "id": "candidate-postcheck-repair-01",
+      "argv": [
+        "node",
+        "scripts/workspace-dependency-audit.mjs",
+        "--verify-candidate",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/execution-candidate-repair-01.json",
+        "--npm-version-file",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/npm-version.txt"
+      ],
+      "depends_on": [
+        "coverage-repair-01"
+      ],
+      "expected_exit_codes": [
+        0,
+        64
+      ]
+    },
+    {
+      "id": "log-sanitization-scan",
+      "argv": [
+        "python3",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/sanitization_scan.py"
+      ],
+      "expected_exit_codes": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "historical-evidence-integrity",
+      "argv": [
+        "sha256sum",
+        "-c",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1J/historical-evidence.sha256"
+      ],
+      "expected_exit_codes": [
+        0
+      ]
+    }
+  ],
+  "final_verification": {
+    "argv": [
+      "python3",
+      "docs/04_audit/evidence/AUD-20260924/M07-S1-C1L/capture_command.py",
+      "--verify"
+    ],
+    "expected_exit_codes": [
+      0
+    ],
+    "must_run_after": [
+      "candidate-postcheck-initial or candidate-postcheck-repair-01",
+      "log-sanitization-scan",
+      "historical-evidence-integrity"
+    ],
+    "purpose": "Verify all captured stdout/stderr hashes and record the verifier's own provenance atomically."
+  },
+  "final_result_rule": "Probe exit allowances only preserve failure evidence and enable the one repair cycle. The selected final candidate must have exit 0 for candidate operations, focused/full tests, typecheck, lint, coverage, post-check, sanitizer, and verifier; inventory must have exit 1 with the exact semantic result in inventory_semantic_check.py."
+}

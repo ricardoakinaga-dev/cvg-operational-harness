@@ -1,0 +1,130 @@
+{
+  "task": "AUD20-008",
+  "finding": "A20-F10",
+  "status": "PASS_LOCAL",
+  "reviewStatus": "I1_PENDING",
+  "scope": "local/synthetic/disposable",
+  "node": "v22.23.2",
+  "candidateId": "579d2100c172b5157ed42d1cf983988d3401a8c930353b52e50c589578ea55af",
+  "runId": "run-579d2100c172-mub8591x",
+  "implementation": {
+    "contract": "WebhookReplayReservation { key, generation, token }",
+    "memory": "reserve creates or takes over a lease; commit and release require the exact generation and token",
+    "postgres": "migration 0025 adds generation/token state, backfills legacy reserved rows, and enforces fencing constraints",
+    "preflight": "startup requires lease_generation, lease_token and both fencing constraints",
+    "claim": "claim carries one reservation through commit and releases only that same reservation after commit failure",
+    "http": "signature verification remains before reserve/claim and downstream failures release the current reservation"
+  },
+  "controls": [
+    {
+      "case": "an in-memory stale holder cannot commit or release a successor lease",
+      "verdict": "PASS",
+      "coveredBy": "apps/api/src/__tests__/webhook-security.test.ts"
+    },
+    {
+      "case": "PostgreSQL takeover increments generation and changes the opaque token",
+      "verdict": "PASS",
+      "coveredBy": "apps/api/src/__tests__/webhook-security.test.ts"
+    },
+    {
+      "case": "PostgreSQL stale commit/release cannot mutate the successor and the successor can commit",
+      "verdict": "PASS",
+      "coveredBy": "apps/api/src/__tests__/webhook-security.test.ts"
+    },
+    {
+      "case": "migration and preflight require the complete fencing catalog",
+      "verdict": "PASS",
+      "coveredBy": "apps/api/src/__tests__/postgres-persistence-mode.test.ts; packages/persistence/src/__tests__/postgres-migration-smoke.test.ts"
+    },
+    {
+      "case": "committed replay remains retained and cannot be released by a stale reservation",
+      "verdict": "PASS",
+      "coveredBy": "apps/api/src/__tests__/webhook-security.test.ts"
+    }
+  ],
+  "postgres": {
+    "command": "TEST_DATABASE_URL=postgres://postgres:aud19-synthetic@127.0.0.1:55432/cvg_local npm run test:postgres",
+    "testFiles": 35,
+    "testsPassed": 253,
+    "testsFailed": 0,
+    "testsSkipped": 0,
+    "report": "postgres-test-report.json",
+    "log": "postgres.log",
+    "verdict": "PASS"
+  },
+  "certification": {
+    "command": "TEST_DATABASE_URL=<disposable> npm run certify",
+    "candidateId": "579d2100c172b5157ed42d1cf983988d3401a8c930353b52e50c589578ea55af",
+    "runId": "run-579d2100c172-mub8591x",
+    "decision": "CONDITIONAL_GO",
+    "classification": "AAA_CONTROLLED",
+    "verificationCommand": "npm run certification:verify",
+    "verificationVerdict": "PASS",
+    "executedGates": [
+      "format",
+      "typecheck",
+      "lint",
+      "build",
+      "unit",
+      "coverage",
+      "security",
+      "worker_startup",
+      "postgres",
+      "e2e",
+      "evals",
+      "chaos",
+      "load",
+      "restore",
+      "sbom",
+      "licenses"
+    ],
+    "unit": {
+      "filesPassed": 286,
+      "filesSkipped": 20,
+      "testsPassed": 2030,
+      "testsSkipped": 144,
+      "skipInventoryEntries": 35,
+      "skipInventoryFailures": 0
+    },
+    "postgres": {
+      "filesPassed": 35,
+      "testsPassed": 253,
+      "testsSkipped": 0
+    },
+    "coverage": {
+      "statements": 90.16,
+      "branches": 85.18,
+      "functions": 92.36,
+      "lines": 90.75,
+      "criticalVerdict": "PASS"
+    },
+    "evals": {
+      "scenarios": 56,
+      "taskSuccessRate": 1,
+      "policyViolationRate": 0,
+      "unsafeActionRate": 0,
+      "adversarialPassRate": 1,
+      "verdict": "PASS"
+    },
+    "mutationGuard": "3/3",
+    "chaos": {
+      "executed": 14,
+      "passed": 14,
+      "notExecuted": 2
+    },
+    "load": {
+      "events": 10000,
+      "processed": 10000,
+      "loss": 0,
+      "duplicates": 0
+    }
+  },
+  "limitations": [
+    "I1 independent review and final mutation sentinel are pending.",
+    "G20-2 remains closed until its remaining controls are complete.",
+    "External provider, channel and identity integrations were not validated.",
+    "Human signoff remains pending; production remains NO_GO.",
+    "AUD20-019/020 remain BLOCKED_BY_G20-5."
+  ],
+  "nextGate": "I1 independent review of AUD20-008, then final sentinel"
+}

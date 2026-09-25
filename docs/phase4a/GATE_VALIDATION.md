@@ -12,7 +12,7 @@ The current controlled entry decision supersedes the historical matrix below.
 The Phase 4 handoff is verified by the current candidate chain and fresh
 read-only critic record:
 
-- candidate: `6185c586e382d9f7f4e4fb4b3f66855b73889f6c89bd7e3553f3696c0c2f5dc8`;
+- candidate: `6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e`;
 - handoff: `docs/phase4a/PHASE_4_HANDOFF.md`;
 - critic: `docs/phase4/evidence/FINAL_CRITIC_APPROVAL.md`;
 - sentinel: `docs/phase4/evidence/CRITIC_ONLY_SENTINEL.json`;
@@ -49,14 +49,14 @@ captured with a matching candidate source snapshot.
 
 ## Current gate matrix
 
-| Stage           | Current result      | Evidence                                                                          | Authority consequence                                                         |
-| --------------- | ------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Discovery       | `PLANNING_COMPLETE` | `SCOUT_REPORT.md`, `BROWNFIELD_REUSE_MAP.md`, and the current 16-part prompt copy | The problem and brownfield seams are bounded for controlled implementation.   |
-| PRD             | `PLANNING_COMPLETE` | `PRD.md` and the controlled product constraints in the prompt archive             | Requirements are explicit for review; no BUILD authority is granted.          |
-| SPEC            | `PLANNING_COMPLETE` | `SPEC.md`, `ARCHITECTURE_PLAN.md`, and `QUALITY_BAR.md`                           | The target contracts are reviewable; no source implementation is authorized.  |
-| Phase 4 handoff | `VERIFIED`          | Current superseding handoff, critic approval, chain and sentinel                  | Phase 4A controlled implementation may proceed within the frozen boundary.    |
-| BUILD           | `READY_FOR_BUILD`   | This entry gate, `TASK.md`, active Gauntlet and ExecPlan                          | Synthetic controlled source work may proceed; external effects remain barred. |
-| AUDIT           | `PASS`              | Candidate-bound implementation, focused suite, PostgreSQL, critics, evidence and matching final sentinel | Controlled Phase 4A PASS is closed; production remains barred. |
+| Stage           | Current result      | Evidence                                                                                                 | Authority consequence                                                         |
+| --------------- | ------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Discovery       | `PLANNING_COMPLETE` | `SCOUT_REPORT.md`, `BROWNFIELD_REUSE_MAP.md`, and the current 16-part prompt copy                        | The problem and brownfield seams are bounded for controlled implementation.   |
+| PRD             | `PLANNING_COMPLETE` | `PRD.md` and the controlled product constraints in the prompt archive                                    | Requirements are explicit for review; no BUILD authority is granted.          |
+| SPEC            | `PLANNING_COMPLETE` | `SPEC.md`, `ARCHITECTURE_PLAN.md`, and `QUALITY_BAR.md`                                                  | The target contracts are reviewable; no source implementation is authorized.  |
+| Phase 4 handoff | `VERIFIED`          | Current superseding handoff, critic approval, chain and sentinel                                         | Phase 4A controlled implementation may proceed within the frozen boundary.    |
+| BUILD           | `READY_FOR_BUILD`   | This entry gate, `TASK.md`, active Gauntlet and ExecPlan                                                 | Synthetic controlled source work may proceed; external effects remain barred. |
+| AUDIT           | `PASS`              | Candidate-bound implementation, focused suite, PostgreSQL, critics, evidence and matching final sentinel | Controlled Phase 4A PASS is closed; production remains barred.                |
 
 ## Existing CVG validation records
 
@@ -90,3 +90,14 @@ must follow the active ExecPlan, remain inside the frozen Phase 4 boundary,
 and produce candidate-bound evidence before any certification claim. Real
 data, providers, channels, credentials, sensitive actions, and unrestricted
 production remain `NO_GO`.
+
+## Errata AUD19-002 — 2026-09-20
+
+A linha `candidate:` acima citava
+`6185c586e382d9f7f4e4fb4b3f66855b73889f6c89bd7e3553f3696c0c2f5dc8`, divergente
+da âncora congelada `certification/phase10-result.json` (`candidateId`) e de
+`docs/phase4a/PHASE_4_HANDOFF.md`
+(`6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e`, run
+`run-6185c586e382-mu44ygfz`). Valor corrigido para a âncora em `AUD19-002`;
+o histórico divergente é preservado nesta errata por supersessão explícita.
+Verificação automática: `npm run verify:phase4a:identity`.

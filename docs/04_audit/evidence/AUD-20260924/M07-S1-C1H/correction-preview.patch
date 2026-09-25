@@ -1,0 +1,81 @@
+--- a/config/workspace-dependency-policy.json
++++ b/config/workspace-dependency-policy.json
+@@ -155,7 +155,7 @@
+   "candidateBinding": {
+     "baselineManifestPath": "docs/04_audit/evidence/AUD-20260923/M07-SPEC/candidate-baseline.json",
+     "baselineManifestSha256": "40b33ca1f63a2c263abcd621cb25d6c6fdf6aae0d0ab05be36b108717357675a",
+-    "npmVersionFilePath": "docs/04_audit/evidence/AUD-20260924/M07-S1-C1F/npm-version.txt",
++    "npmVersionFilePath": "docs/04_audit/evidence/AUD-20260924/M07-S1-C1H/npm-version.txt",
+     "approvedAdditionalPaths": [
+       "config/workspace-dependency-policy.json",
+       "scripts/workspace-dependency-audit.mjs",
+--- a/scripts/workspace-dependency-audit.mjs
++++ b/scripts/workspace-dependency-audit.mjs
+@@ -35,7 +35,7 @@
+   'tests/workspace-dependency-audit.test.js',
+   'packages/conversation/src/__tests__/postgres-store.unit.test.ts'
+ ].sort(compareText);
+-const C1F_NPM_VERSION_FILE = 'docs/04_audit/evidence/AUD-20260924/M07-S1-C1F/npm-version.txt';
++const C1H_NPM_VERSION_FILE = 'docs/04_audit/evidence/AUD-20260924/M07-S1-C1H/npm-version.txt';
+ const R1_NODE_VERSION = 'v22.23.2';
+ 
+ function toPosix(value) {
+@@ -294,8 +294,8 @@
+           policy.candidateBinding.baselineManifestSha256 !== '40b33ca1f63a2c263abcd621cb25d6c6fdf6aae0d0ab05be36b108717357675a') {
+         errors.push('candidateBinding does not match the approved baseline artifact');
+       }
+-      if (policy.candidateBinding.npmVersionFilePath !== C1F_NPM_VERSION_FILE) {
+-        errors.push('candidateBinding.npmVersionFilePath does not match the approved C1F toolchain evidence path');
++      if (policy.candidateBinding.npmVersionFilePath !== C1H_NPM_VERSION_FILE) {
++        errors.push('candidateBinding.npmVersionFilePath does not match the approved C1H toolchain evidence path');
+       }
+     }
+     if (!policy.candidateBinding.fingerprintInventoryRules ||
+@@ -1418,9 +1418,9 @@
+   const errors = [];
+   const expectedPaths = [...policy.candidateBinding.approvedAdditionalPaths].sort(compareText);
+   if (process.version !== R1_NODE_VERSION) errors.push(`Node must be ${R1_NODE_VERSION}`);
+-  if (npmVersionFilePath !== C1F_NPM_VERSION_FILE ||
+-      policy.candidateBinding.npmVersionFilePath !== C1F_NPM_VERSION_FILE) {
+-    errors.push('npm version evidence path differs from the approved C1F path');
++  if (npmVersionFilePath !== C1H_NPM_VERSION_FILE ||
++      policy.candidateBinding.npmVersionFilePath !== C1H_NPM_VERSION_FILE) {
++    errors.push('npm version evidence path differs from the approved C1H path');
+   }
+   const npmVersionFile = readNpmVersionFile(root, npmVersionFilePath);
+   if (candidate.npm_version_file?.path !== npmVersionFile.path ||
+@@ -1833,7 +1833,7 @@
+   const relative = toPosix(path.relative(root, absolute));
+   const segments = relative.split('/');
+   if (segments.length < 6 || segments[0] !== 'docs' || segments[1] !== '04_audit' ||
+-      segments[2] !== 'evidence' || !['M07-BUILD-S1', 'M07-S1-R1', 'M07-S1-R1-C1E', 'M07-S1-C1F'].includes(segments.at(-2)) ||
++      segments[2] !== 'evidence' || !['M07-BUILD-S1', 'M07-S1-R1', 'M07-S1-R1-C1E', 'M07-S1-C1F', 'M07-S1-C1H'].includes(segments.at(-2)) ||
+       !['.json', '.md'].includes(path.extname(absolute).toLowerCase())) {
+     throw new Error('output must be a JSON or Markdown file in a repository M07 evidence directory');
+   }
+--- a/tests/workspace-dependency-audit.test.js
++++ b/tests/workspace-dependency-audit.test.js
+@@ -103,7 +103,7 @@
+       'packages/conversation/src/__tests__/postgres-store.unit.test.ts'
+     ]);
+     expect(repositoryPolicy.candidateBinding.npmVersionFilePath)
+-      .toBe('docs/04_audit/evidence/AUD-20260924/M07-S1-C1F/npm-version.txt');
++      .toBe('docs/04_audit/evidence/AUD-20260924/M07-S1-C1H/npm-version.txt');
+     expect(repositoryPolicy.publicCompatibilityCandidates).toEqual({
+       '@cvg/harness': { ownerPath: 'packages/harness', status: 'PUBLIC_CANDIDATE' },
+       '@cvg/harness-orchestrator': { ownerPath: 'packages/orchestrator', status: 'PUBLIC_CANDIDATE' },
+@@ -375,9 +375,14 @@
+     fs.mkdirSync(path.join(root, 'docs/04_audit/evidence/AUD-20990101/M07-S1-C1F'), { recursive: true });
+     expect(validateOutputPath(root, 'docs/04_audit/evidence/AUD-20990101/M07-S1-C1F/candidate.json').relative)
+       .toBe('docs/04_audit/evidence/AUD-20990101/M07-S1-C1F/candidate.json');
++    fs.mkdirSync(path.join(root, 'docs/04_audit/evidence/AUD-20990101/M07-S1-C1H'), { recursive: true });
++    expect(validateOutputPath(root, 'docs/04_audit/evidence/AUD-20990101/M07-S1-C1H/candidate.json').relative)
++      .toBe('docs/04_audit/evidence/AUD-20990101/M07-S1-C1H/candidate.json');
+     expect(() => validateOutputPath(root, 'docs/04_audit/evidence/AUD-20990101/M07-S1-R1-C1E-UNAPPROVED/candidate.json'))
+       .toThrow('repository M07 evidence directory');
+     expect(() => validateOutputPath(root, 'docs/04_audit/evidence/AUD-20990101/M07-S1-C1F-UNAPPROVED/candidate.json'))
++      .toThrow('repository M07 evidence directory');
++    expect(() => validateOutputPath(root, 'docs/04_audit/evidence/AUD-20990101/M07-S1-C1H-UNAPPROVED/candidate.json'))
+       .toThrow('repository M07 evidence directory');
+     expect(() => validateOutputPath(root, 'docs/04_audit/evidence/../../outside/M07-BUILD-S1/report.json'))
+       .toThrow('may not traverse');

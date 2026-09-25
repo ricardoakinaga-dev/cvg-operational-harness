@@ -1,0 +1,3 @@
+# M07-S1 governance addendum — 2026-09-23
+
+The approved post-implementation candidate bound the SPEC validation file `docs/02_spec/0190_spec_validation.md` and SPEC `docs/02_spec/0128_m07_package_dependency_governance.md` as baseline inputs. Those approved inputs remain byte-identical so the BUILD checks retain the human-approved fingerprint. Their M07-S1 preparation handoff is historical; the later BUILD decision and result are recorded in [human-decision-20260923.md](human-decision-20260923.md), [final-gate-result.md](final-gate-result.md), and the current runtime/execution/backlog ledgers. The overall M07-S1 result is FAIL and does not authorize another slice.

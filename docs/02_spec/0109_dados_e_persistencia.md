@@ -60,7 +60,11 @@ Politica final depende de decisao de governanca. Ate la, nenhum rollout com dado
 
 ## Retencao provisoria
 
-- Ambiente local/dev: usar dados ficticios ou anonimizados.
+- Ambiente local/dev: usar dados ficticios/sinteticos. Dados reais sao
+  proibidos em qualquer ambiente, inclusive anonimizados ou com alegada
+  autorizacao parcial (regra do repositorio em `AGENTS.md`; reconciliado em
+  `AUD19-012`, 2026-09-20). "Autorizado", neste repositorio, significa
+  fixture sintetica aprovada em gate — nunca dado real.
 - Piloto controlado: exige tabela de retencao aprovada antes do primeiro atendimento real.
 - Mensagens e dados pessoais: reter pelo menor periodo compativel com operacao e auditoria.
 - Eventos de auditoria: reter conforme exigencia legal/operacional aprovada, com acesso restrito.

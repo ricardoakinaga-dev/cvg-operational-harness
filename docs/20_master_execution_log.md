@@ -1,3 +1,1794 @@
+# Checkpoint para reinício — 24/09/2026
+
+- Pedido do usuário: registrar estado durável antes de reiniciar o sistema. Criei [checkpoint RA24/C1M](08_runtime/checkpoint_2026-09-24_ra24.md) com HEAD, worktree, artefatos C1M e SHA-256, verificações, bloqueios e passos de retomada.
+- Ação limitada a documentação; nenhum código, scanner M07, teste de produto, candidate, serviço externo ou produção. O checkpoint não equivale a commit ou aprovação.
+- Próxima ação após reinício: ler instruções/ledgers/checkpoint, conferir estado atual e concluir somente o packet documental C1M antes de apresentar gate hash-bound. M07-S1 permanece `FAIL / OPEN`; produção `NO_GO`.
+
+# RA24 — prioridades e primeira remediação documental — 24/09/2026
+
+- Pedido: manter o [relatório 0572](04_audit/0572_repository_score_assessment_2026-09-24.md) em `docs/` e priorizar baseline M07, divergências de candidato, seis links e 165 vazios. Ordem e critérios registrados em [0349](03_build/0349_ra24_resolution_priorities.md).
+- Inspeção adicional: o pacote C1M já contém baseline proposto de 973 inputs e preview de três paths; ele segue documental/incompleto e não foi executado. Dos 165 vazios, 164 tinham stream diretamente vinculada em `command-records.json`, com hash/tamanho coerentes; um permaneceu sem proveniência direta.
+- Remediação documental: sidecar passou de 66 para 231 entradas, sem alterar logs ou ledgers de comando; `node scripts/check-evidence-hygiene.mjs` exit 0, `EVIDENCE_HYGIENE_OK`. Ponteiro C1I atualizado para o archive; checker dirigido ao runtime exit 0. Evidência em [RA24](04_audit/evidence/AUD-20260924/RA24-documentary-remediation.md).
+- Limite: checker global de links continua exit 1, agora com cinco extrações de exemplos Markdown em SPEC L03/crítica. `RA24-04-CHECKER` exige task/SPEC/gate de BUILD separados; não houve código, candidate, testes, integração ou produção nesta rodada.
+- Próxima ação: completar e validar C1M documentalmente; obter decisão hash-bound antes de qualquer BUILD. M07-S1 `FAIL / OPEN`, produção `NO_GO`.
+
+# Auditoria de notas do repositório — 24/09/2026
+
+- Task: avaliação documental/read-only solicitada pelo usuário, registrada em [0572](04_audit/0572_repository_score_assessment_2026-09-24.md). `A24-03-C1M-PACKET` continua a task documental em andamento; esta avaliação não executou C1M.
+- Escopo e resultado: 12 dimensões pontuadas; média ponderada 73/100 e prontidão para produção 28/100 (`NO_GO`). Inspeção de documentação, código, CI, migrations, runbooks e evidências recentes, sem dados reais nem teste de produto.
+- Checks atuais: C1J manifest 977 inputs, 0 ausentes e 4 hashes divergentes; `git diff --check` exit 0; links exit 1 com 6 ocorrências; higiene de evidências exit 1 com 165 artefatos vazios sem sidecar. Node do shell v24.20.0, incompatível com `.nvmrc` 22.23.2; números de testes C1J são históricos.
+- Achados RA24-01–06 e próximos passos constam do [relatório](04_audit/0572_repository_score_assessment_2026-09-24.md) e do backlog mestre. C1L/C1J permanecem `FAIL / OPEN`; nenhum candidate novo, reviewer, gate de produção ou downstream foi criado.
+- Próxima ação: concluir o packet C1M já iniciado e submeter sua decisão própria; preservar C1J/C1L e tratar higiene/links em tarefas separadas.
+
+# AUD52 — C1L interrompido no candidate freeze — 24/09/2026
+
+- Decisão: a instrução do usuário para testar o gate e corrigir falhas foi registrada contra o pedido C1L SHA-256 `0a6dd3efa5bc3a45b8e42062680b338e58e3b4e45a924dd177d6a12b77601f6c`; escopo limitado ao packet, seus três paths e ao máximo de um reparo in-scope.
+- Execução: preflight aprovado; Node `v22.23.2`, TypeScript `6.0.3`, npm `10.9.8`; rollback capturado; `git apply --check` e preview passaram. `candidate-freeze-initial` retornou exit 64 com `baseline input drift: docs/02_spec/0190_spec_validation.md`.
+- Causa/limite: baseline C1J registra esse governance input com SHA-256 `1cb32b47f9bfb66417fc71bd423a12427d87adde5838497c40c4b64cce45990c`; C1L observou `9e443274378c04d8bc5796456b7731fe1f5992be0c614dc9f81627ee34d7dd06`. O input está fora dos três paths autorizados, portanto o stop rule encerrou o run sem reparo.
+- Resultado: `FAIL / OPEN`; candidate ausente; inventory, testes focados/full, typecheck, lint, coverage, pós-check e verifier final não rodaram. Sanitização examinou 22 logs sem matches; integridade histórica C1J passou. Nenhum reviewer, fechamento S1 ou downstream.
+- Evidências: [resultado](04_audit/evidence/AUD-20260924/M07-S1-C1L/final-gate-result.md), [disposição](04_audit/evidence/AUD-20260924/M07-S1-C1L/run-disposition.json), [records](04_audit/evidence/AUD-20260924/M07-S1-C1L/command-records.json). M07-S1 continua `FAIL / OPEN`; produção `NO_GO`.
+- Próxima ação: preparar reconciliação de baseline em packet distinto antes de nova matriz; não ampliar C1L nem alterar inputs históricos.
+
+## Histórico AUD51 — C1L packet preparado — 24/09/2026
+
+- Task: `A24-03-C1L-PACKET` concluída documentalmente; `A24-03-C1L-GATE` registrada como `WAITING_HUMAN_APPROVAL / NOT_STARTED` no backlog 0344.
+- Contexto: C1J já passou a matriz local, mas segue `FAIL / OPEN` porque I1 e Final Critic ficaram indisponíveis. C1K, aprovado somente para duas revisões read-only, parou `STOPPED_UNAVAILABLE`; nenhuma tentativa de reviewer será repetida nesta task.
+- Pedido: [approval request C1L](04_audit/evidence/AUD-20260924/M07-S1-C1L/approval-request.md), SHA-256 `0a6dd3efa5bc3a45b8e42062680b338e58e3b4e45a924dd177d6a12b77601f6c`. O packet inclui preview de três arquivos, command plan de 36 passos + verifier, opção de um repair cycle no mesmo allowlist, rollback e stop rules.
+- Validação desta rodada: 16 verificações estáticas do packet `PASS`; tabela de hashes do request conferida; hashes das três fontes e do fixture snapshot-only batem. AST parsing dos quatro helpers PASS. Nenhum patch de produto foi aplicado e nenhum scanner, `git apply --check`, teste, typecheck, lint ou coverage de produto foi executado.
+- Limites: C1L só cobre candidate/checks locais. Não fecha M07-S1, não autoriza reviewer, S2/S3/S4, M05, dado/serviço/banco/rede ou produção. G21-5/G21-6 fechados e produção `NO_GO`.
+- Próxima ação singular: aguardar decisão explícita pelo SHA integral do pedido C1L; antes disso, manter `command-records.json` em `NOT_STARTED`.
+
+# AUD50 — C1K aprovado; reviewers indisponíveis — 24/09/2026
+
+- Decisão humana: o usuário aprovou `M07-S1-R1-C1K` e confirmou o request SHA-256 `d334e883540d83aa4a77217fc66203befe8a930020ee5e5c4f8443cc8f5aa97c`. Registrei a decisão antes das tentativas.
+- Execução limitada: tentei criar uma vez cada reviewer fresh-context read-only, I1 e Final Critic (`fork_turns=none`), para o candidate congelado `e884796fd90192409230b0991524168186a9f65c824156a943102dcfacc98e1b`. As duas criações foram recusadas pelo serviço (`agent thread limit reached`); nenhum reviewer foi criado, nenhuma fonte foi revisada e nenhum parecer retornou.
+- Resultado: C1K `STOPPED_UNAVAILABLE`; C1J permanece imutável em `FAIL / OPEN`; M07-S1 não foi aceita. Não executei comandos/checks de produto nem alterei arquivos de produto. C1K e C1J não podem ser repetidos; sem substituto sob C1K.
+- Evidências: [C1K final disposition](04_audit/evidence/AUD-20260924/M07-S1-C1K/final-disposition.md), [review ledger](04_audit/evidence/AUD-20260924/M07-S1-C1K/review-ledger.json), [decision record](04_audit/evidence/AUD-20260924/M07-S1-C1K/decision-record.json).
+- Bloqueios: M07-S2/S3/S4 e M05 continuam bloqueadas; G21-5/G21-6 fechados; produção `NO_GO`.
+- Próxima ação: aguardar disponibilidade de criação de contextos independentes; eventual revisão exige novo packet e decisão hash-bound. Nenhum código ou check começa por esta rodada.
+
+# AUD49 — SPEC L03 v0.4 revisada lead-only; C1K segue pendente — 24/09/2026
+
+- Task: concluí documentalmente `A24-11-L03-SPEC-REVIEW` após registrar a task em 0344. A SPEC avançou de v0.3 para v0.4; o registro [AUD49-DOC-001](04_audit/evidence/AUD-20260924/L03-generator-spec/critique-and-revision-03.md) documenta sete ambiguidades, correções e limites.
+- Revisão: duas solicitações I1 fresh-context foram recusadas (`agent thread limit reached`); nenhum reviewer ou parecer independente foi criado. Revisão humana, aprovação da SPEC e gate de BUILD continuam pendentes. A segunda tentativa está em AUD49-DOC-001.
+- Inspeção: leitura estática heurística dos três prefixos atuais achou primeiro heading histórico nas linhas 28, 28 e 16; zero padrões link-like indentados ou com backtick. Os ponteiros AUD49 foram reconciliados em 0341/0344/0347, README e índice. O índice não contém marcadores, portanto bootstrap requer delta/gate separado. Isso não prova nem executa o parser.
+- Limites: nenhum código ou produto foi alterado; nenhum teste, build, typecheck, lint, coverage, scanner, CI ou runtime foi executado. L03 segue parcial e o gerador não foi implementado.
+- C1K: a mensagem “aprovo este gate” ainda não foi vinculada ao pedido C1K, SHA-256 `d334e883540d83aa4a77217fc66203befe8a930020ee5e5c4f8443cc8f5aa97c`; nenhuma tentativa de reviewer ocorreu. M07-S1 mantém `FAIL / OPEN`, M05 downstream bloqueada e produção `NO_GO`.
+- Próxima ação: confirmar se a aprovação se refere especificamente ao C1K e a esse SHA; não criar reviewer sem essa confirmação.
+
+# AUD48 — packet C1K preparado; decisão humana pendente — 24/09/2026
+
+- Estado: `WAITING_HUMAN_APPROVAL`; task `A24-03-C1K-REVIEW`; M07-S1 `FAIL / OPEN`; produção `NO_GO`.
+- Continuidade: o pedido genérico “aprovo este gate” chegou depois do C1J e antes do packet C1K. C1J já consumiu a aprovação contextual anterior e terminou `FAIL / OPEN`; nenhuma aprovação foi atribuída a C1K.
+- Reconciliação: os hashes do C1 original e do preview conferem. O final C1 e o AUD31 registram que o gate foi aprovado e tentado, com freeze exit 64; o statement divergente em 0570 foi supersedido sem alterar o histórico. Evidência em [AUD48](04_audit/0571_c1j_review_packet_reconciliation_2026-09-24.md).
+- Entrega documental: `A24-03-C1K-PACKET` concluída. Pedido C1K SHA-256 `d334e883540d83aa4a77217fc66203befe8a930020ee5e5c4f8443cc8f5aa97c`; packet bound ao candidate C1J `e884796fd90192409230b0991524168186a9f65c824156a943102dcfacc98e1b`. Validação estática passou em oito critérios e conferiu 11 hashes das fontes C1J. O primeiro validador ad hoc teve uma asserção de rótulo excessiva; ajustada a checagem, hashes e estruturas passaram.
+- Limites: C1K aguarda decisão explícita pelo SHA integral antes de uma tentativa I1 e uma Final Critic, separadas e read-only. Nenhum reviewer, teste, build, scanner, comando de produto ou edição de produto ocorreu nesta rodada. C1J, M07-S1 e gates downstream permanecem inalterados.
+- Sincronização final: backlog consolidado 0302, roadmaps/backlogs correntes 0300–0301/0339–0348/0341 e navegação `docs/README.md`/`99_operational_index.md` agora apontam para C1K; históricos anteriores permanecem identificados como históricos.
+- Próxima ação singular: obter decisão vinculada ao pedido C1K; sem ela, não criar reviewers. Se aprovado, cumprir exatamente o escopo e stop rules do packet.
+
+# AUD47 — C1J local matrix concluída; reviewers indisponíveis — 24/09/2026
+
+- Decisão: o usuário aprovou o gate M07-S1 limitado aos três paths de produto e comandos locais; decisão contextual registrada para request C1J SHA-256 `f4351b91f8b0b4401d25bf3200a2355fe8148685936507bfe448b59c3d8c27e2`, escopo exclusivo `M07-S1-R1-C1J`.
+- Execução: os 36 passos congelados e o verifier final terminaram com resultados esperados. O patch alterou os três paths aprovados; o fixture conversacional ficou byte-idêntico. Candidate C1J: 977 inputs, fingerprint `e884796fd90192409230b0991524168186a9f65c824156a943102dcfacc98e1b`.
+- Verificação: focused 25/25; suite 2.137 passed/146 skipped; typecheck e lint PASS; coverage 90,86% statements, 85,87% branches, 92,91% functions e 91,80% lines. Inventory completo com 11 findings esperados, zero gaps/unresolved e mesmo fingerprint. Pós-check sem drift; 68 logs sem matches; 296 evidências históricas e 8 arquivos do archive C1I íntegros; ledger `INTEGRITY_PASS` com 37 registros.
+- Reviews: tentativas fresh-context I1 e Final Critic foram recusadas separadamente por `agent thread limit reached`. Nenhum reviewer ou parecer existe. C1J-08/09 ficam `UNAVAILABLE`; M07-S1 termina `FAIL / OPEN`.
+- Próxima ação: preparar um pedido documental distinto para os reviews ausentes ou uma nova execução. Não repetir C1J sob o mesmo gate. M07-S2/S3/S4 e M05 continuam bloqueadas; G21-5/G21-6 fechados e produção `NO_GO`.
+
+## Histórico AUD46 — Gate C1J aprovado antes da execução — 24/09/2026
+
+- Decisão: o usuário respondeu “Aprovo exatamente este gate” e “aprovo este gate” diretamente à pergunta sobre o gate M07-S1, seus três paths autorizados e os comandos locais. Registrei a decisão contextual para o pedido C1J, SHA-256 `f4351b91f8b0b4401d25bf3200a2355fe8148685936507bfe448b59c3d8c27e2`, somente para `M07-S1-R1-C1J`.
+- Task: `A24-03-C1J-GATE` aprovada e registrada antes da execução. O escopo de produto permanece limitado a `config/workspace-dependency-policy.json`, `scripts/workspace-dependency-audit.mjs` e `tests/workspace-dependency-audit.test.js`; o fixture conversacional é snapshot-only.
+- Estado pré-execução: `command-records.json` está `NOT_STARTED`, sem registros. Nenhum preflight, archive C1I, patch, candidate, teste, typecheck, lint ou coverage C1J foi iniciado.
+- Próxima ação: rodar os 36 comandos C1J individualmente por `capture_command.py`, em ordem e com stop na primeira falha. A decisão não aceita M07-S1, não libera S2/S3/S4, M05 ou produção; produção continua `NO_GO`.
+
+## Histórico AUD45 — Packet C1J pronto; aguarda decisão — 24/09/2026
+
+- Continuidade: conferi o estado CVG após a interrupção C1I. C1I permanece `FINISHED / STOP / FAIL`; o erro ocorreu em candidate-freeze antes de criar candidate, e S1 continua `FAIL / OPEN`.
+- Entrega documental: finalizei o packet C1J em `docs/04_audit/evidence/AUD-20260924/M07-S1-C1J/`. A validação estática passou 30 verificações de hash/baseline, patch scope, helper root, ordenação do plano, bindings do archive e estado inicial. O pedido tem 19 linhas de hash e SHA-256 `f4351b91f8b0b4401d25bf3200a2355fe8148685936507bfe448b59c3d8c27e2`.
+- Task: `A24-03-C1J-PACKET` concluída documentalmente; `A24-03-C1J-GATE` registrada como `WAITING_HUMAN_APPROVAL / NOT_STARTED` em 0344. A resposta “aprovo este gate” foi enviada antes da apresentação do pedido C1J e não está vinculada a ele.
+- Limites: nenhum patch C1J foi aplicado, nenhum passo do command plan foi executado, nenhum teste/typecheck/lint/coverage foi rodado. M07-S2/S3/S4 e M05 continuam bloqueadas; G21-5/G21-6 fechados; produção `NO_GO`.
+- Próxima ação única: obter decisão sobre o pedido C1J pelo SHA completo acima. Nenhum código ou comando C1J começa antes de decisão aprovada e registrada.
+
+## AUD45-DOC-002 — Índices e backlogs correntes reconciliados — 24/09/2026
+
+- Reconciliei os ponteiros correntes 0300–0302, 0341, 0343–0344, 0346–0348, README e índice operacional para `A24-03-C1J-GATE` e o pedido C1J SHA-256 `f4351b91f8b0b4401d25bf3200a2355fe8148685936507bfe448b59c3d8c27e2`; o ExecPlan agora aponta a decisão humana como próxima ação.
+- A atualização foi documental e preservou C1I/C1H/R1 e demais históricos. Nenhuma verificação de produto foi executada; a próxima ação permanece a decisão C1J.
+
+## Histórico AUD44 — C1I parou no candidate freeze; M07-S1 permanece aberto — 24/09/2026
+
+- Decisão: o usuário aprovou o gate C1I; a resposta literal “aprovo este gate” foi registrada contra o approval request SHA-256 `86bc71b2bf7dac7f500a3dbb8a942e5d4cbeb9d6638ac43bf9dd65d923b1af57`, somente para `M07-S1-R1-C1I`.
+- Execução: preflights, baseline de 973 inputs, archive C1H verificado (7/7), inicialização C1I, snapshots, patch aprovado e deltas dos quatro snapshots passaram. O fixture conversacional permaneceu byte-idêntico.
+- Resultado: `candidate-freeze` terminou exit 64: `C1H_NPM_VERSION_FILE is not defined`. Nenhum candidate ou inventory foi criado. O stop rule impediu candidate verification, inventory, testes, typecheck, lint, coverage, post-check, sanitização, verificação histórica, I1 e Final Critic.
+- Proveniência: [resultado final C1I](04_audit/evidence/AUD-20260924/M07-S1-C1I/final-gate-result.md), [quality bar](04_audit/evidence/AUD-20260924/M07-S1-C1I/quality-bar-results.json), [command records](04_audit/evidence/AUD-20260924/M07-S1-C1I/command-records.json). O verificador final encontrou zero problemas em 24 registros prévios; a ledger final contém 25 registros e `INTEGRITY_PASS`.
+- Estado: C1I `FAIL / OPEN`; M07-S1 não foi aceita. M07-S2/S3/S4 e M05 seguem bloqueadas; G21-5/G21-6 fechados; produção `NO_GO`.
+- Próxima ação: preparar o packet documental C1J para corrigir a referência residual e pedir decisão hash-bound própria antes de outro patch/comando.
+
+## Histórico AUD43 — Packet corretivo C1I preparado; decisão pendente — 24/09/2026
+
+- Ação documental: finalizei o encerramento oficial do Gauntlet C1H como `FINISHED / STOP / FAIL` e preparei `A24-03-C1I-PACKET` com o novo gate `A24-03-C1I-GATE`. C1H parou no candidate-freeze exit 64 pelos dois tuples stale; nenhum candidate downstream foi produzido.
+- Baseline: R1 SHA-256 `40b33ca1f63a2c263abcd621cb25d6c6fdf6aae0d0ab05be36b108717357675a` preservado; proposta C1I contém 973 inputs e somente 0190/AGENTS mudam. Fingerprint recalculado `6744024cd8bcdf45be4149c30438f0582ea1f44b884471570bde88f8eaa577c9`.
+- Packet: [approval request](04_audit/evidence/AUD-20260924/M07-S1-C1I/approval-request.md), SHA-256 `86bc71b2bf7dac7f500a3dbb8a942e5d4cbeb9d6638ac43bf9dd65d923b1af57`; [packet validation](04_audit/evidence/AUD-20260924/M07-S1-C1I/packet-validation.json) `PASS`; 36 passos capturados e um verifier final.
+- Estado: C1I `WAITING_HUMAN_APPROVAL`; patch não aplicado, candidate/tests/typecheck/lint/coverage não executados. A validação foi somente documental/estática. A aprovação C1H não autoriza C1I. M07-S1 permanece `FAIL / OPEN`; M07-S2/S3/S4 e M05 bloqueadas; G21-5/G21-6 fechados; produção `NO_GO`.
+- Próxima ação: receber decisão sobre o SHA C1I exato; se aprovado, registrar a decisão antes de qualquer comando do plano.
+
+## Histórico AUD42 — C1H parou no candidate freeze; M07-S1 continua FAIL / OPEN — 24/09/2026
+
+- Decisão: o usuário respondeu “aprovo este gate” para o único gate pendente C1H; registro vinculado ao request SHA-256 `d2e03fb29f0e95efdb418fa47e984ee2bcac4e77fbd244bb9f2b162caead046f`. A24-03-C1H foi registrada no backlog antes de comandos. O patch C1H foi aplicado somente a policy, scanner e teste do scanner; o fixture conversacional permaneceu idêntico ao snapshot.
+- Preflight: Node `v22.23.2`, TypeScript `6.0.3`, npm `10.9.8`; variáveis PostgreSQL removidas e npm offline. O C1F finished/lock/archive foi conferido; o Gauntlet C1F foi arquivado no destino aprovado e o state C1H foi inicializado.
+- Resultado: `candidate-freeze` encerrou exit `64` após rejeitar drift em `docs/02_spec/0190_spec_validation.md` e `docs/07_agents/AGENTS.md`. Expected R1 hashes `a5d40ea217f6886837628faef256d8075b58f4039bdf56dbff0974d1e0feda15` / `f62502666c51bebf8b43d551c67e2651e650c9e4889f09b9c7cd45fdc7e97607`; atual `1cb32b47f9bfb66417fc71bd423a12427d87adde5838497c40c4b64cce45990c` / `a9bfaf7b11036395db222b28d36f227c2feaa4ce8458203b6239b4a527ab96cb`. Nenhum candidate ou inventory foi escrito. Dependências foram interrompidas: candidate verification, inventory, tests, typecheck, lint, coverage, post-check, sanitization, historical hash check e reviewers não rodaram.
+- Proveniência: [resultado final C1H](04_audit/evidence/AUD-20260924/M07-S1-C1H/final-gate-result.md), [quality-bar results](04_audit/evidence/AUD-20260924/M07-S1-C1H/quality-bar-results.json), [command records](04_audit/evidence/AUD-20260924/M07-S1-C1H/command-records.json). O final verifier reportou zero problemas nos 21 registros prévios; a ledger final contém 22 entradas contando o próprio verifier.
+- Veredito: C1H `FAIL / OPEN`, M07-S1 permanece `FAIL / OPEN`. M07-S2/S3/S4 e M05 bloqueadas; G21-5/G21-6 fechados; produção `NO_GO`. C1H não pode ser repetido. A próxima ação é preparar um packet corretivo C1I com allowlist exata dos dois inputs documentais, baseline R1 histórico preservado e gate hash-bound novo.
+- A SPEC L03 v0.2 permanece `SPEC_DRAFT_FOR_REVIEW`, sem review/BUILD. Nenhum outro item da carteira avançou nesta rodada.
+
+## Histórico AUD39 — SPEC L03 preparada para revisão; C1H aguardava decisão — 24/09/2026
+
+- Entrega documental: preparei a [SPEC-DOC-001](02_spec/0129_l03_operational_index_generator.md) para o gerador futuro do bloco de navegação L03. SHA-256 `91440473289ffb45b3336ec47eeccd4cd895cd1f5eb25de1df66c552d42385de`. A SPEC está `SPEC_DRAFT_FOR_REVIEW`; revisão humana e verificação integrada `NOT_RUN`. Não autoriza código, testes ou execução.
+- Escopo: utilitário interno sem PRD de produto; fontes allowlisted são os blocos correntes de runtime state, execution log e backlog mestre. Histórico fica fora da geração; status, approval e gate nunca são inferidos. O write-set proposto e rollback estão descritos na SPEC; BUILD depende de revisão e gate humano próprio.
+- Evidência: [AUD39-DOC-002](04_audit/evidence/AUD-20260924/L03-generator-spec/spec-preparation.md); validação de SPEC atualizada em [0190](02_spec/0190_spec_validation.md); L03 segue parcial nos [backlogs 0341](03_build/0341_50_improvements_backlog.md), [0347](03_build/0347_aud29_backlog.md) e [mestre](30_backlog_master.md).
+- Verificação documental: checker em oito documentos terminou exit 0 (`DOC_LINKS_OK`, zero links quebrados e zero absolutos não allowlisted); oito documentos sem trailing whitespace e com newline final; `git diff --check` passou nos documentos rastreados modificados. Nenhum teste de produto, typecheck, lint, coverage, CI ou runtime foi executado.
+- C1H permanece sem decisão registrada e sem comandos: pedido SHA-256 `d2e03fb29f0e95efdb418fa47e984ee2bcac4e77fbd244bb9f2b162caead046f`; `command-records.json` segue `NOT_STARTED`. M07-S1 `FAIL / OPEN`, S2/S3/S4 e M05 bloqueadas, G21-5/G21-6 fechados, produção `NO_GO`.
+- Próxima ação singular: obter a confirmação humana hash-bound C1H; se aprovada, registrar a decisão antes de executar somente o command plan congelado.
+
+## Histórico AUD38 — índice operacional reconciliado; L03 parcial — 24/09/2026
+
+- Entrega documental: reconciliei `docs/99_operational_index.md` com AUD37 e com o estado controlado C1H/AUD36; o README agora aponta para esse índice. O índice esclarece que a reconciliação é manual e que os ledgers, não o índice, continuam autoridade de status.
+- Estado de L03/P3-S7: `PARTIAL_DOCUMENTARY_RECONCILIATION`. Links resolvem, mas a geração reproduzível ainda não foi implementada; nenhum script/código foi adicionado ou executado. Evidência em [AUD38-DOC-001](04_audit/evidence/AUD-20260924/L03-index-reconciliation/partial-record.md); [backlog 0341](03_build/0341_50_improvements_backlog.md), [A29 backlog 0347](03_build/0347_aud29_backlog.md) e [backlog mestre](30_backlog_master.md) atualizados.
+- Verificação documental: checker em sete documentos terminou exit 0 (`DOC_LINKS_OK`, zero links quebrados e zero absolutos não allowlisted); nove documentos sem trailing whitespace e com newline final; `git diff --check` passou nos documentos rastreados modificados. Nenhum teste de produto, typecheck, lint, coverage ou runtime foi executado.
+- Gate C1H: o packet continua pendente de resposta identificada pelo SHA-256 `d2e03fb29f0e95efdb418fa47e984ee2bcac4e77fbd244bb9f2b162caead046f`. `command-records.json` segue `NOT_STARTED`; M07-S1 `FAIL / OPEN`, M07-S2/S3/S4 e M05 bloqueadas, G21-5/G21-6 fechados, produção `NO_GO`.
+- Próxima ação singular: receber/registrar a confirmação C1H vinculada ao request SHA e, se aprovada, executar somente o command plan congelado.
+
+## Histórico AUD37 — L02 glossário padronizado; C1H aguarda decisão vinculada — 24/09/2026
+
+- Entrega documental: L02/P3-S6 (`Padronizar glossário`) concluída como `COMPLETED_DOCUMENTAL`. O glossário canônico define approval, handoff, gate, candidate, tenant, release e os estados CVG em português/inglês, separando estados de domínio e resultados de gate. O README e `docs/07_agents/AGENTS.md` apontam para ele.
+- Evidência: [AUD37-DOC-001](04_audit/evidence/AUD-20260924/L02-glossary/completion-record.md); task atualizada em [backlog 0341](03_build/0341_50_improvements_backlog.md) e no [backlog mestre](30_backlog_master.md).
+- Verificação documental: checker de links em seis documentos terminou exit 0 (`DOC_LINKS_OK`, zero links quebrados e zero absolutos não allowlisted); seis documentos sem trailing whitespace e com newline final; cinco estados oficiais conferidos contra a constituição. Nenhum teste de produto, typecheck, lint, coverage ou runtime foi executado.
+- Gate C1H: o usuário respondeu “aprovo este gate”, mas o decision-record congelado exige `Approve M07-S1-R1-C1H` vinculado ao SHA-256 `d2e03fb29f0e95efdb418fa47e984ee2bcac4e77fbd244bb9f2b162caead046f`; solicitei essa confirmação identificada. Nenhum comando C1H foi executado. C1F/M07-S1 permanece `FAIL / OPEN`; S2/S3/S4 e M05 bloqueadas, G21-5/G21-6 fechados, produção `NO_GO`.
+- Próxima ação: receber ou registrar a decisão hash-bound do C1H; depois, se aprovada, executar somente o command plan desse packet.
+
+## Histórico AUD36 — C1G stopped at preflight; C1H decision pending — 24/09/2026
+
+- Decisão: o usuário respondeu “Aprovo exatamente este gate” à pergunta específica que aprovava o gate M07-S1 limitado aos três paths e comandos locais, depois reafirmou “aprovo este gate”. Registrei essa decisão contextual somente para o pedido C1G SHA-256 `5700d97d2931dc08c622cdee470c5d869a9980f1a4c1bdb40b64afb7d3e6645f`, antes dos comandos.
+- Execução C1G: `node-version-preflight` passou (`v22.23.2`). `typescript-version-preflight` terminou exit 1 às `2026-09-24T07:28:48.916Z`; o stack mostrou `Cannot find module 'typescript'` de `/home/ricardo/Área de trabalho/[eval]`. O helper C1G usa `HERE.parents[5]`, que aponta um diretório acima da raiz. C1G parou conforme o gate; `c1g-preconditions`, source-baseline, archive, snapshots, patch, candidate, inventory, testes/typecheck/lint/coverage, pós-check e revisões não rodaram. Nenhum dos três paths de produto ou fixture foi alterado.
+- Evidência C1G: [resultado final](04_audit/evidence/AUD-20260924/M07-S1-C1G/final-gate-result.md), [ledger capturado](04_audit/evidence/AUD-20260924/M07-S1-C1G/command-records.json) e streams brutos; C1G/C1F/C1E permanecem preservados. M07-S1 continua `FAIL / OPEN`.
+- Próximo gate: preparei C1H em diretório novo, com `HERE.parents[4]`, plano, patch e quality bar próprios. A validação estática registrou helper AST válido, root igual ao repositório, 33 passos em ordem, 10 critérios, cinco source hashes, 110 hashes históricos e patch limitado aos três paths. Crítica fresh-context do packet C1H recusada por `agent thread limit reached`; sem parecer independente.
+- Evidência C1H: [approval request](04_audit/evidence/AUD-20260924/M07-S1-C1H/approval-request.md), SHA-256 `d2e03fb29f0e95efdb418fa47e984ee2bcac4e77fbd244bb9f2b162caead046f`; [validação estática](04_audit/evidence/AUD-20260924/M07-S1-C1H/packet-validation.json). O C1G approval não se transfere; nenhum C1H source edit/comando foi executado.
+- Estado: M07-S2/S3/S4 e M05 bloqueadas, G21-5/G21-6 fechados, produção `NO_GO`; worktree preexistente preservada.
+- Próxima ação singular: pedir decisão humana sobre o packet C1H e o SHA completo acima. Sem ela, não iniciar C1H.
+
+## Histórico AUD35 — ponteiros reconciliados; C1G aguardava decisão — 24/09/2026
+
+Antes da aprovação C1G, A29-10/A24-11 reconciliaram os resumos correntes para C1G e preservaram C1/C1E/C1F. O AUD35 registrou `DOC_LINKS_OK` em 11 raízes e a verificação final em 12; dez Markdown passaram higiene. A crítica independente de documentação foi recusada por limite de threads. Esses registros permanecem em [AUD35](04_audit/evidence/AUD-20260924/A29-10-doc-freshness-audit.md).
+
+# Histórico AUD34 — C1G gate packet prepared; decision pending — 24/09/2026
+
+- Estado: `WAITING_HUMAN_APPROVAL`; active task `A24-03-C1G`; M07-S1 permanece `FAIL / OPEN`; produção `NO_GO`.
+- Resultado-base: C1F candidate `89e4d30ce8b2fd1d102a200bc729249a99ebc47499e4d04a79cd7f6633890f1a` teve checks locais verdes e inventory completo, mas terminou `FAIL / OPEN` por C1F-05 `PARTIAL`, I1 `UNAVAILABLE` e ausência de Final Critic. Nada disso foi reescrito.
+- Preparação documental: registrei A24-03-C1G/A29-11 como `PROPOSED / WAITING_HUMAN_APPROVAL`; preparei patch de três paths, quality bar de dez critérios, command plan com 33 passos nomeados e um final verifier, capturador, cinco source hashes e preservação hash de 110 arquivos C1E/C1F.
+- Packet: [approval request](04_audit/evidence/AUD-20260924/M07-S1-C1G/approval-request.md) SHA-256 `5700d97d2931dc08c622cdee470c5d869a9980f1a4c1bdb40b64afb7d3e6645f`; [gate](04_audit/evidence/AUD-20260924/M07-S1-C1G/correction-gate-proposal.md) `e8c5752dd9d5555a5a06885b457fba0ff429cdf41432263499f28585e22f7428`; [patch](04_audit/evidence/AUD-20260924/M07-S1-C1G/correction-preview.patch) `0fe21c2b958e376c734908411143e4e8cae5b80ab4384f05725ed54021f96690`; [quality bar](04_audit/evidence/AUD-20260924/M07-S1-C1G/quality-bar.json) `7ab86e4d0ea1f73bbc8ca88c114af4cce3b4beabccd7e5cc04195a3223e57520`.
+- Revisão do packet: solicitei crítica fresh-context read-only; o serviço recusou spawn com `agent thread limit reached`. Nenhum reviewer foi criado e nenhum relatório produzido. Isso não conta como I1 nem Final Critic de candidate.
+- Verificação desta rodada: validação estrutural estática do JSON, sintaxe AST do capturador, DAG de 33 passos, 10 critérios, tabela hash-bound de 14 arquivos, cinco source hashes e 110 arquivos históricos passou (`PACKET_OK`). Nenhum código fonte, scanner, candidate, teste, typecheck, lint, coverage, service, database, rede ou dado real foi executado.
+- Worktree preexistente muito alterado foi preservada. Resumos correntes, 0343–0348, carteira 0340/0341, README e índice foram reconciliados para AUD34.
+- Próxima ação singular: decisão humana sobre o packet C1G exato, request SHA acima. Sem decisão, nenhum código/comando C1G. Após eventual aprovação, registrar os bytes antes da edição; qualquer falha ou indisponibilidade de I1/Final Critic mantém S1 aberta. S2/S3/S4 e M05 bloqueadas; G21-5/G21-6 fechados; produção `NO_GO`.
+
+# AUD33 — C1F executado; checks locais verdes, gate permanece FAIL/OPEN — 2026-09-24
+
+- Decisão: o usuário aprovou o gate corretivo C1F. Registro da resposta e do escopo em [decision-record](04_audit/evidence/AUD-20260924/M07-S1-C1F/decision-record.md); gate SHA-256 `fe12424140bf93785ff520bc804dd0954a82ce976dd26311365a5a5bc57f8535`, preview `244143d81efd8559401dc40c9a11f4d510464e40b54c830700a85bfbab3ba191`. `A24-03-C1F` foi registrada antes de código.
+- Escopo: quatro paths autorizados (policy, scanner, teste do scanner, teste sintético conversacional); a expectativa de mismatch passou a exigir `STATE_CONFLICT`, preservando o resume válido. Nenhum código de produção alterado; snapshots preservados.
+- Candidate: 977 inputs e quatro additions; fingerprint `89e4d30ce8b2fd1d102a200bc729249a99ebc47499e4d04a79cd7f6633890f1a`; report/manifest coincidem. Inventory completo, 11 findings, zero gaps/unresolved.
+- Matriz C1F: focused 25/25; `npm test` 2.137 pass/146 skipped/0 fail; typecheck e lint exit 0; coverage exit 0 (statements 90,86%, branches 85,88%, functions 92,91%, lines 91,81%); pós-check exit 0 e fingerprint sem drift. Logs e resultados em [evidência C1F](04_audit/evidence/AUD-20260924/M07-S1-C1F/).
+- Veredito `FAIL / OPEN`: C1F-05 `PARTIAL` porque setup/snapshot/checksum não tem proveniência individual completa; C1F-08/B8 `BLOCKED`, pois o serviço recusou spawn fresh-context I1 (`agent thread limit reached`). Before/after full-worktree fingerprint igual; nenhum parecer independente foi produzido. Nenhum Final Critic separado foi obtido.
+- Próxima etapa: propor gate de revalidação que capture logs, timestamps e durações dos comandos de snapshot/cópia/checksum de C1F-05; sem aprovação, não repetir checks. Após revalidação sem drift, pedir I1 do mesmo candidato quando o serviço aceitar o reviewer. I1 isolada não fecha C1F-05.
+- Gauntlet: run `m07-s1-c1f-20260924-1` finalizado `FAIL`; run C1E finalizado `FAIL` e arquivado em `.gauntlet-archive/m07-s1-c1e-20260924-finished-fail/`. A barra e snapshots C1F são pré-código; o state manager C1F iniciou depois da implementação, limitação registrada em `gauntlet-lifecycle-note.md`.
+- Limites: testes removeram env PostgreSQL; sem database, serviço externo, rede externa, dado real, ação sensível ou produção. G21-5/G21-6 fechados; M07-S2/S3/S4 e M05 bloqueadas; produção `NO_GO`.
+- Próxima ação singular: obter I1 independente do mesmo candidate quando houver capacidade, sem editar código ou repetir testes para cobrir a indisponibilidade.
+
+# AUD31 — C1 interrompido no freeze; gates de paths preparados — 2026-09-24
+
+- Decisão: “aprovo este gate”, vinculada ao gate C1 vigente após conferir SHA-256 `9d865f7db78b479dacaf69ca2de7dffcc03892eff061dd49ca90ec2035eb83f1` e preview `9d7fc894b728967aaa4f0949bc5dc8ae466d31ecc616fe9a902a58859ebb0c17`.
+- Preflight C1: Node `v22.23.2` (exit 0), TypeScript `6.0.3` (exit 0), candidato R1 verificado com fingerprint `1038f996b0577e56ecd795f1f08b6e13bb3a752d454c80f3fc0601f51c045b5f` (exit 0), diretório C1 ausente (exit 0). npm `10.9.8`; snapshot do fixture C1 SHA-256 `264651255ebc7169dc03935a0981aff0b8ae229b9e3e26013b89ddfd0e8cef66`.
+- Mudança autorizada: apenas `packages/conversation/src/__tests__/postgres-store.unit.test.ts`, adicionando `pendingProposal`/`pendingApproval` sintéticos ligados e preservando o resume negativo. Hash pós-edição `ed11c801c19e5eb31f3997b8b202542cdde8593a29cea3587f1e16711601257c`; snapshot e logs preservados em [M07-S1-R1-C1](04_audit/evidence/AUD-20260923/M07-S1-R1-C1/).
+- Candidate freeze C1 terminou exit `64`; stderr/hash em [logs](04_audit/evidence/AUD-20260923/M07-S1-R1-C1/candidate-freeze.stderr.log) e [command records](04_audit/evidence/AUD-20260923/M07-S1-R1-C1/command-records.json). O validador de output aceita somente `M07-BUILD-S1`/`M07-S1-R1`, rejeitando a pasta C1 exigida. Por leitura, `validateExecutionCandidate`/policy também fixam o registro npm ao path R1; esse segundo bloqueio não foi executado.
+- Resultado: candidate C1 não congelado; inventário, comparação, focused, suite, typecheck, lint, coverage, pós-check e I1 não rodaram. M07-S1 segue `FAIL / OPEN`, I1 `UNAVAILABLE`, produção `NO_GO`.
+- Próxima gate proposta: [C1E](04_audit/evidence/AUD-20260923/M07-S1-R1-C1/output-path-correction-gate.md), SHA-256 `75b6307384074660bde873ca4aa95bfedfb52c1f58d2448ad227e96e87ad34cc`; [preview](04_audit/evidence/AUD-20260923/M07-S1-R1-C1/output-path-correction-preview.md), SHA-256 `3c4b80ad07a1bf59cce8279b40e916140c908b5d7f7a518caf1d0362e57100ec`. Nenhum path adicional será alterado sem decisão separada.
+- A29-10: navegação e ledgers correntes foram reconciliados para AUD31/C1E, com 0345/A24-04 rotulados históricos. `node scripts/check-doc-links.mjs` passou como check documental em 13 roots (README, oito arquivos 0300–0348, logs mestres, índice operacional e evidência C1): `DOC_LINKS_OK`, 0 broken, 0 non-portable absolute, exit 0. Automação permanece proposta. Sem serviço, banco, rede externa, dado real ou ação sensível.
+
+# AUD29 — reauditoria estática R1, documentação e nova rodada — 2026-09-24
+
+- Ação: comparei relato, runtime, gate C1/preview, manifesto, inventário, fixture, contrato `assertExecutionClaimFresh`, Node/CI/coverage e índices. SHA C1 `9d865f7db78b479dacaf69ca2de7dffcc03892eff061dd49ca90ec2035eb83f1` e preview `9d7fc894b728967aaa4f0949bc5dc8ae466d31ecc616fe9a902a58859ebb0c17` conferem. Recalculei por leitura 977/977 hashes e o fingerprint `1038f996b0577e56ecd795f1f08b6e13bb3a752d454c80f3fc0601f51c045b5f`; report/manifest coincidem. Diretório C1 ausente.
+- Resultado: M07-S1 segue `FAIL / OPEN`; B3 `PASS_WITH_FINDINGS` com 11 findings, B6 `FAIL` pelo teste sintético e coverage sem percentuais aprováveis, B8 I1 `UNAVAILABLE`. A pasta R1 não contém logs brutos/registro estruturado de comandos; os exits permanecem evidência declarada no resultado consolidado. A checagem estática não os reexecuta.
+- Artefatos: [0570](04_audit/0570_r1_delivery_repository_reaudit_2026-09-24.md), [0346](03_build/0346_aud29_roadmap.md), [0347](03_build/0347_aud29_backlog.md), [0348](03_build/0348_next_stage_c1_decision.md). Carteira A29-01–A29-10 adicionada como delta, sem duplicar gates A24. Navegação corrente reconciliada.
+- Verificações desta rodada: leitura, hashes, contagem de arquivos, conferência estática de links e diff documental. Nenhum teste, scanner, build, coverage, serviço, banco, rede, C1 ou revisão independente foi executado. Worktree preexistente preservada.
+- Próxima ação: decisão humana sobre o gate C1 exato; só após aprovação registrar A24-03-C1 e executar o escopo do pedido. S2/S3/S4, M05, G21-5/G21-6 e produção mantêm seus bloqueios.
+
+# AUD28 — M07-S1-R1 executado; B6 falhou, C1 aguardando decisão — 24/09/2026
+
+- Autoridade: gate R1 aprovado no SHA-256 `75a9967b1ad7dfc426fccd1a5cabb2a9e29f2a937188e33605e2ddb03c4b3fc1`; executor usou shell novo Node `v22.23.2`, sem alterar o NVM default. Preflight Node/TypeScript/baseline e preparação autorizada retornaram exit 0.
+- Candidato: freeze `--candidate-only` exit 0, fingerprint `1038f996b0577e56ecd795f1f08b6e13bb3a752d454c80f3fc0601f51c045b5f`; verificação inicial exit 0. O inventário retornou VIOLATION/exit 1 com `inventoryComplete=true`, 11 findings (9 mismatches e 2 missing direct), `gaps=[]` e zero unresolved; comparação report/manifest exit 0, `match=true`.
+- Checks no mesmo candidato: foco exit 1 (24 pass/1 fail); suite exit 1 (302 arquivos pass, 20 skipped, 1 arquivo fail; 2.136 pass, 146 skipped, 1 fail; Vitest 298,57 s); typecheck exit 0; lint exit 0; coverage exit 1 pela mesma falha (sem percentuais aprováveis; Vitest 323,14 s); pós-check exit 0 e fingerprint inalterado. A falha foi `STATE_CONFLICT` no resume de aprovação porque o fixture não continha proposta/aprovação ativa correspondentes.
+- Revisão: I1 `UNAVAILABLE`; uma segunda tentativa fresh-context foi recusada por `agent thread limit reached` e registrada em [i1-attempt-02](04_audit/evidence/AUD-20260923/M07-S1-R1/i1-attempt-02.md). Nenhuma revisão própria foi chamada independente.
+- Evidência e decisão: [resultado final R1](04_audit/evidence/AUD-20260923/M07-S1-R1/final-gate-result.md). O [gate corretivo C1](04_audit/evidence/AUD-20260923/M07-S1-R1/correction-gate-proposal.md), SHA-256 `9d865f7db78b479dacaf69ca2de7dffcc03892eff061dd49ca90ec2035eb83f1`, aguarda aprovação explícita. Até lá não editar o fixture nem repetir checks.
+- Limites: sem dados reais, banco/serviço/rede externa ou ação sensível; G21-5/G21-6 fechados, produção `NO_GO`; M07-S1 permanece `FAIL / OPEN`, posteriores e M05 bloqueadas.
+
+# AUD27 — aprovação R1 informada e bloqueio ambiental resolvido em shell novo — 2026-09-23
+
+- Autoridade: mensagem do usuário nesta rodada informou aprovação vigente para o pedido R1 revisado, SHA-256 integral `75a9967b1ad7dfc426fccd1a5cabb2a9e29f2a937188e33605e2ddb03c4b3fc1`. Registrei a decisão em [human-decision-r1](04_audit/evidence/AUD-20260923/A24-04-R0/human-decision-r1-20260923.md); o pedido aprovado não foi editado. A tentativa anterior com Node 24 e parada antes dos demais preflights foi relatada pelo usuário, não reexecutada por mim.
+- Ambiente: o Node 22.23.2 já estava instalado em NVM, enquanto o alias default segue 24.20.0. Abri shell isolado com PATH apontando primeiro ao Node 22, sem alterar alias, `.nvmrc`, package ou arquivos de código. Nesse shell, `node --version` retornou `v22.23.2`, TypeScript retornou `6.0.3` e o preflight read-only do passo 2 imprimiu todos os predicados de integridade verdadeiros: baseline/prior manifest hashes exatos, 973 inputs sem divergência, três additions históricas corretas, novo teste e diretório R1 ausentes. O shell terminou; exit code bruto do preflight individual não foi capturado nesta exploração, portanto a retomada formal deve repetir os passos 1–2 e registrar exit codes.
+- Resultado: bloqueio de disponibilidade do Node 22 resolvido por [runbook de shell isolado](04_audit/evidence/AUD-20260923/A24-04-R0/node22-resume.md). Nenhum BUILD, snapshot, diretório R1, scanner, teste, typecheck, lint, coverage, serviço, DB, rede, dado real ou ação sensível nesta rodada. Não houve mudança de candidato histórico.
+- Próxima ação: processo executor novo em Node 22 repete os passos 1–2 do [gate R1](04_audit/evidence/AUD-20260923/A24-04-R0/r1-gate-request.md), captura exits, e segue ao passo 3 apenas se ambos passarem. A24-01/A24-12/A24-03/A24-02/A24-05 continuam abertas; I1 ainda é requisito, M05 aguarda M07, G21-5/G21-6 fechados e produção `NO_GO`.
+
+# AUD26 — retomada A24-04; gate R1 reforçado e aguardando decisão — 2026-09-23
+
+- Ação: li o anexo de continuidade, recuperei o estado CVG corrente e revalidei o pedido R1 antes de qualquer BUILD. A task continua `A24-04_COMPLETED_DOCUMENTAL`; a resposta “Aprovo exatamente este gate” segue vinculada ao pedido M07-S1 original já executado, conforme o human-decision registrado, e não autoriza R1.
+- Recuperação: `.gauntlet/state.json` é do run `m07-prd-20260923-1`, `FINISHED`, evidência `STALE`, com next action antiga de validação do PRD. Não foi retomado nem sobrescrito; `docs/99_runtime_state.md` é o pointer corrente para A24-04/R1. A worktree tem muitas alterações preexistentes e foi preservada.
+- Correções no packet R1: adendo e gate agora registram allowlist R1 de quatro paths; preflight pré-edição valida os SHAs integrais do baseline e candidato histórico, 973 hashes de inputs, três additions e ausência do teste/diretório; captura Node/TypeScript/npm localmente; salva snapshots de rollback; exige candidato de 977 inputs; compara fingerprint de report/manifest; revalida candidate/toolchain após checks e mantém tentativas parciais sem overwrite. A leitura de `vitest.config.mts` confirmou descoberta `packages/**/*.test.ts` e coverage `packages/**/*.ts` excluindo testes.
+- Crítica/orquestração: preparei um packet read-only fresh-context I1 para o gate revisado; o serviço recusou o spawn com `agent thread limit reached`, portanto nenhum crítico independente foi executado. Parecer desta retomada é somente I0/Lead; o requisito I1 para o candidato R1 permanece.
+- Execução: inspeção de JSON/schema, hashes, presença de paths, `rg`/`sed`, `git status` e ajuda local do state manager. Não executei código de produto, scanner, testes, build, typecheck, lint, serviço, banco, rede ou integração; nenhum manifest, código ou evidência histórica foi alterado. Mudanças desta retomada são documentais.
+- Evidências SHA-256: [ledger A24-04](04_audit/evidence/AUD-20260923/A24-04-R0/adjudication-ledger.md) `d2cedd0058768f4a8e3e3cc0753ce38e1cc4ed852884cf32fcb1e40285cb312c`; [SPEC R1 proposta](04_audit/evidence/AUD-20260923/A24-04-R0/spec-r1-amendment.md) `b3c4a1921a38bc7b4a8bb5fb10a914d12be2a2306a37fd6edb907f56693d3268`; [gate R1 atualizado](04_audit/evidence/AUD-20260923/A24-04-R0/r1-gate-request.md) `75a9967b1ad7dfc426fccd1a5cabb2a9e29f2a937188e33605e2ddb03c4b3fc1`.
+- Estado: M07-S1 histórico `FAIL / OPEN`; A24-01/A24-12/A24-03/A24-02/A24-05 aguardam aprovação R1; M05 só após M07 aceita; G21-5/G21-6 fechados; produção `NO_GO`. Design Director não se aplica a esta rodada sem superfície visual.
+- Próximo passo singular: aprovar ou corrigir o [adendo SPEC-M07-R1-v2 e pedido BUILD R1](04_audit/evidence/AUD-20260923/A24-04-R0/r1-gate-request.md). Até a decisão, não iniciar código nem checks novos.
+
+# AUD25 — A24-04 documental concluída; gate R1 preparado — 2026-09-23
+
+- Ação: por leitura, conferi as 22 ocorrências do relatório M07-S1 contra manifests, localizações de import, uso AST registrado e arestas de produção; registrei B3/B6 prospectivos e preparei adendo SPEC e pedido R1. A aprovação recebida “Aprovo exatamente este gate” corresponde ao gate M07-S1 anterior, já executado; não repeti seus comandos nem alterei seu resultado.
+- Evidências: [ledger das 22 ocorrências](04_audit/evidence/AUD-20260923/A24-04-R0/adjudication-ledger.md), [adendo SPEC R1 proposto](04_audit/evidence/AUD-20260923/A24-04-R0/spec-r1-amendment.md), [gate corretivo R1](04_audit/evidence/AUD-20260923/A24-04-R0/r1-gate-request.md). O ledger confirma dois imports de teste sem declaração, nove mismatchs independentes e registra proposta A24-12 para onze pares com produção type-only `DECLARED_RUNTIME_SAFE`.
+- Interpretação proposta: B3 pode ser `PASS_WITH_FINDINGS` quando o inventário está completo e todos os achados ficam visíveis. `inventory` exit 1 nesse caso é resultado de domínio `VIOLATION`, não conformance limpa. B6 continua exigindo todos os testes e gates passarem com coverage 90/85/90/90. O `FAIL / OPEN` histórico permanece inalterado.
+- Coverage: o resumo candidato-bound histórico permanece 89,34% statements e 84,33% branches. O breakdown ignorado `coverage/coverage-summary.json` coincide nos totais e aponta `packages/conversation/src/postgres-store.ts` a 1/249 statements e 0/224 branches; foi usado somente como diagnóstico não vinculante. O R1 propõe teste sintético via double SQL, sem banco real.
+- Procedimentos desta rodada: leitura `sed`/`rg`, parser Node somente-leitura sobre JSON/source já gravados, `sha256sum` dos artefatos citados e fingerprint Gauntlet com `--include-state` salvo fora do repo em `/tmp/cvg-a24-04-critic-before.json` (`072f1ea38b95e549a699502a25ddd99dcfcfb8e8e5fb15b0652d3390dac31282`). Não executei scanner, testes, build, typecheck, lint, serviços, banco, rede ou integração; não alterei código/manifests/evidência histórica.
+- Revisão: tentativa de crítico independente I1 recusada pelo serviço por limite de threads; nenhuma aprovação independente foi alegada. A reconciliação proposta exige revisão I1 no candidato R1.
+- Estado/gates: A24-04 `COMPLETED_DOCUMENTAL`; nova task A24-12 `PROPOSED / GATE_REQUIRED`; BUILD R1 `WAITING_HUMAN_APPROVAL`. M05 permanece depois de M07; G21-5/G21-6 fechados; produção `NO_GO`.
+- Ajuste final do pedido R1: como o baseline antigo registra só três additions, o basis canônico R1 agora precisa persistir separadamente os quatro paths exatos aprovados no delta. SHA-256 dos artefatos R0: ledger `d2cedd0058768f4a8e3e3cc0753ce38e1cc4ed852884cf32fcb1e40285cb312c`; SPEC proposta `a180f54d7955eca25750647060f9024313222da8c2a9e849d5df231a2fa88aa8`; gate `b6083e932e7925f265931fe843aa413737d4102584d4e278051d4d88463169c9`.
+- Próximo passo singular: aprovar ou pedir correções ao adendo SPEC-M07-R1-v2 e ao gate R1 exato antes de código ou novos checks.
+
+# AUD24 — reauditoria M07-S1, repositório e replanejamento — 2026-09-23
+
+- Ação: comparei barra M07-S1, gate humano, relatório, manifesto, cobertura, código do scanner, CI, manifests e documentação corrente; recalculei por leitura os SHA-256 dos três paths autorizados e dos 976 inputs do candidato (zero divergentes). Não executei testes, scanner, build, serviço, DB, rede ou integração nesta rodada.
+- Resultado da entrega: `FAIL / M07_S1_OPEN` preservado. O relatório registra 25 owners, 813 fontes, 54 arestas de teste reconciliadas com dependência runtime, 22 violações de manifest; coverage abaixo da barra e I1 ausente. A reauditoria achou Node v24.20.0 no run frente a `.nvmrc` 22.23.2 e digest anunciado `a00127…a797` não recalculável diretamente do `fingerprint_basis` serializado (`fc5744…7ffdd5` pela expressão declarada). Isso limita replay independente, sem afirmar adulteração.
+- Repositório: revisão dirigida, score local estimado 77/100, produção 28/100 e `NO_GO`; 325 entradas de worktree já alteradas/não rastreadas no início. Rodapé stale do roadmap 0340 foi corrigido; nenhum código/manifest/candidato histórico foi modificado por esta reauditoria.
+- Artefatos: [0569](04_audit/0569_m07_delivery_and_repository_reaudit_2026-09-23.md), [roadmap 0343](03_build/0343_reaudit_m07_roadmap.md), [backlog 0344](03_build/0344_reaudit_m07_backlog.md), [próxima etapa 0345](03_build/0345_next_stage_m07_correction.md). Índices e carteira de 50 IDs reconciliados.
+- Checagem documental estática: 11/11 IDs A24 únicos no backlog delta; 13 documentos/índices correntes examinados com zero links locais ausentes; `git diff --check` sem erro. Nenhum desses checks é gate executável M07 ou parecer I1.
+- Decisão: próxima ação `A24-04` read-only, adjudicar 22 achados e preparar adendo B3/B6/gate corretivo R1. A24-01–A24-03/A24-05 exigem novo gate; M05 aguarda M07. I1, G21-5/G21-6 e produção seguem fechados/indisponíveis conforme respectivos controles.
+
+# M07-S1 BUILD/AUDIT — execução concluída; gate não fechado — 2026-09-23
+
+- Decisão humana: “Aprovo exatamente este gate”; registro em `docs/04_audit/evidence/AUD-20260923/M07-BUILD-S1/human-decision-20260923.md`. O gate autorizado limitou código aos três paths M07-S1 e aos seis comandos listados no pedido com PostgreSQL env removido.
+- Candidato: fingerprint `a00127c13b165b81bd95d2671891e737f50bfb60c482816d0ef9c1b26fa4a797`; baseline pré-implementação `439e13cba5d32821fd57b5ba2c71160189667a8168bdb97c9eeb1df52211f404`, artifact SHA-256 `40b33ca1f63a2c263abcd621cb25d6c6fdf6aae0d0ab05be36b108717357675a`. O freeze contém 976 inputs (973 baseline + 3 aprovados), 25 owners e baseline delta vazio. Pós-check: mesmo fingerprint, zero input diff; relatório aponta para o mesmo candidato.
+- Resultado: `FAIL`; M07-S1 não está fechado. Inventory cobriu 25 owners, 813 arquivos-fonte, 206 arestas, 4 build scripts e 73 project references; sem gaps/unresolved, mas reportou 22 achados dos manifests existentes (20 categorias e 2 declarações diretas ausentes). Os manifests são in-scope baseline e não foram alterados. Arestas de teste compartilhadas com dependência de runtime declarada foram corrigidas no scanner; 54 arestas em 32 pares owner-target deixaram de gerar falsos positivos.
+- Comandos: teste focal 2 arquivos/15 testes PASS; `npm test` 302/322 arquivos PASS, 20 skipped, 2.127/2.273 testes PASS e 146 skipped; typecheck PASS; lint PASS; coverage FAIL: statements 89,34% <90%, branches 84,33% <85%, functions 91,46% e lines 90,22% passam. Inventory terminou com status `VIOLATION` devido aos 22 achados documentados. Detalhes em `docs/04_audit/evidence/AUD-20260923/M07-BUILD-S1/command-records.json` e `final-gate-result.md`.
+- Fechamento documental: `DOC_LINKS_OK` (zero links quebrados; 12 alvos absolutos históricos allowlisted, zero não allowlisted); `EVIDENCE_HYGIENE_OK` (429 JSON parseados, 66 vazios catalogados, zero erros); `git diff --check` passou.
+- Review: lead-only `CONDITIONAL_PASS` no máximo; I1 fresh-context `UNAVAILABLE` após duas tentativas sem thread disponível. Não há aprovação independente. A barra congela B6 como requisito crítico, e o resultado global é `FAIL` por coverage; não há aceitação incondicional nem autorização para ampliar slice.
+- Guardrails: nenhum manifest foi alterado; os artefatos e três paths de código estão limitados ao gate; worktree preexistente preservado. G21-5/G21-6 continuam fechados e produção `NO_GO`.
+- Próxima ação: registrar e aprovar uma proposta de correção/gate separada para os achados remanescentes antes de qualquer novo BUILD. M05 segue depois de M07; M05 não está pronto para handoff.
+
+## Histórico — preparação do gate M07-S1
+
+O pedido, a barra e o baseline abaixo foram preparados antes da decisão humana de BUILD. O status pendente e as verificações sem execução registrados naquela rodada são históricos. Fingerprint canônico do baseline: `439e13cba5d32821fd57b5ba2c71160189667a8168bdb97c9eeb1df52211f404`.
+
+# M07-SPEC-20260923 — SPEC documental preparada; validação humana pendente
+
+- gate anterior: a resposta humana “Approve for SPEC”, registrada às 12:27:40Z, aprovou PRD-M07-001 somente para preparar a SPEC documental. Evidência em docs/04_audit/evidence/AUD-20260923/M07-PRD/human-decision-20260923.md.
+- artefato: SPEC-M07-001 em docs/02_spec/0128_m07_package_dependency_governance.md; contém scanner local read-only proposto, política explícita, classificação de arestas, regras de manifests, exports, project references, exceções, falhas, verificação futura e slices.
+- revisão: M07-SPEC-v1 congelada. Lead I0 D1–D9 PASS_LEAD_ONLY; D10 UNAVAILABLE porque o serviço de agentes rejeitou o novo crítico I1 por limite de threads. Veredito CONDITIONAL_PASS; revisão/evidência em docs/04_audit/evidence/AUD-20260923/M07-SPEC/.
+- decisões abertas no pedido humano: conjunto público recomendado (três packages neutros), exigência de project references apenas em profiles explicitamente aprovados, regras de classificação e política de exceções sem aprovação implícita.
+- verificação integrada: NOT_RUN; nenhum código, teste, build, typecheck, lint, serviço, banco, rede ou runtime executado. O plano de verificação é futuro e condicionado ao gate local M07 BUILD.
+- checks documentais read-only: DOC_LINKS_OK nos 20 documentos correntes; evidence hygiene OK, 410 JSON parseados, 66 arquivos vazios catalogados e zero erros.
+- limites: worktree permanece sujo; inventário Discovery é histórico para seu candidato; nenhum dado real, ação sensível, integração externa ou produção. G21-5/G21-6 fechados; produção NO_GO.
+- próxima ação: validação humana de SPEC-M07-001. Aprovação poderá autorizar apenas preparar o pedido/freeze do gate local M07-S1; não inicia código ou testes.
+
+# M07-PRD-20260923 — PRD documental preparado; validação humana pendente
+
+- ação concluída: PRD-M07-001 em `docs/01_prd/0028_m07_package_dependencies.md`, após aprovação Discovery explícita; critérios, objetivos, métricas, incertezas, guardrails e próxima gate foram registrados;
+- revisão: lead self-review contra `M07-PRD-v1`, D1–D6 `PASS_LEAD_ONLY`; o Gauntlet `m07-prd-20260923-1` termina `CONDITIONAL_PASS` porque não foi possível iniciar o Final Critic independente I1 (limite de threads do serviço de agentes). O envelope de recurso de 900 segundos expirou; nenhum check executável adicional foi iniciado. Evidências: `docs/04_audit/evidence/AUD-20260923/M07-PRD/`;
+- gate: validação humana do PRD está pendente em `docs/01_prd/0090_prd_validation.md`; aprovação pode liberar apenas a preparação da SPEC M07, não BUILD;
+- handoff: M05 Discovery está aprovada com opção A e segue M07; nenhuma decisão desta rodada alterou a sequência;
+- limite: não houve teste, build, typecheck, lint, serviço, banco, integração externa, uso de dado real ou ação sensível. G21-5/G21-6 seguem fechados; produção `NO_GO`;
+- próxima ação: aprovar o PRD M07 para avançar à SPEC documental ou solicitar correções específicas. Nenhum código está autorizado.
+
+# P1-S1-STATUS-RECON-20260923 — backlog reconciliado com gates pendentes
+
+- ação: o campo “Próxima task executável” em
+  `docs/03_build/0341_50_improvements_backlog.md` foi alinhado aos Discoveries
+  concluídos de M07/M05 e aos gates humanos ainda pendentes; M05 requer também
+  decisão sobre rota canônica e par/limite de paridade;
+- evidência: `docs/04_audit/evidence/AUD-20260923/P1-S1/backlog-status-reconciliation.md`;
+- estado: documental; nenhum gate foi aprovado ou inferido. PRD/SPEC/BUILD não
+  iniciados, nenhum código ou teste executado, G21-5/G21-6 fechados e produção
+  `NO_GO`;
+- próxima ação: receber/corrigir os pedidos de validação Discovery M07 e M05;
+  prosseguir pela ordem P1-S1 somente após as aprovações aplicáveis.
+
+# M05-DISCOVERY-FINAL-20260923 — revisão I1 concluída; gate humano pendente
+
+- resultado: o final critic fresh-context I1 aprovou M05-D1 a M05-D5; nenhum
+  gap factual ou de escopo foi encontrado. O critic report está em
+  `docs/04_audit/evidence/AUD-20260923/M05/final-critic-result.json`;
+- veredito Gauntlet: `CONDITIONAL_PASS` para Discovery documental; a verificação
+  integrada/runtime está `NOT_RUN` e exige PRD/SPEC e gate local de BUILD;
+- artefato revisto: `docs/00_discovery/0018_m05_public_harness_composition.md`,
+  com fingerprint `fb343c7f9916629329f2d85a69b09f17e4928298b1ac63587872d92a3f8f3f9a`;
+- decisão: M05 aguarda validação humana de Discovery e escolha da rota
+  canônica, dos dois paths legados e do limite de paridade. M07 aguarda gate
+  Discovery próprio; G21-5/G21-6 fechados e produção `NO_GO`;
+- limites: nenhuma edição de código, teste, build, serviço, banco, rede,
+  integração, dado real ou ação sensível. Fontes de teste foram só lidas;
+- next_action: aguardar resposta humana ao gate M05 e ao gate M07; não iniciar
+  PRD/SPEC/BUILD por inferência.
+
+# M05-DISCOVERY-20260923 — composição pública e decisão de rota pendentes
+
+- pedido: avançar P1-S1 pelo escopo independente de Discovery permitido em
+  `docs/03_build/0342_next_stage_p1_s1.md` enquanto a validação M07 permanece
+  pendente;
+- ação: leitura estática independente da API, worker e ports de Harness,
+  persistence e contracts; mapa consolidado em
+  `docs/00_discovery/0018_m05_public_harness_composition.md`;
+- achado: `/v1/executions` → outbox operacional → `operational-harness` →
+  `createOperationalHarness()` é separado do webhook/outbox inbound que usa
+  `published-agent` por padrão ou `kernel` opt-in; existe ainda uma opção
+  inline de webhook. “Dois paths legados” e o sentido de “kernel” no handoff
+  seguem ambíguos;
+- trace: os contratos carregam alguns campos solicitados, mas session,
+  policy-version, approval e journal não têm join persistido universal
+  demonstrado. Os testes PostgreSQL foram apenas lidos; nenhum foi executado;
+- evidência: `docs/04_audit/evidence/AUD-20260923/M05/`, com quality bar e
+  pedido de decisão. A revisão final independente deste packet ainda está
+  pendente;
+- limite: nenhum código, teste, build, typecheck, lint, processo, banco,
+  integração, rede, dado real ou ação sensível; worker operacional rejeita
+  production e produção permanece `NO_GO`;
+- gates: M07 ainda aguarda validação humana; M05 Discovery aguarda revisão
+  independente e depois decisão humana sobre suficiência, rota canônica e
+  par/limite de paridade. PRD/SPEC/BUILD e produção não autorizados;
+- next_action: concluir a crítica read-only contra `M05-DISCOVERY-v1` e, sem
+  achado material, pedir a validação humana registrada no gate request.
+
+# M07-DISCOVERY-20260923 — inventário estático, sem BUILD
+
+- pedido: avançar a carteira de 50 melhorias seguindo o pipeline CVG e iniciar
+  por M07 conforme o handoff P1-S1;
+- ação: inventário estático de 25 manifests/tsconfigs, exports, imports de
+  produção/teste, referências TypeScript e scripts de build; relatório em
+  `docs/00_discovery/0017_m07_package_dependencies.md`;
+- achados: 813 arquivos de código analisados com TypeScript AST 6.0.3 e zero
+  parse errors; sem ciclo de imports de produção observado; 27 arestas sem
+  project reference em 13 projetos; nenhum import bare interno sem declaração
+  correspondente. A descoberta detalha limites e incógnitas;
+- processo: gate request em
+  `docs/04_audit/evidence/AUD-20260923/M07/discovery-gate-request.md`; barra
+  congelada em `docs/04_audit/evidence/AUD-20260923/M07/quality-bar.json`;
+  crítica independente registrada nos artefatos Gauntlet M07;
+- preservação: execução Gauntlet anterior `aud20-20260920-w1` arquivada sem
+  alteração em `.gauntlet-archive/AUD20-20260920-w1/`; hashes registrados em
+  `docs/04_audit/evidence/AUD-20260923/M07/prior-gauntlet-preservation.md`;
+- limite: não houve edição de código ou manifest, teste, build, typecheck,
+  lint, serviço, integração externa, dado real ou ação sensível; worktree já
+  continha alterações preexistentes; resultados são do estado observado;
+- decisão: nenhum gate histórico cobre M07; `G21-5`/`G21-6` permanecem fechados,
+  produção `NO_GO`; aguardando validação humana de Discovery antes de PRD;
+- next_action: aprovar a validação de Discovery M07 ou solicitar ajustes no
+  packet; depois seguir PRD → SPEC e pedir gate local específico antes de BUILD.
+
+# AUD23-PLAN-50 — plano, roadmap, backlog e próxima etapa — 2026-09-23
+
+- pedido: salvar relatório e lista em docs, entregar plano executivo, roadmap
+  e backlog detalhado para as 50 melhorias, manter documentação atualizada e
+  apontar sempre a próxima etapa;
+- artefatos: relatório 0567 e lista 0568 confirmados em docs/04_audit;
+  plano 0339, roadmap 0340, backlog 0341 e pacote P1-S1 0342 criados em
+  docs/03_build; navegação atualizada em README, 0300–0302, 0337 e índice 99;
+- M01 / AUD22-DOC-001: COMPLETED_DOCUMENTAL com evidência em
+  docs/04_audit/evidence/AUD-20260923/M01-index-reconciliation.md;
+- inspeção: 50 IDs de origem presentes uma vez no backlog; links relativos
+  dos documentos novos e índices inspecionados sem destino ausente;
+  git diff --check dos arquivos rastreados afetados sem erro;
+- candidato: cinco arquivos do manifesto histórico REM21-019 mudaram por
+  atualização documental; o certificado anterior não cobre os bytes novos.
+  Nenhum certificado, source code, serviço, teste, dado real ou integração
+  externa foi executado ou regenerado nesta rodada;
+- decisão: P0-S0 encerrada só no escopo documental; H02 precisa de novo freeze
+  antes de promoção, H01 precisa de I1 aceito; G21-5/G21-6 e produção NO_GO;
+- autoridade: G21-1 histórico cobriu REM21-001–019, não os 50 novos IDs; cada
+  slice com código requer Discovery/PRD/SPEC e gate local próprio antes de BUILD;
+- next_action: iniciar Discovery read-only de M07 em P1-S1 pelo pacote 0342,
+  produzir PRD/SPEC e verificar o gate antes de código; M05 é a sucessora.
+
+# AUD23-IMPROVEMENT-PRIORITIZATION — 50 propostas — 2026-09-23
+
+- pedido: listar 50 melhorias em alta, média e baixa prioridade;
+- base: relatório `0567`, runtime/backlog/log mestres, backlog `0337`,
+  `REM21-019`, pacote offline `REM21-009`, PRD/SPEC e auditoria do Harness;
+- entrega: `docs/04_audit/0568_50_melhorias_priorizadas_2026-09-23.md`,
+  com 20 propostas altas, 20 médias e 10 baixas, cada uma com ação concreta;
+- decisão: lista consultiva, sem aprovação de BUILD, `G21-5`, `G21-6`,
+  integração, dado real ou produção; controles já verificados localmente não
+  foram marcados como ausentes;
+- verificação: contagem documental de 50 itens; nenhuma suíte ou serviço foi
+  executado;
+- next_action: `AUD22-DOC-001` para reconciliar índices derivados; revisão I1
+  e decisão humana externa permanecem bloqueios do programa.
+
+# AUD22-DOC-ASSESSMENT — relatório de documentação e construção — 2026-09-22
+
+- pedido: ler a documentação, verificar o programa construído e pontuar cada
+  item analisado de 0 a 100;
+- ação: leitura dirigida dos documentos mestres, gates, auditorias recentes,
+  `REM21-019`/`REM21-009`, entrypoints, packages, migrations e CI; inventário
+  documental e comparação somente leitura dos 1.381 hashes do manifesto;
+- evidência: `docs/04_audit/0567_documentation_and_implementation_assessment_2026-09-22.md`;
+- resultado: 12 dimensões e 6 capacidades pontuadas; média ponderada local
+  `78/100`; produção `28/100` e `NO_GO`; 0 arquivos ausentes/divergentes no
+  manifesto inspecionado; 306 entradas dirty preexistentes no início;
+- limitação: nenhum teste, container, navegador, IdP, provider, canal, dado
+  real ou ambiente produtivo executado; números de gates são artefatos
+  registrados, não medição desta rodada;
+- achado: resumos derivados de Build e índice operacional defasados ante os
+  ledgers e evidências correntes; `AUD22-DOC-001` proposto no backlog;
+- next_action: reconciliar índices documentais; `A21-F20` permanece aberto,
+  `G21-5`/`G21-6` e produção fechados.
+
+# AUD21-COMPREHENSIVE-REMEDIATION — REM21-009 BUILD/AUDIT offline concluído — 2026-09-22
+
+- `REM21-009` (`A21-F06`) concluiu o slice permitido de preparação offline em
+  `G21-1`, com `DISCOVERY -> PRD -> SPEC -> BUILD -> AUDIT` registrados em
+  `docs/04_audit/evidence/AUD-20260921/REM21-009/`.
+- O schema Draft 7 passou Ajv `6.15.0`; o contrato base passou com zero erros;
+  12 casos negativos passaram com os resultados previstos (`BLOCKED`,
+  `REJECTED`, `ABORT`, `DENY`, `DENY_NO_DISPATCH`, `HANDOFF`,
+  `HANDOFF_ABORT` e `ACCEPTED_FOR_OFFLINE_ONLY`).
+- Sete artefatos receberam SHA-256; links/higiene, formato e diff passaram.
+  O pacote é sintético, local e descartável, sem rede, credencial, serviço,
+  endpoint operacional, dado real ou efeito externo.
+- decisão: `OFFLINE_PREPARATION_COMPLETE`; qualificação externa permanece
+  `BLOCKED_BY_G21-5`, produção `NO_GO`, G21-6 fechado. O resultado não prova
+  IdP/provider/canal real, privacidade externa, RPO/RTO ou rollback produtivo.
+- próxima transição singular: decisão humana/autoridade explícita sobre a
+  abertura de G21-5; nenhum piloto, cutover, dispatch ou ação sensível.
+- evidência: `docs/04_audit/evidence/AUD-20260921/REM21-009/`;
+  `OFFLINE-BUILD-AUDIT.md`.
+
+# AUD21-COMPREHENSIVE-REMEDIATION — REM21-009 BUILD offline iniciado — 2026-09-22
+
+- `REM21-019` permanece `CONDITIONAL_PASS / FINAL_CERT_DEFERRED`, com
+  produção, G21-5 e G21-6 fechados. A próxima task executável foi escolhida
+  como `REM21-009`, apenas no slice permitido de preparação offline para
+  `A21-F06`.
+- Discovery fresh read-only confirmou as superfícies locais de identidade,
+  provider, canal, fonte institucional, egress, handoff e rollback, além das
+  lacunas que exigem autoridade externa. Não houve rede, credencial, serviço,
+  dado real ou alteração de runtime.
+- `REM21-009` concluiu `DISCOVERY -> PRD -> SPEC` em
+  `docs/04_audit/evidence/AUD-20260921/REM21-009/`; gate:
+  `SPEC_APPROVED_CONTROLLED_BUILD_OFFLINE`.
+- BUILD autorizado somente para schema/fixtures sintéticos, matriz de
+  autoridade, threat-model addendum, runbooks de qualificação/abort e pacote
+  de decisão. Toda autoridade, endpoint, secret reference, owner, privacy,
+  rollback e aprovação externa permanece `PENDING`/`UNKNOWN`.
+- decisão operacional: `OFFLINE_PREPARATION_IN_PROGRESS`, com qualificação
+  externa `BLOCKED_BY_G21-5`; nenhum `GO`, `PASS` externo, piloto, dispatch,
+  cutover ou ação sensível pode ser inferido.
+
+# AUD21 — REM21-019 BUILD/AUDIT candidate-wide; I1 condicional — 2026-09-22
+
+- run final: `run-rem21-019-final-3`; candidate:
+  `8a889682d378c1d3e82a71c079c00390e98307ce4d6e5314f69f02c7c8cf3132`;
+  Node `22.23.2`, npm `10.9.8`, PostgreSQL 16 descartável em loopback.
+- `ci-bar` finalizado com 35 gates `PASS`, zero falhas e current candidate igual
+  ao congelado; `npm run certification:verify`, self-test offline e diff
+  passaram.
+- regressão: 2.262 testes unitários, 258 assertions PostgreSQL, zero skips
+  proibidos; coverage 92,09% statements / 93,07% lines / 94,68% functions /
+  87,26% branches; mutation 10/10 killed; load 10.000 sem loss/duplicates;
+  restore com digest/outbox/tenant isolation.
+- browser-proof trusted: Chromium/Firefox/WebKit 15/15, axe blocking 0;
+  runtime image non-root `cvg`, smoke health/readiness 200/200, digest
+  `sha256:0ab00bb46af93a24d45f5beff82cd1ffc4400ff5a8448c7e0530fcccff90b90e`.
+- findings: 26 preservados e registry source/candidate/run-bound; P0/P1
+  internos abertos `0`; `A21-F05`/`A21-F06` `EXTERNAL_BLOCKED`; `A21-F20`
+  `OPEN_INTERNAL`; decisão mecânica `CONDITIONAL_GO`.
+- a tentativa `final-2` foi invalidada por incompatibilidade entre E2E geral
+  simulado e spec trusted; `final-3` separou o spec no projeto dedicado e
+  repetiu todos os gates. Nenhum report foi editado para forçar PASS.
+- Gauntlet: sentinel `MATCH_WITH_CONDITIONS`; o crítico I1 fresh read-only
+  retornou `CONDITIONAL_PASS`, sem drift ou achado novo, mas não forneceu
+  aceitação limpa; uma segunda adjudicação fresh não retornou relatório no
+  bounded window; F20 continua aberto.
+- decisão: `CONDITIONAL_PASS / FINAL_CERT_DEFERRED`, produção `NO_GO`, sem
+  autoridade para IdP/provider/canal, signoff humano ou ação sensível.
+- estado de parada governado: `BLOCKED_PENDING_ACCEPTED_I1_AND_HUMAN_DECISION`;
+  novas tentativas bounded não produziram uma aceitação limpa, e nenhum
+  artefato foi alterado para forçar PASS.
+- evidência: `docs/04_audit/evidence/AUD-20260921/REM21-019/` e artefatos
+  externos do run `CI_ARTIFACT_DIR`.
+
+# AUD21 — REM21-019 DISCOVERY/PRD/SPEC concluídos; BUILD autorizado — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-019` é o freeze e a reauditoria candidate-wide, limitado a G21-1:
+fixtures sintéticas, PostgreSQL descartável local, browsers declarados e
+imagem local. Nenhum gate externo, dado real ou produção foi aberto.
+
+### DISCOVERY / PRD / SPEC
+
+Discovery encontrou que `finding-governance` já vincula a fonte A21 ao
+candidate/run, mas ainda materializava os 26 achados como `OPEN`; o SPEC exige
+closure registry completa, hashada e vinculada ao mesmo source/candidate/run,
+com distinção entre fechamento local, bloqueio externo e trabalho interno.
+O PRD congelou a barra completa do `ci-bar`, a regra de não mutação após freeze,
+o uso de Node `22.23.2` e a ausência de GO de produção.
+
+Evidência: `docs/04_audit/evidence/AUD-20260921/REM21-019/` (`DISCOVERY.md`,
+`PRD.md`, `SPEC.md`, `quality-bar.json`). Status:
+`SPEC_APPROVED_CONTROLLED_BUILD`; próxima ação: BUILD/AUDIT candidate-wide.
+
+# AUD21 — REM21-018 BUILD/AUDIT local concluído; REM21-019 próxima — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-018` (`A21-F24`, `A21-F25`) foi executada sob `G21-1` em escopo local,
+sintético e descartável. O BUILD removeu RNG fraco dos três caminhos de
+identidade produtiva identificados, adicionou factories determinísticas e
+completou o baseline de configuração por perfil.
+
+### RESULTADO FRESCO
+
+No run `run-rem21-018-final-1`, candidate scoped
+`417b83f1f8366cd3de29287254c21a045cea86549ec994ed88053be2f56b8354`, Node
+`22.23.2`, focused Vitest, typecheck, lint, format, docs, diff e regressão
+passaram: 301 arquivos, 20 skips; 2.113 testes, 146 skips; zero falhas.
+Links quebrados e referências absolutas não allowlisted ficaram em `0`; a
+higiene catalogou `66/66` vazios e parseou `383` JSONs.
+
+### DECISION / LIMITATIONS
+
+`REM21-018 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`, Gauntlet
+`CONDITIONAL_PASS`. Três tentativas de crítico I1 fresco não produziram uma
+inspeção válida; o resultado não é promovido a `PASS`. Produção, G21-5, G21-6,
+freeze e signoff continuam fechados. Evidência em
+`docs/04_audit/evidence/AUD-20260921/REM21-018/`. Próxima transição:
+Discovery/PRD/SPEC de `REM21-019`.
+
+# AUD21 — REM21-018 DISCOVERY/PRD/SPEC concluídos; BUILD autorizado — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-018` (`A21-F24`, `A21-F25`) foi confirmada em escopo local, sintético e
+descartável. A descoberta encontrou os dois fallbacks Node previstos e uma
+terceira chave de idempotência web produtiva baseada em `Math.random`, além de
+19 chaves de runtime ausentes do `.env.example`.
+
+### DISCOVERY / PRD / SPEC
+
+O quality bar congelado, PRD, SPEC e RED estão em
+`docs/04_audit/evidence/AUD-20260921/REM21-018/`. Os validadores públicos de
+API, worker, homolog, iterativo e web foram mapeados; health e telemetria sem
+env próprio foram documentados sem inventar configuração.
+
+### DECISION / NEXT
+
+`REM21-018 = SPEC_APPROVED_CONTROLLED_BUILD`. O BUILD está autorizado somente
+para os slices da SPEC, com defaults seguros, factories determinísticas de
+teste, placeholders sintéticos e sem produção/G21-5/G21-6. Próxima ação:
+implementar e verificar antes de atualizar o status local.
+
+# AUD21 — REM21-017 BUILD/AUDIT local concluído; REM21-018 próxima — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-017` (`A21-F19`, `A21-F22`, `A21-F23`, `A21-F26`) foi confirmada em
+escopo local, sintético e descartável. O BUILD/AUDIT implementou somente os
+quatro slices aprovados: parser/scan documental, correção dos dois links,
+política para referências históricas e catálogo de vazios com índice derivado.
+
+### RESULTADO FRESCO
+
+No run `run-rem21-017-final-2`, candidate
+`9efe1a104d4f77546c5d8f4c15f8bec0f4a4c5bb48844eb759e477f42e9d2bd6`, Node
+`22.23.2`, os gates candidate-bound selecionados de typecheck, lint, format,
+docs, diff e unit passaram. A regressão teve 300 arquivos aprovados, 20 skips
+governados, 2.105 testes aprovados, 146 skips governados e zero falhas.
+O scan documental terminou com zero links quebrados e zero referências
+absolutas não allowlisted; 12 referências históricas foram preservadas e
+catalogadas. A higiene encontrou 66/66 vazios catalogados e parseou 382 JSONs
+não vazios. A evidência está em
+`docs/04_audit/evidence/AUD-20260921/REM21-017/`.
+
+### DECISION / LIMITATIONS
+
+`REM21-017 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`. A crítica de integridade
+invalidou o primeiro candidato-bound por ter iniciado antes da restauração dos
+bytes históricos hash-bound; o run final foi refeito com a preservação
+confirmada. Barra integral, freeze, I1, signoff, G21-5 e G21-6 continuam fora
+da rodada; produção permanece `NO_GO`. F24/F25 seguem em REM21-018.
+Próxima transição: Discovery/PRD/SPEC de `REM21-018`.
+
+# AUD21 — REM21-015 BUILD/AUDIT local concluído; REM21-017 próxima — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-015` (`A21-F17`) foi executada sob `G21-1` em escopo local, sintético e
+descartável. O BUILD implementou apenas os quatro slices aprovados em
+`SPEC.md`: hook de sessão trusted no API, lifecycle de migrations PostgreSQL,
+loop detection do harness e Trace Viewer do platform web. Nenhuma produção,
+integração externa, dado real ou ação sensível foi usada.
+
+### RESULTADO FRESCO
+
+No run `run-rem21-015-final-1`, candidate
+`5fb42a3bbf5ab2be4ce51966773868a1c25c66eb6eef4e72fd7a6095d60f2da1`, Node
+`22.23.2`, os gates candidate-bound de runtime, typecheck, lint, format, docs,
+diff e unit passaram. A regressão teve 299 arquivos aprovados, 20 skips
+governados, 2.101 testes aprovados, 146 skips governados e zero falhas. A
+reconciliação recalculou 1.376 arquivos, o mesmo candidate e zero drift. Os
+hotspots reduziram 598 linhas no total, sem mudança nos contratos congelados.
+
+### DECISION / LIMITATIONS
+
+`REM21-015 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`. Evidência, mapa de
+ownership, hashes dos logs e limitações estão em
+`docs/04_audit/evidence/AUD-20260921/REM21-015/`. A barra integral, freeze,
+I1, signoff e validação externa continuam fora da rodada; produção permanece
+`NO_GO`. Próxima transição: Discovery/PRD/SPEC de `REM21-017`.
+
+# AUD21 — REM21-015 DISCOVERY/PRD/SPEC concluídos; BUILD autorizado — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-015` (`A21-F17`) foi confirmada em escopo local, sintético e
+descartável. A descoberta mediu os quatro hotspots e selecionou quatro slices
+disjuntos: hook de sessão trusted no API, lifecycle de migrations PostgreSQL,
+policy de detecção de loop do harness e Trace Viewer do platform web.
+
+### DISCOVERY / PRD / SPEC
+
+O baseline reproduzido foi `server.ts` 5.901 linhas, `postgres.ts` 3.821,
+`iterative-runtime.ts` 2.503 e `platform/index.tsx` 1.778. O RED probe de
+ownership confirmou que os quatro módulos novos ainda não existiam. Os
+contratos públicos, ordem de hooks, SQL/checksum, semântica de loop, labels e
+seleção tenant-scoped foram congelados em
+`docs/04_audit/evidence/AUD-20260921/REM21-015/`.
+
+### DECISION / NEXT
+
+`REM21-015 = SPEC_APPROVED_CONTROLLED_BUILD`; BUILD local foi autorizado apenas
+para o file plan de `SPEC.md`. Não há autorização para refactor big-bang,
+produção ou serviços externos.
+
+# AUD21 — REM21-014 BUILD/AUDIT local concluído; REM21-015 próxima — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-014` (`A21-F16`) foi executada sob `G21-1` em escopo local, sintético e
+descartável. A qualificação usa sessão trusted com token sintético e store em
+memória; produção, IdP, provider, canal, device físico, dado real, G21-5,
+G21-6, I1 e signoff permanecem fechados.
+
+### RESULTADO FRESCO
+
+O gate `rem21-014-v1` passou duas vezes no run
+`run-rem21-014-final-2`, candidate
+`f4f88e037214fe0cc54e446c9094a1bf7603da1f1b255cb5328427e3a73dfcf9`, Node
+`22.23.2`. Chromium, Firefox e WebKit executaram 5/5 cada, total 15/15,
+zero skips/flaky/falhas; seis análises axe tiveram zero violações bloqueantes e
+zero minor. O negative binding rejeitou run, candidate, simulation e
+production scope divergentes. Evidência hashada em
+`docs/04_audit/evidence/AUD-20260921/REM21-014/`.
+
+### DECISION / LIMITATIONS
+
+`REM21-014 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`. A matriz local não prova
+IdP real, device físico, produção, barra integral, freeze, I1 ou signoff.
+Próxima transição: Discovery/PRD/SPEC de `REM21-015`; produção segue `NO_GO`.
+
+# AUD21 — REM21-014 DISCOVERY/PRD/SPEC concluídos — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-014` (`A21-F16`) foi registrada sob `G21-1` para qualificação local,
+sintética e descartável de UX, acessibilidade e browsers. A leitura independente
+confirmou que não há evidência fresca ou candidate-bound e que a marca antiga
+`VERIFIED_LOCAL` no backlog não é suportada pelo estado real. Produção,
+G21-5, G21-6, I1 e signoff continuam fechados.
+
+### DISCOVERY / PRD / SPEC
+
+O baseline passou `6/6` apenas em Chromium, com identidade de browser em modo
+`simulation`, campos editáveis e axe bloqueando somente `serious`/`critical`.
+Firefox/WebKit não estavam declarados no Playwright nem instalados pelo CI. A
+SPEC congela uma configuração separada trusted com sessão HttpOnly, token
+sintético, store em memória, matriz Chromium/Firefox/WebKit, recovery de
+expiração, authz/tenant isolation, keyboard/focus, contraste, reduced motion,
+axe moderada bloqueante e report bound a run/candidate.
+
+Evidência documental: `docs/04_audit/evidence/AUD-20260921/REM21-014/`, com
+`DISCOVERY.md`, `PRD.md`, `SPEC.md` e `DECISION-RECORD.md`.
+
+### DECISION / NEXT
+
+`REM21-014 = SPEC_APPROVED_CONTROLLED_BUILD`; o BUILD local foi autorizado.
+Nenhum status VERIFIED ou GO de produção foi inferido nessa etapa documental.
+
+# AUD21 — REM21-011 BUILD/AUDIT local concluído; REM21-014 próxima — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-011` (`A21-F12`) foi executada sob `G21-1` em escopo local, sintético e
+descartável. O proof não usou provider, canal, IdP, segredo, dado real ou
+produção; produção permanece `NO_GO`.
+
+### RESULTADO FRESCO
+
+O gate `rem21-011-v1` passou duas vezes no run
+`run-local-376327-mucafskq`, candidate
+`2f4741c4947d356a81c9c238e6c3f67bf43bd3802377cb9ac9536133742544d8`, Node
+`22.23.2`. O collector sintético recebeu logs/métrica/span redigidos; labels
+não aprovadas foram zero; o exporter fault foi capturado e alertado sem
+exceção; SLOs e fault injection passaram; readiness permaneceu independente.
+Evidência hashada em `docs/04_audit/evidence/AUD-20260921/REM21-011/`.
+
+### DECISION / LIMITATIONS
+
+`REM21-011 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`. Collector/retention,
+external exporter, paging e SLO produtivo não foram medidos. Barra integral,
+freeze, I1, signoff e produção seguem `NO_GO`. Próxima transição:
+Discovery/PRD/SPEC de `REM21-014`.
+
+# AUD21 — REM21-011 DISCOVERY/PRD/SPEC concluídos — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-011` (`A21-F12`) foi registrada para BUILD controlado local, sintético
+e descartável, dependente das provas locais de `REM21-006` e `REM21-010`.
+Produção, G21-5, G21-6, I1 e signoff permanecem fechados.
+
+### DISCOVERY / PRD / SPEC
+
+O baseline confirmou redaction, cardinalidade e probes locais, mas ausência de
+exporter composto, saúde de sink, SLO avaliável e prova de falha sem mascarar
+readiness. A SPEC congela `CompositeTelemetry`,
+`CompositeObservationExporter`, catálogo SLI/SLO, alertas puros, integração
+API/worker e runner `rem21-011-v1`.
+
+Evidência documental: `docs/04_audit/evidence/AUD-20260921/REM21-011/`, com
+`DISCOVERY.md`, `PRD.md`, `SPEC.md` e `DECISION-RECORD.md`.
+
+### DECISION / NEXT
+
+`REM21-011 = SPEC_APPROVED_CONTROLLED_BUILD`. O BUILD/AUDIT local está
+autorizado; o próximo passo singular é executar o proof com collector sintético
+e fault injection. Nenhum GO de produção foi inferido.
+
+# AUD21 — REM21-010 BUILD/AUDIT local concluído; REM21-011 próxima — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-010` (`A21-F07`) foi executada sob `G21-1` em PostgreSQL 16 descartável,
+com dados sintéticos, sem provider, canal, IdP, segredo ou produção.
+
+### RESULTADO FRESCO
+
+O gate `rem21-010-v1` passou duas vezes no mesmo run
+`run-rem21-010-final-3`, candidate
+`7e3a7feb86e8f2cd2f1f3a611e2d25b1a5211f98643d42bd6c4db62844f39edb`, Node
+`22.23.2`. O workload API-repository → PostgreSQL → dois workers processou 32
+eventos sem duplicata; 45 tabelas, rows/checksums, RLS/policies, roles/grants,
+outbox e journals coincidiram após `pg_dump`/`pg_restore`. Corrupção intencional
+foi detectada e recuperada; rollback por backup pré-`0026` e roll-forward para
+`0026` passaram em repetição. Evidência hashada em
+`docs/04_audit/evidence/AUD-20260921/REM21-010/`.
+
+### DECISION / LIMITATIONS
+
+`REM21-010 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`. RPO/RTO produtivo não foi
+medido nem reivindicado; barra integral/freeze, I1, signoff e produção seguem
+`NO_GO`. Próxima transição: Discovery/PRD/SPEC de `REM21-011`.
+
+# AUD21 — REM21-016 BUILD/AUDIT local concluído; REM21-010 próxima — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-016` (`A21-F13`, `A21-F18`) foi executada sob `G21-1` em escopo local,
+sintético e descartável. O target Docker `runtime` foi construído sem push ou
+deploy; produção permanece `NO_GO`.
+
+### RESULTADO FRESCO
+
+O image gate `run-rem21-016-image-1` no candidate
+`b7b7bc7ea0d6c9e107e1fa1100df38ecb2c0439aafe79951acbfe00bbb4b61de`, Node
+`22.23.2`, passou. A imagem usa base Node 22 pinada, usuário `cvg`,
+entrypoint `node apps/api/dist/main.js`, contexto sem fontes/testes/dev deps e
+smoke `/live=200`/`/ready=200` em read-only, capacidades reduzidas e rede
+desabilitada. O image id é
+`sha256:10ae0b8369fdf5504b44b9ab25735f577d01e1d4a8dd568f543faa882691c2fa`;
+o manifesto `certification/runtime-image.json` hash é
+`6ec9a9e2884d374403ff74e02b9de920fdb3d11025e88956cf3d25666f4714d7`.
+O teste negativo rejeitou run, candidate e image id divergentes. A suíte
+unitária passou 2.081 testes, com 146 skips governados.
+
+### DECISION / NEXT
+
+`REM21-016 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`. Evidência hashada em
+`docs/04_audit/evidence/AUD-20260921/REM21-016/`. A barra integral,
+SBOM/licenças independentes, freeze, certificação externa e signoff humano não
+foram inferidos. Próxima transição: Discovery/PRD/SPEC de `REM21-010`.
+
+# AUD21 — REM21-013 BUILD/AUDIT local concluído; REM21-016 próxima — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-013` (`A21-F15`) foi executada sob `G21-1` em escopo local, sintético
+e descartável. Nenhum provider, canal, IdP, segredo, banco externo ou dado
+real foi usado; produção permanece `NO_GO`.
+
+### DISCOVERY / PRD / SPEC
+
+O baseline cobria somente três mutantes de `coverage-gate`, sem manifest
+versionado, source hash, domínio de risco, budget, testes focados ou teste
+negativo de alteração. Discovery, PRD e SPEC definiram o contrato
+`rem21-013-v1`, isolamento em cópia temporária e fail-closed para selector,
+source drift, timeout, erro e sobrevivente. Os documentos estão em
+`docs/04_audit/evidence/AUD-20260921/REM21-013/`.
+
+### BUILD / AUDIT FRESCO
+
+O run `run-rem21-013-mut-1`, candidate
+`5e2b52242b1a367573b6ea572b25adb784b451e73fe058ce5b75548a2e8f622e`, em
+Node `22.23.2`, executou 10/10 mutantes: coverage (3), identity, replay,
+policy, SSRF, approval, rate-limiter e persistence (7). Resultado: `10 KILLED`,
+`0 SURVIVED`, `0 TIMEOUT`, `0 ERROR`, verdict `PASS`; manifest hash
+`700210716713d583f80037838ac87be91e0af70765139601efbc756353a073da`.
+O teste focado passou 97/97; typecheck, lint, formato, diff e contrato da
+barra passaram. O checker de links retornou `broken: []`; as 11 referências
+absolutas históricas permanecem escopo de `REM21-017`.
+
+### DECISION / NEXT
+
+`REM21-013 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`. Evidência hashada em
+`docs/04_audit/evidence/AUD-20260921/REM21-013/`. A certificação integral,
+freeze e validação externa não foram inferidos. Próxima transição:
+Discovery/PRD/SPEC de `REM21-016`; `G21-5`, `G21-6`, I1 e produção seguem
+fechados.
+
+# AUD21 — REM21-008 BUILD/AUDIT local concluído; REM21-012 iniciada — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-008` (`A21-F08`, `A21-F21`) foi executada em escopo local, sintético e
+descartável sob `G21-1`. Produção permanece `NO_GO`; nenhum segredo, provider,
+canal ou serviço externo foi usado.
+
+### RESULTADO FRESCO
+
+O run `run-rem21-008-final-bar-4` no candidate
+`d9ae236ca252e8648bedffef3f9be98fe71d9b40d2d7013507e913413f47f6f0`, Node
+`22.23.2`, fechou a barra `rem21-008-v1` com `32/32 PASS`, manifesto sem
+falhas, `certification:verify PASS` e `diff:check PASS`. Coverage foi
+92,29% statements, 87,46% branches, 95% functions e 93,22% lines; unit
+passou 2.218 testes e PostgreSQL 257, ambos sem skips. A imagem non-root foi
+inspecionada com digest
+`sha256:1492aec8f82c838516201938f44692ca0eb6d82e22a1c364d4930511a6b42f45`.
+
+O certificador Phase 10 permaneceu `NO_GO` pelos gates externos não validados
+e signoff humano pendente. A evidência está em
+`docs/04_audit/evidence/AUD-20260921/REM21-008/`; nenhum I1, freeze ou GO de
+produção foi inferido.
+
+### DECISION / NEXT
+
+`REM21-008 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`. Próxima transição:
+Discovery/PRD/SPEC de `REM21-012` (governança de skips); `G21-5` e `G21-6`
+continuam fechados.
+
+# AUD21 — REM21-012 DISCOVERY/PRD/SPEC concluídos — 2026-09-22
+
+### TASK / SCOPE
+
+`REM21-012` (`A21-F14`) foi aberta após a verificação local de `REM21-008`,
+com `G21-1` limitado a fixtures e recursos descartáveis. O baseline confirmou
+que o catálogo não exigia expiração, conhecia apenas `postgres` e não agregava
+E2E ao inventário.
+
+### DECISION / NEXT
+
+Discovery, PRD e SPEC estão registrados em
+`docs/04_audit/evidence/AUD-20260921/REM21-012/`. O BUILD está autorizado
+somente após RED dos casos de expiração passada, gate dedicado ausente,
+relatório desconhecido/duplicado e E2E sem artefato. Produção, G21-5 e G21-6
+continuam fechados.
+
+# AUD21 — REM21-012 BUILD/AUDIT local concluído; REM21-013 próxima — 2026-09-22
+
+`REM21-012` passou para `VERIFIED_LOCAL / FINAL_CERT_DEFERRED`. O run
+`run-rem21-012-skip-1`, candidate
+`ae3c30a1acc2872d011f8696e7b1711b21d4c5f08a62723ce07ebe33bd981878`, passou
+E2E 12/12 e o gate de skip com 35 entries, quatro reports, zero skips e zero
+falhas. Os REDs de expiração, dedicated gate ausente e report desconhecido
+falharam antes do BUILD e passaram depois. Typecheck, lint, formato, links e
+diff também passaram; as 11 referências absolutas históricas continuam
+escopo de REM21-017. Evidência: `docs/04_audit/evidence/AUD-20260921/REM21-012/`.
+
+Próxima transição: Discovery/PRD/SPEC de `REM21-013`; `REM21-016` permanece
+lane local independente. Produção, G21-5, G21-6, I1 e freeze seguem fechados.
+
+# AUD21 — REM21-008 DISCOVERY/PRD/SPEC concluídos — 2026-09-21
+
+### TASK / SCOPE
+
+`REM21-008` (`A21-F08`, `A21-F21`) foi registrada para BUILD controlado local,
+sintético e descartável sob `G21-1`. Produção permanece `NO_GO`; nenhum
+segredo, provider, canal ou serviço externo será usado.
+
+### DISCOVERY / PRD / SPEC
+
+O baseline confirmou que `.github/workflows/verify.yml` fixa apenas a linha
+major de Node e não enumera todos os gates da barra. A task agora exige
+`.nvmrc`/Node 22.23.2, catálogo executável, self-tests negativos, artefatos
+por run, PostgreSQL/browser/imagem e certificação explicitamente bloqueantes.
+
+Evidência documental: `docs/04_audit/evidence/AUD-20260921/REM21-008/`, com
+`DISCOVERY.md`, `PRD.md`, `SPEC.md` e `DECISION-RECORD.md`.
+
+### DECISION / NEXT
+
+`REM21-008 = SPEC_APPROVED_CONTROLLED_BUILD`; BUILD local autorizado. `G21-5`
+e `G21-6` continuam fechados. Próxima ação singular: RED do contrato e
+implementação da barra.
+
+# AUD21 — REM21-005 BUILD/AUDIT local verificado — 2026-09-21
+
+### TASK / SCOPE
+
+`REM21-005` (`A21-F04`) foi concluída localmente sob `G21-1`, somente em escopo
+local, sintético e descartável. O `backend-patterns` foi aplicado à fronteira
+de sessão/replay e o `frontend-patterns` à ownership de estado, trust boundary
+e UX de auth. Produção permanece `NO_GO`; nenhum IdP, provider, canal,
+credencial ou dado real foi usado.
+
+### DISCOVERY / PRD / SPEC
+
+O BUILD implementou `GET /v1/session`, logout idempotente, store opaco local,
+fail-closed trusted sem store, replay fence com cookie stale/duplicado,
+rotação de sessão, bridge one-shot, dedupe sob StrictMode, expiração segura,
+foco de reauth e separação compile-time do bundle trusted. Simulation ficou
+explícita e controlada em fixtures.
+
+### DECISION / NEXT
+
+`REM21-005 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`, com produção `NO_GO`.
+Evidência: `docs/04_audit/evidence/AUD-20260921/REM21-005/BUILD-AUDIT.md` e
+`verification-summary.json`. `G21-5`/`G21-6` continuam fechados; a próxima
+task singular é `REM21-007`.
+
+# AUD21 — REM21-006 verificada; REM21-005 iniciada — 2026-09-21
+
+### TASK / SCOPE
+
+`REM21-006` (`A21-F05`, `A21-F09`) foi executada sob `G21-1`, somente
+em escopo local, sintético e descartável. Produção permanece `NO_GO`; nenhum
+provider, canal, credencial, dado real ou efeito externo foi usado.
+
+### ACTION / RESULT
+
+O worker ganhou máquina de readiness, preflight PostgreSQL/RLS antes do claim,
+preflight explícito para o perfil memory não durável, health independente de
+sweep, pausa/recovery de claims, ordem `ready -> processNext/drain/start` e
+cleanup idempotente entre sinais e `finally`. O `SIGTERM` não reabre
+readiness e erros tardios de preflight não convertem shutdown em falha global.
+
+Verificação: Node `v22.23.2`; focused lifecycle `15/15`; focused
+worker/runtime `25` pass e `1` skip sem PG; PostgreSQL sintético `9`
+arquivos/`43/43`; suíte completa `289` pass/`20` skip e `2052`
+pass/`144` skip; typecheck, ESLint, Prettier, links (`broken: []`), diff e
+hashes locais `PASS`. Os críticos fresh-context foram registrados como
+snapshots superseded e revisão atual `PARTIAL_SCOPE`; nenhum I1/freeze foi
+alegado.
+
+### DECISION / NEXT
+
+`REM21-006 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`, com `A21-F05` ainda
+aberto para qualquer qualificação produtiva. A próxima task singular é
+`REM21-005`; iniciar Discovery/PRD/SPEC de identidade frontend confiável.
+`G21-5` e `G21-6` permanecem fechados.
+
+# AUD21 — REM21-004 verificada; REM21-006 iniciada — 2026-09-21
+
+`REM21-004 / A21-F03` foi verificada localmente após BUILD/AUDIT. O guard
+compartilhado agora propaga o endereço resolvido por hop; os transports Node
+usam `lookup` determinístico com `agent:false`, preservam Host/SNI e propagam
+abort/timeout. EvolutionAPI, Chatwoot, OpenAI-compatible e Ollama exigem
+HTTPS fora de loopback explicitamente autorizado e restringem o opt-in HTTP a
+respostas DNS loopback.
+
+Evidência: `docs/04_audit/evidence/AUD-20260921/REM21-004/`, incluindo
+`sha256sums.txt` verificado. Node `v22.23.2`: focused 92/92, regressão dos
+packages afetados 322/322, typecheck, lint, Prettier, links e diff `PASS`.
+Crítica fresh-context final `PASS`; I1/freeze/certificação candidate-bound não
+foram reivindicados. Estado corrente: `REM21-004 = VERIFIED_LOCAL /
+FINAL_CERT_DEFERRED`; `REM21-006 = IN_PROGRESS`. Próxima ação: Discovery de
+REM21-006.
+
+# AUD21 — REM21-003 verificada; REM21-004 iniciada — 2026-09-21
+
+### TASK / SCOPE
+
+A crítica independente da task `REM21-003` confirmou a ordem de autenticação,
+detectou ausência de `iss` explícito no envelope HMAC, e o residual foi
+corrigido antes do fechamento. O trabalho continua local/sintético/descartável
+sob `G21-1`.
+
+### ACTION / RESULT
+
+O contrato foi ampliado para exigir issuer `cvg-operator` na emissão e na
+validação, com negativos para issuer ausente/divergente. A regressão Node22
+passou 38/38, lint/typecheck, links, diff e hashes passaram.
+
+### DECISION / NEXT
+
+`REM21-003 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`; `REM21-004 = IN_PROGRESS`.
+Próxima ação: Discovery/PRD/SPEC de SSRF connect-bound. Nenhum veredito I1 foi
+aceito para o candidato dirty.
+
+# AUD21 — REM21-002 verificada; REM21-003 iniciada — 2026-09-21
+
+### TASK / SCOPE
+
+`REM21-002` (`A21-F01`) foi executada após `REM21-001`, somente em escopo
+local/sintético/descartável sob `G21-1`; produção `NO_GO`, `G21-5` e `G21-6`
+fechados.
+
+### ACTION / RESULT
+
+Foi criada a governança computada em `scripts/lib/finding-governance.mjs`.
+O parser exige os 26 IDs A21, registra fonte/hash/linha/candidate/run/frescor,
+deriva scores e mantém os 11 P0 e 1 P1 abertos. `phase10-certify.mjs` agora
+materializa esse snapshot e `phase10-verify.mjs` o rederiva, rejeitando
+ausência, stale, divergência e adulteração. A suíte negativa passou 6/6, o
+self-test passou N1–N10/C0–C29, typecheck/lint focados, links e diff check
+passaram. A verificação do certificado legado falhou como esperado por drift e
+findings não computados; nenhum certificado foi promovido.
+
+### DECISION / NEXT
+
+`REM21-002 = VERIFIED_LOCAL / FINAL_CERT_DEFERRED`; `REM21-003 = IN_PROGRESS`.
+Próxima ação: Discovery/PRD/SPEC e BUILD local de autenticação antes do claim
+de replay. A evidência está em
+`docs/04_audit/evidence/AUD-20260921/REM21-002/`; I1 e freeze final continuam
+pendentes.
+
+# AUD21 — REM21-001 verificada; REM21-002 iniciada — 2026-09-21
+
+### TASK / SCOPE
+
+`REM21-002` (`A21-F01`) foi ativada após a verificação local de `REM21-001`.
+O escopo continua local/sintético/descartável sob `G21-1`, com produção
+`NO_GO`; `G21-5` e `G21-6` permanecem fechados.
+
+### ACTION / RESULT
+
+`REM21-001` passou os hashes do pacote AUD20-008 e REM21-001, o checker de
+documentos (`broken: []`), parse JSON e `git diff --check`. O resultado é
+`VERIFIED_LOCAL / I1_PENDING`: a ausência de uma crítica I1 fresca foi
+preservada como limitação, sem promoção por inferência. Discovery/PRD/SPEC de
+`REM21-002` serão registrados antes de mudar código.
+
+### DECISION / NEXT
+
+`REM21-002 = IN_PROGRESS`; próxima ação: reproduzir primeiro os casos
+negative de findings ausentes, stale, candidate mismatch e score/finding
+manual, depois corrigir o caminho de decisão com evidência candidate-bound.
+
+# AUD21 — G21-1 autorizado; REM21-001 iniciado — 2026-09-21
+
+### TASK / SCOPE
+
+`REM21-001` (`A21-F11`, `A21-F13`, `A21-F20`, `A21-F22`) iniciou a
+reconciliação do control plane e da evidência `AUD20-008`. O envio humano do
+prompt `0338` é a autoridade corrente de `G21-1`, restrita a execução
+local/sintética/descartável; produção continua `NO_GO`.
+
+### ACTION / RESULT
+
+Foi recuperada a evidência `AUD20-008` com candidate
+`579d2100c172b5157ed42d1cf983988d3401a8c930353b52e50c589578ea55af`, run
+`run-579d2100c172-mub8591x`, Node `v22.23.2` e status
+`PASS_LOCAL / I1_PENDING`. O `sha256sum --check` executado da raiz retornou
+exit `0`. O worktree preexistente (207 entradas) e o `.gauntlet` AUD20 ativo
+foram preservados; nenhum serviço externo, dado real ou ação sensível foi
+executado.
+
+### DECISION / NEXT
+
+`G21-1 = AUTHORIZED_LOCAL`; `REM21-001 = IN_PROGRESS`; `I1_PENDING` permanece
+pendente até haver parecer fresco. Próxima ação: finalizar a reconciliação,
+executar checker/diff e só então ativar `REM21-002`. `G21-5` e `G21-6` seguem
+fechados.
+
+# AUD21 — auditoria abrangente e pacote executivo — 2026-09-21
+
+### TASK / SCOPE
+
+Salvar a auditoria completa solicitada e produzir plano executivo, roadmap,
+backlog e prompt copia-e-cola para uma futura execucao Codex. Rodada
+documental; nenhuma remediacao de codigo, integracao externa ou producao foi
+autorizada/executada.
+
+### ACTION / RESULT
+
+Foi publicado o relatorio `0566` com nota geral 67/100, 12 dimensoes e 26
+achados: 12 de alto impacto, 10 de medio e 4 de baixo. O relatorio preserva a
+evidencia positiva de 2.030 testes e a decisao mecanica do candidate
+`579d2100...`, mas mantem `REJECT / NO_GO` diante dos blockers atuais.
+
+Foram criados o plano `0335`, roadmap `0336`, backlog `0337` e prompt `0338`.
+O backlog mapeia todos os achados em 20 tasks `REM21`, relaciona resultados
+AUD20 sem reescrever o historico e separa explicitamente trabalho local de
+IdP/providers/canais/piloto/producao.
+
+A recuperacao confirmou drift: `AUD20-008` possui manifesto e verificacao
+`PASS_LOCAL / I1_PENDING`, candidate `579d2100...`, enquanto registros mestres
+anteriores ainda a apontam como proxima task. O fato foi registrado como
+`A21-F11` e a reconciliacao segura e a primeira task `REM21-001`.
+
+Validacao documental da rodada: Prettier dos cinco novos arquivos `PASS`;
+checker focado dos 11 arquivos criados/atualizados sem link quebrado ou
+referencia absoluta; `npm run docs:check-links` `PASS` sem link quebrado e com
+11 referencias absolutas historicas reportadas; `git diff --check` `PASS`;
+inventario confirmou 26 headings `A21-F01`-`F26` e 20 tasks
+`REM21-001`-`020`.
+
+### DECISION / NEXT
+
+`G21-0 = COMPLETED_DOCUMENTATION_ONLY`. Estado corrente:
+`WAITING_HUMAN_APPROVAL_FOR_G21-1`; producao `NO_GO`. A proxima acao singular
+e o humano revisar o pacote e, se aprovar BUILD local/sintetico/descartavel,
+enviar o prompt `0338`. `G21-5`, validacao externa, piloto e producao continuam
+bloqueados e nao podem ser inferidos desse prompt.
+
+# AUD-20260920-REAUDIT — AUD20-007 verificada — 2026-09-21
+
+### TASK / SCOPE
+
+`AUD20-007` (`A20-F08`): preservar causalidade imutavel de approvals no
+decision route e no worker de recovery. Escopo local, sintetico e descartavel
+sob `G20-1`; sem provider, canal, IdP, dado real ou producao.
+
+### ACTION / RESULT
+
+Foi implementada a migration `0024_approval_decision_causality`, com actor type,
+decision correlation e decision command key persistidos atomically with the
+approval decision. O route reutiliza o `ApprovalRecord` duravel; o worker busca
+qualquer decisao sem audit via `NOT EXISTS`, falha fechado com metadata
+incompleta e preserva a deduplicacao da migration 0021.
+
+Com Node `v22.23.2` e PostgreSQL 16 descartavel em `127.0.0.1:55432`, o gate
+PostgreSQL passou 35 arquivos/252 testes, sem falhas e sem skips. A
+certificacao integrada passou os 16 gates, unit passou 286 arquivos/2029 testes
+com skips catalogados, evals passaram 56/56, coverage critica passou e mutation
+guard matou 3/3. `certification:verify` e `sha256sum --check` passaram.
+Evidencia completa esta em
+`docs/04_audit/evidence/AUD-20260920/AUD20-007/`, com candidate e run
+vinculados no manifesto proprio.
+
+### DECISION / NEXT
+
+`AUD20-007` = `VERIFIED_LOCAL / PASS_LOCAL`. O certificado permanece
+`CONDITIONAL_GO / AAA_CONTROLLED`; `G20-2` permanece fechado e producao
+`NO_GO`. Proxima task: `AUD20-008`, fencing ao replay/webhook lease.
+
+# AUD-20260920-REAUDIT — AUD20-007 Discovery/SPEC congeladas — 2026-09-21
+
+### TASK / SCOPE
+
+`AUD20-007` (`A20-F08`): preservar causalidade imutavel de approvals no
+decision route e no worker de recovery. Escopo local, sintetico e descartavel
+sob `G20-1`; sem provider, canal, IdP, dado real ou producao.
+
+### ACTION / RESULT
+
+Discovery confirmou que `ApprovalRecord` ja possui parte da narrativa, mas o
+route nao persiste o correlation/`Idempotency-Key` da decisao e o worker usa
+identidade, correlation e policy fabricadas, consulta somente
+`WAITING_APPROVAL` e diverge a capitalizacao do veredito no audit. A SPEC foi
+registrada em `docs/04_audit/evidence/AUD-20260920/AUD20-007/SPEC.md`.
+
+O design congelado estende `runtime_approvals` com actor type, decision
+correlation e decision command key; o route grava e reutiliza o envelope
+persistido; o worker localiza qualquer execucao decidida sem audit via
+`NOT EXISTS`, falha fechado com metadata incompleta e preserva a deduplicacao
+da migration 0021.
+
+### DECISION / NEXT
+
+SPEC pronta para BUILD sob `G20-1`. Proxima acao: implementar migration 0024,
+persistencia do envelope, route e recovery, com prova de crash apos decisao e
+antes do audit. G20-2 permanece fechado e producao `NO_GO`.
+
+# AUD-20260920-REAUDIT — AUD20-006 migration 0021 fail-closed verificada — 2026-09-21
+
+### TASK / SCOPE
+
+`AUD20-006` (`A20-F09`): tornar a deduplicacao de `approval_decision` fail-closed
+na migration 0021 e no preflight PostgreSQL. Escopo local, sintetico e
+descartavel sob `G20-1`; sem provider, canal, IdP, dado real ou producao.
+
+### ACTION / RESULT
+
+A migration agora bloqueia duplicatas legadas e definicoes incompatíveis sem
+reconciliar dados; o runner conserva a transacao/advisory lock; o preflight
+valida unicidade, validade, prontidao, tabela, expressoes e predicado do indice
+tambem fora do caminho RLS. Os testes cobrem duplicatas, ausencia, definicao
+errada, indice invalido/não pronto e duas aplicacoes concorrentes.
+
+Com Node `v22.23.2` e PostgreSQL 16 descartavel em `127.0.0.1:55432`, o gate
+PostgreSQL passou 35 arquivos/251 testes, sem falhas e sem skips. A certificacao
+integrada passou format, typecheck, lint, build, unit, coverage, security,
+worker startup, PostgreSQL, E2E, evals, chaos, load, restore, SBOM e licenses;
+coverage critica e mutation guard passaram, e `certification:verify` passou.
+Evidencia e candidate/run estao vinculados em
+`docs/04_audit/evidence/AUD-20260920/AUD20-006/`.
+
+### DECISION / NEXT
+
+`AUD20-006` = `VERIFIED_LOCAL / PASS_LOCAL`. `G20-2` permanece fechado ate os
+controles restantes. Proxima task: `AUD20-007`, causalidade imutavel de
+approvals. Producao permanece `NO_GO`.
+
+# AUD-20260920-REAUDIT — AUD20-005 evidência e certificação vinculadas — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD20-005` (`A20-F04`): least-privilege e preflight da tabela
+`rate_limit_buckets`. Escopo local, sintetico e descartavel sob `G20-1`; sem
+provider, canal, IdP, dado real ou producao.
+
+### ACTION / RESULT
+
+O preflight estrutural e de privilegios foi implementado com controles negativos
+para grant, tabela, indice e catalogo incompleto. A governanca de skips foi
+reconciliada com o arquivo PostgreSQL atualizado. Coverage global passou
+90.15/85.23/92.35/90.75; o grupo critico `rls` passou 95.39%; mutation guard
+matou 3/3 mutacoes.
+
+O candidate
+`a7b8b86b111a3d4fdc0f1042af7a2b92ca8540a9204f7dd2da9113eb59111a80` e o run
+`run-a7b8b86b111a-muagav9h` foram certificados como
+`CONDITIONAL_GO / AAA_CONTROLLED`; `npm run certification:verify` passou. O gate
+PostgreSQL explicito passou 35 arquivos/238 testes, zero falhas e zero skips.
+Evidencia completa esta em
+`docs/04_audit/evidence/AUD-20260920/AUD20-005/`.
+
+### DECISION / NEXT
+
+`AUD20-005` = `VERIFIED_LOCAL / PASS_LOCAL`. `G20-2` permanece fechado ate os
+controles negativos restantes. Proxima task: `AUD20-006`, migration 0021 e
+preflight fail-closed. Producao permanece `NO_GO`.
+
+# AUD-20260920-REAUDIT — AUD20-005 rate limiter verificada — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD20-005` (`A20-F04`): fechar least-privilege e preflight da tabela
+`rate_limit_buckets`. Escopo local, sintetico e descartavel sob `G20-1`; sem
+provider, canal, IdP, dado real ou producao.
+
+### ACTION / RESULT
+
+Foi registrada a SPEC em
+`docs/04_audit/evidence/AUD-20260920/AUD20-005/SPEC.md`. A migration 0023
+permanece sem RLS e com `REVOKE ALL FROM PUBLIC`, documentando que o setup de
+deployment deve conceder explicitamente `SELECT, INSERT, UPDATE, DELETE` ao
+runtime role. O catalogo de ownership da migration role agora inclui a tabela.
+
+O novo `assertRateLimitSchema` verifica tabela regular, colunas, constraints e
+os indices primary/reset em todo startup PostgreSQL. O preflight da runtime role
+verifica ownership, DML necessario e ausencia de `TRUNCATE`, `TRIGGER` e
+`REFERENCES`. `buildServerFromEnv` executa o preflight antes de compor o
+limiter; `/health` continua isento, enquanto request ordinaria usa o limiter.
+
+Provas negativas cobrem grant ausente, tabela ausente e indice ausente. Com
+Node `v22.23.2` e PostgreSQL 16 descartavel em `127.0.0.1:55432`, a suite focada
+da API passou 35/35; o gate PostgreSQL completo passou 35 arquivos/237 testes,
+sem skips; `npm test` passou 285 arquivos/2.017 testes, com 139 skips
+catalogados; Phase 4A passou 13 arquivos/93 testes e 16 assertions. Typecheck,
+lint, format, diff, skip governance e certification self-test passaram.
+
+### DECISION / NEXT
+
+`AUD20-005` = `VERIFIED_LOCAL / PASS_LOCAL`. O candidate/run final e os hashes
+da certificacao integrada desta rodada serao vinculados na evidencia propria.
+`G20-2` permanece fechado ate os controles negativos restantes. Proxima task:
+`AUD20-006`, migration 0021 e preflight fail-closed. Producao permanece `NO_GO`.
+
+# AUD-20260920-REAUDIT — AUD20-004 identity verificada — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD20-004` (`A20-F13`): tornar exata a identidade do gate Phase 4A. Escopo
+local, sintetico e descartavel sob `G20-1`; nenhuma alteracao de produto,
+integracao externa ou producao.
+
+### ACTION / RESULT
+
+`scripts/phase4a-gate-identity.mjs` passou a extrair somente declaracoes
+semanticas `candidate:`/`Candidate digest:`/`candidateId:`, ignorando digests de
+reports, fingerprints, sentinels e secoes de errata/historicas. O gate agora
+exige cardinalidade exatamente 1 em cada documento e um unico digest
+compartilhado igual a ancora congelada
+`6185c586e3820665faa5b735ec27f7395d01fa15c1e9199263023bb52dbba73e`.
+
+O teste negativo "ancora + digest extra" falha fechado. O teste focado passou
+6/6; `npm run verify:phase4a:identity` passou com `shared=[anchor]`; a suite
+estrutural `verify:phase4a` passou 13 arquivos/93 testes e 16 assertions, com
+fixture PostgreSQL descartavel. No candidate
+`6b34fefb169823b3be9ef7febb7e6d05c41e0d564d644a1d93451de340f3e38d`, run
+`run-6b34fefb1698-muad6372`, Node `v22.23.2`, todos os gates Phase 10 passaram e
+o resultado foi `CONDITIONAL_GO / AAA_CONTROLLED`.
+
+Evidencia e hashes estao em
+`docs/04_audit/evidence/AUD-20260920/AUD20-004/`.
+
+### DECISION / NEXT
+
+`AUD20-004` = `VERIFIED_LOCAL / PASS_LOCAL`. `G20-2` permanece fechado ate os
+controles negativos restantes. Proxima task: `AUD20-005`, least-privilege do
+rate limiter. Producao permanece `NO_GO`.
+
+# AUD-20260920-REAUDIT — AUD20-003 skips verificada — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD20-003` (`A20-F03`): inventariar e governar todos os skips observados pelos
+gates. Escopo local, sintetico e descartavel sob `G20-1`; nenhum provider,
+canal, IdP, dado real ou producao.
+
+### ACTION / RESULT
+
+Foi implementado o catalogo `scripts/skip-catalog.json` com 35 contratos e
+hashes de origem, a biblioteca `scripts/lib/skip-governance.mjs`, o CLI
+`scripts/skip-inventory.mjs` e os testes de governanca. O inventario rejeita
+skip desconhecido, skip requerido, source drift, metadata ausente e report com
+contagem divergente; os reports de unit, PostgreSQL e chaos ficam vinculados ao
+mesmo candidate/run.
+
+Com Node `v22.23.2` e PostgreSQL 16 sintetico em `127.0.0.1:55432`, o run
+`run-49bd7d1d9f7e-muabjtti` no candidate
+`49bd7d1d9f7e8a7469710718103c121c36bf916c468e2cc96c0b6d40be2092f9` passou
+format, typecheck, lint, build, unit, coverage, security, worker startup,
+PostgreSQL, E2E, evals, chaos, load, restore, SBOM e licenses. Unit teve 2.014
+testes PASS e 138 skips catalogados; PostgreSQL teve 35 arquivos, 234 testes e
+zero skips; inventory teve 35 contratos e zero falhas. O certificador produziu
+`CONDITIONAL_GO / AAA_CONTROLLED` no escopo controlado.
+
+Self-test de governanca passou e os negativos de skip desconhecido/requerido
+falharam como esperado. Evidencia e hashes estao em
+`docs/04_audit/evidence/AUD-20260920/AUD20-003/`.
+
+### DECISION / NEXT
+
+`AUD20-003` = `VERIFIED_LOCAL / PASS_LOCAL`. `G20-2` permanece fechado ate
+`AUD20-004` e seus controles negativos. Proxima task: `AUD20-004`, identidade
+exata do gate Phase 4A. Producao permanece `NO_GO`.
+
+# AUD-20260920-REAUDIT — AUD20-002 coverage/mutation verificada — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD20-002` (`A20-F02`): alinhar coverage global, coverage critica e mutation
+guard ao contrato QAUD20. Escopo local, sintetico e descartavel, sob `G20-1`;
+nenhuma integracao externa ou producao.
+
+### ACTION / RESULT
+
+Em Node `v22.23.2`, `npm run test:coverage` terminou com 284 arquivos PASS,
+20 skipped, 2.008 testes PASS e 138 skipped. Os totais foram 90.15% statements,
+85.20% branches, 92.32% functions e 90.75% lines, acima de 90/85/90/90.
+`npm run coverage:critical` agregou kernel 95.82%, approval 99.42%, policy
+98.17%, journal 97.76%, channel 95.47% e RLS 95.42% em branches. O
+`mutation:guard` matou 3/3 mutacoes selecionadas. Controles de limite e fonte
+critica passaram 3/3; focused tests passaram 146 com 6 skipped; typecheck, lint,
+Prettier e `git diff --check` passaram.
+
+O teste de deadline do runtime foi tornado deterministico com `AuditSink`
+sintetico suspenso, sem alterar a implementacao de producao. Evidencia e
+hashes foram persistidos em
+`docs/04_audit/evidence/AUD-20260920/AUD20-002/`.
+
+### DECISION / NEXT
+
+`AUD20-002` = `VERIFIED_LOCAL / PASS_LOCAL`. `G20-2` permanece fechado ate
+`AUD20-004` e seus controles negativos. Proxima task: `AUD20-003`, inventario
+e governanca dos skips. Producao permanece `NO_GO`.
+
+# AUD-20260920-REAUDIT — G20-1 autorizado, AUD20-001 iniciado — 2026-09-20
+
+### TASK / SCOPE
+
+Recuperação do programa `AUD-20260920-REAUDIT` após autorização humana explícita
+de `G20-1`. Escopo autorizado: `AUD20-001`–`AUD20-018`, somente local,
+sintético e descartável; `AUD20-019/020` continuam sob `G20-5`.
+
+### ACTION / RESULT
+
+As instruções e os planos correntes foram revalidados. O worktree já continha
+alterações AUD19/AUD20 prévias e foi preservado; HEAD é
+`05d1f33322a5b75e65ee3b6f0fa1a737c300d7bb`. O fingerprint pré-BUILD foi salvo
+fora do repositório com digest
+`b9ec03d60bd57872095fa6561908d590071888b50760eb29cc65693adf8ae484`. Node
+`v24.20.0` é apenas diagnóstico; Node `v22.23.2` está disponível. A barra
+QAUD20-v1 foi congelada e o estado Gauntlet `aud20-20260920-w1` foi inicializado.
+O estado Gauntlet AAA-4A concluído foi preservado em
+`.gauntlet-aaa4a-20260917-finished`; nenhuma evidência histórica foi reescrita.
+
+### DECISION / NEXT
+
+`G20-1` está registrado como autorizado para BUILD interno. `AUD20-001` é a
+task ativa e exige RED/GREEN, negativos de threshold e prova integrada antes de
+`G20-2`. Não há autorização para G20-5, integração externa, piloto ou produção;
+produção permanece `NO_GO`.
+
+# AUD-20260920-REAUDIT — nova auditoria e planejamento — 2026-09-20
+
+### TASK / SCOPE
+
+Auditoria read-only do código e do certificado `AUD19-016`, atualização
+documental e criação de plano executivo, roadmap e backlog. Nenhum BUILD,
+serviço externo, dado real ou produção autorizado.
+
+### ACTION / RESULT
+
+Quatro revisões I1 independentes inspecionaram código, contratos e artefatos.
+Antes da documentação, `certification:verify`, Phase 4A identity,
+`format:check`, `git diff --check` e `docs:check-links` passaram. O sentinel da
+crítica final preservou
+`6e7c97c343e4985e3ef94964428d70a00169be316382701117d66493d51da243`.
+O parecer consolidado foi `REJECT` sob QAUD20, apesar da coerência mecânica do
+certificado histórico `d7f5…`.
+
+Foram registrados os achados A20-F01–F15 e criados `0565`, `0331`, `0332`,
+`0333` e `0334`. README, índices `0300/0301/0302`, runtime state e backlog
+mestre foram reconciliados. Nenhum artefato certificado de `AUD19-016` foi
+reescrito.
+
+Depois da entrega, `certification:verify` falhou somente pela mudança esperada
+dos nove documentos incluídos no digest: candidato corrente
+`bc60314d9ae3b4ef431c4089700283b9b59b34fbfd5ed1d4a0704291c99aa4e6` versus
+`d7f5…`; schema, 29 hashes, decisão e certificação histórica continuaram
+coerentes.
+
+### DECISION / NEXT
+
+Programa `AUD-20260920-REAUDIT` = `WAITING_HUMAN_APPROVAL`, engine
+`EVOLUTION / PLAN`, active task `NONE`, produção `NO_GO`. `G20-1` pode
+autorizar apenas remediação local/sintética; validação externa e piloto
+dependem de `G20-5` separado. Como os novos docs entram no candidate digest,
+drift contra `d7f5…` é esperado e exige novo candidato após eventual BUILD.
+
+# AUD-20260919-REMEDIATION — AUD19-016 candidato controlado — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-016` (W4): freeze, certificação Phase 10, crítica independente e
+adjudicação do candidato local/sintético.
+
+### ACTION / RESULT
+
+`npm run certify` terminou os 16 gates locais em `PASS`; `certification:verify`
+validou schema, 29 hashes, decisão coerente e candidato
+`d7f5d06a6bbf67ca410e5619674d313a74af690479bf5a5b7c5f67aeea331454`. Crítica
+fresh read-only registrou P0/P1 vazios, limites P2 explícitos e a lacuna de
+eval 94,64% versus meta contratual de 97%.
+
+### DECISION / NEXT
+
+`AUD19-016` = `CONDITIONAL_GO` / `AAA_CONTROLLED` somente no escopo
+local/sintético; manifesto, critica e sentinel pós-crítica registrados; produção
+`NO_GO`. Próximo gate depende de validação externa autorizada e signoff humano.
+
+# AUD-20260919-REMEDIATION — AUD19-013 VERIFIED — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-013` (W3): UX/acessibilidade (F-14 parcial). Chromium + axe +
+teclado + estados + tenant + authz + reduced motion.
+
+### ACTION / RESULT
+
+Novo spec E2E (6/6) + suíte completa 12/12; axe 0 serious/critical;
+screenshots de evidência; tenants corrigidos para o schema; 401 legado =
+baseline do HEAD. Estáticos PASS.
+
+### DECISION / NEXT
+
+`AUD19-013` = `VERIFIED`. Próxima: `AUD19-014`. Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — AUD19-011 VERIFIED; W2 fechada — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-011` (W2): hotspots + dependências (F-13). Node `v22.23.2`.
+
+### ACTION / RESULT
+
+Guard de manifests novo achou 42 violações → todas declaradas (lock
+ressincronizado); extrações `server.ts`→`tenant-preflight.ts` (−1002 linhas)
+e `platform/index.tsx`→`draft-helpers.ts` (−447) com caracterização idêntica
+(7/19 e 57/285); `build:web` isolado PASS. Estáticos PASS.
+
+### DECISION / NEXT
+
+`AUD19-011` = `VERIFIED`. W2 fechada. Próxima: W3 com `AUD19-013`.
+Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — AUD19-010 VERIFIED — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-010` (W2): identidade confiável + resiliência no web (F-12).
+Node `v22.23.2`, fetch mockado.
+
+### ACTION / RESULT
+
+Adapter token + `ApiSession` (geração/limpeza/401) + `request()` resiliente
+(timeout/abort/parse/retry-só-GET) sem mudar a superfície default.
+Provas: 10 novas + web completa 80/80. `App` preservado (login em 013).
+Estáticos PASS.
+
+### DECISION / NEXT
+
+`AUD19-010` = `VERIFIED`. Próxima: `AUD19-011` (fecha W2). Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — AUD19-009 VERIFIED — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-009` (W2): telemetria/health compostos (F-11). Node `v22.23.2`,
+PG descartável local.
+
+### ACTION / RESULT
+
+`/ready` 503 + `/live` 200 com DB quebrado; probe travada limitada;
+`checkHomologHealth` (DB+fila) com log sem derrubar; redação travada
+(logs/métricas); correlação PG 1-evento sem PII; cardinalidade + alertas
+puros; runbook. Provas: 5/5 memory, 1+3 PG, regressão verde. Estáticos PASS.
+
+### DECISION / NEXT
+
+`AUD19-009` = `VERIFIED`. Próxima: `AUD19-010`. Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — AUD19-008 VERIFIED — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-008` (W2): worker durável de homologação (F-10). Node `v22.23.2`,
+PG descartável, processos reais.
+
+### ACTION / RESULT
+
+Modo `operational-harness-homolog` (arming, PG mandatório, produção recusada,
+surface sintética vazia, loop com drain, sweeps + convergência de aprovações).
+Smoke: SIGKILL pós-claim → reclaim → `SUCCEEDED` 1× (attempt 2, journal 0);
+recusas fail-closed; SIGTERM drena exit 0. Regressão worker/R3 verde.
+Estáticos PASS.
+
+### DECISION / NEXT
+
+`AUD19-008` = `VERIFIED`. Próxima: `AUD19-009`. Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — AUD19-007 VERIFIED; W1/G3 fechados — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-007` (W1): egress SSRF/DNS/redirect (F-09). Node `v22.23.2`; rede real
+só loopback; restante injetado.
+
+### ACTION / RESULT
+
+Guarda composta (`resolveAndGuardOutboundUrl` + `fetchWithSsrfGuard`) em
+`shared/ssrf.ts`; 4 chamadores compostos (`evolution`, `chatwoot`,
+`openai-compatible`, `ollama`) com opt-in explícito de redes privadas e DNS
+injetável. Provas: egress 17/17 (allowlist×privado, rebinding, redirects,
+loopback real), estático 30/30, channel+model+shared 317/317, negação no
+adapter sem fetch. Residual honesto: TOCTOU check→connect sem pin.
+Estáticos PASS.
+
+### DECISION / NEXT
+
+`AUD19-007` = `VERIFIED`. W1 fechada, gate `G3` atingido. Próxima: W2 com
+`AUD19-008`. Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — AUD19-006 VERIFIED — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-006` (W1): replay/rate distribuídos (F-08). ADR-006 escolhe PostgreSQL
+existente (sem infra nova). Node `v22.23.2`, PG descartável local.
+
+### ACTION / RESULT
+
+Hook de replay de token via `webhook_replay_events` (cross-processo, restart,
+outage→401 e token fresco provados); `PostgresRateLimiter` + migration `0023`
+(budget compartilhado, expiração, outage→throw, HTTP 301→429); limite escopado
+tenant:sub na decisão; probes isentas de tarifação; fiação trusted no
+`buildServerFromEnv`. Provas: 4/4 replay + 7/7 rate PG, identidade/rate/webhook
+existentes verdes, api memory 280 PASS. Estáticos PASS.
+
+### DECISION / NEXT
+
+`AUD19-006` = `VERIFIED`. Próxima: `AUD19-007` (fecha W1). Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — AUD19-005 VERIFIED — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-005` (W1): preflight RLS do schema tenant-scoped completo (F-07).
+Node `v22.23.2`, PG descartável local.
+
+### ACTION / RESULT
+
+Inventário canônico `TENANT_SCHEMA_INVENTORY` (40 tabelas) consumido pelo
+preflight (NOMES exatos do catálogo vivo); migration `0022` padroniza as 5
+políticas `cvg_*`; versões/constraints/indexes estendidos; mundo fechado
+provado (41 tabelas com tenant_id == inventário + quarentena); 3 negativos
+(tabela removida, `0022` ausente, papel sem grants) falham; fixture de grants
+deriva do inventário. Compat: sonda de coluna em `appendAudit` preserva
+0000-only. Gap full-schema além de auditoria → W2. Provas: mundo fechado 4/4,
+persistence-mode 25/25, role-preflight 13/13, phase4a 78/78, api memory 280.
+Estáticos PASS.
+
+### DECISION / NEXT
+
+`AUD19-005` = `VERIFIED`. Próxima: `AUD19-006`. Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — AUD19-004 VERIFIED — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-004` (W1): idempotência de outbox vinculada ao conteúdo (F-06).
+Node `v22.23.2`, PG descartável local. RED→GREEN.
+
+### ACTION / RESULT
+
+RED: replay divergente devolvia o vencedor silencioso (3/5).
+Reparos: vínculo canônico (tenant, tipo, versão, hash) em memory + PG;
+divergente → `conflict` (inclusive em corrida concorrente real); idêntico e
+redação-equivalente convergem; `findByIdempotencyKey` + fallback
+durable-inbound convergem redelivery. Contratos que consagravam o bug
+atualizados (`outbox-durability`, `outbox-memory`, `outbox`). Provas: memory
+6/6, PG 3/3, regressão persistence/api/worker + PG outbox tudo PASS.
+Estáticos PASS.
+
+### DECISION / NEXT
+
+`AUD19-004` = `VERIFIED`. Próxima: `AUD19-005`. Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — AUD19-003 VERIFIED — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-003` (W1): atomicidade causal aprovação/retomada/auditoria (F-05).
+Node `v22.23.2`, PG descartável local. RED→GREEN com caracterização.
+
+### ACTION / RESULT
+
+RED: repetição idêntica de decisão lançava `invalid_state` (2/4).
+Reparos: decisão idempotente por (veredicto+aprovador) com divergência
+fail-closed (memory+PG via engine único); auditoria exatamente-uma por
+(tenant, approvalId, decision) com migration `0021` (índice único parcial +
+`unique_violation`→re-SELECT); rota anexa incondicionalmente; reconciliador
+em `@cvg/agent-core` (sweep → `AUD19-008`). Defeito pré-existente corrigido:
+rota nunca gravava auditoria no PG (`tenant_id NOT NULL`) — payload/wrapper/
+INSERT com propriedade de tenant. Provas: rota memory 7/7 (fault injection
+em 2 fronteiras, concorrência, veredicto oposto→409), PG 3/3 com `COUNT=1`,
+engine 4/4, regressão 109+17+24+12+36 PASS. Estáticos PASS.
+
+### DECISION / NEXT
+
+`AUD19-003` = `VERIFIED`. Próxima: `AUD19-004`. Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — AUD19-012 VERIFIED; W0/G1 fechados — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-012` (W0): reconciliação README/estado/índices/links/política de dados/
+críticos (F-14/F-15). BUILD documental + AUDIT, Node `v22.23.2`.
+
+### ACTION / RESULT
+
+README com `Estado atual — 2026-09-20`; índices `0300/0301/0302` em
+`IN_PROGRESS`; novo gate `docs:check-links` PASS (zero quebrados no escopo:
+README, `03_build`, `phase4*`, `07_agents`, registros mestres); 13 links
+`](../` corrigidos; política de dados reconciliada (`0109` normativa + notas
+aditivas em `0490`/`0491`); `critics/INDEX.md` vincula 3 APPROVE ao RESULT
+(hashes 3/3 MATCH, `PENDING` reconciliado, ausências declaradas sem fabricar).
+Residuais: 43 links quebrados em `04_audit` históricos (mapeados); 11 refs
+absolutas de máquina preservadas como histórico.
+
+### DECISION / NEXT
+
+`AUD19-012` = `VERIFIED`. W0 fechada, gate `G1` atingido. Próxima: W1 com
+`AUD19-003`. Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — AUD19-002 VERIFIED — 2026-09-20
+
+### TASK / SCOPE
+
+`AUD19-002` (W0): autoridade canônica de digest + PostgreSQL obrigatório Phase
+4A (F-03/F-04). Etapa `EVOLUTION / BUILD`, Node `v22.23.2`, PG descartável
+`postgres:16-alpine` local (porta 5434, sintético).
+
+### ACTION / RESULT
+
+F-03: `GATE_VALIDATION.md` reconciliado à âncora congelada
+`6185c586e3820665…dbba73e` (+ errata aditiva); novo gate
+`verify:phase4a:identity` PASS (autoridade `certification-rules.mjs`, sem hash
+duplicado); 5/5 testes de identidade (1 âncora viva + 4 negativas fail-closed).
+F-04: `PHASE4A_PG_REQUIRED=1` fail-closed (`MISSING_DISPOSABLE_PG`); sem env →
+FAIL exit 1 em `test:phase4a` e `verify:phase4a`; com PG → 13 arquivos / 78
+testes PASS zero skips; certify sem PG → decisão FAIL exit 1 (evidência
+restaurada byte-a-byte, `RESTORE_BYTE_IDENTICAL`); CI com flag + step Phase 4A.
+Gates estáticos: typecheck, lint, format:check, `git diff --check` PASS.
+
+### DECISION / NEXT
+
+`AUD19-002` = `VERIFIED`. Próxima ação: `AUD19-012` (reconciliação documental
+para fechar W0/`G1`). Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — execução autorizada; AUD19-001 VERIFIED — 2026-09-20
+
+### TASK / SCOPE
+
+Gate `G0` aprovado pelo prompt humano de 2026-09-19 para `AUD19-001`–`AUD19-016`
+(escopo local/sintético/descartável; sem commit/push/PR, sem produção).
+Etapa `EVOLUTION / BUILD`. Executada `AUD19-001` (W0): formatação mecânica dos
+nove arquivos de F-01 com Prettier travado `3.8.3`, sem mudança semântica.
+
+### ACTION / RESULT
+
+`npm run format:check` antes FAIL (exatos 9 arquivos) → depois PASS
+(`All matched files use Prettier code style!`); `git diff --check` PASS antes e
+depois. Equivalência semântica: 5 JSON parse-iguais ao `HEAD`; 4 markdown com
+diff restrito a formatação determinística (tokens de conteúdo intactos).
+Supersessão explícita de hashes em
+`docs/04_audit/evidence/AUD-20260919/AUD19-001/HASH_TRANSITION.md`
+(`attempt-01-raw.md` `59dde900…`→`d92f69f0…`, conteúdo idêntico). Runtime dos
+gates: Node `v22.23.2` (engine `>=22 <23`).
+
+### DECISION / NEXT
+
+`AUD19-001` = `VERIFIED`. Próxima ação: `AUD19-002` (identidade do candidato,
+digest canônico e PostgreSQL obrigatório Phase 4A). Produção `NO_GO`.
+
+# AUD-20260919-REMEDIATION — relatório e planejamento executivo — 2026-09-19T22:21:08-03:00
+
+### TASK / SCOPE
+
+Atendido o pedido de persistir a auditoria integral e derivar plano executivo,
+roadmap e backlog. Etapa `EVOLUTION / PLAN`, entrega exclusivamente documental;
+nenhum BUILD, migration, dependência, credencial, dado real, deploy ou efeito
+externo foi autorizado.
+
+### ACTION / RESULT
+
+Salvo o relatório
+`docs/04_audit/0564_full_construction_audit_2026-09-19.md`, com candidato
+`05d1f33322a5b75e65ee3b6f0fa1a737c300d7bb`, nota `60/100`, parecer
+`FAIL / REJECT` para prontidão integral e produção `NO_GO`. Criados plano
+`0328`, roadmap `0329` e backlog `0330`; registrados 16 itens
+`AUD19-001`–`AUD19-016` em cinco ondas. Os índices `0300`/`0301`/`0302` e o
+backlog mestre foram sincronizados.
+
+Validação desta entrega: readiness documental PASS (2 arquivos / 11 testes),
+Prettier direcionado PASS nos dez documentos entregues/atualizados,
+`git diff --check` PASS e 38 links relativos verificados em sete documentos,
+zero quebrados. O baseline global permanece honestamente vermelho:
+`format:check` falha nos nove arquivos preexistentes listados na auditoria e
+`certification:verify` falha por candidate drift; nenhum deles foi mascarado.
+
+### DECISION / NEXT
+
+Status `WAITING_HUMAN_APPROVAL` no gate `G0`. Próxima ação, se o plano for
+aprovado: promover somente `AUD19-001`, congelando paths e locks antes da
+execução. Produção e qualquer integração/efeito real permanecem `NO_GO`.
+
 # AAA-4A — final controlled certification — 2026-09-17
 
 ### ACTION / RESULT
@@ -364,7 +2155,7 @@ SUCCEEDED`; effect-journal count was `0` by deterministic empty-tool design.
 # PROD-20260913 — M1 implementado, corrigido e revalidado — 2026-09-13
 
 - engine: `BUILD` controlado + `AUDIT` independente; autorização: correções locais reversíveis, dados sintéticos e bancos descartáveis.
-- Entrega: PROD-01 fechou o mapa e congelou o contrato M1 ([doc](../02_spec/prod20260913_m1_corrections_contract.md), sha256 `7cff313d…`); PROD-02/03/05/06 implementados; PROD-04 bloqueado por D01; AAA-22 corrigiu D13-04 parcialmente.
+- Entrega: PROD-01 fechou o mapa e congelou o contrato M1 ([doc](02_spec/prod20260913_m1_corrections_contract.md), sha256 `7cff313d…`); PROD-02/03/05/06 implementados; PROD-04 bloqueado por D01; AAA-22 corrigiu D13-04 parcialmente.
 - Verificação: `npm run typecheck` PASS; `npm test` 234 arquivos/1625 testes PASS (83 skips condicionais, 0 em `test:postgres`); `test:postgres` 18/151 com 0 skips (inventário agora inclui continuous-worker e attendance); probes de atomicidade (PASS_ATOMIC), UI Chromium (PASS_STALE_DISCARDED) e readiness (queries=1, /ready 503, /live 200); hashes dos 6 manifests 64/64.
 - Revisão independente: primeiro verificador CONFIRMOU as alegações funcionais C1–C5 e levantou F1 P1 (typecheck) e F2–F7; builder corrigiu; segundo verificador emitiu `REVALIDATED_PASS` (F1–F6 resolvidos, R1–R7). Nenhum P0/P1 aberto no lote.
 - Estado: PROD-01/02/03/05/06 `VERIFIED`; PROD-04 `BLOCKED`; AAA-22 `REVIEW` (composição do probe de consumer pendente de AAA-21/D01). D01–D05 permanecem humanas e pendentes; produção `NO-GO`.
@@ -5789,3 +7580,24 @@ Executar regressão completa, revisão independente suportada e gates integrados
 ### STATUS
 
 IN_PROGRESS
+
+# AUD21 — REM21-006 Discovery/PRD/SPEC concluídos — 2026-09-21
+
+### TASK / SCOPE
+
+`REM21-006` (`A21-F05`, `A21-F09`) foi iniciada após a verificação local de
+`REM21-004`. O escopo é local, sintético e descartável sob `G21-1`; produção,
+G21-5 e G21-6 continuam fechados.
+
+### DISCOVERY / DECISION
+
+Foi confirmado que o homolog worker não executava o preflight estrutural antes
+do primeiro claim, emitia ready depois do loop e acoplava health ao sweep. O
+operational worker também emitia ready depois do consumo. A SPEC define uma
+máquina `not_ready -> ready -> not_ready -> stopped`, health independente e
+fail-closed sem alegar exporter externo.
+
+### NEXT
+
+Executar BUILD com testes negativos antes da alteração de runtime e registrar a
+evidência em `docs/04_audit/evidence/AUD-20260921/REM21-006/`.

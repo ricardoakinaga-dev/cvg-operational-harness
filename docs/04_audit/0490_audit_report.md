@@ -65,3 +65,10 @@ Gate de entrada na construcao: `docs/03_build/0310_construction_readiness_95.md`
 ## Proximo passo
 
 Entrar na fase de construcao controlada: cada sprint deve executar `npm run verify`, `npm run test:e2e` e `npm run readiness`, mantendo dados reais e automacoes sensiveis bloqueados ate nova decisao documentada.
+
+## Nota AUD19-012 — 2026-09-20 (aditiva; original preservado)
+
+A recomendação acima que menciona "dados ... anonimizados ou aprovados" é
+lida, por supersessão explícita, como fixtures sintéticas aprovadas em gate.
+Dados reais — inclusive anonimizados — são proibidos pela regra do
+repositório (`AGENTS.md`). "Aprovado" nunca autoriza dado real.

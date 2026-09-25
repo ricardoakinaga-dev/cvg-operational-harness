@@ -84,3 +84,10 @@ Nao esta aprovado para:
 - operar com dados reais sem politica de retencao assinada;
 - executar acoes clinicas, financeiras ou de prontuario definitivo;
 - dispensar aprovacao humana em acoes sensiveis.
+
+## Nota AUD19-012 — 2026-09-20 (aditiva; original preservado)
+
+O "release candidate controlado com dados ficticios, anonimizados ou
+explicitamente autorizados" acima é lido, por supersessão explícita, como
+fixtures sintéticas aprovadas em gate. Dados reais — inclusive anonimizados —
+são proibidos pela regra do repositório (`AGENTS.md`).

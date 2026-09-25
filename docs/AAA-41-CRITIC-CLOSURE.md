@@ -9,7 +9,9 @@
 > Estado-alvo do harness: State of Art, Triplo AAA.
 
 # CVG OPERATIONAL HARNESS
+
 # PHASE 4 — CRITIC-ONLY CERTIFICATION CLOSURE
+
 # AAA-41-CRITIC-CLOSURE
 
 MODE: READ-ONLY / ASSURANCE ONLY
@@ -39,8 +41,8 @@ ONLY IF APPROVED.
 
 ## 1. ABSOLUTE READ-ONLY SOURCE RULE
 
-DO NOT MODIFY: apps/**, packages/**, src/**, migrations/**, tests/**,
-package.json, lockfiles, tsconfig*, Dockerfile, runtime configuration, CI
+DO NOT MODIFY: apps/**, packages/**, src/**, migrations/**, tests/\*_,
+package.json, lockfiles, tsconfig_, Dockerfile, runtime configuration, CI
 workflows, production configuration. DO NOT refactor, format source, fix code,
 add tests, change dependencies, Runtime, Orchestrator, Capability Boundary,
 Policy, Approval, Effect Journal, or implement Phase 4A. NOT an implementation
@@ -48,7 +50,7 @@ round.
 
 ## 2. ALLOWED WRITES
 
-Only certification/audit artifacts: docs/phase4/evidence/**,
+Only certification/audit artifacts: docs/phase4/evidence/\*\*,
 docs/phase4a/PHASE_4_HANDOFF.md, and existing certification metadata ONLY if the
 established certification process requires evidence rebinding. Do not modify
 mechanical source candidate. If source modification appears necessary: STOP,
@@ -189,8 +191,9 @@ PHASE_4_HANDOFF=VERIFIED + HEAD/digest/composition/mechanical/critic identity/
 APPROVE/report SHA/mutation MATCH/sentinel MATCH/scope/NO_GO. Authorization
 text: "Phase 4 is independently approved for the controlled synthetic scope and
 its frozen capability boundary may now be consumed by Phase 4A implementation."
-+ "This is not Production GO." Then STOP — do NOT start Phase 4A
-(ConversationState/DialogueManager/ResponseComposer/migrations/consumers).
+
+- "This is not Production GO." Then STOP — do NOT start Phase 4A
+  (ConversationState/DialogueManager/ResponseComposer/migrations/consumers).
 
 ## 37–38. INFRA-BLOCKED PATH
 

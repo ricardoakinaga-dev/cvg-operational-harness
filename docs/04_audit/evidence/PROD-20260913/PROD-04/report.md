@@ -2,7 +2,7 @@
 
 - Programa: `PROD-20260913`; task: `PROD-04`; decisão: `D01 = C` + variante **A2** autorizada pelo prompt.
 - Status: **IMPLEMENTED** (builder). Não é `VERIFIED`: revisão por crítico fresco independente é obrigatória e não foi feita.
-- Spec: [adendo PROD-04](../../../02_spec/prod20260913_prod04_addendum.md) substitui o **mecanismo** da §6 do [contrato de composição](../../../02_spec/aaa_composition_contract.md) (rota A/DurableApprovalStorePort); a **aceitação** permanece inalterada.
+- Spec: [adendo PROD-04](../../../../02_spec/prod20260913_prod04_addendum.md) substitui o **mecanismo** da §6 do [contrato de composição](../../../../02_spec/aaa_composition_contract.md) (rota A/DurableApprovalStorePort); a **aceitação** permanece inalterada.
 - Ambiente: Node `v22.23.2`; PostgreSQL 16.15 em `127.0.0.1:55481` (`cvg_prod`, trust); banco descartável `prod04_0c9ca84c`; porta 5432 nunca usada.
 - Nenhum dado real, efeito real, canal, provider, IdP, deploy ou produção; D02–D05 `PENDING`; produção `NO-GO`.
 

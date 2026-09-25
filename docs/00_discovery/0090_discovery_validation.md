@@ -12,6 +12,14 @@
 
 `DISCOVERY_VALIDATED_CONTROLLED`: [0011_rem0539_r0_revalidation.md](0011_rem0539_r0_revalidation.md). Execução local autorizada pelo usuário; contratos corretivos registrados antes de BUILD. Não altera gates de dados reais, integração externa ou piloto.
 
+## Gate específico P1-S1 / M07 — 2026-09-23T11:36:16Z
+
+`APPROVED_FOR_PRD_DOCUMENTAL`: [Discovery M07](0017_m07_package_dependencies.md), após decisão humana explícita nesta sessão: “Approve for PRD”. A decisão cobre somente a elaboração do PRD documental M07. O veredito Gauntlet permanece `CONDITIONAL_PASS`; a limitação D4 sobre o log de comandos/alterações da rodada Discovery está preservada como lacuna de evidência, não como evidência de violação. Não autoriza SPEC, BUILD, testes, alteração de código, integração externa ou produção. Registro da decisão: [P1-S1 human decisions](../04_audit/evidence/AUD-20260923/P1-S1/human-decisions-20260923.md).
+
+## Gate específico P1-S1 / M05 — 2026-09-23T11:36:16Z
+
+`APPROVED_FOR_PRD_DOCUMENTAL`: [Discovery M05](0018_m05_public_harness_composition.md), após decisão humana explícita nesta sessão: “Approve both; choose A (recommended)”. A opção A fixa a rota canônica `/v1/executions` → outbox PostgreSQL operacional → worker `operational-harness` → `createOperationalHarness()` e o par legado `published-agent`/`kernel`. O PRD M05 permanece sucessor de M07 conforme o P1-S1. A comparação de paridade se limitará às dimensões declaradas em `0342`: tenant, session, policy, approval, tool, journal e resposta; a redação observável dessas dimensões deve constar no PRD e passar por sua validação antes de SPEC. Não autoriza BUILD, integração externa ou produção. Registro da decisão: [P1-S1 human decisions](../04_audit/evidence/AUD-20260923/P1-S1/human-decisions-20260923.md).
+
 ## Histórico anterior
 
 ## Problema

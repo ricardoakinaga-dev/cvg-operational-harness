@@ -1,0 +1,619 @@
+{
+  "schema_version": 1,
+  "run_id": "m07-s1-c1g-20260924-1",
+  "purpose": "Exact allowlist of local C1G setup, candidate, verification, and evidence commands. Every step is run individually through capture_command.py.",
+  "environment": {
+    "prepend_path": [
+      "/home/ricardo/.nvm/versions/node/v22.23.2/bin"
+    ],
+    "unset": [
+      "DATABASE_URL",
+      "TEST_DATABASE_URL",
+      "PGHOST",
+      "PGPORT",
+      "PGDATABASE",
+      "PGUSER",
+      "PGPASSWORD"
+    ],
+    "set": {
+      "npm_config_offline": "true"
+    }
+  },
+  "steps": [
+    {
+      "id": "node-version-preflight",
+      "argv": [
+        "node",
+        "--version"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "typescript-version-preflight",
+      "argv": [
+        "node",
+        "-p",
+        "require('typescript').version"
+      ],
+      "depends_on": [
+        "node-version-preflight"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "npm-version-preflight",
+      "argv": [
+        "npm",
+        "--version"
+      ],
+      "depends_on": [
+        "typescript-version-preflight"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "stdout_copy_to": "npm-version.txt",
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/npm-version.txt"
+      ]
+    },
+    {
+      "id": "c1g-preconditions",
+      "argv": [
+        "python3",
+        "-c",
+        "import json,pathlib,sys; root=pathlib.Path('.'); state=json.loads((root/'.gauntlet/state.json').read_text()); target=root/'.gauntlet-archive/m07-s1-c1f-20260924-finished-fail'; out=root/'docs/04_audit/evidence/AUD-20260924/M07-S1-C1G'; absent=['execution-candidate-manifest.json','workspace-dependency-report.json','rollback-baseline','rollback-baseline.sha256','coverage','quality-bar-results.json','evidence-index.json','sanitization_scan.py','final-gate-result.md']; unexpected=[p for p in absent if (out/p).exists()]; existing_logs=sorted(p.name for p in out.glob('*.log')); expected_logs=sorted(['node-version-preflight.stdout.log','node-version-preflight.stderr.log','typescript-version-preflight.stdout.log','typescript-version-preflight.stderr.log','npm-version-preflight.stdout.log','npm-version-preflight.stderr.log']); logs_match=existing_logs==expected_logs; npm=(out/'npm-version.txt'); npm_log=(out/'npm-version-preflight.stdout.log'); npm_match=npm.is_file() and npm_log.is_file() and npm.read_bytes()==npm_log.read_bytes(); ledger=(root/'docs/03_build/0344_reaudit_m07_backlog.md').read_text(); registered='A24-03-C1G' in ledger; decision=(out/'decision-record.md').read_text(); approved='APPROVED' in decision; lock=(root/'.gauntlet/.writer.lock').is_file(); ok=(state.get('run_id')=='m07-s1-c1f-20260924-1' and state.get('status')=='FINISHED' and state.get('phase')=='STOP' and lock and not target.exists() and not unexpected and logs_match and npm_match and registered and approved); print(json.dumps({'c1f_run_id':state.get('run_id'),'c1f_status':state.get('status'),'c1f_phase':state.get('phase'),'c1f_lock_exists':lock,'archive_target_absent':not target.exists(),'unexpected_execution_outputs':unexpected,'existing_logs':existing_logs,'preflight_logs_exact':logs_match,'npm_output_matches_capture':npm_match,'c1g_task_registered':registered,'approval_recorded':approved,'pass':ok})); sys.exit(0 if ok else 1)"
+      ],
+      "depends_on": [
+        "npm-version-preflight"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "source-baseline-preflight",
+      "argv": [
+        "python3",
+        "-c",
+        "import hashlib,json,pathlib,sys; data=json.loads(pathlib.Path('docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/source-baseline.json').read_text()); results=[]; [(results.append({'path':entry['path'],'expected':entry['sha256'],'actual':hashlib.sha256(pathlib.Path(entry['path']).read_bytes()).hexdigest()})) for entry in data['files']]; changed=[item for item in results if item['expected']!=item['actual']]; print(json.dumps({'checked':len(results),'changed':changed,'pass':not changed})); sys.exit(0 if not changed else 1)"
+      ],
+      "depends_on": [
+        "c1g-preconditions"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "c1f-gauntlet-lock-preflight",
+      "argv": [
+        "flock",
+        "-n",
+        ".gauntlet/.writer.lock",
+        "true"
+      ],
+      "depends_on": [
+        "source-baseline-preflight"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "archive-finished-c1f-gauntlet",
+      "argv": [
+        "mv",
+        "--",
+        ".gauntlet",
+        ".gauntlet-archive/m07-s1-c1f-20260924-finished-fail"
+      ],
+      "depends_on": [
+        "c1f-gauntlet-lock-preflight"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        ".gauntlet",
+        ".gauntlet-archive/m07-s1-c1f-20260924-finished-fail"
+      ]
+    },
+    {
+      "id": "gauntlet-init-c1g",
+      "argv": [
+        "python3",
+        "/home/ricardo/.codex/skills/gauntlet-loop/scripts/gauntlet_state.py",
+        "init",
+        "--repo",
+        ".",
+        "--goal-file",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/gauntlet-goal.txt",
+        "--bar-manifest",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/quality-bar.json",
+        "--run-id",
+        "m07-s1-c1g-20260924-1",
+        "--capabilities",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/gauntlet-capabilities.json",
+        "--budget",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/gauntlet-budget.json"
+      ],
+      "depends_on": [
+        "archive-finished-c1f-gauntlet"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        ".gauntlet"
+      ]
+    },
+    {
+      "id": "rollback-directory-create",
+      "argv": [
+        "mkdir",
+        "--",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline"
+      ],
+      "depends_on": [
+        "gauntlet-init-c1g"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline"
+      ]
+    },
+    {
+      "id": "snapshot-policy",
+      "argv": [
+        "cp",
+        "--parents",
+        "config/workspace-dependency-policy.json",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/"
+      ],
+      "depends_on": [
+        "rollback-directory-create"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/config/workspace-dependency-policy.json"
+      ]
+    },
+    {
+      "id": "snapshot-scanner",
+      "argv": [
+        "cp",
+        "--parents",
+        "scripts/workspace-dependency-audit.mjs",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/"
+      ],
+      "depends_on": [
+        "snapshot-policy"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/scripts/workspace-dependency-audit.mjs"
+      ]
+    },
+    {
+      "id": "snapshot-scanner-test",
+      "argv": [
+        "cp",
+        "--parents",
+        "tests/workspace-dependency-audit.test.js",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/"
+      ],
+      "depends_on": [
+        "snapshot-scanner"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/tests/workspace-dependency-audit.test.js"
+      ]
+    },
+    {
+      "id": "snapshot-conversation-fixture",
+      "argv": [
+        "cp",
+        "--parents",
+        "packages/conversation/src/__tests__/postgres-store.unit.test.ts",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/"
+      ],
+      "depends_on": [
+        "snapshot-scanner-test"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/packages/conversation/src/__tests__/postgres-store.unit.test.ts"
+      ]
+    },
+    {
+      "id": "snapshot-checksums",
+      "argv": [
+        "sha256sum",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/config/workspace-dependency-policy.json",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/scripts/workspace-dependency-audit.mjs",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/tests/workspace-dependency-audit.test.js",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/packages/conversation/src/__tests__/postgres-store.unit.test.ts"
+      ],
+      "depends_on": [
+        "snapshot-conversation-fixture"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "stdout_copy_to": "rollback-baseline.sha256",
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline.sha256"
+      ]
+    },
+    {
+      "id": "preview-apply-check",
+      "argv": [
+        "git",
+        "apply",
+        "--check",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/correction-preview.patch"
+      ],
+      "depends_on": [
+        "snapshot-checksums"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "preview-apply",
+      "argv": [
+        "git",
+        "apply",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/correction-preview.patch"
+      ],
+      "depends_on": [
+        "preview-apply-check"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        "config/workspace-dependency-policy.json",
+        "scripts/workspace-dependency-audit.mjs",
+        "tests/workspace-dependency-audit.test.js"
+      ]
+    },
+    {
+      "id": "snapshot-delta-policy",
+      "argv": [
+        "git",
+        "diff",
+        "--no-index",
+        "--",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/config/workspace-dependency-policy.json",
+        "config/workspace-dependency-policy.json"
+      ],
+      "depends_on": [
+        "preview-apply"
+      ],
+      "expected_exit_codes": [
+        1
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "snapshot-delta-scanner",
+      "argv": [
+        "git",
+        "diff",
+        "--no-index",
+        "--",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/scripts/workspace-dependency-audit.mjs",
+        "scripts/workspace-dependency-audit.mjs"
+      ],
+      "depends_on": [
+        "snapshot-delta-policy"
+      ],
+      "expected_exit_codes": [
+        1
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "snapshot-delta-scanner-test",
+      "argv": [
+        "git",
+        "diff",
+        "--no-index",
+        "--",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/tests/workspace-dependency-audit.test.js",
+        "tests/workspace-dependency-audit.test.js"
+      ],
+      "depends_on": [
+        "snapshot-delta-scanner"
+      ],
+      "expected_exit_codes": [
+        1
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "snapshot-delta-conversation-fixture",
+      "argv": [
+        "git",
+        "diff",
+        "--no-index",
+        "--",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/rollback-baseline/packages/conversation/src/__tests__/postgres-store.unit.test.ts",
+        "packages/conversation/src/__tests__/postgres-store.unit.test.ts"
+      ],
+      "depends_on": [
+        "snapshot-delta-scanner-test"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "candidate-freeze",
+      "argv": [
+        "node",
+        "scripts/workspace-dependency-audit.mjs",
+        "--candidate-only",
+        "--npm-version-file",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/npm-version.txt",
+        "--format",
+        "json",
+        "--output",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/execution-candidate-manifest.json"
+      ],
+      "depends_on": [
+        "snapshot-delta-conversation-fixture"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/execution-candidate-manifest.json"
+      ]
+    },
+    {
+      "id": "candidate-verify-initial",
+      "argv": [
+        "node",
+        "scripts/workspace-dependency-audit.mjs",
+        "--verify-candidate",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/execution-candidate-manifest.json",
+        "--npm-version-file",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/npm-version.txt"
+      ],
+      "depends_on": [
+        "candidate-freeze"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "inventory",
+      "argv": [
+        "node",
+        "scripts/workspace-dependency-audit.mjs",
+        "--policy",
+        "config/workspace-dependency-policy.json",
+        "--profile",
+        "inventory",
+        "--format",
+        "json",
+        "--output",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/workspace-dependency-report.json"
+      ],
+      "depends_on": [
+        "candidate-verify-initial"
+      ],
+      "expected_exit_codes": [
+        1
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/workspace-dependency-report.json"
+      ]
+    },
+    {
+      "id": "candidate-inventory-semantic-check",
+      "argv": [
+        "node",
+        "-e",
+        "const fs=require('node:fs');const base='docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/';const m=JSON.parse(fs.readFileSync(base+'execution-candidate-manifest.json','utf8'));const r=JSON.parse(fs.readFileSync(base+'workspace-dependency-report.json','utf8'));const expected=['config/workspace-dependency-policy.json','packages/conversation/src/__tests__/postgres-store.unit.test.ts','scripts/workspace-dependency-audit.mjs','tests/workspace-dependency-audit.test.js'];const additions=m.approved_additions.map(x=>x.path).sort();const reportAdditions=r.candidate.approvedAdditionalPaths.map(x=>x.path).sort();const codes=r.report.findings.map(x=>x.code);const actual={inputCount:m.candidate_input_manifest.length,hashCount:m.workspace_summary.hashed_input_count,approvedAdditions:additions,reportAdditions,reportFingerprint:r.candidate.fingerprint,manifestFingerprint:m.candidate_fingerprint_sha256,reportMatches:r.candidate.fingerprint===m.candidate_fingerprint_sha256,inventoryExit:r.result.exitCode,inventoryStatus:r.result.status,inventoryComplete:r.result.inventoryComplete,gaps:r.report.coverage.gaps,unresolved:r.result.unresolved,violations:r.result.violations,missingDirect:codes.filter(x=>x==='MISSING_DIRECT_DEPENDENCY').length,categoryMismatch:codes.filter(x=>x==='DEPENDENCY_CATEGORY_MISMATCH').length,node:m.toolchain.node,typescript:m.toolchain.typescript,npm:m.toolchain.npm};const ok=actual.inputCount===977&&actual.hashCount===977&&JSON.stringify(additions)===JSON.stringify(expected)&&JSON.stringify(reportAdditions)===JSON.stringify(expected)&&actual.reportMatches&&actual.inventoryExit===1&&actual.inventoryStatus==='VIOLATION'&&actual.inventoryComplete&&actual.gaps.length===0&&actual.unresolved===0&&actual.violations===11&&actual.missingDirect===2&&actual.categoryMismatch===9&&actual.node==='v22.23.2'&&actual.typescript==='6.0.3'&&actual.npm==='10.9.8';console.log(JSON.stringify({actual,pass:ok}));if(!ok)process.exitCode=1;"
+      ],
+      "depends_on": [
+        "inventory"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "focused-tests",
+      "argv": [
+        "npm",
+        "test",
+        "--",
+        "tests/workspace-dependency-audit.test.js",
+        "tests/architecture/dependency-direction.test.ts",
+        "packages/conversation/src/__tests__/postgres-store.unit.test.ts"
+      ],
+      "depends_on": [
+        "candidate-inventory-semantic-check"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "full-suite",
+      "argv": [
+        "npm",
+        "test"
+      ],
+      "depends_on": [
+        "focused-tests"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "typecheck",
+      "argv": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "depends_on": [
+        "full-suite"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "lint",
+      "argv": [
+        "npm",
+        "run",
+        "lint"
+      ],
+      "depends_on": [
+        "typecheck"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "coverage",
+      "argv": [
+        "npm",
+        "run",
+        "test:coverage",
+        "--",
+        "--coverage.reportsDirectory",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/coverage"
+      ],
+      "depends_on": [
+        "lint"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/coverage"
+      ]
+    },
+    {
+      "id": "candidate-postcheck",
+      "argv": [
+        "node",
+        "scripts/workspace-dependency-audit.mjs",
+        "--verify-candidate",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/execution-candidate-manifest.json",
+        "--npm-version-file",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/npm-version.txt"
+      ],
+      "depends_on": [
+        "candidate-freeze"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "copy-sanitization-scanner",
+      "argv": [
+        "cp",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1F/sanitization_scan.py",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/sanitization_scan.py"
+      ],
+      "depends_on": [
+        "candidate-postcheck"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": [
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/sanitization_scan.py"
+      ]
+    },
+    {
+      "id": "log-sanitization-scan",
+      "argv": [
+        "python3",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/sanitization_scan.py"
+      ],
+      "depends_on": [
+        "copy-sanitization-scanner"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    },
+    {
+      "id": "historical-evidence-integrity",
+      "argv": [
+        "sha256sum",
+        "-c",
+        "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/historical-evidence.sha256"
+      ],
+      "depends_on": [
+        "log-sanitization-scan"
+      ],
+      "expected_exit_codes": [
+        0
+      ],
+      "declared_side_effects": []
+    }
+  ],
+  "final_verification": {
+    "argv": [
+      "python3",
+      "docs/04_audit/evidence/AUD-20260924/M07-S1-C1G/capture_command.py",
+      "--verify"
+    ],
+    "must_run_after": [
+      "candidate-postcheck",
+      "log-sanitization-scan",
+      "historical-evidence-integrity"
+    ],
+    "expected_exit_codes": [
+      0
+    ],
+    "purpose": "Verify all previously captured stream hashes, then record the verifier's own UTC timestamps, duration, exit, stdout/stderr paths and hashes. The verifier record is added atomically to command-records.json."
+  }
+}

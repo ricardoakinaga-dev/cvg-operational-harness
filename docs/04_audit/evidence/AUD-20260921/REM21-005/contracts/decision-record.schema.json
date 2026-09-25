@@ -1,0 +1,86 @@
+{
+  "recordType": "cvg.frontend-backend.decision",
+  "program": "AUD21-COMPREHENSIVE-REMEDIATION",
+  "task": "REM21-005",
+  "finding": "A21-F04",
+  "status": "SPEC_COMPLETE / BUILD_GATE_PENDING",
+  "problem": "The browser currently presents editable operator, role and tenant fields as API authority.",
+  "desiredOutcome": "A qualified/default web build consumes a server-resolved tenant-bound session and fails closed without one.",
+  "journey": [
+    "trusted bootstrap",
+    "authenticated console",
+    "expiry or 401",
+    "reauthentication or locked state",
+    "logout and tenant-scope reset"
+  ],
+  "constraints": [
+    "G21-1 only",
+    "local synthetic disposable data",
+    "no IdP/provider/channel/real credential",
+    "production NO_GO",
+    "preserve one-use jti replay fence"
+  ],
+  "currentEvidence": [
+    "apps/web/src/App.tsx owns editable identity fields",
+    "apps/web/src/api/client.ts defaults to simulationAuthHeaders",
+    "apps/web/src/main.tsx has no session bootstrap",
+    "apps/api/src/operator-identity.ts verifies signed claims and replay",
+    "no browser session endpoint exists"
+  ],
+  "unknowns": [
+    "external IdP/BFF contract",
+    "durable multi-instance session store",
+    "production cookie/CSRF/key-custody policy",
+    "Firefox/WebKit qualification"
+  ],
+  "stack": {
+    "web": "Vite + React 19 + TypeScript + Vitest + Playwright",
+    "api": "Fastify + TypeScript + existing trusted HMAC resolver",
+    "persistence": "in-memory local session store for controlled tests only"
+  },
+  "state": [
+    { "name": "identity", "class": "session", "owner": "API/session authority", "sourceOfTruth": "trusted resolver and session store" },
+    { "name": "sessionStatus", "class": "workflow_state_machine", "owner": "web session coordinator", "sourceOfTruth": "bootstrap/401/expiry/logout transitions" },
+    { "name": "operationalData", "class": "server", "owner": "API/persistence", "sourceOfTruth": "tenant-scoped API" },
+    { "name": "capabilityVisibility", "class": "derived", "owner": "web", "sourceOfTruth": "server identity snapshot; never authority" }
+  ],
+  "boundaries": {
+    "trust": "browser is untrusted; API resolver and session store are authority",
+    "authorization": "API route and persistence/RLS enforce actor/role/resource/tenant",
+    "data": "opaque HttpOnly session plus minimal read-only identity snapshot",
+    "clientServer": "browser sends cookie credentials; server resolves identity",
+    "replay": "one-use bootstrap jti; no bearer reuse after bootstrap"
+  },
+  "candidates": [
+    { "name": "editable simulation fields", "decision": "rejected", "reason": "default authority injection" },
+    { "name": "browser-decoded claims", "decision": "rejected", "reason": "browser is not an authentication boundary" },
+    { "name": "localStorage bearer", "decision": "rejected", "reason": "secret exposure and replay conflict" },
+    { "name": "fresh token per request", "decision": "deferred", "reason": "external issuer/refresh and concurrency ownership required" },
+    { "name": "opaque server session after one-use bootstrap", "decision": "selected", "reason": "minimum design preserving current replay fence" },
+    { "name": "durable distributed session", "decision": "deferred", "reason": "production owner and G21-5 required" }
+  ],
+  "selectedDesign": {
+    "name": "one-use trusted bootstrap plus opaque HttpOnly server session",
+    "api": ["GET /v1/session", "POST /v1/session/logout"],
+    "web": ["ApiSession in-memory snapshot", "credentials include", "trusted default", "simulation test-only"],
+    "failure": "missing/invalid/expired/revoked authority locks the UI and denies protected API operations"
+  },
+  "verification": {
+    "E1": "bundle/config has no editable authority controls in trusted mode",
+    "E2": "typecheck/lint/build",
+    "E3": "component/session state tests",
+    "E4": "API boundary and synthetic browser tests",
+    "E6": "replay/expiry/revocation/late-response negatives",
+    "E7": "fresh-context review, not yet claimed"
+  },
+  "handoffs": [
+    "G21-5: real IdP/BFF/session authority, key custody, cookie/CSRF policy, durable revocation and browser matrix",
+    "G21-6: human production decision"
+  ],
+  "revalidationTriggers": [
+    "change to trusted resolver replay semantics",
+    "introduction of a real IdP or durable session store",
+    "cross-origin cookie deployment",
+    "UI authorization decision or tenant model change"
+  ]
+}

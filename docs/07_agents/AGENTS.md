@@ -1,5 +1,10 @@
 # AGENTS.md — Constituicao Operacional CVG
 
+Para a tradução e desambiguação canônica de `approval`, `handoff`, `gate`,
+`candidate`, `tenant`, `release` e estados, consulte o
+[glossário operacional](../architecture/GLOSSARY.md). Esta constituição
+continua sendo a fonte de verdade dos estados CVG e do processo operacional.
+
 ## Proposito
 
 Este repositorio segue o padrao CVG de engenharia orientada por documentacao, gates e execucao controlada. O Codex deve operar como agente de engenharia disciplinado para construir a Esmeralda V2, nao como gerador solto de codigo.

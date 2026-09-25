@@ -1,0 +1,566 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:cvg:rem21-009:external-qualification-contract:1",
+  "title": "CVG REM21-009 external qualification contract",
+  "description": "Strict, synthetic-only contract for preparing (not executing) an external qualification.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "packetId",
+    "synthetic",
+    "status",
+    "createdAt",
+    "externalExecution",
+    "domains",
+    "authority",
+    "data",
+    "security",
+    "observability",
+    "rollback",
+    "abortConditions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0.0"
+    },
+    "packetId": {
+      "type": "string",
+      "pattern": "^rem21-009-fixture-[a-z0-9-]+$"
+    },
+    "synthetic": {
+      "const": true
+    },
+    "status": {
+      "enum": [
+        "PENDING",
+        "OFFLINE_READY",
+        "BLOCKED",
+        "REJECTED",
+        "ABORTED",
+        "APPROVED",
+        "REVOKED"
+      ]
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "externalExecution": {
+      "const": false
+    },
+    "domains": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "provider",
+        "channel",
+        "institutionalSource",
+        "egress"
+      ],
+      "properties": {
+        "identity": {
+          "$ref": "#/definitions/domain"
+        },
+        "provider": {
+          "$ref": "#/definitions/domain"
+        },
+        "channel": {
+          "$ref": "#/definitions/domain"
+        },
+        "institutionalSource": {
+          "$ref": "#/definitions/domain"
+        },
+        "egress": {
+          "$ref": "#/definitions/domain"
+        }
+      }
+    },
+    "authority": {
+      "type": "array",
+      "minItems": 7,
+      "items": {
+        "$ref": "#/definitions/authoritySlot"
+      }
+    },
+    "data": {
+      "$ref": "#/definitions/dataPolicy"
+    },
+    "security": {
+      "$ref": "#/definitions/securityPolicy"
+    },
+    "observability": {
+      "$ref": "#/definitions/observability"
+    },
+    "rollback": {
+      "$ref": "#/definitions/rollback"
+    },
+    "abortConditions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "enum": [
+          "authority-missing",
+          "endpoint-not-allowlisted",
+          "secret-materialized",
+          "tenant-boundary-failed",
+          "source-missing-or-revoked",
+          "sensitive-output",
+          "retry-unbounded",
+          "rollback-unproven",
+          "evidence-drift"
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "APPROVED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "authority": {
+            "contains": {
+              "required": [
+                "decisionStatus"
+              ],
+              "properties": {
+                "decisionStatus": {
+                  "const": "APPROVED"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "domain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "ownerSlot",
+        "environment",
+        "dataClass",
+        "endpointRef",
+        "secretRef",
+        "auth",
+        "tenantBoundary",
+        "correlation",
+        "idempotency",
+        "rateLimit",
+        "redaction",
+        "observability",
+        "rollback",
+        "abortConditions"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "PENDING",
+            "OFFLINE_READY",
+            "BLOCKED",
+            "REJECTED",
+            "ABORTED",
+            "APPROVED",
+            "REVOKED"
+          ]
+        },
+        "ownerSlot": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]+$"
+        },
+        "environment": {
+          "enum": [
+            "local-synthetic",
+            "external-homolog",
+            "production"
+          ]
+        },
+        "dataClass": {
+          "enum": [
+            "synthetic",
+            "synthetic-boundary",
+            "real-restricted",
+            "real-sensitive"
+          ]
+        },
+        "endpointRef": {
+          "type": "string",
+          "pattern": "^pending://endpoint/[a-z0-9-]+$"
+        },
+        "secretRef": {
+          "type": "string",
+          "pattern": "^pending://secret/[a-z0-9-]+$"
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "issuerRef",
+            "audienceRef",
+            "jwksRef",
+            "secretRef"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "fixture-deterministic",
+                "oidc-pending",
+                "api-key-pending",
+                "webhook-signature-pending"
+              ]
+            },
+            "issuerRef": {
+              "type": "string",
+              "pattern": "^pending://issuer/[a-z0-9-]+$"
+            },
+            "audienceRef": {
+              "type": "string",
+              "pattern": "^pending://audience/[a-z0-9-]+$"
+            },
+            "jwksRef": {
+              "type": "string",
+              "pattern": "^pending://jwks/[a-z0-9-]+$"
+            },
+            "secretRef": {
+              "type": "string",
+              "pattern": "^pending://secret/[a-z0-9-]+$"
+            }
+          }
+        },
+        "tenantBoundary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "claimRef",
+            "mismatchAction"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "fixture-only",
+                "explicit-tenant-claim"
+              ]
+            },
+            "claimRef": {
+              "type": "string",
+              "pattern": "^pending://claim/[a-z0-9-]+$"
+            },
+            "mismatchAction": {
+              "const": "DENY"
+            }
+          }
+        },
+        "correlation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requestId",
+            "conversationId",
+            "tenantId",
+            "traceId"
+          ],
+          "properties": {
+            "requestId": {
+              "const": "fixture-request-id"
+            },
+            "conversationId": {
+              "const": "fixture-conversation-id"
+            },
+            "tenantId": {
+              "const": "fixture-tenant-a"
+            },
+            "traceId": {
+              "const": "fixture-trace-id"
+            }
+          }
+        },
+        "idempotency": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "keySource",
+            "replayWindowSeconds",
+            "mismatchAction"
+          ],
+          "properties": {
+            "keySource": {
+              "const": "fixture-idempotency-key"
+            },
+            "replayWindowSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400
+            },
+            "mismatchAction": {
+              "const": "DENY_NO_DISPATCH"
+            }
+          }
+        },
+        "rateLimit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "perMinute",
+            "burst",
+            "exhaustionAction"
+          ],
+          "properties": {
+            "perMinute": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "burst": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "exhaustionAction": {
+              "const": "ABORT"
+            }
+          }
+        },
+        "redaction": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "policyRef",
+            "sensitiveFields",
+            "beforeExternalBoundary"
+          ],
+          "properties": {
+            "policyRef": {
+              "const": "pending://policy/redaction-rem21-009"
+            },
+            "sensitiveFields": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            },
+            "beforeExternalBoundary": {
+              "const": true
+            }
+          }
+        },
+        "observability": {
+          "$ref": "#/definitions/observability"
+        },
+        "rollback": {
+          "$ref": "#/definitions/rollback"
+        },
+        "abortConditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "authoritySlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "requiredRole",
+        "decisionStatus",
+        "decidedAt",
+        "expiresAt",
+        "evidenceRef",
+        "evidenceSha256"
+      ],
+      "properties": {
+        "slot": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]+$"
+        },
+        "requiredRole": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]+$"
+        },
+        "decisionStatus": {
+          "enum": [
+            "PENDING",
+            "APPROVED",
+            "REJECTED",
+            "REVOKED"
+          ]
+        },
+        "decidedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expiresAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidenceRef": {
+          "type": "string",
+          "pattern": "^pending://evidence/[a-z0-9-]+$"
+        },
+        "evidenceSha256": {
+          "type": "string",
+          "pattern": "^(pending:[a-z0-9-]+|[a-f0-9]{64})$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decisionStatus": {
+                "const": "APPROVED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "decidedAt": {
+                "type": "string",
+                "minLength": 1
+              },
+              "expiresAt": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evidenceSha256": {
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "dataPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "purpose",
+        "retention",
+        "residency",
+        "realDataAllowed"
+      ],
+      "properties": {
+        "classification": {
+          "const": "synthetic"
+        },
+        "purpose": {
+          "const": "offline-contract-validation"
+        },
+        "retention": {
+          "const": "local-disposable"
+        },
+        "residency": {
+          "const": "local-only"
+        },
+        "realDataAllowed": {
+          "const": false
+        }
+      }
+    },
+    "securityPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "egressPolicy",
+        "allowlistRef",
+        "certificateMode",
+        "supplyChainRef",
+        "externalExecution"
+      ],
+      "properties": {
+        "egressPolicy": {
+          "const": "local-loopback-only"
+        },
+        "allowlistRef": {
+          "const": "pending://allowlist/rem21-009"
+        },
+        "certificateMode": {
+          "const": "fixture-only"
+        },
+        "supplyChainRef": {
+          "const": "pending://supply-chain/rem21-009"
+        },
+        "externalExecution": {
+          "const": false
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metricsRef",
+        "logsRef",
+        "tracesRef",
+        "sensitiveFieldsRedacted",
+        "alertOwnerSlot"
+      ],
+      "properties": {
+        "metricsRef": {
+          "const": "pending://observability/metrics-rem21-009"
+        },
+        "logsRef": {
+          "const": "pending://observability/logs-rem21-009"
+        },
+        "tracesRef": {
+          "const": "pending://observability/traces-rem21-009"
+        },
+        "sensitiveFieldsRedacted": {
+          "const": true
+        },
+        "alertOwnerSlot": {
+          "const": "operations-owner"
+        }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "planRef",
+        "authoritySlot",
+        "requiresApproval",
+        "proofStatus",
+        "restoreTargetRef"
+      ],
+      "properties": {
+        "planRef": {
+          "const": "pending://rollback/rem21-009"
+        },
+        "authoritySlot": {
+          "const": "rollback-authority"
+        },
+        "requiresApproval": {
+          "const": true
+        },
+        "proofStatus": {
+          "enum": [
+            "PENDING",
+            "DEMONSTRATED",
+            "NOT_APPLICABLE"
+          ]
+        },
+        "restoreTargetRef": {
+          "const": "pending://release/rem21-009-previous"
+        }
+      }
+    }
+  }
+}

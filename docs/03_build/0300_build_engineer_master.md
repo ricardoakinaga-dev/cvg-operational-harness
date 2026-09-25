@@ -1,5 +1,63 @@
 # 0300 — Build Engineer Master
 
+> Ciclo corrente AUD51 (24/09/2026): [roadmap 0346](0346_aud29_roadmap.md) → [backlog A29](0347_aud29_backlog.md) → [handoff 0348](0348_next_stage_c1_decision.md) → [pedido C1L](../04_audit/evidence/AUD-20260924/M07-S1-C1L/approval-request.md) → [resultado C1J](../04_audit/evidence/AUD-20260924/M07-S1-C1J/final-gate-result.md). C1L SHA-256 `0a6dd3efa5bc3a45b8e42062680b338e58e3b4e45a924dd177d6a12b77601f6c` aguarda aprovação para matriz local limitada. M07-S1 continua `FAIL / OPEN`; S2/S3/S4 e M05 bloqueadas; produção `NO_GO`.
+
+> Histórico AUD31 (24/09/2026): [auditoria 0570](../04_audit/0570_r1_delivery_repository_reaudit_2026-09-24.md) → [roadmap 0346](0346_aud29_roadmap.md) → [backlog 0347](0347_aud29_backlog.md) → [próxima etapa 0348](0348_next_stage_c1_decision.md). O gate C1 foi aprovado, mas o freeze parou em exit 64 porque o scanner rejeitou a pasta C1. A decisão seguinte era o gate C1E, agora histórico.
+
+> Histórico AUD31: R1 permaneceu `FAIL / OPEN` no candidato `1038f996b0577e56ecd795f1f08b6e13bb3a752d454c80f3fc0601f51c045b5f`; B3 `PASS_WITH_FINDINGS`, B6 `FAIL`, B7 `PASS`, I1 `UNAVAILABLE`. C1 terminou freeze antes dos checks; os logs estão em [resultado C1](../04_audit/evidence/AUD-20260923/M07-S1-R1-C1/final-gate-result.md).
+
+> Histórico de 23/09/2026: [0569](../04_audit/0569_m07_delivery_and_repository_reaudit_2026-09-23.md) confirma M07-S1 `FAIL/OPEN` e originou o [roadmap corretivo 0343](0343_reaudit_m07_roadmap.md), o [backlog 0344](0344_reaudit_m07_backlog.md) e o handoff histórico [0345/A24-04](0345_next_stage_m07_correction.md). O estado corrente está no ciclo AUD36 acima.
+
+## Programa corrente — carteira de 50 melhorias — 23/09/2026
+
+O [relatório 0567](../04_audit/0567_documentation_and_implementation_assessment_2026-09-22.md) e a [lista 0568](../04_audit/0568_50_melhorias_priorizadas_2026-09-23.md) estão salvos em docs. O novo ciclo documental usa o [plano executivo 0339](0339_50_improvements_executive_plan.md), o [roadmap 0340](0340_50_improvements_roadmap.md) e o [backlog 0341](0341_50_improvements_backlog.md), que cobrem todos os 50 IDs.
+
+Estado comprovado: REM21-019 = CONDITIONAL_PASS / FINAL_CERT_DEFERRED para o candidato histórico; REM21-009 = OFFLINE_PREPARATION_COMPLETE / BLOCKED_BY_G21-5. M01 foi concluída documentalmente. M07 Discovery, PRD e SPEC estão aprovados para suas etapas. C1J executou a matriz local no candidate `e884796fd90192409230b0991524168186a9f65c824156a943102dcfacc98e1b`, mas segue `FAIL / OPEN` porque I1 e Final Critic ficaram indisponíveis. O packet C1L de reteste local aguarda decisão hash-bound; consulte o [pedido](../04_audit/evidence/AUD-20260924/M07-S1-C1L/approval-request.md). C1K parou porque os dois reviewers ficaram indisponíveis. M07 não está fechado e M05 permanece bloqueada. M05 Discovery continua aprovada com opção A e par `published-agent`/`kernel`. Nenhum dado real, ação sensível ou produção; G21-5/G21-6 fechados e produção `NO_GO`.
+
+As seções a seguir preservam o contexto e os estados históricos de programas anteriores. Para status corrente, usar os ledgers mestres e as evidências das tasks.
+
+## Programa proposto após a auditoria abrangente de 21/09/2026
+
+O programa corrente `AUD21-COMPREHENSIVE-REMEDIATION` está descrito no
+[plano executivo 0335](0335_comprehensive_remediation_executive_plan.md),
+[roadmap 0336](0336_comprehensive_remediation_roadmap.md),
+[backlog 0337](0337_comprehensive_remediation_backlog.md) e
+[prompt Codex 0338](0338_codex_full_remediation_prompt.md), derivados da
+[auditoria 0566](../04_audit/0566_comprehensive_repository_audit_2026-09-21.md).
+Status: `IN_PROGRESS / REM21-005 SPEC_READY`; `REM21-005` está
+`BUILD_LOCAL_AUTHORIZED` após Discovery/PRD/SPEC; `REM21-006` está
+`VERIFIED_LOCAL / FINAL_CERT_DEFERRED`; produção `NO_GO`. `G21-1` foi concedido
+somente para a execução local, sintética e descartável do prompt `0338`. O
+programa preserva AUD20 como histórico, registra `AUD20-008` como
+`PASS_LOCAL / I1_PENDING` e reconcilia agora o control plane. Este índice não
+autoriza integração externa, ações sensíveis ou produção.
+
+## Programa proposto após a reauditoria de 20/09/2026
+
+O programa `AUD-20260920-REAUDIT` está registrado no
+[plano executivo 0331](0331_audit20_executive_plan.md),
+[roadmap 0332](0332_audit20_roadmap.md) e
+[backlog 0333](0333_audit20_backlog.md), derivados da
+[auditoria 0565](../04_audit/0565_code_reaudit_2026-09-20.md). Status:
+`READY_FOR_NEXT_STEP / G20-1_AUTHORIZED`, engine `EVOLUTION / BUILD`, produção
+`NO_GO`. `AUD20-001`–`AUD20-006` estão verificadas localmente; `AUD20-007` é
+a próxima task e `AUD20-008`–`018` estão autorizadas por dependência
+sequencial. O candidato `d7f5…` e seu
+certificado `CONDITIONAL_GO / AAA_CONTROLLED` permanecem como histórico de
+`AUD19-016`; a barra QAUD20 retornou `REJECT`.
+
+## Programa de remediação da auditoria de 19/09/2026
+
+O programa `AUD-20260919-REMEDIATION` está registrado em
+[plano executivo 0328](0328_audit_20260919_executive_plan.md),
+[roadmap 0329](0329_audit_20260919_roadmap.md) e
+[backlog 0330](0330_audit_20260919_backlog.md), derivados da
+[auditoria 0564](../04_audit/0564_full_construction_audit_2026-09-19.md).
+Status histórico: `COMPLETED_CONTROLLED` em `AUD19-016`; tasks `001`–`016`
+encerradas conforme o backlog `0330`. O resultado foi supersedido para decisão
+corrente pela auditoria `0565`, sem apagar sua evidência. Nenhuma task
+autorizou integração real, produção ou ação sensível.
+
 ## Complemento pós-auditoria de 13/09/2026
 
 Consultar [plano para produção](../PLANO_EXECUTIVO_PRODUCAO.md), [roadmap](../ROADMAP_PRODUCAO.md) e [backlog consolidado](../BACKLOG_PRODUCAO.md). Os 42 IDs AAA mantêm seus contratos/status; 14 IDs PROD acrescentam correções e pré-requisitos de saída. Não concluir pela evidência histórica de outro candidato. Este índice não concede gate de BUILD ou produção.
