@@ -1,3 +1,10 @@
+# AUD53 — packet de decisão hash-bound do closure registry — 25/09/2026
+
+- Decisões do usuário nesta data: AUD53 primeiro; corrigir o certificado por decisão hash-bound; refresh mínimo dos três ponteiros; confirmar a licença ISC.
+- Achado estrutural registrado em [0575](04_audit/0575_aud53_closure_rebind_decision_packet.md): o gate `certify` não pode passar em CI com registry commitado, porque `CLOSURE_REGISTRY_PATH` é constante (`finding-governance.mjs:7-8`), o `runId` tem de bater (`:225`) e expira em 24h (`:229`), enquanto `CI_RUN_ID` é fixado uma vez por job (`.github/workflows/verify.yml:22-23`) e nenhum script ou passo de CI escreve o registry.
+- SHA-256 do packet commitado (`d91d92e`): `ca2ae0001b4807f94131f9bedf68bdd8ad06eb16b49eae5bae852ddcc43a9743`. Aprovação pendente deve citar este hash.
+- Nada foi aplicado: nenhum código, evidência ou registry alterado. Opção A (registry gerado por execução, adjudicação REM21-019 byte-idêntica) recomendada.
+
 # AUD-0573 — execução do roadmap 0350/0351 — 25/09/2026
 
 - Pedido: implementar todo o conteúdo planejado de [0573](04_audit/0573_repository_audit_executed_gates_2026-09-24.md), [0350](03_build/0350_audit0573_roadmap.md) e [0351](03_build/0351_audit0573_backlog.md).
