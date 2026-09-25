@@ -1,3 +1,14 @@
+# AUD-0573 — execução do roadmap 0350/0351 — 25/09/2026
+
+- Pedido: implementar todo o conteúdo planejado de [0573](04_audit/0573_repository_audit_executed_gates_2026-09-24.md), [0350](03_build/0350_audit0573_roadmap.md) e [0351](03_build/0351_audit0573_backlog.md).
+- D0: `RA25-01` 348 arquivos em cinco commits convencionais com varredura de segredos antes do stage; `RA25-02` 21 arquivos formatados e os três documentos hash-congelados (`0028`, `0128`, `0129`) excluídos por `.prettierignore` com hashes reconferidos; `RA25-08` licença ISC, SBOM de 378 componentes e `licenses:check` exit 0.
+- D1: `RA25-03` corrigiu a extração do checker de links (máscara de código, fail-closed em fence sem fechamento, destino sem line ending) sob [SPEC-DOC-002](02_spec/0130_doc_link_checker_extraction.md); `docs:check-links` passou de exit 1 para exit 0 com `broken 0`. `RA25-04` ficou para o fim da fila e não coube no orçamento.
+- D2: `RA25-09` rodou os cinco gates históricos mais `npm run verify` sob Node 22 e Postgres 16 descartável, arquivou a rodada 2026-09-22 antes de qualquer reescrita e registrou os relatórios datados em `certification/logs/historical/2026-09-25-raid25/`. `RA25-05` permanece `BLOCKED_BY_C1M`.
+- D3: `RA25-06` fechou o vazamento de credencial em URL no boundary do worker, com teste negativo e entrypoint real preservando exit 1; [SPEC-OPS-001](02_spec/0131_worker_startup_error_redaction.md). `RA25-07` não foi aberto: cada fatia exige task e gate próprios e o orçamento terminou antes da primeira.
+- D4: `RA25-10` registrou [POL-EVIDENCE-001](08_runtime/0801_evidence_retention_policy.md) com classes R0–R3 e aplicação pendente de aprovação humana; nenhum artefato foi movido.
+- Bloqueio registrado: `npm run certify` e `certification:verify` falham por drift de candidato anterior à rodada (registry AUD-20260921 fixa `8a889682…`, candidato atual `012ff293…`); re-bind exige AUD53/C1M, não reescrita local de evidência travada.
+- Limite: revisão independente/humana das SPECs `NOT_RUN`; produção `NO_GO`; nenhum dado real, provider, canal ou IdP. Evidência completa: [0574](04_audit/0574_aud0573_execution_evidence_2026-09-25.md).
+
 # Checkpoint para reinício — 24/09/2026
 
 - Pedido do usuário: registrar estado durável antes de reiniciar o sistema. Criei [checkpoint RA24/C1M](08_runtime/checkpoint_2026-09-24_ra24.md) com HEAD, worktree, artefatos C1M e SHA-256, verificações, bloqueios e passos de retomada.

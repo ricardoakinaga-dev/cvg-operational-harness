@@ -1,3 +1,12 @@
+# AUD-0573 — execução do roadmap — 2026-09-25
+
+- status: `IN_PROGRESS` com D0, D1 parcial, D2 e D4 documental executados; RA25-07 e RA25-04 `NOT_EXECUTED`; RA25-05 segue `BLOCKED_BY_C1M`. M07-S1 `FAIL / OPEN`; produção `NO_GO`.
+- last_completed_action: encerrei RA25-06 (`e17c244`) e RA25-10 (`cc416b7`). RA25-06 estendeu `redactSensitiveText` para credencial em URL, criou o boundary `apps/worker/src/startup-error.ts`, roteou os cinco catchs do entrypoint e o `worker.startup_failed`, com teste negativo sintético e entrypoint spawnado preservando exit 1 e `homolog_worker_failed`. RA25-10 registrou `POL-EVIDENCE-001` com aplicação pendente de aprovação humana.
+- current_evidence: [0574](04_audit/0574_aud0573_execution_evidence_2026-09-25.md), [SPEC-OPS-001](02_spec/0131_worker_startup_error_redaction.md), [POL-EVIDENCE-001](08_runtime/0801_evidence_retention_policy.md), relatórios em `certification/logs/historical/2026-09-25-raid25/`.
+- verification_state: `npm run verify` exit 0 (323/2 287); `npm test` 324/2 293; coverage 92,6/87,71/94,95/93,58; postgres 258, chaos 20, load 10 000 sem perda, restore e evals exit 0; audit 0; `docs:check-links`, `evidence:check-hygiene`, `diff:check`, `licenses:check` exit 0.
+- blocking_state: `npm run certification:verify` e `npm run certify` vermelhos por drift de candidato anterior a esta rodada (20 arquivos com mtime entre 2026-09-22T13:29:50Z e o início da sessão); re-bind exige AUD53/C1M. Revisão humana das SPECs 0130/0131 `NOT_RUN`.
+- next_action: abrir RA25-07 como primeira task de BUILD com SPEC própria, uma fatia por gate; depois RA25-04 (ponteiros + reconciliação 0344). Remover o container descartável `cvg-raid25-pg-20260925` antes de nova rodada de Postgres.
+
 # Checkpoint para reinício — 2026-09-24
 
 - status: `READY_FOR_NEXT_STEP` para retomada documental; task `A24-03-C1M-PACKET` continua `IN_PROGRESS / DOCUMENTARY`. M07-S1 `FAIL / OPEN`; produção `NO_GO`.

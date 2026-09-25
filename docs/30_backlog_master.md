@@ -1,3 +1,11 @@
+# AUD-0573 — roadmap executado; RA25-07 e RA25-04 em aberto — 25/09/2026
+
+- `COMPLETED`: RA25-01, RA25-02, RA25-03, RA25-06, RA25-08, RA25-09 e RA25-10 (política registrada, aplicação pendente). Evidência: [0574](04_audit/0574_aud0573_execution_evidence_2026-09-25.md).
+- `BLOCKED_BY_C1M`: RA25-05, inalterado — decisão humana hash-bound + I1/Final Critic.
+- `NOT_EXECUTED`: RA25-07 (hotspots; cada fatia exige task e gate próprios, orçamento encerrado antes da primeira) e RA25-04 (ponteiros e reconciliação com AUD53/C1M de [0344](03_build/0344_reaudit_m07_backlog.md), adiado para o fim da fila pelo próprio roadmap).
+- Ponteiros `README.md`, `docs/README.md` e `docs/99_operational_index.md` continuam apontando 2026-09-24; a referência mais nova é este bloco e [0574](04_audit/0574_aud0573_execution_evidence_2026-09-25.md).
+- `certification:verify` / `certify` vermelhos por drift de candidato anterior à rodada; re-bind exige AUD53/C1M. Produção `NO_GO`.
+
 # Ponteiro de retomada — 24/09/2026
 
 - [Checkpoint RA24/C1M](08_runtime/checkpoint_2026-09-24_ra24.md) criado antes de reinício. `A24-03-C1M-PACKET` continua `IN_PROGRESS / DOCUMENTARY`; nenhuma task de BUILD ou gate foi aprovada por este checkpoint. Após retomar, conferir estado/hashes e seguir [0349](03_build/0349_ra24_resolution_priorities.md). M07-S1 `FAIL / OPEN`; produção `NO_GO`.
