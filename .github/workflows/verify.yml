@@ -16,8 +16,14 @@ concurrency:
 
 jobs:
   verify:
+    name: REM21 CI bar (Node 22)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 180
+    env:
+      CI_RUN_ID: run-${{ github.run_id }}-${{ github.run_attempt }}
+      CI_ARTIFACT_DIR: ${{ runner.temp }}/cvg-ci/${{ github.run_id }}-${{ github.run_attempt }}
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cvg_test
+      PHASE4A_DISPOSABLE_PG: '1'
     services:
       postgres:
         image: postgres:16-alpine
@@ -38,45 +44,135 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Node
+      - name: Setup Node 22
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
 
-      - name: Install
-        run: npm ci --ignore-scripts
+      - name: Runtime version evidence
+        run: |
+          node --version
+          npm --version
 
-      - name: Construction readiness
-        run: npm run readiness
+      - name: Initialize candidate/run bar
+        run: node scripts/ci-bar.mjs init
 
-      - name: Verify
-        run: npm run verify
+      - name: Gate install
+        run: node scripts/ci-bar.mjs gate install
 
-      - name: Diff check
-        run: git diff --check
+      - name: Gate readiness
+        run: node scripts/ci-bar.mjs gate readiness
 
-      - name: Worker startup fail-closed smoke
-        run: npm run test:worker:startup
+      - name: Gate format
+        run: node scripts/ci-bar.mjs gate format
 
-      - name: Agent evals
-        run: npm run test:evals
+      - name: Gate typecheck
+        run: node scripts/ci-bar.mjs gate typecheck
 
-      - name: Chaos suite
-        run: npm run test:chaos
+      - name: Gate lint
+        run: node scripts/ci-bar.mjs gate lint
 
-      - name: Dependency licenses
-        run: npm run licenses:check
+      - name: Gate build
+        run: node scripts/ci-bar.mjs gate build
 
-      - name: SBOM
-        run: npm run sbom
+      - name: Gate unit
+        run: node scripts/ci-bar.mjs gate unit
 
-      - name: PostgreSQL migration smoke
-        env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/cvg_test
-        run: npm run test:postgres
+      - name: Gate coverage
+        run: node scripts/ci-bar.mjs gate coverage
 
-      - name: E2E
-        run: npx playwright install --with-deps chromium
-      - name: Browser E2E
-        run: npm run test:e2e
+      - name: Gate critical coverage
+        run: node scripts/ci-bar.mjs gate coverage-critical
+
+      - name: Gate mutation
+        run: node scripts/ci-bar.mjs gate mutation
+
+      - name: Gate worker startup
+        run: node scripts/ci-bar.mjs gate worker-startup
+
+      - name: Gate PostgreSQL
+        run: node scripts/ci-bar.mjs gate postgres
+
+      - name: Gate PostgreSQL backup restore rollback proof
+        run: node scripts/ci-bar.mjs gate postgres-proof
+
+      - name: Gate observability exporter and SLO proof
+        run: node scripts/ci-bar.mjs gate observability-proof
+
+      - name: Gate phase 2
+        run: node scripts/ci-bar.mjs gate phase2
+
+      - name: Gate phase 3
+        run: node scripts/ci-bar.mjs gate phase3
+
+      - name: Gate phase 4A
+        run: node scripts/ci-bar.mjs gate phase4a
+
+      - name: Gate phase 4A identity
+        run: node scripts/ci-bar.mjs gate phase4a-identity
+
+      - name: Gate chaos
+        run: node scripts/ci-bar.mjs gate chaos
+
+      - name: Gate evals
+        run: node scripts/ci-bar.mjs gate evals
+
+      - name: Gate load
+        run: node scripts/ci-bar.mjs gate load
+
+      - name: Gate restore
+        run: node scripts/ci-bar.mjs gate restore
+
+      - name: Gate docs and links
+        run: node scripts/ci-bar.mjs gate docs
+
+      - name: Install declared browser
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Gate E2E
+        run: node scripts/ci-bar.mjs gate e2e
+
+      - name: Gate REM21-014 trusted browser and accessibility proof
+        run: node scripts/ci-bar.mjs gate browser-proof
+
+      - name: Gate skip governance
+        run: node scripts/ci-bar.mjs gate skip
+
+      - name: Gate image build and non-root smoke
+        run: node scripts/ci-bar.mjs gate image
+
+      - name: Gate SBOM
+        run: node scripts/ci-bar.mjs gate sbom
+
+      - name: Gate licenses
+        run: node scripts/ci-bar.mjs gate licenses
+
+      - name: Gate security audit
+        run: node scripts/ci-bar.mjs gate security
+
+      - name: Gate certification
+        run: node scripts/ci-bar.mjs gate certify
+
+      - name: Gate certification verifier
+        run: node scripts/ci-bar.mjs gate certification-verify
+
+      - name: Gate diff
+        run: node scripts/ci-bar.mjs gate diff
+
+      - name: Gate artifacts and candidate drift
+        if: always()
+        run: node scripts/ci-bar.mjs gate artifacts
+
+      - name: Finalize CI bar
+        if: always()
+        run: node scripts/ci-bar.mjs finalize
+
+      - name: Upload CI bar artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cvg-ci-bar-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cvg-ci/${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 7

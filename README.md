@@ -2,6 +2,30 @@
 
 CVG Operational Harness is a governed runtime foundation for reusable operational AI agents across the CVG ecosystem.
 
+## Estado atual — 2026-09-20
+
+- Runtime V1 (single-pass governado), Runtime V2 (loop iterativo), fronteira
+  de capacidade Phase 4 (`PHASE_4_HANDOFF=VERIFIED`, controlada/sintética) e
+  camada conversacional Phase 4A estão entregues em escopo controlado e
+  cobertas por gates automatizados (`npm run verify:phase2`,
+  `npm run verify:phase3`, `npm run verify:phase4a`, `npm run test:phase4a`
+  com PostgreSQL descartável obrigatório e zero skips).
+- `AUD19-016` encerrou o programa anterior com candidato `d7f5d06a…`,
+  certificado mecânico `CONDITIONAL_GO / AAA_CONTROLLED` e produção `NO_GO`.
+  A nova [auditoria `0565`](docs/04_audit/0565_code_reaudit_2026-09-20.md)
+  retornou `REJECT` sob a barra QAUD20 por gaps contratuais e de composição.
+- O programa proposto `AUD-20260920-REAUDIT` está
+  `WAITING_HUMAN_APPROVAL`; nenhuma task de código foi autorizada. Acompanhe
+  pelo [plano executivo](docs/03_build/0331_audit20_executive_plan.md),
+  [roadmap](docs/03_build/0332_audit20_roadmap.md),
+  [backlog](docs/03_build/0333_audit20_backlog.md),
+  [`docs/30_backlog_master.md`](docs/30_backlog_master.md) e
+  [`docs/99_runtime_state.md`](docs/99_runtime_state.md).
+- Produção permanece `NO_GO`: nenhum dado real, provider/canal, credencial,
+  deploy ou ação sensível está autorizado neste repositório.
+- As seções `Scope`, `Non-goals` e `Roadmap` abaixo descrevem a fundação
+  Phase 0/1 histórica; o estado vigente é o desta seção.
+
 ## Purpose
 
 The harness provides neutral contracts, a governed single-pass runtime, an
@@ -53,5 +77,6 @@ ADRs under [`docs/architecture/adrs/`](docs/architecture/adrs/).
 4. Specify a bounded Runtime V2 loop only after the V1 invariants and gates are
    proven.
 
-The current production posture remains `NO-GO` until the separate operational
-AAA-21 program closes its own evidence and gates.
+The current production posture remains `NO_GO`. The proposed remediation
+program `AUD-20260920-REAUDIT` owns the next gates; `AUD19-016` and earlier
+AAA references are preserved as immutable history, not current authorization.
