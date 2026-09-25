@@ -1,15 +1,15 @@
 # Gauntlet progress
 
-- Run: `AAA-4A-20260917`
+- Run: `m07-s1-c1j-20260924-1`
 - Mode: `execute`
-- Status: `COMPLETE`
-- Phase: `AUDIT`
+- Status: `FINISHED`
+- Phase: `STOP`
 - Current round: 1
-- Evidence freshness: `FRESH`
-- Candidate: `aaa4a-df2c0b1a1b7e0e9a` / `df2c0b1a1b7e0e9a40badf7bd04a444a0ecf1f30390865412b2845adce492e77`
-- Latest verification: controlled `PASS`; 73/73 focused, PostgreSQL `EXECUTED`, three fresh critics `APPROVE`, and the final sentinel matches the candidate.
-- Final sentinel: `PASS`; `sourceCandidateUnchanged=true`.
-- Next action: stop at controlled Phase 4A PASS. Any real integration or production path requires a new gate.
-- Production: `NO_GO`.
+- Resource usage: `{"agent_depth_peak":0,"agent_peak":0,"elapsed_seconds":1062,"retries":0,"tokens":0,"tool_calls":39}`
+- Evidence freshness: `MISSING`
+- Largest current gap: C1J-08 and C1J-09 unavailable; M07-S1 cannot be accepted
+- Latest verification: C1J local checks and final command-record verifier passed; C1J-08/09 remain unavailable, so final M07-S1 verdict is FAIL / OPEN.
+- Blockers: none recorded
+- Next action: Prepare a separate documentary, hash-bound packet for the unavailable reviews or a later gated run. Do not replay C1J or start downstream M07/M05 work.
 
 This file is generated. Durable decisions are in `state.json` and `history.jsonl`.
