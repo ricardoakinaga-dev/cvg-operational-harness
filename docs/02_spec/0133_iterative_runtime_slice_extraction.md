@@ -66,14 +66,40 @@ precisa somar o domínio de ciclo de vida (`applyResume`, `finalize`,
   ou maior que a anterior.
 - Nenhum drift de baseline não explicado; `npm run diff:check` exit 0.
 
-## Estado do BUILD
+## Estado do BUILD — fatia 1 executada
 
-`BUILD_NOT_AUTHORIZED`. O recon foi feito, mas a extração **não** foi executada:
-o orçamento de execução do ciclo terminou antes de abrir a fatia, e o próprio
-[0351](../03_build/0351_audit0573_backlog.md) exige task e gate de BUILD
-próprios por fatia. Nenhuma linha de `iterative-runtime.ts` foi tocada; não há
-drift atribuível a RA25-07. A justificativa de não execução está registrada em
-[0574](../04_audit/0574_aud0573_execution_evidence_2026-09-25.md).
+`COMPLETED`. A fatia 1 extraiu 1 065 linhas em oito métodos para
+`packages/harness/src/iterative-dispatch.ts` (1 159 linhas), deixando
+`iterative-runtime.ts` em **1 488 linhas** — abaixo do alvo de ~1 500.
+
+Métodos movidos: `validateDecision` (58), `applyResume` (95), `dispatchTool`
+(498), `dispatchKnowledge` (114), `dispatchRespond` (89), `composeResponse`
+(64), `evaluate` (78), `pause` (69).
+
+Desenho: o módulo recebe `IterativeDispatchContext`, construído por um getter
+privado dentro da classe, onde os membros privados são acessíveis. Nenhum
+membro mudou de visibilidade e `index.ts` do pacote não ganhou export. A
+extração foi mecânica, feita por script com verificação embutida: cada bloco
+movido foi reconstruído a partir do resultado e comparado byte a byte ao
+original, admitindo apenas `this.` → `ctx.` e o recuo de dois espaços. O script
+abortaria se qualquer outra diferença aparecesse.
+
+`errorMessage`, `bindCapabilityFingerprint`, `boundedPayload`,
+`stringifySummary` e `mapEvaluationToStopReason` passaram a ser exportados do
+módulo do runtime para o módulo de dispatch. Isso cria um ciclo de importação
+entre os dois arquivos, seguro porque todas as referências cruzadas são
+avaliadas dentro de corpos de função, nunca na avaliação do módulo. O ciclo
+está documentado no cabeçalho de `iterative-dispatch.ts`.
+
+Verificação: `typecheck`, `lint` e `format:check` exit 0; `packages/harness`
+9 arquivos / 121 testes `PASS`; suíte completa 324 arquivos / 2 295 testes
+`PASS`; cobertura 92,63 / 87,73 / 94,99 / 93,61, acima dos thresholds e sem
+queda em relação ao estado anterior (92,6 / 87,71 / 94,95 / 93,58).
+
+Restante de RA25-07: `apps/api/src/server.ts` (5 857 linhas),
+`packages/persistence/src/postgres.ts` (3 354) e `packages/agent-runtime/src/runtime.ts`
+(2 603, um único `runTurn` de 2 233 linhas) continuam exigindo a própria SPEC e
+a própria fatia.
 
 ## Autorização e gates
 
