@@ -1,3 +1,12 @@
+# RA25-07 fatia 1 — domínio de dispatch extraído — 25/09/2026
+
+- Escopo: [RA25-07](03_build/0351_audit0573_backlog.md), primeira fatia. `packages/harness/src/iterative-runtime.ts` caiu de 2 455 para 1 488 linhas; as 1 065 linhas movidas foram para o novo `packages/harness/src/iterative-dispatch.ts` (1 159 linhas).
+- Métodos movidos: `validateDecision`, `applyResume`, `dispatchTool`, `dispatchKnowledge`, `dispatchRespond`, `composeResponse`, `evaluate`, `pause`.
+- Desenho: contexto `IterativeDispatchContext` construído por getter privado dentro da classe, onde os membros privados são acessíveis. Nenhuma visibilidade mudou e `index.ts` do pacote não ganhou export, preservando o contrato público. Cinco helpers puros passaram a ser exportados do runtime, criando um ciclo de importação documentado e seguro porque toda referência cruzada é avaliada dentro de corpos de função.
+- Integridade: a extração foi feita por script com verificação embutida — cada bloco movido é reconstruído a partir do resultado e comparado byte a byte ao original, admitindo apenas `this.` → `ctx.` e o recuo de dois espaços; qualquer outra diferença aborta o script. Nenhuma regra, ordem de efeito ou mensagem de erro foi alterada.
+- Gates: `typecheck`, `lint`, `format:check`, `docs:check-links`, `evidence:check-hygiene` e `diff:check` exit 0; `packages/harness` 9 arquivos/121 testes; suíte completa 324 arquivos/2 295 testes `PASS`; cobertura 92,63/87,73/94,99/93,61 — acima dos thresholds e acima do estado anterior (92,6/87,71/94,95/93,58). Commit `a8d38ac`.
+- Restante: `apps/api/src/server.ts` (5 857), `packages/persistence/src/postgres.ts` (3 354) e `packages/agent-runtime/src/runtime.ts` (2 603, com um único `runTurn` de 2 233 linhas) seguem exigindo SPEC e fatia próprias. Produção `NO_GO`.
+
 # RA25-07 — recon medido e plano da fatia; BUILD não autorizado — 25/09/2026
 
 - Escopo: [RA25-07](03_build/0351_audit0573_backlog.md). Fiz o recon e escrevi [SPEC-STRUCT-001](02_spec/0133_iterative_runtime_slice_extraction.md); nenhuma linha de código foi extraída.

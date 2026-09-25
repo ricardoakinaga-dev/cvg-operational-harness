@@ -1,3 +1,12 @@
+# RA25-07 fatia 1 — dispatch extraído — 2026-09-25
+
+- status: `IN_PROGRESS / SLICE_1_COMPLETED`. `iterative-runtime.ts` caiu de 2 455 para 1 488 linhas. Restam `server.ts` (5 857), `postgres.ts` (3 354) e `runtime.ts` (2 603). RA25-05 `BLOCKED_BY_C1M`; produção `NO_GO`.
+- last_completed_action: extraí o domínio de dispatch (1 065 linhas, oito métodos) para `packages/harness/src/iterative-dispatch.ts` com contexto explícito construído por getter privado — nenhuma visibilidade alterada, nenhum export novo no índice do pacote. Extração mecânica por script com verificação byte a byte do bloco movido. Commit `a8d38ac`.
+- current_evidence: [SPEC-STRUCT-001](02_spec/0133_iterative_runtime_slice_extraction.md), [RA25-07](03_build/0351_audit0573_backlog.md).
+- verification_state: `typecheck`, `lint`, `format:check`, `docs:check-links`, `evidence:check-hygiene` e `diff:check` exit 0; harness 9 arquivos/121 testes; suíte completa 324 arquivos/2 295 testes `PASS`; cobertura 92,63/87,73/94,99/93,61 (acima dos thresholds e sem queda).
+- blocking_state: nada bloqueia a fatia 1. Permanecem: RA25-05 (`BLOCKED_BY_C1M`), os três hotspots restantes de RA25-07, revisão humana das SPECs `NOT_RUN`.
+- next_action: fatia 2 de RA25-07 com SPEC própria (candidato natural: `packages/persistence/src/postgres.ts`, excluído da cobertura unitária, ou `apps/api/src/server.ts`, que exige mais de uma fatia). Reexecutar `npm run certify` em máquina ociosa para reemitir o certificado do candidato corrente.
+
 # AUD53 — closure registry vinculado à execução — 2026-09-25
 
 - status: `COMPLETED`. RA25-11 fechado sob aprovação direta do usuário (“vamos de opção A”). M07-S1 `FAIL / OPEN`; RA25-05 `BLOCKED_BY_C1M`; produção `NO_GO`.
