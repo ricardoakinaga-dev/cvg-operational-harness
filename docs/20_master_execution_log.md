@@ -1,3 +1,11 @@
+# Reemissão do certificado pós-RA25-04 — flake sob carga — 25/09/2026
+
+- Contexto: RA25-04 mudou o candidato, então reexecutei `npm run certify` para reemitir o certificado (candidato `ae77bd1d…`, run `run-aud53-20260925b`).
+- Resultado: 15 dos 16 gates `PASS`, incluindo `findings are current and candidate-bound` e os 37 hashes de artefato — o mecanismo do AUD53 segue correto. O gate `postgres` falhou por um flake: `operational-harness-homolog.integration.test.ts > drains cleanly on SIGTERM with no work pending` recebeu exit 143 em vez de 0, isto é, o SIGTERM chegou antes do handler gracioso.
+- Diagnóstico: o teste passa 3/3 em isolamento com o mesmo `TEST_DATABASE_URL`. A máquina estava com load average 23,7 em 16 cores por processos de outros projetos (navegador, `codex-web-gpt`, VS Code), o que atrasa o registro do handler. Não há relação com o diff desta rodada: `main.ts`, `finding-governance.mjs` e `certify` não tocam o ciclo de sinal do worker de homologação.
+- Ação: não reexecutei sob essa carga. Reverti `certification/` para a última revisão verde commitada (`3d3f867`, candidato `22a95426…`) e restaurei os PNGs de evidência regenerados pelo gate e2e. O certificado commitado fica verde porém pontual; a próxima execução em máquina ociosa deve reemitir para o candidato corrente.
+- Limite: nenhum código alterado por este incidente; produção `NO_GO`.
+
 # RA25-04 — ponteiros de navegação reconciliados — 25/09/2026
 
 - Escopo: [RA25-04](03_build/0351_audit0573_backlog.md). `README.md` raiz, `docs/README.md` e `docs/99_operational_index.md` passaram a apontar o ciclo corrente AUD-0573 / AUD53; os blocos anteriores foram relabelados como histórico, sem apagar nenhum `FAIL / OPEN` nem alterar hashes citados.
