@@ -13,7 +13,7 @@ import {
   PolicyEngine,
   type Capability,
   type PolicyDocument,
-  SECRETARY_POLICY_PROFILE
+  REFERENCE_POLICY_PROFILE
 } from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import { GovernedAgentRuntime, sweepExpiredApprovals } from '../runtime.ts'
@@ -52,7 +52,7 @@ function buildHarness(options: HarnessOptions = {}) {
   prompts.register({
     promptId: 'binding-core',
     version: '1.0.0',
-    content: 'You are the CVG secretary.',
+    content: 'You are the CVG operational assistant.',
     owner: 'platform',
     approvedBy: 'reviewer',
     status: 'approved',
@@ -94,7 +94,7 @@ function buildHarness(options: HarnessOptions = {}) {
     retry: { maxRetries: 0 }
   })
   const policy = new PolicyEngine({
-    profile: SECRETARY_POLICY_PROFILE,
+    profile: REFERENCE_POLICY_PROFILE,
     documents: options.documents ?? [],
     clock: now
   })
@@ -150,12 +150,12 @@ function turnInput(
     operatorRole: 'Supervisor',
     agentId: AGENT,
     agentVersion: 'v1',
-    agentProfile: 'secretary',
+    agentProfile: 'assistant',
     conversationId: 'conv_1',
     correlationId: CORRELATION,
-    capability: 'appointment.cancel',
-    action: 'appointment.cancel',
-    resource: { type: 'appointment', id: 'apt_1', tenantId: TENANT },
+    capability: 'record.cancel',
+    action: 'record.cancel',
+    resource: { type: 'record', id: 'apt_1', tenantId: TENANT },
     dataClassification: 'INTERNAL',
     prompt: { promptId: 'binding-core', version: '1.0.0' },
     modelProfile: 'fast',
@@ -191,7 +191,7 @@ function expectedCallerOperationKey(callerIdempotencyKey: string): string {
 }
 
 const FAKE_CANCEL_SCOPE: Partial<Record<Capability, EffectScope>> = {
-  'appointment.cancel': 'controlled_fake'
+  'record.cancel': 'controlled_fake'
 }
 
 function reserveOrphan(
@@ -204,14 +204,14 @@ function reserveOrphan(
   const reservation = harness.approvals.reserve({
     tenantId: TENANT,
     approvalId,
-    action: 'appointment.cancel',
-    resource: { type: 'appointment', id: 'apt_1' },
+    action: 'record.cancel',
+    resource: { type: 'record', id: 'apt_1' },
     payload: stored.proposalPayload,
     proposalHash: stored.proposalHash,
     agentId: AGENT,
     agentVersion: 'v1',
     policyVersion: stored.policyVersion,
-    capability: 'appointment.cancel',
+    capability: 'record.cancel',
     ttlMs,
     ...(options.operationKey !== undefined
       ? { operationKey: options.operationKey }

@@ -1,5 +1,6 @@
 export * from './profile.ts'
 export * from './secretary-profile.ts'
+export * from './reference-profile.ts'
 export * from './capabilities.ts'
 export * from './grants.ts'
 export * from './documents.ts'

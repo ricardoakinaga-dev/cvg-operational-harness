@@ -32,13 +32,10 @@ import {
   type TenantId
 } from '@cvg/platform'
 import {
-  AgentProfileNameSchema,
-  CapabilitySchema,
-  PolicyDocumentSchema,
   PolicyEngine,
+  REFERENCE_POLICY_PROFILE,
   type Capability,
-  type PolicyDocumentInput,
-  SECRETARY_POLICY_PROFILE
+  type PolicyDocumentInput
 } from '@cvg/policy-engine'
 import {
   CorrelationIdSchema,
@@ -90,9 +87,9 @@ export function resolveWorkerRuntimeKind(
 
 /**
  * SYNTHETIC controlled policy document (marked synthetic; no real institutional
- * source). It allows a read of an appointment draft and requires approval for
- * the draft-only write capability `appointment.modify`. Real capabilities
- * (`appointment.confirm`/`reschedule`/`cancel`) receive no grant here, so the
+ * source). It allows a read of a record draft and requires approval for
+ * the draft-only write capability `record.update`. Real capabilities
+ * (`record.confirm`/`reschedule`/`cancel`) receive no grant here, so the
  * kernel denies them before any executor call.
  */
 export const CONTROLLED_KERNEL_POLICY_DOCUMENT: PolicyDocumentInput = {
@@ -101,19 +98,19 @@ export const CONTROLLED_KERNEL_POLICY_DOCUMENT: PolicyDocumentInput = {
   effectiveFrom: '2026-09-01T00:00:00.000Z',
   rules: [
     {
-      id: 'synthetic-allow-schedule-read-appointment-draft',
+      id: 'synthetic-allow-resource-read-record-draft',
       effect: 'ALLOW',
       priority: 10,
-      capabilities: ['schedule.read'],
-      resourceTypes: ['appointment_draft'],
-      reason: 'Synthetic controlled read of an appointment draft'
+      capabilities: ['resource.read'],
+      resourceTypes: ['record_draft'],
+      reason: 'Synthetic controlled read of a record draft'
     },
     {
-      id: 'synthetic-require-approval-appointment-modify',
+      id: 'synthetic-require-approval-record-update',
       effect: 'REQUIRE_APPROVAL',
       priority: 20,
-      capabilities: ['appointment.modify'],
-      resourceTypes: ['appointment_draft'],
+      capabilities: ['record.update'],
+      resourceTypes: ['record_draft'],
       reason: 'Synthetic controlled write requires human approval'
     }
   ]
@@ -123,8 +120,8 @@ export const CONTROLLED_KERNEL_POLICY_DOCUMENT: PolicyDocumentInput = {
 export const CONTROLLED_KERNEL_EFFECT_SCOPES: Partial<
   Record<Capability, EffectScope>
 > = {
-  'schedule.read': 'controlled_fake',
-  'appointment.modify': 'controlled_fake'
+  'resource.read': 'controlled_fake',
+  'record.update': 'controlled_fake'
 }
 
 export const CONTROLLED_KERNEL_PAYLOAD_SCHEMA = z.object({
@@ -138,7 +135,7 @@ export const CONTROLLED_KERNEL_PAYLOAD_SCHEMA = z.object({
  */
 export const KernelTurnEnvelopeSchema = z
   .object({
-    capability: CapabilitySchema,
+    capability: REFERENCE_POLICY_PROFILE.capabilitySchema,
     action: z.string().min(1).max(120),
     resource: z
       .object({
@@ -150,7 +147,8 @@ export const KernelTurnEnvelopeSchema = z
     operatorId: z.string().min(1).max(120).default('op_synthetic_kernel'),
     operatorRole: RoleSchema.default('Operator'),
     agentVersion: z.string().min(1).max(120).default('synthetic-v1'),
-    agentProfile: AgentProfileNameSchema.default('secretary'),
+    agentProfile:
+      REFERENCE_POLICY_PROFILE.agentProfileSchema.default('assistant'),
     modelProfile: ModelProfileNameSchema.default('fast'),
     message: z
       .string()
@@ -215,7 +213,7 @@ function createControlledModelGateway(): ModelGateway {
     promptId: CONTROLLED_KERNEL_PROMPT_ID,
     version: CONTROLLED_KERNEL_PROMPT_VERSION,
     content:
-      'SYNTHETIC controlled kernel prompt. Produce a deterministic appointment draft update; no real data, no external call.',
+      'SYNTHETIC controlled kernel prompt. Produce a deterministic record draft update; no real data, no external call.',
     owner: 'platform-synthetic',
     approvedBy: 'synthetic-reviewer',
     status: 'approved',
@@ -305,8 +303,12 @@ export function createPostgresKernelRuntime(
   resolveWorkflowCoordinator(env)
 
   const policy = new PolicyEngine({
-    profile: SECRETARY_POLICY_PROFILE,
-    documents: [PolicyDocumentSchema.parse(CONTROLLED_KERNEL_POLICY_DOCUMENT)]
+    profile: REFERENCE_POLICY_PROFILE,
+    documents: [
+      REFERENCE_POLICY_PROFILE.policyDocumentSchema.parse(
+        CONTROLLED_KERNEL_POLICY_DOCUMENT
+      )
+    ]
   })
   const approvals = new PostgresApprovalAuthority(pool)
   const telemetry = new InMemoryTelemetry()

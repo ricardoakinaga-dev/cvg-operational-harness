@@ -20,7 +20,7 @@ import {
   PolicyEngine,
   type Capability,
   type PolicyDocument,
-  SECRETARY_POLICY_PROFILE
+  REFERENCE_POLICY_PROFILE
 } from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import { GovernedAgentRuntime, sweepExpiredApprovals } from '../runtime.ts'
@@ -71,7 +71,7 @@ function buildHarness(options: HarnessOptions = {}) {
   prompts.register({
     promptId: 'binding-core',
     version: '1.0.0',
-    content: 'You are the CVG secretary.',
+    content: 'You are the CVG operational assistant.',
     owner: 'platform',
     approvedBy: 'reviewer',
     status: 'approved',
@@ -117,7 +117,7 @@ function buildHarness(options: HarnessOptions = {}) {
     retry: { maxRetries: 0 }
   })
   const policy = new PolicyEngine({
-    profile: SECRETARY_POLICY_PROFILE,
+    profile: REFERENCE_POLICY_PROFILE,
     documents: options.documents ?? [],
     clock: now
   })
@@ -181,12 +181,12 @@ function turnInput(
     operatorRole: 'Supervisor',
     agentId: AGENT,
     agentVersion: 'v1',
-    agentProfile: 'secretary',
+    agentProfile: 'assistant',
     conversationId: 'conv_1',
     correlationId: CORRELATION,
-    capability: 'appointment.cancel',
-    action: 'appointment.cancel',
-    resource: { type: 'appointment', id: 'apt_1', tenantId: TENANT },
+    capability: 'record.cancel',
+    action: 'record.cancel',
+    resource: { type: 'record', id: 'apt_1', tenantId: TENANT },
     dataClassification: 'INTERNAL',
     prompt: { promptId: 'binding-core', version: '1.0.0' },
     modelProfile: 'fast',
@@ -226,9 +226,9 @@ function expectedDerivedOperationKey(proposalHash: string): string {
     .update(
       canonicalizeJson({
         tenantId: TENANT,
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
-        resource: { type: 'appointment', id: 'apt_1' },
+        capability: 'record.cancel',
+        action: 'record.cancel',
+        resource: { type: 'record', id: 'apt_1' },
         proposalHash
       }),
       'utf8'
@@ -243,7 +243,7 @@ function expectedResultDigest(result: unknown): string {
 }
 
 const FAKE_CANCEL_SCOPE: Partial<Record<Capability, EffectScope>> = {
-  'appointment.cancel': 'controlled_fake'
+  'record.cancel': 'controlled_fake'
 }
 
 function reserveBinding(harness: Harness, approvalId: string, ttlMs: number) {
@@ -251,14 +251,14 @@ function reserveBinding(harness: Harness, approvalId: string, ttlMs: number) {
   const reservation = harness.approvals.reserve({
     tenantId: TENANT,
     approvalId,
-    action: 'appointment.cancel',
-    resource: { type: 'appointment', id: 'apt_1' },
+    action: 'record.cancel',
+    resource: { type: 'record', id: 'apt_1' },
     payload: stored.proposalPayload,
     proposalHash: stored.proposalHash,
     agentId: AGENT,
     agentVersion: 'v1',
     policyVersion: stored.policyVersion,
-    capability: 'appointment.cancel',
+    capability: 'record.cancel',
     ttlMs
   })
   harness.approvals.markExecuting({
@@ -304,12 +304,12 @@ describe('AAA-10 fail-closed durability (F03 / artifact 3)', () => {
 
   it('keeps a controlled-fake medium-risk capability executable without claiming durability', async () => {
     const harness = buildHarness({
-      effectScopes: { 'appointment.create': 'controlled_fake' }
+      effectScopes: { 'record.create': 'controlled_fake' }
     })
     const result = await harness.runtime.runTurn(
       turnInput({
-        capability: 'appointment.create',
-        action: 'appointment.create'
+        capability: 'record.create',
+        action: 'record.create'
       })
     )
 

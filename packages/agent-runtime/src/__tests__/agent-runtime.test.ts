@@ -10,7 +10,7 @@ import type { ModelProfile } from '@cvg/model-gateway'
 import {
   PolicyEngine,
   type PolicyDocument,
-  SECRETARY_POLICY_PROFILE
+  REFERENCE_POLICY_PROFILE
 } from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import { GovernedAgentRuntime } from '../runtime.ts'
@@ -26,9 +26,9 @@ function buildHarness(
 ) {
   const prompts = new PromptRegistry()
   prompts.register({
-    promptId: 'secretary-core',
+    promptId: 'assistant-core',
     version: '1.0.0',
-    content: 'You are the CVG secretary.',
+    content: 'You are the CVG operational assistant.',
     owner: 'platform',
     approvedBy: 'reviewer',
     status: 'approved',
@@ -40,7 +40,7 @@ function buildHarness(
     respond: () => ({
       text: JSON.stringify({
         intent: 'schedule',
-        proposed: ['appointment.create']
+        proposed: ['record.create']
       }),
       usage: { inputTokens: 100, outputTokens: 50 },
       providerId: 'deterministic',
@@ -70,7 +70,7 @@ function buildHarness(
     retry: { maxRetries: 0 }
   })
   const policy = new PolicyEngine({
-    profile: SECRETARY_POLICY_PROFILE,
+    profile: REFERENCE_POLICY_PROFILE,
     documents: options.documents ?? [],
     clock: () => NOW
   })
@@ -108,7 +108,7 @@ function buildHarness(
     outbox,
     clock: () => NOW,
     effectJournal: new InMemoryEffectJournal({ clock: () => NOW }),
-    effectScopes: { 'appointment.cancel': 'controlled_fake' }
+    effectScopes: { 'record.cancel': 'controlled_fake' }
   })
   return { runtime, approvals, telemetry, audit, toolExecutor, outbox, prompts }
 }
@@ -122,14 +122,14 @@ function turnInput(
     operatorRole: 'Supervisor',
     agentId: 'agent_00000000-0000-4000-8000-000000000001',
     agentVersion: 'v1',
-    agentProfile: 'secretary',
+    agentProfile: 'assistant',
     conversationId: 'conv_1',
     correlationId: CORRELATION,
-    capability: 'appointment.create',
-    action: 'appointment.create',
-    resource: { type: 'appointment', id: 'apt_1', tenantId: TENANT },
+    capability: 'record.create',
+    action: 'record.create',
+    resource: { type: 'record', id: 'apt_1', tenantId: TENANT },
     dataClassification: 'INTERNAL',
-    prompt: { promptId: 'secretary-core', version: '1.0.0' },
+    prompt: { promptId: 'assistant-core', version: '1.0.0' },
     modelProfile: 'fast',
     modelMessages: { messages: [{ role: 'user', content: 'quero agendar' }] },
     structuredOutput: {
@@ -148,7 +148,7 @@ describe('governed agent runtime', () => {
     expect(result.outcome).toBe('executed')
     expect(result.modelResult?.output.structured).toEqual({
       intent: 'schedule',
-      proposed: ['appointment.create']
+      proposed: ['record.create']
     })
     expect(harness.toolExecutor).toHaveBeenCalledTimes(1)
     expect(harness.outbox).toHaveBeenCalledTimes(1)
@@ -180,8 +180,8 @@ describe('governed agent runtime', () => {
     const harness = buildHarness()
     const result = await harness.runtime.runTurn(
       turnInput({
-        capability: 'patient.record.write',
-        action: 'patient.record.write'
+        capability: 'subject.record.write',
+        action: 'subject.record.write'
       })
     )
     expect(result.outcome).toBe('denied')
@@ -197,8 +197,8 @@ describe('governed agent runtime', () => {
     const harness = buildHarness()
     const result = await harness.runtime.runTurn(
       turnInput({
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel'
+        capability: 'record.cancel',
+        action: 'record.cancel'
       })
     )
     expect(result.outcome).toBe('approval_required')
@@ -218,8 +218,8 @@ describe('governed agent runtime', () => {
     const harness = buildHarness()
     const requested = await harness.runtime.runTurn(
       turnInput({
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel'
+        capability: 'record.cancel',
+        action: 'record.cancel'
       })
     )
     expect(requested.outcome).toBe('approval_required')
@@ -230,17 +230,17 @@ describe('governed agent runtime', () => {
     ).proposalPayload
     expect(approvedPayload).toEqual({
       intent: 'schedule',
-      proposed: ['appointment.create']
+      proposed: ['record.create']
     })
     harness.approvals.submit(TENANT, approvalId, 'op_1')
     harness.approvals.approve(TENANT, approvalId, { approverId: 'op_2' })
 
     const mismatched = await harness.runtime.runTurn(
       turnInput({
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
+        capability: 'record.cancel',
+        action: 'record.cancel',
         approvalId,
-        approvalPayload: { appointmentId: 'apt_1', reason: 'mutado' }
+        approvalPayload: { recordId: 'rec_1', reason: 'mutado' }
       })
     )
     expect(mismatched.outcome).toBe('denied')
@@ -248,8 +248,8 @@ describe('governed agent runtime', () => {
 
     const executed = await harness.runtime.runTurn(
       turnInput({
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
+        capability: 'record.cancel',
+        action: 'record.cancel',
         approvalId
       })
     )
@@ -257,14 +257,14 @@ describe('governed agent runtime', () => {
     expect(harness.toolExecutor).toHaveBeenCalledTimes(1)
     expect(harness.toolExecutor.mock.calls[0]?.[0]?.payload).toEqual({
       intent: 'schedule',
-      proposed: ['appointment.create']
+      proposed: ['record.create']
     })
     expect(harness.approvals.get(TENANT, approvalId).status).toBe('EXECUTED')
 
     const replayed = await harness.runtime.runTurn(
       turnInput({
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
+        capability: 'record.cancel',
+        action: 'record.cancel',
         approvalId
       })
     )
@@ -338,10 +338,10 @@ describe('governed agent runtime', () => {
           effectiveFrom: '2026-09-01T00:00:00.000Z',
           rules: [
             {
-              id: 'deny-appointment-create',
+              id: 'deny-record-create',
               effect: 'DENY',
               priority: 10,
-              capabilities: ['appointment.create'],
+              capabilities: ['record.create'],
               reason: 'Tenant forbids automatic creation'
             }
           ]

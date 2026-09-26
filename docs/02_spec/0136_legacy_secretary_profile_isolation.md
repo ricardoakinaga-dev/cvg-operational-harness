@@ -199,3 +199,41 @@ mover.
   `realMedicalRecords` do `AgentConfigSchema` e no console web
   (`apps/web/src/features/platform/draft-helpers.ts` fixa o plugin
   `scheduling.controlled`). O inventário PR-L01 foi atualizado.
+
+### Ordem de execução ajustada
+
+A fatia 3 foi executada antes da fatia 2. Tirar o perfil e o preset da
+secretária do harness quebraria os testes de `agent-runtime`, `chaos`, worker e
+`platform`, que a regra R3 impede de importar o legado; eles precisam do perfil
+de referência antes da mudança. O conteúdo aprovado das fatias não mudou.
+
+### Fatia 3 (parte do perfil de referência) — concluída em 26/09/2026
+
+- Novo `packages/policy-engine/src/reference-profile.ts` com
+  `REFERENCE_POLICY_PROFILE`, gerado a partir do perfil da secretária pelo
+  mapeamento da tabela acima. Uma comparação programática confirmou a mesma
+  estrutura: mesmos riscos, número de ações, tipos de recurso, grants
+  (nível, `limitedFields`, `requiresMedicalOperator`), tetos por papel e
+  fallback.
+- Testes de `agent-runtime` (10 arquivos), `chaos` e o kernel sintético do
+  worker (`apps/worker/src/kernel-composition.ts` e seu teste PostgreSQL)
+  passaram para o perfil de referência por troca mecânica de nomes (163
+  capacidades, perfis `assistant`/`specialist`, recursos `record`/
+  `record_draft`); nenhuma asserção de decisão mudou. O worker deixou de
+  depender do vocabulário da secretária.
+- Novo `reference-engine.test.ts` (11 testes) cobre o mecanismo do engine só
+  com o perfil de referência.
+- Causa corrigida: os testes que sobem o worker real via `tsx` resolviam
+  `@cvg/*` pelo `package.json` (`dist/`), carregando código compilado antigo
+  de 22/09 que existia localmente; num clone limpo o processo nem subia. O
+  `tsconfig.json` raiz agora herda `tsconfig.base.json` (e seus `paths`), e o
+  `tsx` passou a carregar o código-fonte. Consequência: os testes de processo
+  do certificado `94d7a211` (PR-003) exercitaram o `dist` antigo; a próxima
+  certificação é a primeira com código atual nesses testes.
+- Gates (Node 22.23.2, PostgreSQL descartável): `typecheck`, `lint`,
+  `format:check`, `docs:check-links`, `build`, `build:harness` exit 0;
+  `test:coverage` 315 arquivos / 2 293 testes, cobertura 92,58/87,59/94,90/93,57;
+  `coverage:critical` PASS; `mutation:guard` PASS; `test:worker:startup` exit 0;
+  `test:postgres` 35/258; `test:evals` exit 0; `test:e2e` falhou uma vez em
+  `visual-shell.spec.ts` (comparação de screenshot) e passou 12/12 em duas
+  repetições seguidas — instabilidade registrada na PR-009.

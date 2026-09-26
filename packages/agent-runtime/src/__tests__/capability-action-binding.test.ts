@@ -6,7 +6,7 @@ import {
   PromptRegistry
 } from '@cvg/model-gateway'
 import type { ModelProfile } from '@cvg/model-gateway'
-import { PolicyEngine, SECRETARY_POLICY_PROFILE } from '@cvg/policy-engine'
+import { PolicyEngine, REFERENCE_POLICY_PROFILE } from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import { GovernedAgentRuntime } from '../runtime.ts'
 import type { GovernedTurnInput } from '../contracts.ts'
@@ -20,7 +20,7 @@ function buildHarness() {
   prompts.register({
     promptId: 'binding-core',
     version: '1.0.0',
-    content: 'You are the CVG secretary.',
+    content: 'You are the CVG operational assistant.',
     owner: 'platform',
     approvedBy: 'reviewer',
     status: 'approved',
@@ -60,7 +60,7 @@ function buildHarness() {
   const toolExecutor = vi.fn(async () => ({ result: { ok: true } }))
   const runtime = new GovernedAgentRuntime({
     policy: new PolicyEngine({
-      profile: SECRETARY_POLICY_PROFILE,
+      profile: REFERENCE_POLICY_PROFILE,
       clock: () => NOW
     }),
     approvals: new ApprovalEngine({ clock: () => NOW }),
@@ -70,7 +70,7 @@ function buildHarness() {
     toolExecutor,
     outbox: vi.fn(async () => ({ eventId: 'evt_binding' })),
     clock: () => NOW,
-    effectScopes: { 'appointment.cancel': 'controlled_fake' }
+    effectScopes: { 'record.cancel': 'controlled_fake' }
   })
   return { runtime, toolExecutor }
 }
@@ -84,12 +84,12 @@ function turnInput(
     operatorRole: 'Supervisor',
     agentId: 'agent_00000000-0000-4000-8000-000000000001',
     agentVersion: 'v1',
-    agentProfile: 'secretary',
+    agentProfile: 'assistant',
     conversationId: 'conv_1',
     correlationId: CORRELATION,
-    capability: 'appointment.modify',
-    action: 'appointment.modify',
-    resource: { type: 'appointment_draft', id: 'draft_1', tenantId: TENANT },
+    capability: 'record.update',
+    action: 'record.update',
+    resource: { type: 'record_draft', id: 'draft_1', tenantId: TENANT },
     dataClassification: 'INTERNAL',
     prompt: { promptId: 'binding-core', version: '1.0.0' },
     modelProfile: 'fast',
@@ -101,13 +101,13 @@ function turnInput(
 describe('AAA08-C1-F01 public boundary: capability/action/resource binding', () => {
   it('denies smuggled sensitive actions with zero fake-tool calls', async () => {
     for (const action of [
-      'appointment.confirm',
-      'appointment.reschedule',
-      'appointment.cancel'
+      'record.confirm',
+      'record.reschedule',
+      'record.cancel'
     ]) {
       const harness = buildHarness()
       const result = await harness.runtime.runTurn(
-        turnInput({ capability: 'appointment.modify', action })
+        turnInput({ capability: 'record.update', action })
       )
       expect(result.outcome, action).toBe('denied')
       expect(result.decision.decision, action).toBe('DENY')
@@ -128,9 +128,9 @@ describe('AAA08-C1-F01 public boundary: capability/action/resource binding', () 
     const confirm = buildHarness()
     const confirmResult = await confirm.runtime.runTurn(
       turnInput({
-        capability: 'appointment.confirm',
-        action: 'appointment.confirm',
-        resource: { type: 'appointment', id: 'apt_1', tenantId: TENANT }
+        capability: 'record.confirm',
+        action: 'record.confirm',
+        resource: { type: 'record', id: 'apt_1', tenantId: TENANT }
       })
     )
     expect(confirmResult.outcome).toBe('denied')
@@ -140,9 +140,9 @@ describe('AAA08-C1-F01 public boundary: capability/action/resource binding', () 
     const cancel = buildHarness()
     const cancelResult = await cancel.runtime.runTurn(
       turnInput({
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
-        resource: { type: 'appointment', id: 'apt_1', tenantId: TENANT }
+        capability: 'record.cancel',
+        action: 'record.cancel',
+        resource: { type: 'record', id: 'apt_1', tenantId: TENANT }
       })
     )
     expect(cancelResult.outcome).toBe('approval_required')
