@@ -112,6 +112,40 @@
   sobrescrevendo evidência histórica cujos hashes estão nos estados Gauntlet.
   Na rodada PR-003 os três PNGs foram restaurados. Pronto também exige que o
   E2E grave em `test-results/` e nunca em `docs/04_audit/evidence/`.
+- Achado de 26/09 (SPEC-LEGACY-002): `tests/e2e/visual-shell.spec.ts` falhou
+  uma vez na comparação de screenshot e passou nas duas repetições seguintes;
+  tratar a instabilidade visual antes de usar o E2E como gate de release.
+
+### PR-010 — Fazer o CI rodar no GitHub · P0 · SPEC+BUILD
+
+- Fato (26/09/2026, `gh run list`): o `verify.yml` falha em 0 s com "This run
+  likely failed because of a workflow file issue" desde pelo menos 17/09; a
+  barra de 29 gates nunca rodou no remoto nesse período.
+- Como: validar o workflow (por exemplo com `actionlint`), corrigir a causa e
+  rodar a barra completa no GitHub.
+- Pronto: `verify.yml` verde em `main` no GitHub.
+
+### PR-011 — Triagem do Gitleaks · P0 · SPEC+BUILD
+
+- Fato: o job `secret-scan` do `security.yml` falha (exit 1). Varredura local
+  com a mesma ferramenta, `--redact`: 480 achados, todos da regra genérica
+  `generic-api-key`, em arquivos de impressão digital de evidência (nome de
+  arquivo seguido de SHA-256), `idempotencyKey`/`operationKey` de teste e
+  segredos sintéticos de testes de redação. Nenhuma credencial real
+  identificada.
+- Como: `.gitleaks.toml` com allowlist estreita (caminhos de evidência com
+  hash, fixtures de teste nomeadas e o padrão de hash hexadecimal), revisada
+  item a item; manter o scan bloqueante.
+- Pronto: `security.yml` verde; allowlist documentada.
+
+### PR-012 — Testes de processo sobre código compilado antigo · P0 · SPEC+BUILD
+
+- Estado: `COMPLETED` em 26/09/2026 na fatia 3 de SPEC-LEGACY-002.
+- Fato: o worker real, rodado via `tsx`, resolvia `@cvg/*` pelo `dist/`
+  local (de 22/09); num clone limpo não subia. Corrigido com o `tsconfig.json`
+  raiz herdando os `paths` da base.
+- Pendente: a certificação `94d7a211` usou o `dist` antigo nesses testes; ela
+  será substituída na próxima reemissão.
 
 ## FL — Limpeza e isolamento do legado
 
@@ -646,7 +680,7 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 | Fase      | Tasks        | P0     | P1     | P2    |
 | --------- | ------------ | ------ | ------ | ----- |
-| F0        | PR-001 a 009 | 4      | 2      | 3     |
+| F0        | PR-001 a 012 | 7      | 2      | 3     |
 | FL        | PR-L01 a L12 | 7      | 4      | 1     |
 | F1        | PR-101 a 109 | 8      | 1      | 0     |
 | F2        | PR-201 a 208 | 1      | 4      | 3     |
@@ -655,4 +689,4 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 | F5        | PR-501 a 507 | 5      | 2      | 0     |
 | F6        | PR-601 a 608 | 4      | 3      | 1     |
 | F7        | PR-701 a 709 | 7      | 2      | 0     |
-| **Total** | **76**       | **46** | **22** | **8** |
+| **Total** | **79**       | **49** | **22** | **8** |
