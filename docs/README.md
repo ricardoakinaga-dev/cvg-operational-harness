@@ -5,7 +5,14 @@ e estados: [glossário operacional](architecture/GLOSSARY.md).
 
 Navegação derivada dos registros correntes: [índice operacional](99_operational_index.md).
 
-## Navegação corrente — 25/09/2026 — AUD-0573 / AUD53
+## Navegação corrente — 26/09/2026 — AUD-0576
+
+- [AUD-0576: auditoria de nota por item](04_audit/0576_repository_score_audit_2026-09-26.md) — docs 65, código 72, qualidade/CI 79, processo 58, geral `69/100`
+- [Roadmap AUD-0576](03_build/0352_score_roadmap_2026-09-26.md) — ondas R0–R5
+- [Backlog RA26-01–17](03_build/0353_score_backlog_2026-09-26.md) — próximo passo singular: RA26-01 (escopo do worktree) para RA26-02 devolver `phase10-verify` a exit 0
+- [M07: backlog corretivo da reauditoria](03_build/0344_reaudit_m07_backlog.md) — `A24-03-C1M-PACKET` `IN_PROGRESS / DOCUMENTARY`, baseline a rederivar
+
+## Histórico — Navegação em 25/09/2026 — AUD-0573 / AUD53
 
 - [AUD-0573: auditoria com gates executados](04_audit/0573_repository_audit_executed_gates_2026-09-24.md)
 - [AUD-0573: evidência de execução do roadmap](04_audit/0574_aud0573_execution_evidence_2026-09-25.md)
@@ -15,7 +22,6 @@ Navegação derivada dos registros correntes: [índice operacional](99_operation
 - [SPEC-OPS-001: redação de erro no entrypoint do worker](02_spec/0131_worker_startup_error_redaction.md)
 - [SPEC-DOC-002: extração do checker de links](02_spec/0130_doc_link_checker_extraction.md)
 - [Política de retenção de evidência](08_runtime/0801_evidence_retention_policy.md)
-- [M07: backlog corretivo da reauditoria](03_build/0344_reaudit_m07_backlog.md) — `A24-03-C1M-PACKET` `IN_PROGRESS / DOCUMENTARY`, baseline a rederivar
 - [C1L: resultado final — FAIL / OPEN](04_audit/evidence/AUD-20260924/M07-S1-C1L/final-gate-result.md)
 
 ## Histórico — Navegação em 24/09/2026 — AUD52 / C1L interrompido

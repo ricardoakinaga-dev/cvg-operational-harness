@@ -1,3 +1,12 @@
+# AUD-0576 — auditoria de nota por item, roadmap e backlog — 26/09/2026
+
+- Escopo: auditoria independente (documental, sem gate de BUILD) com nota de 0–100 por item. Fonte: [0576](04_audit/0576_repository_score_audit_2026-09-26.md). Notas: docs 65, código 72, qualidade/CI 79, processo 58; nota geral `69/100`.
+- Método: leitura do corpus `docs/` (3.559 arquivos / 54 MB), inventário de código (83 368 linhas de produção e 92 925 de teste em 25 workspaces) e execução de verificações read-only.
+- Executado: `npx prettier --check .` exit 0; `npm run typecheck` exit 0; `npm run lint` exit 0; `node scripts/check-doc-links.mjs README.md docs` exit 0 (`DOC_LINKS_OK`, 0 links quebrados); `node scripts/check-evidence-hygiene.mjs` exit 0 (231/231); `npx vitest run packages/observability` 20/20 `PASS`.
+- Achado crítico da rodada: `node scripts/phase10-verify.mjs` exit 1 com 5 falhas — `CANDIDATE_DRIFT` (worktree sujo: `packages/persistence/src/postgres.ts` e `packages/persistence/src/postgres-audit.ts`) e 3 falhas por `coverage/coverage-summary.json` ausente, com 116 shards órfãos em `coverage/.tmp/`.
+- Achados materiais: (1) circularidade gate × documentação (`baseline input drift` de `0190_spec_validation.md` derrubou C1L); (2) C1J passou 2 137 testes e falhou por `agent thread limit reached`; (3) packet C1M incompleto (3 arquivos) mantém `RA25-05 BLOCKED_BY_C1M`; (4) certificação reprovada no instante da auditoria; (5) contradição RA25 entre `0351` e `0574`.
+- Entregas: [0576](04_audit/0576_repository_score_audit_2026-09-26.md), roadmap [0352](03_build/0352_score_roadmap_2026-09-26.md) e backlog [0353](03_build/0353_score_backlog_2026-09-26.md) (RA26-01–17, ondas R0–R5). Nenhuma task de código autorizada; toda task R2–R4 exige SPEC e gate próprios. Produção `NO_GO`.
+
 # RA25-07 fatia 2 — outbox durável extraído — 25/09/2026
 
 - Escopo: [RA25-07](03_build/0351_audit0573_backlog.md), segunda fatia, alvo `packages/persistence/src/postgres.ts` (3 354 linhas).

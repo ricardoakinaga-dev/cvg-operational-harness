@@ -1,3 +1,14 @@
+# AUD-0576 — backlog RA26-01–17 registrado — 26/09/2026
+
+- Fonte: [relatório 0576](04_audit/0576_repository_score_audit_2026-09-26.md) (nota geral `69/100`); sequência em [0352](03_build/0352_score_roadmap_2026-09-26.md); tasks em [0353](03_build/0353_score_backlog_2026-09-26.md). Registro `PROPOSED / DOCUMENTARY`, sem autoridade para BUILD. Produção `NO_GO`.
+- `R0` (P0): `RA26-01` escopo do worktree sujo (`WAITING_HUMAN_APPROVAL`) e `RA26-02` regeneração de `coverage/coverage-summary.json` + reemissão de certificação para `phase10-verify` exit 0 — este é o próximo passo singular.
+- `R1` (consistência): `RA26-03` reconciliar `0351` × `0574` × `30_`; `RA26-04` unificar backlog master e ponteiros; `RA26-05` referências de code-span não resolvidas (53/571, inclui `BRIEFING/`); `RA26-06` numeração duplicada e "Ordem oficial" incompleta; `RA26-07` corpo dos docs mestres.
+- `R2` (fronteira de produção, `SPEC_AND_BUILD_GATE_REQUIRED`): `RA26-08` flags `ENABLE_REAL_*`; `RA26-09` plug do channel-gateway ou non-goal; `RA26-10` RAG no runtime ou descarte.
+- `R3` (dívida estrutural, uma fatia por gate): `RA26-11` extração de `server.ts` (5 857 linhas); `RA26-12` fachada Drizzle; `RA26-13` pacotes órfãos (`conversation` 7 917 linhas sem importadores); `RA26-14` duplicações e dependências não usadas.
+- `R4` (mensurabilidade): `RA26-15` denominador de cobertura para `apps/web` e adaptadores Postgres; `RA26-16` coerência de `playwright-results.xml` com a certificação.
+- `R5` (paralela, humana): `RA26-17` packet C1M completo (`IN_PROGRESS / DOCUMENTARY`, herda `A24-03-C1M-PACKET`).
+- Em aberto: RA25-05 `BLOCKED_BY_C1M`; RA25-07 `IN_PROGRESS` (fatias 3–4); revisão humana das SPECs `NOT_RUN`; produção `NO_GO`.
+
 # AUD53 — RA25-11 fechado; certificado verde — 25/09/2026
 
 - `COMPLETED`: RA25-11 (closure registry vinculado à execução) e RA25-04 (ponteiros `README.md`, `docs/README.md` e `docs/99_operational_index.md` no ciclo corrente, com os blocos anteriores relabelados como histórico). A adjudicação dos 26 findings de REM21-019 permanece byte-idêntica; o vínculo (candidato, runId, generatedAt) passou a ser gerado por execução em `certification/finding-closure.json`. Evidência: [0575](04_audit/0575_aud53_closure_rebind_decision_packet.md), SPEC [0132](02_spec/0132_run_bound_closure_registry.md).

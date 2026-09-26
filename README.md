@@ -2,7 +2,21 @@
 
 CVG Operational Harness is a governed runtime foundation for reusable operational AI agents across the CVG ecosystem.
 
-## Estado atual — 2026-09-25 — AUD-0573 / AUD53
+## Estado atual — 2026-09-26 — AUD-0576
+
+- A [auditoria AUD-0576](docs/04_audit/0576_repository_score_audit_2026-09-26.md)
+  emiti nota de 0–100 por item: documentação 65, código 72, qualidade/CI 79,
+  processo 58, nota geral `69/100`. Remediação em
+  [roadmap R0–R5](docs/03_build/0352_score_roadmap_2026-09-26.md) e
+  [backlog RA26-01–17](docs/03_build/0353_score_backlog_2026-09-26.md),
+  todas as tasks `PROPOSED` até decisão humana.
+- Estado verificado na rodada: `prettier`, `typecheck`, `lint`,
+  `docs:check-links` e `evidence:check-hygiene` exit 0; porém
+  `node scripts/phase10-verify.mjs` retorna 5 falhas (`CANDIDATE_DRIFT` pelo
+  worktree sujo e `coverage/coverage-summary.json` ausente) — a certificação
+  não é reproduzível neste instante.
+
+## Estado anterior — 2026-09-25 — AUD-0573 / AUD53
 
 - O ciclo [AUD-0573](docs/04_audit/0573_repository_audit_executed_gates_2026-09-24.md)
   foi executado: RA25-01, RA25-02, RA25-03, RA25-06, RA25-08, RA25-09 e RA25-10

@@ -1,3 +1,12 @@
+# AUD-0576 — auditoria de nota por item e roadmap RA26 — 2026-09-26
+
+- status: `PROPOSED / DOCUMENTARY`. Notas 0–100 por item: docs 65, código 72, qualidade/CI 79, processo 58, nota geral `69/100`. Roadmap [0352](03_build/0352_score_roadmap_2026-09-26.md) e backlog [0353](03_build/0353_score_backlog_2026-09-26.md) registrados com 17 tasks `PROPOSED`. M07-S1 `FAIL / OPEN`; RA25-05 `BLOCKED_BY_C1M`; produção `NO_GO`.
+- last_completed_action: auditei os 3.559 arquivos de `docs/`, o código, os testes e o CI em modo read-only e emiti [0576](04_audit/0576_repository_score_audit_2026-09-26.md) com as notas e os achados materiais, mais roadmap e backlog RA26. Nenhum arquivo de código foi alterado.
+- current_evidence: [0576](04_audit/0576_repository_score_audit_2026-09-26.md), [0352](03_build/0352_score_roadmap_2026-09-26.md), [0353](03_build/0353_score_backlog_2026-09-26.md).
+- verification_state: `prettier --check`, `typecheck`, `lint`, `docs:check-links` e `evidence:check-hygiene` exit 0 após a escrita. `node scripts/phase10-verify.mjs` **exit 1 com 5 falhas**: `CANDIDATE_DRIFT` (worktree sujo) e 3 por `coverage/coverage-summary.json` ausente — a evidência de cobertura da certificação não é reproduzível neste instante.
+- blocking_state: RA26-01 `WAITING_HUMAN_APPROVAL` (escopo do worktree: `postgres.ts` modificado, `postgres-audit.ts` não rastreado); RA26-02 depende de RA26-01; ondas R2–R4 exigem SPEC e gate de BUILD próprios; revisão humana das SPECs `NOT_RUN`.
+- next_action: decisão humana sobre as 2 entradas do worktree (RA26-01); depois regenerar `coverage/coverage-summary.json` e reemitir a certificação (RA26-02) para devolver `phase10-verify` a exit 0.
+
 # RA25-07 fatia 2 — outbox durável extraído — 2026-09-25
 
 - status: `IN_PROGRESS / SLICE_1_AND_2_COMPLETED`. `iterative-runtime.ts` em 1 488 linhas (alvo cumprido); `postgres.ts` de 3 354 para 2 572. Restam as fatias 3 e 4 de `postgres.ts`, mais `server.ts` (5 857) e `runtime.ts` (2 603). RA25-05 `BLOCKED_BY_C1M`; produção `NO_GO`.

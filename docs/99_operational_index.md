@@ -12,7 +12,17 @@ infer approval, certification or production access.
 - [master backlog](30_backlog_master.md)
 - [AUD21 executable backlog](03_build/0337_comprehensive_remediation_backlog.md)
 
-## Current controlled work — AUD-0573 / AUD53
+## Current controlled work — AUD-0576
+
+- [Current runtime state](99_runtime_state.md)
+- [Current master execution log](20_master_execution_log.md)
+- [Current consolidated backlog](30_backlog_master.md)
+- [AUD-0576 score audit (0–100 per item)](04_audit/0576_repository_score_audit_2026-09-26.md)
+- [AUD-0576 roadmap (waves R0–R5)](03_build/0352_score_roadmap_2026-09-26.md)
+- [AUD-0576 backlog RA26-01–17](03_build/0353_score_backlog_2026-09-26.md)
+- [Detailed M07 recovery backlog](03_build/0344_reaudit_m07_backlog.md) — `A24-03-C1M-PACKET` `IN_PROGRESS / DOCUMENTARY`
+
+## Histórico — Current controlled work — AUD-0573 / AUD53
 
 - [Current runtime state](99_runtime_state.md)
 - [Current master execution log](20_master_execution_log.md)
