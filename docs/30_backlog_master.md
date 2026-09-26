@@ -1,3 +1,9 @@
+# PROD-20260926 — F0 e FL em andamento — 26/09/2026
+
+- `COMPLETED`: PR-001 (gates sobre `f9f84c9`), PR-002 (preflight de Node), PR-L01 (inventário), PR-L02 (pacotes mortos removidos) e PR-L03 (fronteira de `legacy/`). Evidência em [SPEC-LEGACY-001](02_spec/0135_legacy_dead_packages_and_boundary.md).
+- `IN_PROGRESS`: PR-003 — causa identificada (ambiente), falta reemitir o certificado.
+- Próximas: PR-L04 (jornadas; depende de D-13 por causa da política de workspaces da M07-S1), PR-L06 e PR-L07. Produção `NO_GO`.
+
 # PROD-20260926 — frente FL (limpeza e isolamento do legado) — 26/09/2026
 
 - Fonte: [0356](03_build/0356_production_backlog_2026-09-26.md), seção FL; decisões DL-01 a DL-04 em [0357](03_build/0357_production_decision_packet_2026-09-26.md). Todas `PROPOSED`.

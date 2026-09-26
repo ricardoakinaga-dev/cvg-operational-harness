@@ -1,3 +1,12 @@
+# PROD-20260926 — F0 parcial e FL iniciada — 2026-09-26
+
+- status: `IN_PROGRESS`. PR-001, PR-002, PR-L01, PR-L02 e PR-L03 `COMPLETED`; PR-003 `IN_PROGRESS / CAUSE_IDENTIFIED`. M07-S1 `FAIL / OPEN`; produção `NO_GO`.
+- last_completed_action: sob a autorização do usuário ("então vamos avançar"), confirmei os gates sobre `f9f84c9`, criei o preflight de Node (`scripts/node-version-preflight.mjs`) em `verify`/`certify`, escrevi o [inventário do legado](../legacy/LEGACY_INVENTORY.md), removi `packages/workflows`, `packages/tools` e `packages/memory` e criei a fronteira de `legacy/` com `tests/architecture/legacy-boundary.test.ts`, sob [SPEC-LEGACY-001](02_spec/0135_legacy_dead_packages_and_boundary.md).
+- current_evidence: [SPEC-LEGACY-001](02_spec/0135_legacy_dead_packages_and_boundary.md), [inventário](../legacy/LEGACY_INVENTORY.md), [backlog 0356](03_build/0356_production_backlog_2026-09-26.md).
+- verification_state: Node 22.23.2 com PostgreSQL descartável `cvg-legacy-pg-20260926`: `typecheck`, `lint`, `format:check`, `docs:check-links`, `diff:check`, `sbom`, `licenses:check` e `audit:security` exit 0; `test:coverage` 314 arquivos / 2 280 testes PASS, 0 skipped, cobertura 92,57/87,62/94,93/93,57; `test:postgres` 35/258 PASS. Causa da divergência de cobertura da AUD-0577: execução sem PostgreSQL e em Node 24.
+- blocking_state: reemissão do certificado (PR-003) exige `npm run certify` em máquina ociosa ou CI; PR-L04 exige incluir `legacy/packages/*` nos workspaces e na política da M07-S1 (D-13); decisões D-02, D-12, D-13 e DL-05 pendentes.
+- next_action: reemitir o certificado (PR-003); decidir D-13 para liberar PR-L04 (isolar as jornadas); PR-L06/PR-L07 podem começar em paralelo.
+
 # PROD-20260926 — plano redirecionado ao harness e frente FL do legado — 2026-09-26
 
 - status: `WAITING_HUMAN_APPROVAL`. Programa com 75 tasks `PROPOSED` (46 P0, 22 P1, 7 P2) em F0, FL e F1–F7. Nenhuma task autorizada para BUILD. M07-S1 `FAIL / OPEN`; produção `NO_GO`.

@@ -1,6 +1,8 @@
 # Backlog — programa PROD-20260926 — harness em produção controlada
 
-- Status: todas as tasks `PROPOSED`. Nenhuma está autorizada para BUILD.
+- Status: PR-001, PR-002, PR-L01, PR-L02 e PR-L03 `COMPLETED` e PR-003
+  `IN_PROGRESS` em 26/09/2026, sob a autorização do usuário ("então vamos
+  avançar"); as demais continuam `PROPOSED`.
 - Plano executivo: [0354](0354_production_executive_plan_2026-09-26.md).
   Roadmap e gates de fase: [0355](0355_production_roadmap_2026-09-26.md).
   Baseline: [AUD-0577](../04_audit/0577_production_readiness_score_audit_2026-09-26.md).
@@ -17,38 +19,35 @@
 
 ### PR-001 — Resolver o worktree sujo (RA26-01) · P0 · DOC
 
-- Estado: `COMPLETED_PENDING_VERIFICATION`. Durante a rodada de 26/09 o
-  commit `f9f84c9` (extração do domínio de auditoria de `postgres.ts`) absorveu
-  `M packages/persistence/src/postgres.ts` e
-  `?? packages/persistence/src/postgres-audit.ts`; o worktree ficou limpo.
-- Falta: registrar a fatia 3 de RA25-07 nos ledgers e executar os gates sobre
-  `f9f84c9`.
-- Pronto: `typecheck`, `lint`, `npm test` e `test:postgres` PASS sobre o
-  commit, com evidência registrada.
+- Estado: `COMPLETED` em 26/09/2026. O commit `f9f84c9` absorveu
+  `postgres.ts` e `postgres-audit.ts`. Gates sobre `001fc6f` (que contém
+  `f9f84c9`) em Node 22 com PostgreSQL: `typecheck` e `lint` exit 0; suíte
+  completa 323 arquivos / 2 294 testes PASS; `test:postgres` 35 / 258 PASS.
 
 ### PR-002 — Fixar a toolchain em Node 22 · P0 · SPEC+BUILD
 
-- O que/onde: `.nvmrc` exige 22.23.2; a auditoria rodou em Node 24.20.0 sem
-  aviso. `package.json` não declara `engines`.
-- Como: declarar `engines.node` e `engine-strict`, adicionar preflight que
-  aborta `verify`/`certify` fora da versão, e documentar o `nvm use`.
-- Dependência: PR-001.
-- Pronto: `npm run verify` em Node 24 falha com mensagem clara; em Node 22
-  passa.
+- Estado: `COMPLETED` em 26/09/2026.
+- Fato: `package.json` já declarava `engines.node` `>=22 <23`, mas nada
+  impedia rodar `verify`/`certify` em outra versão.
+- Entregue: `scripts/node-version-preflight.mjs` lê o `.nvmrc`; major
+  diferente aborta (exit 1), patch diferente só avisa. `verify` e `certify`
+  passam a começar pelo preflight. Teste em
+  `tests/node-version-preflight.test.js` (6 casos). Verificado: Node 22.23.2
+  exit 0; Node 24.20.0 exit 1 com mensagem.
 
 ### PR-003 — Certificado reproduzível (RA26-02) · P0 · SPEC+BUILD
 
-- O que/onde: `node scripts/phase10-verify.mjs` retorna 11 falhas em execução
-  limpa; cobertura medida 90,88/85,88/92,97/91,83 (Node 24, sem PostgreSQL)
-  contra 92,6/87,71 no ledger.
-- Evidência parcial de 26/09: com Node 22.23.2 e PostgreSQL descartável,
-  `npm run test:postgres` passou 35 arquivos / 258 testes. Falta repetir a
-  cobertura nas mesmas condições.
-- Como: explicar a divergência (Node 24? 20 arquivos PostgreSQL pulados?);
-  tornar o CI a única fonte do certificado; reemitir com `CI_RUN_ID` novo.
-- Dependência: PR-001, PR-002.
+- Estado: `IN_PROGRESS / CAUSE_IDENTIFIED`.
+- Causa da divergência, medida em 26/09: ambiente, não regressão. Sem
+  PostgreSQL e em Node 24 a suíte pula 20 arquivos (146 testes) e a cobertura
+  cai para 90,88/85,88/92,97/91,83. Em Node 22 com PostgreSQL descartável e
+  `PHASE4A_DISPOSABLE_PG=1`: 0 skips e 92,41/87,48/94,79/93,40 sobre
+  `001fc6f`; depois da PR-L02, 92,57/87,62/94,93/93,57.
+- Falta: reemitir o certificado (`npm run certify` com `CI_RUN_ID` novo) em
+  máquina ociosa, ou no CI, e confirmar `certification:verify` exit 0 em duas
+  execuções seguidas.
 - Pronto: duas execuções limpas seguidas geram as mesmas métricas;
-  `certification:verify` exit 0; causa da divergência registrada.
+  `certification:verify` exit 0.
 
 ### PR-004 — Tirar o estado Gauntlet do versionamento · P0 · HUMAN + DOC
 
@@ -118,6 +117,8 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-L01 — Inventário e classificação do legado · P0 · DOC
 
+- Estado: `COMPLETED` em 26/09/2026 — [`legacy/LEGACY_INVENTORY.md`](../../legacy/LEGACY_INVENTORY.md).
+
 - O que/onde: todos os arquivos de `apps/`, `packages/`, `scripts/`, `tests/`,
   `docs/`, configuração e raiz.
 - Como: classificar cada item em `HARNESS`, `LEGACY_ISOLATE` (vital hoje,
@@ -130,6 +131,8 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-L02 — Apagar pacotes sem consumidor (DL-02) · P0 · SPEC+BUILD
 
+- Estado: `COMPLETED` em 26/09/2026 sob [SPEC-LEGACY-001](../02_spec/0135_legacy_dead_packages_and_boundary.md).
+
 - O que/onde: `packages/workflows` (266 linhas), `packages/tools` (395) e
   `packages/memory` (13), sem nenhum importador em `apps/` ou `packages/`.
 - Como: remover os diretórios e as referências em `tsconfig.json`,
@@ -140,6 +143,8 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
   `typecheck`, `lint`, `npm test` e `sbom` verdes.
 
 ### PR-L03 — Estrutura de `legacy/` e regra de dependência · P0 · SPEC+BUILD
+
+- Estado: `COMPLETED` em 26/09/2026 sob [SPEC-LEGACY-001](../02_spec/0135_legacy_dead_packages_and_boundary.md). A inclusão de `legacy/packages/*` nos workspaces ficou para a PR-L04 (depende de D-13).
 
 - Como: workspace `legacy/packages/*` com pacotes `@cvg/legacy-*`;
   `legacy/README.md` explica origem, regra e prazo de remoção; teste de

@@ -1,3 +1,13 @@
+# PROD-20260926 — PR-001, PR-002, PR-L01–L03 executadas — 26/09/2026
+
+- Autorização: usuário, "então vamos avançar", sobre o plano 0354 e as decisões DL-01–DL-04.
+- PR-001: gates sobre `001fc6f` (contém `f9f84c9`) em Node 22 com PostgreSQL — `typecheck`/`lint` exit 0, suíte 323/2 294 PASS (1 arquivo pulado por exigir `PHASE4A_DISPOSABLE_PG=1`), `test:postgres` 35/258 PASS.
+- PR-003: divergência de cobertura explicada pelo ambiente (sem PostgreSQL e Node 24 → 20 arquivos pulados); com PostgreSQL, 92,41/87,48/94,79/93,40. Certificado ainda não reemitido.
+- PR-002: `scripts/node-version-preflight.mjs` + teste; `verify` e `certify` começam pelo preflight; `engines.node` já existia.
+- PR-L01: [`legacy/LEGACY_INVENTORY.md`](../legacy/LEGACY_INVENTORY.md) com 170 arquivos classificados por domínio.
+- PR-L02/PR-L03 ([SPEC-LEGACY-001](02_spec/0135_legacy_dead_packages_and_boundary.md)): removidos `workflows`, `tools`, `memory` e suas referências (tsconfig, vitest, lockfile, digest phase3); `0304`/`0305` registram a remoção sem apagar mapeamentos; checker de links ganhou `removedTargets` para três relatórios de auditoria vinculados por hash; teste de fronteira `legacy-boundary.test.ts`; `legacy/README.md` e `legacy/packages/`.
+- Primeira execução dos gates falhou em 4 testes (contratos 0304/0305 e teste da PR-002 antes do `package.json`) e na checagem de links; corrigido e reexecutado: todos os gates exit 0, 314/2 280 PASS com 0 skip, cobertura 92,57/87,62/94,93/93,57, `test:postgres` 35/258. Produção `NO_GO`.
+
 # PROD-20260926 — legado identificado e frente FL registrada — 26/09/2026
 
 - Correção do usuário: a Esmeralda V2 (`cvg-agent-secretary-v2`) é o programa legado; o produto é o `cvg-operational-harness`. Pedido: tudo o que for legado deve ficar isolado e identificado em `legacy/` ou ser apagado quando não for vital, e isso deve entrar como melhoria do programa.
