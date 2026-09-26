@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  createControlledSecretaryConfig,
+  createControlledAgentConfig,
   InMemoryControlPlaneStore,
   runTestLab,
   type CapabilityGateway
@@ -20,7 +20,7 @@ async function fixture() {
   const version = await store.createVersion(
     { tenantId },
     agent.id,
-    createControlledSecretaryConfig(),
+    createControlledAgentConfig(),
     'admin.synthetic'
   )
   return { store, tenantId, agentId: agent.id, versionId: version.id }

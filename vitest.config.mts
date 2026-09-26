@@ -23,6 +23,7 @@ export default defineConfig({
       'tests/**/*.test.js',
       'tests/**/*.test.ts',
       'packages/**/*.test.ts',
+      'legacy/**/*.test.ts',
       'apps/**/*.test.ts',
       'apps/**/*.test.tsx'
     ],
@@ -40,7 +41,12 @@ export default defineConfig({
         functions: 90,
         lines: 90
       },
-      include: ['packages/**/*.ts', 'apps/**/*.ts', 'apps/**/*.tsx'],
+      include: [
+        'packages/**/*.ts',
+        'legacy/**/*.ts',
+        'apps/**/*.ts',
+        'apps/**/*.tsx'
+      ],
       // Process bootstraps, browser rendering, and PostgreSQL adapters have
       // dedicated smoke/E2E/integration gates. Keep them out of the unit
       // denominator so this threshold measures the deterministic core rather
@@ -85,6 +91,10 @@ export default defineConfig({
       '@cvg/agent-core': resolve(
         workspaceRoot,
         'packages/agent-core/src/index.ts'
+      ),
+      '@cvg/legacy-secretary-profile': resolve(
+        workspaceRoot,
+        'legacy/packages/secretary-profile/src/index.ts'
       ),
       '@cvg/adapters': resolve(workspaceRoot, 'packages/adapters/src/index.ts'),
       '@cvg/rag': resolve(workspaceRoot, 'packages/rag/src/index.ts'),

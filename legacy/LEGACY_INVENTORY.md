@@ -49,7 +49,7 @@ com ocorrência. Cada ocorrência foi agrupada por domínio abaixo.
 | `apps/web/src/features/journeys/`, `apps/web/src/api/client.ts`, `App.tsx`                                                                                                           | Tela e cliente de jornadas                                                                       |
 | Testes: `journeys*.test.ts`, `journey-*.test.ts`, `journey-routes-coverage.test.ts`, `journeys-api-postgres.test.ts`, `journeys-identity-race.test.tsx`, `restore-integrity.test.ts` | Cobertura do domínio                                                                             |
 
-### `LEGACY_ISOLATE` — perfil da secretária (PR-L05)
+### `LEGACY_ISOLATE` — perfil da secretária (PR-L05, isolado em 26/09/2026)
 
 | Onde                                                         | O quê                                                             |
 | ------------------------------------------------------------ | ----------------------------------------------------------------- |
@@ -120,9 +120,10 @@ arquitetura já proíbe `secretary`), `apps/worker/src/operational-harness-worke
 
 ## Andamento
 
-| Task            | Estado      | Evidência                                                                                                               |
-| --------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------- |
-| PR-L01          | `COMPLETED` | Este inventário                                                                                                         |
-| PR-L02          | `COMPLETED` | `workflows`, `tools` e `memory` removidos; [SPEC-LEGACY-001](../docs/02_spec/0135_legacy_dead_packages_and_boundary.md) |
-| PR-L03          | `COMPLETED` | `legacy/README.md`, `legacy/packages/`, `tests/architecture/legacy-boundary.test.ts`                                    |
-| PR-L04 a PR-L12 | `PROPOSED`  | —                                                                                                                       |
+| Task                    | Estado      | Evidência                                                                                                               |
+| ----------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------- |
+| PR-L01                  | `COMPLETED` | Este inventário                                                                                                         |
+| PR-L02                  | `COMPLETED` | `workflows`, `tools` e `memory` removidos; [SPEC-LEGACY-001](../docs/02_spec/0135_legacy_dead_packages_and_boundary.md) |
+| PR-L03                  | `COMPLETED` | `legacy/README.md`, `legacy/packages/`, `tests/architecture/legacy-boundary.test.ts`                                    |
+| PR-L05                  | `COMPLETED` | `legacy/packages/secretary-profile`; [SPEC-LEGACY-002](../docs/02_spec/0136_legacy_secretary_profile_isolation.md)      |
+| PR-L04, PR-L06 a PR-L12 | `PROPOSED`  | —                                                                                                                       |

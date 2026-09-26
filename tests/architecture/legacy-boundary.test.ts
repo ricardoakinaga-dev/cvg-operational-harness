@@ -10,7 +10,10 @@ const repositoryRoot = resolve(process.cwd())
  * Files under apps/ allowed to compose legacy packages. Each entry names the
  * FL task that introduced it; the list shrinks back to empty in PR-L11.
  */
-const LEGACY_COMPOSITION_POINTS: readonly string[] = []
+const LEGACY_COMPOSITION_POINTS: readonly string[] = [
+  // PR-L05 (SPEC-LEGACY-002): development bootstrap of the secretary preset.
+  'apps/api/src/legacy-composition.ts'
+]
 
 const legacyImportPattern =
   /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"]([^'"]*(?:@cvg\/legacy-|\/legacy\/)[^'"]*)['"]/g

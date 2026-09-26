@@ -1,6 +1,6 @@
 /**
  * Neutral reference PolicyProfile of the harness (SPEC-LEGACY-002, slice 3).
- * It mirrors the structure of the legacy secretary profile one-to-one, with
+ * It mirrors the structure of the legacy product profile one-to-one, with
  * the same risk levels, grants and role ceilings under product-neutral names,
  * so harness tests and the synthetic worker kernel exercise the policy
  * mechanism without legacy vocabulary. It is an example, not a product.

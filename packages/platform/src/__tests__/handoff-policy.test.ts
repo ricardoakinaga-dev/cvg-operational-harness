@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   AgentConfigSchema,
-  createControlledSecretaryConfig,
+  createControlledAgentConfig,
   evaluatePlatformPolicy,
   InMemoryControlPlaneStore,
   runTestLab
@@ -10,7 +10,7 @@ import {
 const tenantId = 'tenant_00000000-0000-4000-8000-000000000081'
 
 function configuredPolicy() {
-  const base = createControlledSecretaryConfig()
+  const base = createControlledAgentConfig()
   return AgentConfigSchema.parse({
     ...base,
     policies: {

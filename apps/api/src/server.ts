@@ -42,7 +42,6 @@ import {
   createControlledCapabilityGateway,
   createTestSuiteRunId,
   executeConfiguredAgent,
-  ensureControlledSecretaryPreset,
   InMemoryControlPlaneStore,
   TenantIdSchema,
   TestLabCaseSchema,
@@ -74,6 +73,7 @@ import {
   type TestSuiteRunRecord,
   type TestSuiteVariantResult
 } from '@cvg/platform'
+import { ensureControlledSecretaryPreset } from './legacy-composition.ts'
 import {
   ApprovalEngine,
   ApprovalRepository,

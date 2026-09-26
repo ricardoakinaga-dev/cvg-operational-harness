@@ -1,7 +1,7 @@
 /**
  * LEGACY CONTENT — Esmeralda V2 (cvg-agent-secretary-v2) veterinary-hospital
  * secretary policy profile. It is product content, not harness mechanism, and
- * moves to legacy/packages in slice 2 of SPEC-LEGACY-002
+ * was moved here from @cvg/policy-engine by slice 2 of SPEC-LEGACY-002
  * (docs/02_spec/0136_legacy_secretary_profile_isolation.md). The data below is
  * byte-for-byte the former built-in catalog, grants and role ceilings.
  */
@@ -12,7 +12,7 @@ import {
   type CapabilityDefinition,
   type CapabilityGrant,
   type RoleName
-} from './profile.ts'
+} from '@cvg/policy-engine'
 
 export const SECRETARY_CAPABILITIES = [
   'schedule.read',
@@ -231,7 +231,7 @@ const SCHEDULING_CAPABILITIES: Capability[] = [
   'patient.summary.read'
 ]
 
-const AGENT_PROFILE_GRANTS: Readonly<
+const GRANTS_BY_PROFILE: Readonly<
   Record<AgentProfileName, readonly CapabilityGrant[]>
 > = {
   secretary: [
@@ -298,7 +298,7 @@ const OPERATOR_ROLE_CAPABILITIES: Readonly<
   System: Object.keys(CATALOG) as Capability[]
 }
 
-const APPROVER_ROLES: readonly RoleName[] = [
+const APPROVERS: readonly RoleName[] = [
   'Approver',
   'Supervisor',
   'Admin',
@@ -310,8 +310,54 @@ export const SECRETARY_POLICY_PROFILE = createPolicyProfile({
   catalog: CATALOG,
   actions: ACTIONS,
   resourceTypes: RESOURCE_TYPES,
-  agentProfileGrants: AGENT_PROFILE_GRANTS,
+  agentProfileGrants: GRANTS_BY_PROFILE,
   operatorRoleCapabilities: OPERATOR_ROLE_CAPABILITIES,
-  approverRoles: APPROVER_ROLES,
+  approverRoles: APPROVERS,
   invalidCapabilityFallback: 'admin.policy.manage'
 })
+
+/*
+ * Former @cvg/policy-engine names, kept for the secretary content tests that
+ * moved here with the profile.
+ */
+export const CapabilitySchema = SECRETARY_POLICY_PROFILE.capabilitySchema
+export const AgentProfileNameSchema =
+  SECRETARY_POLICY_PROFILE.agentProfileSchema
+export const CAPABILITY_CATALOG = SECRETARY_POLICY_PROFILE.catalog as Readonly<
+  Record<SecretaryCapability, CapabilityDefinition>
+>
+export const CAPABILITY_RESOURCE_TYPES = SECRETARY_POLICY_PROFILE.resourceTypes
+export const AGENT_PROFILE_GRANTS =
+  SECRETARY_POLICY_PROFILE.agentProfileGrants as Readonly<
+    Record<SecretaryAgentProfile, readonly CapabilityGrant[]>
+  >
+export const APPROVER_ROLES = SECRETARY_POLICY_PROFILE.approverRoles
+
+export function capabilityRisk(capability: Capability) {
+  return SECRETARY_POLICY_PROFILE.risk(capability)
+}
+
+export function isHighRiskCapability(capability: Capability): boolean {
+  return SECRETARY_POLICY_PROFILE.isHighRisk(capability)
+}
+
+export function grantFor(
+  profile: AgentProfileName,
+  capability: Capability
+): CapabilityGrant | undefined {
+  return SECRETARY_POLICY_PROFILE.grantFor(profile, capability)
+}
+
+export function roleAllowsCapability(
+  role: RoleName,
+  capability: Capability
+): boolean {
+  return SECRETARY_POLICY_PROFILE.roleAllows(role, capability)
+}
+
+export function canApproveCapability(
+  role: RoleName,
+  capability: Capability
+): boolean {
+  return SECRETARY_POLICY_PROFILE.canApprove(role, capability)
+}

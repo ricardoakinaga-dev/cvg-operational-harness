@@ -7,7 +7,6 @@ import {
   type PolicyProfile,
   type ToolRiskLevel
 } from './profile.ts'
-import { SECRETARY_POLICY_PROFILE } from './secretary-profile.ts'
 import {
   ENGINE_POLICY_ID,
   ENGINE_POLICY_VERSION,
@@ -23,13 +22,6 @@ export const PolicyDecisionValueSchema = z.enum([
 ])
 
 export type PolicyDecisionValue = z.infer<typeof PolicyDecisionValueSchema>
-
-/**
- * Compatibility schema (SPEC-LEGACY-002 slice 1) bound to the legacy secretary
- * profile; a PolicyProfile exposes `evaluationInputSchema` for its catalog.
- */
-export const PolicyEvaluationInputSchema =
-  SECRETARY_POLICY_PROFILE.evaluationInputSchema
 
 export type PolicyEvaluationInput = z.input<
   PolicyProfile['evaluationInputSchema']

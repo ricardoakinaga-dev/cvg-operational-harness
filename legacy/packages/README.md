@@ -1,5 +1,9 @@
 # legacy/packages/
 
-Isolated legacy packages, named `@cvg/legacy-<name>`. None exists yet: the
-first one arrives with PR-L04, which also adds `legacy/packages/*` to the npm
-workspaces and to the reviewed workspace-dependency policy.
+Isolated legacy packages, named `@cvg/legacy-<name>` and registered as npm
+workspaces (`legacy/packages/*`, reviewed workspace-dependency policy
+`PROD26-L05-1`).
+
+| Package                         | Content                                                                 | Composed by                          |
+| ------------------------------- | ----------------------------------------------------------------------- | ------------------------------------ |
+| `@cvg/legacy-secretary-profile` | Secretary policy profile (21 capabilities, 5 agent profiles) and preset | `apps/api/src/legacy-composition.ts` |

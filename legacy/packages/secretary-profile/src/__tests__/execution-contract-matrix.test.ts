@@ -1,24 +1,24 @@
 import { describe, expect, it } from 'vitest'
-import { SECRETARY_POLICY_PROFILE } from '../secretary-profile.ts'
+import { SECRETARY_POLICY_PROFILE } from '../policy-profile.ts'
 import { RoleSchema, type Role } from '@cvg/shared'
+import { type Capability } from '@cvg/policy-engine'
 import {
   CAPABILITY_RESOURCE_TYPES,
   CapabilitySchema,
   capabilityRisk,
-  isHighRiskCapability,
-  type Capability
-} from '../capabilities.ts'
+  isHighRiskCapability
+} from '../policy-profile.ts'
+import { type AgentProfileName } from '@cvg/policy-engine'
 import {
   AGENT_PROFILE_GRANTS,
   AgentProfileNameSchema,
   APPROVER_ROLES,
   canApproveCapability,
   grantFor,
-  roleAllowsCapability,
-  type AgentProfileName
-} from '../grants.ts'
-import { PolicyRegistry } from '../documents.ts'
-import { PolicyEngine, type PolicyEvaluationInput } from '../engine.ts'
+  roleAllowsCapability
+} from '../policy-profile.ts'
+import { PolicyRegistry } from '@cvg/policy-engine'
+import { PolicyEngine, type PolicyEvaluationInput } from '@cvg/policy-engine'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
 const OTHER_TENANT = 'tenant_00000000-0000-4000-8000-000000000002'

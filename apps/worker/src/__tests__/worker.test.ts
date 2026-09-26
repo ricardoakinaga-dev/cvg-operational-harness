@@ -1,5 +1,6 @@
 import {
-  ensureControlledSecretaryPreset,
+  ensureControlledAgentPreset,
+  createControlledReferencePreset,
   InMemoryControlPlaneStore,
   TenantIdSchema
 } from '@cvg/platform'
@@ -16,8 +17,9 @@ const tenantId = TenantIdSchema.parse(
 describe('worker runtime', () => {
   it('reports health and processes deterministic jobs', async () => {
     const platform = new InMemoryControlPlaneStore()
-    const agent = await ensureControlledSecretaryPreset(
+    const agent = await ensureControlledAgentPreset(
       platform,
+      createControlledReferencePreset(),
       tenantId,
       'worker.test'
     )

@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { SECRETARY_POLICY_PROFILE } from '../secretary-profile.ts'
+import { SECRETARY_POLICY_PROFILE } from '../policy-profile.ts'
 import {
   AGENT_PROFILE_GRANTS,
   APPROVER_ROLES,
   canApproveCapability,
   grantFor,
   roleAllowsCapability
-} from '../grants.ts'
-import { CAPABILITY_CATALOG, type Capability } from '../capabilities.ts'
-import { PolicyRegistry } from '../documents.ts'
-import { PolicyEngine, type PolicyEvaluationInput } from '../engine.ts'
+} from '../policy-profile.ts'
+import { type Capability } from '@cvg/policy-engine'
+import { CAPABILITY_CATALOG } from '../policy-profile.ts'
+import { PolicyRegistry } from '@cvg/policy-engine'
+import { PolicyEngine, type PolicyEvaluationInput } from '@cvg/policy-engine'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
 const OTHER_TENANT = 'tenant_00000000-0000-4000-8000-000000000002'

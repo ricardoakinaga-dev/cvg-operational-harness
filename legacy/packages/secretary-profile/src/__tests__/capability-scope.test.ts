@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { SECRETARY_POLICY_PROFILE } from '../secretary-profile.ts'
-import { PolicyEngine, type PolicyEvaluationInput } from '../engine.ts'
-import { CAPABILITY_RESOURCE_TYPES, type Capability } from '../capabilities.ts'
+import { SECRETARY_POLICY_PROFILE } from '../policy-profile.ts'
+import { PolicyEngine, type PolicyEvaluationInput } from '@cvg/policy-engine'
+import { type Capability } from '@cvg/policy-engine'
+import { CAPABILITY_RESOURCE_TYPES } from '../policy-profile.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
 const OTHER_TENANT = 'tenant_00000000-0000-4000-8000-000000000002'

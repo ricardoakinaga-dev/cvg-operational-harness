@@ -14,7 +14,11 @@ describe('workspace quality scripts', () => {
     const packageJson = readJson('package.json')
 
     expect(packageJson.private).toBe(true)
-    expect(packageJson.workspaces).toEqual(['apps/*', 'packages/*'])
+    expect(packageJson.workspaces).toEqual([
+      'apps/*',
+      'packages/*',
+      'legacy/packages/*'
+    ])
     expect(packageJson.scripts.typecheck).toBe(
       'tsc -p tsconfig.typecheck.json --noEmit'
     )

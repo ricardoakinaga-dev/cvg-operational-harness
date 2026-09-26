@@ -12,7 +12,11 @@ describe('vitest workspace hermeticity', () => {
     expect(aliases).toBeDefined()
     for (const [name, target] of Object.entries(aliases ?? {})) {
       expect(name).toMatch(/^@cvg\//)
-      expect(target).toContain(`${process.cwd()}/packages/`)
+      // SPEC-LEGACY-002: isolated legacy workspaces live under legacy/packages.
+      expect(
+        target.startsWith(`${process.cwd()}/packages/`) ||
+          target.startsWith(`${process.cwd()}/legacy/packages/`)
+      ).toBe(true)
       expect(target).not.toContain('/home/ricardo/.openclaw/workspace/')
     }
   })

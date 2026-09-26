@@ -4,7 +4,7 @@ import {
   AgentConfigSchema,
   executeConfiguredAgent,
   InMemoryControlPlaneStore,
-  createControlledSecretaryConfig,
+  createControlledAgentConfig,
   type ApprovedKnowledgeResolver
 } from '../index.ts'
 
@@ -22,7 +22,7 @@ describe('controlled knowledge resolver', () => {
       }
     )
     const config = AgentConfigSchema.parse({
-      ...createControlledSecretaryConfig(),
+      ...createControlledAgentConfig(),
       knowledge: [
         {
           source: 'controlled://institutional-hours',

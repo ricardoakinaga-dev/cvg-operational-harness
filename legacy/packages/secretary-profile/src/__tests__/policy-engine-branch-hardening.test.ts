@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { SECRETARY_POLICY_PROFILE } from '../secretary-profile.ts'
-import { PolicyRegistry } from '../documents.ts'
-import { PolicyEngine, type PolicyEvaluationInput } from '../engine.ts'
-import { AGENT_PROFILE_GRANTS, riskRequiresApproval } from '../grants.ts'
+import { SECRETARY_POLICY_PROFILE } from '../policy-profile.ts'
+import { PolicyRegistry } from '@cvg/policy-engine'
+import { PolicyEngine, type PolicyEvaluationInput } from '@cvg/policy-engine'
+import { riskRequiresApproval } from '@cvg/policy-engine'
+import { AGENT_PROFILE_GRANTS } from '../policy-profile.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
 const NOW = new Date('2026-09-12T12:00:00.000Z')

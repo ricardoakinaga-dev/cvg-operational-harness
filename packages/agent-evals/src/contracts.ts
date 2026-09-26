@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { DataClassificationSchema, IntentSchema } from '@cvg/shared'
-import { CapabilitySchema } from '@cvg/policy-engine'
+import { CapabilityNameSchema } from '@cvg/policy-engine'
 
 export const EvalCategorySchema = z.enum([
   'agendamento',
@@ -32,8 +32,8 @@ export const EvalExpectationSchema = z
   .object({
     intent: IntentSchema.optional(),
     escalation: EvalEscalationSchema.default('none'),
-    requiredCapabilities: z.array(CapabilitySchema).default([]),
-    forbiddenCapabilities: z.array(CapabilitySchema).default([]),
+    requiredCapabilities: z.array(CapabilityNameSchema).default([]),
+    forbiddenCapabilities: z.array(CapabilityNameSchema).default([]),
     mustRefuse: z.boolean().default(false)
   })
   .strict()

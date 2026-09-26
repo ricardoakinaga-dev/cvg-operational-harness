@@ -6,7 +6,10 @@ import {
   runPostgresMigrations,
   TenantScopedPostgresControlPlaneRepository
 } from '@cvg/persistence'
-import { ensureControlledSecretaryPreset } from '@cvg/platform'
+import {
+  ensureControlledAgentPreset,
+  createControlledReferencePreset
+} from '@cvg/platform'
 import { buildServer } from '../../../api/src/server.ts'
 import { createPostgresControlledWorker } from '../postgres-controlled.ts'
 
@@ -33,7 +36,11 @@ describe('API to PostgreSQL worker outbox bridge', () => {
       try {
         await runPostgresMigrations(migrationClient, { schemaName })
         const platform = new TenantScopedPostgresControlPlaneRepository(apiPool)
-        const agent = await ensureControlledSecretaryPreset(platform, tenantId)
+        const agent = await ensureControlledAgentPreset(
+          platform,
+          createControlledReferencePreset(),
+          tenantId
+        )
         app = buildServer({
           persistence: { kind: 'postgres-pool', pool: apiPool },
           durableInbound: true,

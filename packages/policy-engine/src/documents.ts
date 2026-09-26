@@ -1,21 +1,13 @@
 import { z } from 'zod'
 import type { PolicyProfile } from './profile.ts'
-import { SECRETARY_POLICY_PROFILE } from './secretary-profile.ts'
 
 export const PolicyEffectSchema = z.enum(['ALLOW', 'DENY', 'REQUIRE_APPROVAL'])
 export type PolicyEffect = z.infer<typeof PolicyEffectSchema>
 
-/**
- * Compatibility schemas (SPEC-LEGACY-002 slice 1) validated against the legacy
- * secretary profile. A PolicyProfile exposes the same schemas for its own
- * catalog: `profile.policyRuleSchema` and `profile.policyDocumentSchema`.
- */
-export const PolicyRuleSchema = SECRETARY_POLICY_PROFILE.policyRuleSchema
+/** Policy documents are validated by `PolicyProfile.policyDocumentSchema`. */
 export type PolicyRule = z.output<PolicyProfile['policyRuleSchema']>
 export type PolicyRuleInput = z.input<PolicyProfile['policyRuleSchema']>
 
-export const PolicyDocumentSchema =
-  SECRETARY_POLICY_PROFILE.policyDocumentSchema
 export type PolicyDocument = z.output<PolicyProfile['policyDocumentSchema']>
 export type PolicyDocumentInput = z.input<PolicyProfile['policyDocumentSchema']>
 

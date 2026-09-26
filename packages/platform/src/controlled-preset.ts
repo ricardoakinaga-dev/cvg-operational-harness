@@ -14,11 +14,22 @@ import {
 } from './ids.ts'
 import { runCriticalSafetyPreflight } from './critical-safety-preflight.ts'
 
-export const CONTROLLED_SECRETARY_TENANT_ID = TenantIdSchema.parse(
+/**
+ * Controlled agent presets (SPEC-LEGACY-002 slice 2). The platform owns the
+ * mechanism — create, test, approve, safety-preflight, validate a release
+ * candidate and publish — and a neutral controlled configuration. Products
+ * supply their own identity and configuration as a ControlledAgentPreset.
+ */
+export const CONTROLLED_DEFAULT_TENANT_ID = TenantIdSchema.parse(
   'tenant_00000000-0000-4000-8000-000000000001'
 )
 
-export const CONTROLLED_SECRETARY_SLUG = 'cvg-secretary'
+export interface ControlledAgentPreset {
+  slug: string
+  name: string
+  description: string
+  config: AgentConfig
+}
 
 export async function createValidatedControlledReleaseCandidate(
   store: ControlPlaneStore,
@@ -71,26 +82,31 @@ export async function createValidatedControlledReleaseCandidate(
   )
 }
 
-export async function ensureControlledSecretaryPreset(
+/**
+ * Idempotently publishes a controlled preset for a tenant: an existing agent
+ * with the same slug is returned unchanged.
+ */
+export async function ensureControlledAgentPreset(
   store: ControlPlaneStore,
-  tenantId: TenantId = CONTROLLED_SECRETARY_TENANT_ID,
+  preset: ControlledAgentPreset,
+  tenantId: TenantId = CONTROLLED_DEFAULT_TENANT_ID,
   createdBy = 'bootstrap.controlled'
 ): Promise<AgentRecord> {
   const scope = { tenantId }
   const existing = (await store.listAgents(scope)).find(
-    (agent) => agent.slug === CONTROLLED_SECRETARY_SLUG
+    (agent) => agent.slug === preset.slug
   )
   if (existing) return existing
 
   const agent = await store.createAgent(scope, {
-    slug: CONTROLLED_SECRETARY_SLUG,
-    name: 'CVG Secretary',
-    description: 'Preset controlado da secretaria virtual da CVG.'
+    slug: preset.slug,
+    name: preset.name,
+    description: preset.description
   })
   const draft = await store.createVersion(
     scope,
     agent.id,
-    createControlledSecretaryConfig(),
+    preset.config,
     createdBy
   )
   const testing = await store.transitionVersion(scope, draft.id, 'TESTING')
@@ -102,7 +118,7 @@ export async function ensureControlledSecretaryPreset(
     versionId: approved.id
   })
   if (!preflight.passed) {
-    throw new Error('Controlled Secretary safety preflight failed')
+    throw new Error(`Controlled preset ${preset.slug} safety preflight failed`)
   }
   const validatedCandidate = await createValidatedControlledReleaseCandidate(
     store,
@@ -115,17 +131,24 @@ export async function ensureControlledSecretaryPreset(
   return (await store.getAgent(scope, agent.id)) ?? agent
 }
 
-export function createControlledSecretaryConfig(): AgentConfig {
+/**
+ * Neutral controlled configuration. The scheduling plugin and the blocked
+ * appointment actions are the platform's current controlled scope and its
+ * safety preflight requirements, not product identity; they are tracked as
+ * HARNESS_REVIEW in legacy/LEGACY_INVENTORY.md until the neutral reference
+ * flow (PR-L07) replaces them.
+ */
+export function createControlledAgentConfig(): AgentConfig {
   return AgentConfigSchema.parse({
     persona: {
-      name: 'Luna',
-      role: 'secretary',
-      tone: 'acolhedor e objetivo'
+      name: 'Assistente',
+      role: 'assistant',
+      tone: 'claro e objetivo'
     },
-    greeting: 'Olá! Sou a assistente virtual da CVG. Como posso ajudar?',
+    greeting: 'Olá! Sou a assistente virtual. Como posso ajudar?',
     promptBlocks: [
       {
-        id: 'controlled-secretary-safety',
+        id: 'controlled-agent-safety',
         kind: 'safety',
         content:
           'Não prescreva, diagnostique, confirme consultas reais ou exponha dados confidenciais.',
@@ -133,7 +156,7 @@ export function createControlledSecretaryConfig(): AgentConfig {
         enabled: true
       },
       {
-        id: 'controlled-secretary-persona',
+        id: 'controlled-agent-persona',
         kind: 'persona',
         content: 'Atenda com clareza, acolhimento e linguagem simples.',
         priority: 10,
@@ -163,7 +186,7 @@ export function createControlledSecretaryConfig(): AgentConfig {
       realMedicalRecords: false
     },
     policies: {
-      version: 'controlled-secretary-v1',
+      version: 'controlled-agent-v1',
       minConfidence: 0.65,
       lowConfidence: 'clarify',
       maxClarifications: 2,
@@ -191,4 +214,14 @@ export function createControlledSecretaryConfig(): AgentConfig {
       maxClarifications: 2
     }
   })
+}
+
+/** Neutral reference preset used by harness tests and demos. */
+export function createControlledReferencePreset(): ControlledAgentPreset {
+  return {
+    slug: 'cvg-reference-agent',
+    name: 'CVG Reference Agent',
+    description: 'Agente de referência controlado do harness.',
+    config: createControlledAgentConfig()
+  }
 }

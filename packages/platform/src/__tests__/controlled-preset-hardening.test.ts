@@ -9,10 +9,11 @@ vi.mock('../critical-safety-preflight.ts', () => ({
 }))
 
 import {
+  createControlledAgentConfig,
   createValidatedControlledReleaseCandidate,
-  createControlledSecretaryConfig,
-  ensureControlledSecretaryPreset
-} from '../secretary-preset.ts'
+  ensureControlledAgentPreset,
+  type ControlledAgentPreset
+} from '../controlled-preset.ts'
 import {
   InMemoryControlPlaneStore,
   type ControlPlaneStore
@@ -20,6 +21,13 @@ import {
 import type { TenantId } from '../ids.ts'
 
 const tenantId = 'tenant_00000000-0000-4000-8000-000000000451' as TenantId
+
+const preset: ControlledAgentPreset = {
+  slug: 'controlled-fixture',
+  name: 'Controlled Fixture',
+  description: 'Synthetic controlled preset fixture',
+  config: createControlledAgentConfig()
+}
 
 function preflightReport(passed: boolean) {
   return {
@@ -33,13 +41,13 @@ function preflightReport(passed: boolean) {
   }
 }
 
-describe('controlled secretary preset fail-closed branches', () => {
+describe('controlled agent preset fail-closed branches', () => {
   it('does not publish when the safety preflight does not pass', async () => {
     runCriticalSafetyPreflight.mockResolvedValueOnce(preflightReport(false))
     const store = new InMemoryControlPlaneStore()
 
     await expect(
-      ensureControlledSecretaryPreset(store, tenantId)
+      ensureControlledAgentPreset(store, preset, tenantId)
     ).rejects.toThrow(/safety preflight failed/)
 
     const agents = await store.listAgents({ tenantId })
@@ -59,7 +67,7 @@ describe('controlled secretary preset fail-closed branches', () => {
     const approverDraft = await store.createVersion(
       scope,
       agent.id,
-      createControlledSecretaryConfig(),
+      createControlledAgentConfig(),
       'approver.controlled'
     )
     const approverCandidate = await createValidatedControlledReleaseCandidate(
@@ -75,7 +83,7 @@ describe('controlled secretary preset fail-closed branches', () => {
     const otherDraft = await store.createVersion(
       scope,
       agent.id,
-      createControlledSecretaryConfig(),
+      createControlledAgentConfig(),
       'builder.coverage'
     )
     const otherCandidate = await createValidatedControlledReleaseCandidate(
@@ -100,11 +108,11 @@ describe('controlled secretary preset fail-closed branches', () => {
       }
     }) as ControlPlaneStore
 
-    const agent = await ensureControlledSecretaryPreset(store, tenantId)
+    const agent = await ensureControlledAgentPreset(store, preset, tenantId)
 
     expect(agent).toMatchObject({
-      slug: 'cvg-secretary',
-      name: 'CVG Secretary',
+      slug: 'controlled-fixture',
+      name: 'Controlled Fixture',
       tenantId
     })
   })

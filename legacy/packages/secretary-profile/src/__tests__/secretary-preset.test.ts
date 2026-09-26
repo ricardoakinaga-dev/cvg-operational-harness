@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { AgentConfigSchema, InMemoryControlPlaneStore } from '@cvg/platform'
 import {
-  AgentConfigSchema,
   CONTROLLED_SECRETARY_TENANT_ID,
-  InMemoryControlPlaneStore,
   ensureControlledSecretaryPreset
-} from '../index.ts'
+} from '../preset.ts'
 
 describe('controlled CVG Secretary preset', () => {
   it('creates one published immutable preset and is idempotent', async () => {
