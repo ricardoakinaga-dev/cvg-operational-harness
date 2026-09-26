@@ -82,17 +82,11 @@ export default defineConfig({
         'packages/persistence/src/index.ts'
       ),
       '@cvg/policy': resolve(workspaceRoot, 'packages/policy/src/index.ts'),
-      '@cvg/tools': resolve(workspaceRoot, 'packages/tools/src/index.ts'),
       '@cvg/agent-core': resolve(
         workspaceRoot,
         'packages/agent-core/src/index.ts'
       ),
-      '@cvg/workflows': resolve(
-        workspaceRoot,
-        'packages/workflows/src/index.ts'
-      ),
       '@cvg/adapters': resolve(workspaceRoot, 'packages/adapters/src/index.ts'),
-      '@cvg/memory': resolve(workspaceRoot, 'packages/memory/src/index.ts'),
       '@cvg/rag': resolve(workspaceRoot, 'packages/rag/src/index.ts'),
       '@cvg/platform': resolve(workspaceRoot, 'packages/platform/src/index.ts'),
       '@cvg/model-gateway': resolve(

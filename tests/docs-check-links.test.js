@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { test } from 'vitest'
 
 const repositoryRoot = process.cwd()
@@ -177,4 +177,56 @@ test('evidence hygiene rejects an unrecorded empty artifact', () => {
   const result = run(hygieneChecker, [root])
   assert.equal(result.status, 1)
   assert.match(result.stderr, /EVIDENCE_HYGIENE_FAILED/)
+})
+
+test('doc link checker classifies registered removed targets and rejects stale ones', () => {
+  const root = mkdtempSync(join(tmpdir(), 'pr-l02-removed-'))
+  mkdirSync(join(root, 'docs'))
+  mkdirSync(join(root, 'kept'))
+  writeFileSync(join(root, 'kept', 'still-here.ts'), 'export {}\n')
+  const source = join(root, 'docs', 'frozen.md')
+  writeFileSync(
+    source,
+    '[gone](../gone/module.ts:3)\n[unregistered](../gone/other.ts)\n'
+  )
+  const rel = (path) => relative(repositoryRoot, path).split(sep).join('/')
+  const policyFile = join(root, 'policy.json')
+  const writePolicy = (targets) =>
+    writeFileSync(
+      policyFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        entries: [],
+        removedTargets: [
+          { file: rel(source), targets, removedBy: 'PR-L02', reason: 'test' }
+        ]
+      })
+    )
+  const runWithPolicy = () =>
+    spawnSync(process.execPath, [linkChecker, join(root, 'docs')], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: { ...process.env, DOC_LINK_POLICY: policyFile }
+    })
+
+  writePolicy([rel(join(root, 'gone', 'module.ts'))])
+  let result = runWithPolicy()
+  assert.equal(result.status, 1)
+  let output = JSON.parse(result.stdout)
+  assert.equal(output.historicalRemovedTargets.length, 1)
+  assert.equal(output.historicalRemovedTargets[0].removedBy, 'PR-L02')
+  assert.equal(output.broken.length, 1)
+  assert.equal(output.broken[0].target, '../gone/other.ts')
+
+  writePolicy([
+    rel(join(root, 'gone', 'module.ts')),
+    rel(join(root, 'gone', 'other.ts')),
+    rel(join(root, 'kept', 'still-here.ts'))
+  ])
+  result = runWithPolicy()
+  assert.equal(result.status, 1)
+  output = JSON.parse(result.stdout)
+  assert.deepEqual(output.broken, [])
+  assert.equal(output.staleRemovedTargets.length, 1)
+  assert.match(result.stderr, /STALE_REMOVED_TARGETS=1/)
 })
