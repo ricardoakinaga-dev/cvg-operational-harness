@@ -1,3 +1,12 @@
+# RA25-07 fatia 2 — outbox durável extraído — 2026-09-25
+
+- status: `IN_PROGRESS / SLICE_1_AND_2_COMPLETED`. `iterative-runtime.ts` em 1 488 linhas (alvo cumprido); `postgres.ts` de 3 354 para 2 572. Restam as fatias 3 e 4 de `postgres.ts`, mais `server.ts` (5 857) e `runtime.ts` (2 603). RA25-05 `BLOCKED_BY_C1M`; produção `NO_GO`.
+- last_completed_action: extraí o domínio de outbox durável (816 linhas, cinco métodos e 17 helpers) para `packages/persistence/src/postgres-outbox.ts` (900 linhas), com contexto explícito construído por getter privado — nenhuma visibilidade alterada, nenhum export novo no índice do pacote. Commit `916f684`; SPEC em [0134](02_spec/0134_postgres_slice_extraction.md).
+- current_evidence: [SPEC-STRUCT-002](02_spec/0134_postgres_slice_extraction.md), [SPEC-STRUCT-001](02_spec/0133_iterative_runtime_slice_extraction.md), [RA25-07](03_build/0351_audit0573_backlog.md).
+- verification_state: `typecheck`, `lint`, `format:check`, `docs:check-links`, `evidence:check-hygiene` e `diff:check` exit 0; suíte completa 324 arquivos/2 295 testes `PASS`; `test:postgres` 35 arquivos/258 testes `PASS`; cobertura 92,63/87,73/94,99/93,61 inalterada.
+- blocking_state: nada bloqueia as fatias 1 e 2. Permanecem: RA25-05 (`BLOCKED_BY_C1M`), fatias 3 e 4 de `postgres.ts`, `server.ts` e `runtime.ts`, revisão humana das SPECs `NOT_RUN`.
+- next_action: fatia 3 de `postgres.ts` (auditoria e checkpoint, 526 linhas), depois fatia 4 (inbound e sessão/task, ~907) que deve fechar o alvo. Reexecutar `npm run certify` em máquina ociosa.
+
 # RA25-07 fatia 1 — dispatch extraído — 2026-09-25
 
 - status: `IN_PROGRESS / SLICE_1_COMPLETED`. `iterative-runtime.ts` caiu de 2 455 para 1 488 linhas. Restam `server.ts` (5 857), `postgres.ts` (3 354) e `runtime.ts` (2 603). RA25-05 `BLOCKED_BY_C1M`; produção `NO_GO`.

@@ -143,16 +143,20 @@ registro do ciclo M07-S1. Produção `NO_GO`.
 
 ### RA25-07 — Reduzir hotspots de arquivo
 
-- Estado: `IN_PROGRESS / SLICE_1_COMPLETED`.
+- Estado: `IN_PROGRESS / SLICE_1_AND_2_COMPLETED`.
 - Fatia 1 (2026-09-25): 1 065 linhas movidas para
   `packages/harness/src/iterative-dispatch.ts`; `iterative-runtime.ts` caiu de
-  2 455 para 1 488 linhas. `typecheck`, `lint`, `format:check` exit 0; harness
-  121 testes e suíte completa 2 295 testes `PASS`; cobertura
-  92,63/87,73/94,99/93,61. Commit `a8d38ac`.
+  2 455 para 1 488 linhas. Commit `a8d38ac`.
+- Fatia 2 (2026-09-25): 816 linhas movidas para
+  `packages/persistence/src/postgres-outbox.ts` (900 linhas);
+  `postgres.ts` caiu de 3 354 para 2 572. Commit `916f684`; SPEC em
+  [0134](../02_spec/0134_postgres_slice_extraction.md). Faltam as fatias 3
+  (auditoria/checkpoint, 526 linhas) e 4 (inbound e sessão/task, ~907) para
+  `postgres.ts` atingir ~1 400.
 - Recon: [SPEC-STRUCT-001](../02_spec/0133_iterative_runtime_slice_extraction.md)
   mede a god-class de `packages/harness/src/iterative-runtime.ts` (classe aberta
   na linha 312, 49 métodos, 2 302 linhas) e fixa o plano da primeira fatia.
-  Restam `server.ts`, `postgres.ts` e `runtime.ts`, cada um com SPEC própria.
+  Restam `server.ts` e `runtime.ts`, cada um com SPEC própria.
 - O que/onde: `apps/api/src/server.ts` (5.857 linhas),
   `packages/persistence/src/postgres.ts` (3.354),
   `packages/agent-runtime/src/runtime.ts` (2.603),

@@ -1,3 +1,12 @@
+# RA25-07 fatia 2 — outbox durável extraído — 25/09/2026
+
+- Escopo: [RA25-07](03_build/0351_audit0573_backlog.md), segunda fatia, alvo `packages/persistence/src/postgres.ts` (3 354 linhas).
+- Recon: uma única classe exportada com 47 métodos. Domínios medidos: outbox durável 816 linhas (consumindo só 5 membros de `this`), auditoria/checkpoint 526, inbound runtime 361, sessão/task ~546. O arquivo não chega a ~1 500 numa fatia segura — exigiria mover ~1 900 linhas e um contexto com mais de 20 membros.
+- Execução: 816 linhas movidas para `packages/persistence/src/postgres-outbox.ts` (900 linhas) — métodos `enqueue`, `claimNext`, `ack`, `fail`, `requeueDeadLetter` e 17 helpers. `postgres.ts` caiu para 2 572. Commit `916f684`; SPEC em [0134](02_spec/0134_postgres_slice_extraction.md).
+- Leitura do critério registrada na SPEC: cada fatia entrega módulo abaixo de ~1 500 linhas e reduz o alvo de forma monotônica; o alvo de `postgres.ts` é atingido na fatia 4. A leitura alternativa (alvo já abaixo de ~1 500 em toda fatia) é impossível na primeira fatia de um arquivo desse tamanho.
+- Integridade: extração mecânica por script com a mesma verificação da fatia 1 — cada bloco movido é reconstruído e comparado byte a byte ao original, admitindo apenas `this.` → `ctx.` e recuo de dois espaços. Nenhum SQL, código de erro, ordem de efeito ou mensagem foi alterado.
+- Gates: `typecheck`, `lint`, `format:check`, `docs:check-links`, `evidence:check-hygiene` e `diff:check` exit 0; suíte completa 324 arquivos/2 295 testes `PASS`; `test:postgres` 35 arquivos/258 testes `PASS`; cobertura 92,63/87,73/94,99/93,61 inalterada. Produção `NO_GO`.
+
 # RA25-07 fatia 1 — domínio de dispatch extraído — 25/09/2026
 
 - Escopo: [RA25-07](03_build/0351_audit0573_backlog.md), primeira fatia. `packages/harness/src/iterative-runtime.ts` caiu de 2 455 para 1 488 linhas; as 1 065 linhas movidas foram para o novo `packages/harness/src/iterative-dispatch.ts` (1 159 linhas).
