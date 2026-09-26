@@ -37,7 +37,8 @@ import {
   PolicyDocumentSchema,
   PolicyEngine,
   type Capability,
-  type PolicyDocumentInput
+  type PolicyDocumentInput,
+  SECRETARY_POLICY_PROFILE
 } from '@cvg/policy-engine'
 import {
   CorrelationIdSchema,
@@ -304,6 +305,7 @@ export function createPostgresKernelRuntime(
   resolveWorkflowCoordinator(env)
 
   const policy = new PolicyEngine({
+    profile: SECRETARY_POLICY_PROFILE,
     documents: [PolicyDocumentSchema.parse(CONTROLLED_KERNEL_POLICY_DOCUMENT)]
   })
   const approvals = new PostgresApprovalAuthority(pool)

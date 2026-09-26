@@ -14,7 +14,7 @@ import {
   PromptRegistry,
   type ModelProfile
 } from '@cvg/model-gateway'
-import { PolicyEngine } from '@cvg/policy-engine'
+import { PolicyEngine, SECRETARY_POLICY_PROFILE } from '@cvg/policy-engine'
 import { InMemoryDatabase, OutboxRepository } from '@cvg/persistence'
 import { ChaosLedger } from '../faults.ts'
 
@@ -474,7 +474,10 @@ describe('chaos: approvals and tenants', () => {
     expect(() => approvals.get(OTHER_TENANT, record.approvalId)).toThrowError(
       expect.objectContaining({ code: 'not_found' })
     )
-    const policy = new PolicyEngine({ clock: () => NOW })
+    const policy = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    })
     const decision = policy.evaluate({
       tenantId: TENANT,
       operatorId: 'op_1',

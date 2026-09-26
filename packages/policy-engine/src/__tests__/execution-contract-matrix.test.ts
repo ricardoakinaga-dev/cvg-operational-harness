@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { SECRETARY_POLICY_PROFILE } from '../secretary-profile.ts'
 import { RoleSchema, type Role } from '@cvg/shared'
 import {
   CAPABILITY_RESOURCE_TYPES,
@@ -48,9 +49,13 @@ function input(
 function engine(
   documents: Array<Parameters<PolicyRegistry['register']>[0]> = []
 ) {
-  const registry = new PolicyRegistry()
+  const registry = new PolicyRegistry(SECRETARY_POLICY_PROFILE)
   for (const document of documents) registry.register(document)
-  return new PolicyEngine({ documents: registry.list(), clock: () => NOW })
+  return new PolicyEngine({
+    profile: SECRETARY_POLICY_PROFILE,
+    documents: registry.list(),
+    clock: () => NOW
+  })
 }
 
 function resourceFor(
@@ -98,7 +103,10 @@ function expectedDecision(
 
 describe('AAA-03 §10 capability matrix across every profile and role', () => {
   it('matches grants, role ceiling and risk for every profile/role/capability', () => {
-    const policy = new PolicyEngine({ clock: () => NOW })
+    const policy = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    })
     let evaluated = 0
     for (const profile of PROFILES) {
       for (const role of ROLES) {
@@ -129,7 +137,10 @@ describe('AAA-03 §10 capability matrix across every profile and role', () => {
   })
 
   it('has no grant for real confirm or reschedule in any profile or role', () => {
-    const policy = new PolicyEngine({ clock: () => NOW })
+    const policy = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    })
     for (const profile of PROFILES) {
       for (const capability of [
         'appointment.confirm',
@@ -167,7 +178,10 @@ describe('AAA-03 §10 capability matrix across every profile and role', () => {
   })
 
   it('requires appointment_draft for modify and denies the real type', () => {
-    const policy = new PolicyEngine({ clock: () => NOW })
+    const policy = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    })
     for (const profile of PROFILES) {
       const real = policy.evaluate(
         input({
@@ -199,7 +213,10 @@ describe('AAA-03 §10 capability matrix across every profile and role', () => {
   })
 
   it('denies unknown resource types for every scoped capability and profile', () => {
-    const policy = new PolicyEngine({ clock: () => NOW })
+    const policy = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    })
     for (const capability of Object.keys(
       CAPABILITY_RESOURCE_TYPES
     ) as Capability[]) {
@@ -222,7 +239,10 @@ describe('AAA-03 §10 capability matrix across every profile and role', () => {
   })
 
   it('requires an explicit resource for every scoped capability', () => {
-    const policy = new PolicyEngine({ clock: () => NOW })
+    const policy = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    })
     for (const capability of Object.keys(
       CAPABILITY_RESOURCE_TYPES
     ) as Capability[]) {
@@ -244,7 +264,10 @@ describe('AAA-03 §10 capability matrix across every profile and role', () => {
   })
 
   it('fails closed when a provided resource has no usable type', () => {
-    const policy = new PolicyEngine({ clock: () => NOW })
+    const policy = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    })
     for (const resource of [{}, { type: 123 }, { type: '' }, { id: 'res_1' }]) {
       const decision = policy.evaluate(
         input({
@@ -259,7 +282,10 @@ describe('AAA-03 §10 capability matrix across every profile and role', () => {
   })
 
   it('orders tenant, resource, action, grant, role and policy documents', () => {
-    const policy = new PolicyEngine({ clock: () => NOW })
+    const policy = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    })
 
     const tenantFirst = policy.evaluate(
       input({
@@ -353,7 +379,10 @@ describe('AAA-03 §10 capability matrix across every profile and role', () => {
   })
 
   it('reports builtin identity on denials and document identity on rule wins', () => {
-    const policy = new PolicyEngine({ clock: () => NOW })
+    const policy = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    })
     const builtin = policy.evaluate(input())
     expect(builtin.policyId).toBe('builtin.deny_by_default')
     expect(builtin.policyVersion).toBe('policy-engine-v1')
@@ -446,7 +475,10 @@ describe('AAA-03 §10 capability matrix across every profile and role', () => {
   })
 
   it('denies when any required context field is absent, empty or unknown', () => {
-    const policy = new PolicyEngine({ clock: () => NOW })
+    const policy = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    })
     const requiredFields: Array<keyof PolicyEvaluationInput> = [
       'tenantId',
       'operatorId',

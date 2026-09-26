@@ -7,7 +7,11 @@ import {
   PromptRegistry
 } from '@cvg/model-gateway'
 import type { ModelProfile } from '@cvg/model-gateway'
-import { PolicyEngine, type PolicyDocument } from '@cvg/policy-engine'
+import {
+  PolicyEngine,
+  type PolicyDocument,
+  SECRETARY_POLICY_PROFILE
+} from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import { GovernedAgentRuntime } from '../runtime.ts'
 import { InMemoryEffectJournal } from '../effect-journal.ts'
@@ -66,6 +70,7 @@ function buildHarness(
     retry: { maxRetries: 0 }
   })
   const policy = new PolicyEngine({
+    profile: SECRETARY_POLICY_PROFILE,
     documents: options.documents ?? [],
     clock: () => NOW
   })

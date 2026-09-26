@@ -12,7 +12,8 @@ import type { ModelProfile } from '@cvg/model-gateway'
 import {
   PolicyEngine,
   type Capability,
-  type PolicyDocument
+  type PolicyDocument,
+  SECRETARY_POLICY_PROFILE
 } from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import { GovernedAgentRuntime, sweepExpiredApprovals } from '../runtime.ts'
@@ -93,6 +94,7 @@ function buildHarness(options: HarnessOptions = {}) {
     retry: { maxRetries: 0 }
   })
   const policy = new PolicyEngine({
+    profile: SECRETARY_POLICY_PROFILE,
     documents: options.documents ?? [],
     clock: now
   })

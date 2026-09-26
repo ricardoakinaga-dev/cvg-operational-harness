@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { SECRETARY_POLICY_PROFILE } from '../secretary-profile.ts'
 import {
   AGENT_PROFILE_GRANTS,
   APPROVER_ROLES,
@@ -31,9 +32,13 @@ function input(
 }
 
 function engine(documents: Parameters<PolicyRegistry['register']>[0][] = []) {
-  const registry = new PolicyRegistry()
+  const registry = new PolicyRegistry(SECRETARY_POLICY_PROFILE)
   for (const document of documents) registry.register(document)
-  return new PolicyEngine({ documents: registry.list(), clock: () => NOW })
+  return new PolicyEngine({
+    profile: SECRETARY_POLICY_PROFILE,
+    documents: registry.list(),
+    clock: () => NOW
+  })
 }
 
 describe('capability catalog and least privilege', () => {

@@ -18,7 +18,11 @@ import type {
   ProviderRequest,
   ProviderResult
 } from '@cvg/model-gateway'
-import { PolicyEngine, type Capability } from '@cvg/policy-engine'
+import {
+  PolicyEngine,
+  type Capability,
+  SECRETARY_POLICY_PROFILE
+} from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import { GovernedAgentRuntime, sweepExpiredApprovals } from '../runtime.ts'
 import {
@@ -121,7 +125,11 @@ function buildHarness(options: HarnessOptions = {}) {
     clock,
     retry: { maxRetries: 0 }
   })
-  const policy = new PolicyEngine({ documents: [], clock })
+  const policy = new PolicyEngine({
+    profile: SECRETARY_POLICY_PROFILE,
+    documents: [],
+    clock
+  })
   const store = options.store ?? new InMemoryApprovalStore()
   const approvals = new ApprovalEngine({ store, clock })
   const telemetry = new InMemoryTelemetry({ clock })

@@ -20,7 +20,7 @@ import {
   PromptRegistry
 } from '@cvg/model-gateway'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
-import { PolicyEngine } from '@cvg/policy-engine'
+import { PolicyEngine, SECRETARY_POLICY_PROFILE } from '@cvg/policy-engine'
 import {
   PostgresEffectJournal,
   runPostgresMigrations,
@@ -89,7 +89,9 @@ function validCompositionInput(
   overrides: Partial<GovernedRuntimeCompositionInput> = {}
 ): GovernedRuntimeCompositionInput {
   return {
-    policy: new PolicyEngine(),
+    policy: new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE
+    }),
     approvals: new ApprovalEngine({ store: new InMemoryApprovalStore() }),
     modelGateway: new ModelGateway({
       providers: [new DeterministicModelProvider()],

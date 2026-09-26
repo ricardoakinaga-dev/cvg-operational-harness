@@ -6,7 +6,7 @@ import {
   PromptRegistry
 } from '@cvg/model-gateway'
 import type { ModelProfile } from '@cvg/model-gateway'
-import { PolicyEngine } from '@cvg/policy-engine'
+import { PolicyEngine, SECRETARY_POLICY_PROFILE } from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import { GovernedAgentRuntime } from '../runtime.ts'
 import type { GovernedTurnInput } from '../contracts.ts'
@@ -59,7 +59,10 @@ function buildHarness() {
   })
   const toolExecutor = vi.fn(async () => ({ result: { ok: true } }))
   const runtime = new GovernedAgentRuntime({
-    policy: new PolicyEngine({ clock: () => NOW }),
+    policy: new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    }),
     approvals: new ApprovalEngine({ clock: () => NOW }),
     modelGateway,
     telemetry: new InMemoryTelemetry({ clock: () => NOW }),

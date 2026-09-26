@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { SECRETARY_POLICY_PROFILE } from '../secretary-profile.ts'
 import { PolicyEngine, type PolicyEvaluationInput } from '../engine.ts'
 import { CAPABILITY_RESOURCE_TYPES, type Capability } from '../capabilities.ts'
 
@@ -22,7 +23,10 @@ function input(
   }
 }
 
-const policy = new PolicyEngine({ clock: () => NOW })
+const policy = new PolicyEngine({
+  profile: SECRETARY_POLICY_PROFILE,
+  clock: () => NOW
+})
 
 describe('AB-08 draft vs real capability scope (F15)', () => {
   it('denies modifying a real appointment through the draft capability', () => {
@@ -86,6 +90,7 @@ describe('AB-08 draft vs real capability scope (F15)', () => {
 
   it('does not let a tenant policy expand confirm/reschedule authority', () => {
     const expanding = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
       clock: () => NOW,
       documents: [
         {
@@ -267,6 +272,7 @@ describe('AAA08-C1-F01 action/capability binding', () => {
 
   it('does not let tenant policy expand a capability/action mismatch', () => {
     const expanding = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
       clock: () => NOW,
       documents: [
         {

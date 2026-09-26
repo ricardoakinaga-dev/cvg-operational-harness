@@ -12,7 +12,11 @@ import type {
   ProviderRequest,
   ProviderResult
 } from '@cvg/model-gateway'
-import { PolicyEngine, type Capability } from '@cvg/policy-engine'
+import {
+  PolicyEngine,
+  type Capability,
+  SECRETARY_POLICY_PROFILE
+} from '@cvg/policy-engine'
 import { canonicalizeJson } from '@cvg/shared'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import type { ActiveSpan, Attributes, TraceContext } from '@cvg/observability'
@@ -144,7 +148,11 @@ function buildHarness(options: HarnessOptions = {}) {
     clock,
     retry: { maxRetries: 0 }
   })
-  const policy = new PolicyEngine({ documents: [], clock })
+  const policy = new PolicyEngine({
+    profile: SECRETARY_POLICY_PROFILE,
+    documents: [],
+    clock
+  })
   const approvals = new ApprovalEngine({
     store: new InMemoryApprovalStore(),
     clock

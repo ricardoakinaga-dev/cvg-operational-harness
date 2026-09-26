@@ -8,10 +8,9 @@ import {
 } from '@cvg/approval-engine'
 import { ModelGatewayError, type ModelResult } from '@cvg/model-gateway'
 import {
-  capabilityRisk,
-  isHighRiskCapability,
   type Capability,
-  type PolicyDecision
+  type PolicyDecision,
+  type ToolRiskLevel
 } from '@cvg/policy-engine'
 import type { ActiveSpan } from '@cvg/observability'
 import { canonicalizeJson, createDomainId } from '@cvg/shared'
@@ -148,6 +147,7 @@ function computeResultDigest(result: unknown): string {
 function syntheticDenialDecision(
   reason: string,
   input: GovernedTurnInput,
+  risk: ToolRiskLevel,
   correlationId: string,
   evaluatedAt: string
 ): PolicyDecision {
@@ -158,7 +158,7 @@ function syntheticDenialDecision(
     policyVersion: 'effect-journal-v1',
     correlationId,
     capability: input.capability,
-    risk: capabilityRisk(input.capability),
+    risk,
     evaluatedAt
   }
 }
@@ -350,7 +350,10 @@ export class GovernedAgentRuntime {
         ? undefined
         : 'real_effect_not_authorized'
     }
-    if (declared === undefined && isHighRiskCapability(capability)) {
+    if (
+      declared === undefined &&
+      this.#options.policy.profile.isHighRisk(capability)
+    ) {
       return 'real_effect_not_authorized'
     }
     return undefined
@@ -365,7 +368,7 @@ export class GovernedAgentRuntime {
     if (this.#options.effectScopes?.[capability] === 'real_authorized') {
       return true
     }
-    return isHighRiskCapability(capability)
+    return this.#options.policy.profile.isHighRisk(capability)
   }
 
   async runTurn(input: GovernedTurnInput): Promise<GovernedTurnResult> {
@@ -374,7 +377,7 @@ export class GovernedAgentRuntime {
     const limits: LoopLimits = LoopLimitsSchema.parse(input.limits ?? {})
     const startedAt = clock()
     const deadline = startedAt.getTime() + limits.maxDurationMs
-    const risk = capabilityRisk(input.capability)
+    const risk = policy.profile.risk(input.capability)
     const root: ActiveSpan = telemetry.startSpan('agent.turn', {
       capability: input.capability,
       agentProfile: input.agentProfile,
@@ -557,6 +560,7 @@ export class GovernedAgentRuntime {
         syntheticDenialDecision(
           reason,
           input,
+          risk,
           correlationId,
           startedAt.toISOString()
         )
@@ -585,6 +589,7 @@ export class GovernedAgentRuntime {
             syntheticDenialDecision(
               'journal_sweep_failed',
               input,
+              risk,
               correlationId,
               startedAt.toISOString()
             )
@@ -615,6 +620,7 @@ export class GovernedAgentRuntime {
           syntheticDenialDecision(
             'approval_sweep_failed',
             input,
+            risk,
             correlationId,
             startedAt.toISOString()
           )

@@ -81,6 +81,18 @@ texto é específico do hospital veterinário. Neutralizar junto com PR-L05:
 | `tests/e2e/*`, `tests/phase4a/*`, `examples/phase4a/service-desk.ts`                                                    | Poucas ocorrências de vocabulário em cenários sintéticos                                          |
 | `scripts/phase4a-certify.mjs`, `scripts/rem21-010-postgres-proof.ts`, `scripts/skip-catalog.json`                       | Nomes de teste de jornada citados; atualizar junto com PR-L04                                     |
 
+### `HARNESS_REVIEW` — achados da fatia 1 de SPEC-LEGACY-002 (26/09/2026)
+
+A varredura original não incluía os termos `scheduling`, `find_available_slots`
+e `confirm_appointment`. Com eles aparecem:
+
+| Onde                                                       | O quê                                                              |
+| ---------------------------------------------------------- | ------------------------------------------------------------------ | ------------------ | ----------------------- |
+| `packages/platform/src/policy-evaluator.ts`                | Regex `confirm_appointment                                         | cancel_appointment | reschedule_appointment` |
+| `packages/platform/src/test-lab.ts`                        | Ação `confirm_appointment` no Test Lab                             |
+| `packages/platform/src/contracts.ts` (`AgentConfigSchema`) | Flags `realPayments` e `realMedicalRecords`                        |
+| `apps/web/src/features/platform/draft-helpers.ts`          | Plugin `scheduling.controlled` e tool `find_available_slots` fixos |
+
 ### `HARNESS` — confirmados neutros
 
 `packages/contracts`, `packages/orchestrator`, `packages/harness` (teste de

@@ -1,25 +1,13 @@
-import {
-  DataClassificationSchema,
-  RoleSchema,
-  type DataClassification
-} from '@cvg/shared'
+import { type DataClassification } from '@cvg/shared'
 import { z } from 'zod'
 import {
-  CAPABILITY_CATALOG,
-  CapabilitySchema,
-  actionMatchesCapability,
-  capabilityResourceScope,
-  capabilityRisk,
-  type Capability
-} from './capabilities.ts'
-import {
-  AGENT_PROFILE_GRANTS,
-  AgentProfileNameSchema,
-  grantFor,
-  roleAllowsCapability,
   type AgentProfileName,
-  type GrantLevel
-} from './grants.ts'
+  type Capability,
+  type GrantLevel,
+  type PolicyProfile,
+  type ToolRiskLevel
+} from './profile.ts'
+import { SECRETARY_POLICY_PROFILE } from './secretary-profile.ts'
 import {
   ENGINE_POLICY_ID,
   ENGINE_POLICY_VERSION,
@@ -36,38 +24,18 @@ export const PolicyDecisionValueSchema = z.enum([
 
 export type PolicyDecisionValue = z.infer<typeof PolicyDecisionValueSchema>
 
-export const PolicyEvaluationInputSchema = z
-  .object({
-    tenantId: z.string().min(1).max(120),
-    operatorId: z.string().min(1).max(120),
-    operatorRole: RoleSchema,
-    agentId: z.string().min(1).max(120),
-    agentProfile: AgentProfileNameSchema,
-    capability: CapabilitySchema,
-    action: z.string().min(1).max(120),
-    correlationId: z.string().min(8).max(120),
-    resource: z
-      .object({
-        type: z.string().min(1).max(120),
-        id: z.string().min(1).max(160).optional(),
-        tenantId: z.string().min(1).max(120).optional()
-      })
-      .strict()
-      .optional(),
-    context: z
-      .object({
-        dataClassification: DataClassificationSchema.optional(),
-        emergency: z.boolean().optional(),
-        medicalOperator: z.boolean().optional()
-      })
-      .strict()
-      .optional()
-  })
-  .strict()
+/**
+ * Compatibility schema (SPEC-LEGACY-002 slice 1) bound to the legacy secretary
+ * profile; a PolicyProfile exposes `evaluationInputSchema` for its catalog.
+ */
+export const PolicyEvaluationInputSchema =
+  SECRETARY_POLICY_PROFILE.evaluationInputSchema
 
-export type PolicyEvaluationInput = z.input<typeof PolicyEvaluationInputSchema>
+export type PolicyEvaluationInput = z.input<
+  PolicyProfile['evaluationInputSchema']
+>
 export type NormalizedPolicyEvaluationInput = z.output<
-  typeof PolicyEvaluationInputSchema
+  PolicyProfile['evaluationInputSchema']
 >
 
 export interface PolicyDecision {
@@ -77,7 +45,7 @@ export interface PolicyDecision {
   policyVersion: string
   correlationId: string
   capability: Capability
-  risk: ReturnType<typeof capabilityRisk>
+  risk: ToolRiskLevel
   evaluatedAt: string
 }
 
@@ -97,6 +65,8 @@ const EFFECT_PRECEDENCE: Record<PolicyEffect, number> = {
 }
 
 export interface PolicyEngineOptions {
+  /** Product content: capability catalog, agent profiles and grants. */
+  profile: PolicyProfile
   documents?: PolicyDocument[]
   clock?: () => Date
 }
@@ -107,16 +77,18 @@ export interface PolicyEngineOptions {
  * and versioned policy documents. Missing context or missing tenants deny.
  */
 export class PolicyEngine {
+  readonly profile: PolicyProfile
   readonly #documents: PolicyDocument[]
   readonly #clock: () => Date
 
-  constructor(options: PolicyEngineOptions = {}) {
+  constructor(options: PolicyEngineOptions) {
+    this.profile = options.profile
     this.#documents = options.documents ?? []
     this.#clock = options.clock ?? (() => new Date())
   }
 
   evaluate(input: PolicyEvaluationInput): PolicyDecision {
-    const parsed = PolicyEvaluationInputSchema.safeParse(input)
+    const parsed = this.profile.evaluationInputSchema.safeParse(input)
     if (!parsed.success) {
       return this.#deny(
         'insufficient_context',
@@ -124,13 +96,13 @@ export class PolicyEngine {
         undefined,
         {
           correlationId: safeCorrelation(input),
-          capability: safeCapability(input),
-          profile: safeProfile(input)
+          capability: this.#safeCapability(input),
+          profile: this.#safeProfile(input)
         }
       )
     }
     const request = parsed.data
-    const risk = capabilityRisk(request.capability)
+    const risk = this.profile.risk(request.capability)
     const at = this.#clock()
 
     if (
@@ -149,7 +121,7 @@ export class PolicyEngine {
       )
     }
 
-    const resourceScope = capabilityResourceScope(
+    const resourceScope = this.profile.resourceScope(
       request.capability,
       request.resource
     )
@@ -178,7 +150,7 @@ export class PolicyEngine {
       )
     }
 
-    if (!actionMatchesCapability(request.capability, request.action)) {
+    if (!this.profile.actionMatches(request.capability, request.action)) {
       return this.#deny(
         'action_capability_mismatch',
         'Action is not bound to the requested capability',
@@ -191,7 +163,10 @@ export class PolicyEngine {
       )
     }
 
-    const grant = grantFor(request.agentProfile, request.capability)
+    const grant = this.profile.grantFor(
+      request.agentProfile,
+      request.capability
+    )
     if (!grant) {
       return this.#deny(
         'capability_not_granted',
@@ -205,7 +180,7 @@ export class PolicyEngine {
       )
     }
 
-    if (!roleAllowsCapability(request.operatorRole, request.capability)) {
+    if (!this.profile.roleAllows(request.operatorRole, request.capability)) {
       return this.#deny(
         'operator_role_denied',
         `Role ${request.operatorRole} cannot exercise ${request.capability}`,
@@ -257,7 +232,7 @@ export class PolicyEngine {
     level: GrantLevel,
     requiresMedicalOperator: boolean
   ): PolicyDecision {
-    const risk = capabilityRisk(request.capability)
+    const risk = this.profile.risk(request.capability)
     const emergency = request.context?.emergency === true
     if (
       requiresMedicalOperator &&
@@ -345,7 +320,7 @@ export class PolicyEngine {
     reason: string,
     source: PolicyDocument | undefined,
     request: NormalizedPolicyEvaluationInput,
-    risk: ReturnType<typeof capabilityRisk>
+    risk: ToolRiskLevel
   ): PolicyDecision {
     return {
       decision,
@@ -376,15 +351,33 @@ export class PolicyEngine {
       policyVersion: ENGINE_POLICY_VERSION,
       correlationId: fallback.correlationId,
       capability: fallback.capability,
-      risk: CAPABILITY_CATALOG[fallback.capability]
-        ? CAPABILITY_CATALOG[fallback.capability].risk
+      risk: this.profile.catalog[fallback.capability]
+        ? this.profile.catalog[fallback.capability]!.risk
         : 'ADMIN',
       evaluatedAt: this.#clock().toISOString()
     }
   }
 
   listProfiles(): AgentProfileName[] {
-    return Object.keys(AGENT_PROFILE_GRANTS) as AgentProfileName[]
+    return this.profile.agentProfileNames()
+  }
+
+  #safeCapability(input: unknown): Capability {
+    if (input && typeof input === 'object') {
+      const value = (input as { capability?: unknown }).capability
+      const parsed = this.profile.capabilitySchema.safeParse(value)
+      if (parsed.success) return parsed.data
+    }
+    return this.profile.invalidCapabilityFallback
+  }
+
+  #safeProfile(input: unknown): AgentProfileName {
+    if (input && typeof input === 'object') {
+      const value = (input as { agentProfile?: unknown }).agentProfile
+      const parsed = this.profile.agentProfileSchema.safeParse(value)
+      if (parsed.success) return parsed.data
+    }
+    return 'unknown'
   }
 }
 
@@ -427,22 +420,4 @@ function safeCorrelation(input: unknown): string {
     if (typeof value === 'string' && value.length >= 8) return value
   }
   return 'corr_unknown'
-}
-
-function safeCapability(input: unknown): Capability {
-  if (input && typeof input === 'object') {
-    const value = (input as { capability?: unknown }).capability
-    const parsed = CapabilitySchema.safeParse(value)
-    if (parsed.success) return parsed.data
-  }
-  return 'admin.policy.manage'
-}
-
-function safeProfile(input: unknown): AgentProfileName {
-  if (input && typeof input === 'object') {
-    const value = (input as { agentProfile?: unknown }).agentProfile
-    const parsed = AgentProfileNameSchema.safeParse(value)
-    if (parsed.success) return parsed.data
-  }
-  return 'secretary'
 }

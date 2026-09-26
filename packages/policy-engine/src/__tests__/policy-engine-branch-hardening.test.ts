@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { SECRETARY_POLICY_PROFILE } from '../secretary-profile.ts'
 import { PolicyRegistry } from '../documents.ts'
 import { PolicyEngine, type PolicyEvaluationInput } from '../engine.ts'
 import { AGENT_PROFILE_GRANTS, riskRequiresApproval } from '../grants.ts'
@@ -25,14 +26,20 @@ function input(
 function engine(
   documents: Array<Parameters<PolicyRegistry['register']>[0]> = []
 ) {
-  const registry = new PolicyRegistry()
+  const registry = new PolicyRegistry(SECRETARY_POLICY_PROFILE)
   for (const document of documents) registry.register(document)
-  return new PolicyEngine({ documents: registry.list(), clock: () => NOW })
+  return new PolicyEngine({
+    profile: SECRETARY_POLICY_PROFILE,
+    documents: registry.list(),
+    clock: () => NOW
+  })
 }
 
 describe('AAA34 policy-engine branch hardening', () => {
   it('defaults the clock, the document list and lists every profile', () => {
-    const policy = new PolicyEngine()
+    const policy = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE
+    })
     const decision = policy.evaluate(input())
     expect(decision.decision).toBe('ALLOW')
     expect(decision.policyId).toBe('builtin.deny_by_default')
@@ -42,7 +49,10 @@ describe('AAA34 policy-engine branch hardening', () => {
   })
 
   it('fails closed on non-object runtime inputs with safe fallbacks', () => {
-    const policy = new PolicyEngine({ clock: () => NOW })
+    const policy = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    })
     for (const malformed of [undefined, null, 42, 'not-an-input']) {
       const decision = policy.evaluate(malformed as never)
       expect(decision.decision).toBe('DENY')

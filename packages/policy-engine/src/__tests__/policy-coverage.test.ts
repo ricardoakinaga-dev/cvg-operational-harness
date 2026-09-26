@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { SECRETARY_POLICY_PROFILE } from '../secretary-profile.ts'
 import {
   CAPABILITY_CATALOG,
   capabilityRisk,
@@ -66,7 +67,7 @@ describe('capability helpers', () => {
 
 describe('policy registry', () => {
   it('registers idempotently and rejects conflicting duplicates', () => {
-    const registry = new PolicyRegistry()
+    const registry = new PolicyRegistry(SECRETARY_POLICY_PROFILE)
     const first = registry.register(baseDocument)
     const second = registry.register(baseDocument)
     expect(second).toEqual(first)
@@ -92,7 +93,7 @@ describe('policy registry', () => {
   })
 
   it('filters documents by tenant and effective window', () => {
-    const registry = new PolicyRegistry()
+    const registry = new PolicyRegistry(SECRETARY_POLICY_PROFILE)
     registry.register(baseDocument)
     registry.register({
       ...baseDocument,
@@ -121,6 +122,7 @@ describe('policy engine edge rules', () => {
   it('matches optional rule dimensions and ignores non-matching ones', () => {
     const engineFor = (rule: Record<string, unknown>) =>
       new PolicyEngine({
+        profile: SECRETARY_POLICY_PROFILE,
         clock: () => NOW,
         documents: [
           {
@@ -178,7 +180,10 @@ describe('policy engine edge rules', () => {
   })
 
   it('denies malformed capability and profile inputs safely', () => {
-    const engine = new PolicyEngine({ clock: () => NOW })
+    const engine = new PolicyEngine({
+      profile: SECRETARY_POLICY_PROFILE,
+      clock: () => NOW
+    })
     const decision = engine.evaluate({
       tenantId: TENANT,
       operatorId: 'op_1',
