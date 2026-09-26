@@ -1,4 +1,4 @@
-# Backlog — programa PROD-20260926 — produção controlada
+# Backlog — programa PROD-20260926 — harness em produção controlada
 
 - Status: todas as tasks `PROPOSED`. Nenhuma está autorizada para BUILD.
 - Plano executivo: [0354](0354_production_executive_plan_2026-09-26.md).
@@ -39,7 +39,11 @@
 ### PR-003 — Certificado reproduzível (RA26-02) · P0 · SPEC+BUILD
 
 - O que/onde: `node scripts/phase10-verify.mjs` retorna 11 falhas em execução
-  limpa; cobertura medida 90,88/85,88/92,97/91,83 contra 92,6/87,71 no ledger.
+  limpa; cobertura medida 90,88/85,88/92,97/91,83 (Node 24, sem PostgreSQL)
+  contra 92,6/87,71 no ledger.
+- Evidência parcial de 26/09: com Node 22.23.2 e PostgreSQL descartável,
+  `npm run test:postgres` passou 35 arquivos / 258 testes. Falta repetir a
+  cobertura nas mesmas condições.
 - Como: explicar a divergência (Node 24? 20 arquivos PostgreSQL pulados?);
   tornar o CI a única fonte do certificado; reemitir com `CI_RUN_ID` novo.
 - Dependência: PR-001, PR-002.
@@ -72,10 +76,13 @@
 
 ### PR-006 — Reconciliar arquivos vazios versionados · P2 · DOC
 
-- O que/onde: 242 arquivos vazios versionados; 165 já catalogados em
-  `docs/04_audit/evidence/empty-artifact-status.json`.
-- Como: catalogar os 77 restantes ou removê-los com justificativa.
-- Pronto: todos os vazios catalogados; `evidence:check-hygiene` exit 0.
+- Estado: `ABSORVIDA_POR_PR-004`.
+- Fato: dos 242 vazios versionados, 231 já estão catalogados em
+  `docs/04_audit/evidence/empty-artifact-status.json`; os 11 restantes são
+  `artifacts.jsonl` vazios dos diretórios `.gauntlet*` e saem do índice com a
+  PR-004. O inventário deles está no
+  [manifesto Gauntlet](../04_audit/evidence/AUD-20260926/gauntlet-state-manifest.json).
+- Pronto: PR-004 concluída; `evidence:check-hygiene` exit 0.
 
 ### PR-007 — Cobertura com denominador completo e lint type-aware (RA26-15) · P1 · SPEC+BUILD
 
@@ -100,24 +107,165 @@
 - Pronto: `playwright-results.xml` e o relatório E2E da certificação com o
   mesmo `runId`; specs para aprovações e jornada completa.
 
-## F1 — Decisões de produto e escopo
+## FL — Limpeza e isolamento do legado
 
-### PR-101 — Discovery de produção · P0 · DISC
+O legado é a Esmeralda V2 (`cvg-agent-secretary-v2`), secretária de hospital
+veterinário da qual o harness foi extraído. Decisões DL-01 a DL-04 já foram
+tomadas pelo usuário em 26/09/2026 ([0357](0357_production_decision_packet_2026-09-26.md)).
+Regra de todas as tasks FL: o legado pode depender do harness; o harness
+nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
+`typecheck`, `lint`, `npm test`, `test:postgres` e E2E verdes em Node 22.
 
-- O que: dor, operadores, volumes, horários, canais atuais e sistemas da
-  clínica; restrições legais.
+### PR-L01 — Inventário e classificação do legado · P0 · DOC
+
+- O que/onde: todos os arquivos de `apps/`, `packages/`, `scripts/`, `tests/`,
+  `docs/`, configuração e raiz.
+- Como: classificar cada item em `HARNESS`, `LEGACY_ISOLATE` (vital hoje,
+  vai para `legacy/`), `LEGACY_DELETE` (não vital, apagar) ou `HISTORY`
+  (histórico vinculado por hash, fica no lugar e é marcado). Ponto de partida
+  medido em 26/09: termos `secretary|esmeralda|tutor|pet|patient|appointment|veterin`
+  em 40 arquivos de produção (~19,5 mil linhas, incluindo `server.ts`).
+- Pronto: `legacy/LEGACY_INVENTORY.md` com cada item, classe, motivo e task
+  de destino; revisado pelo usuário.
+
+### PR-L02 — Apagar pacotes sem consumidor (DL-02) · P0 · SPEC+BUILD
+
+- O que/onde: `packages/workflows` (266 linhas), `packages/tools` (395) e
+  `packages/memory` (13), sem nenhum importador em `apps/` ou `packages/`.
+- Como: remover os diretórios e as referências em `tsconfig.json`,
+  `tsconfig.base.json`, `apps/worker/tsconfig.json`, `vitest.config.mts`,
+  `scripts/phase3-candidate-digest.mjs` e `package-lock.json` (as entradas
+  `packages/<nome>` do lock também precisam sair).
+- Pronto: `git grep` sem referências fora do histórico; `npm ci`,
+  `typecheck`, `lint`, `npm test` e `sbom` verdes.
+
+### PR-L03 — Estrutura de `legacy/` e regra de dependência · P0 · SPEC+BUILD
+
+- Como: workspace `legacy/packages/*` com pacotes `@cvg/legacy-*`;
+  `legacy/README.md` explica origem, regra e prazo de remoção; teste de
+  arquitetura (extensão de `tests/architecture/dependency-direction.test.ts`)
+  falha se `packages/` importar `legacy/` e se `apps/` importar `legacy/` fora
+  de um único ponto de composição declarado.
+- Pronto: teste de arquitetura verde e com caso negativo provado.
+
+### PR-L04 — Isolar o domínio de jornadas (tutor, pet, consulta) (DL-01) · P0 · SPEC+BUILD
+
+- O que/onde: `packages/persistence/src/journeys.ts` (998 linhas) e
+  `journeys-postgres.ts` (1 148), rotas de jornada em
+  `apps/api/src/server.ts`, `apps/web/src/features/journeys`, entradas de
+  jornada em `restore.ts` e `tenant-schema.ts`.
+- Como: mover para `legacy/packages/secretary-journeys` como plugin Fastify e
+  módulo web registrados pelo ponto de composição; a migration
+  `0014_journeys.sql` fica na cadeia (histórico de schema) marcada como
+  `LEGACY`; a remoção das tabelas só acontece em PR-L11 com migration
+  expand/contract e backup.
+- Pronto: nenhuma referência a jornadas fora de `legacy/` exceto a
+  migration marcada; `test:postgres` e E2E verdes.
+
+### PR-L05 — Isolar o perfil da secretária (DL-01) · P0 · SPEC+BUILD
+
+- O que/onde: `packages/platform/src/secretary-preset.ts`, grants da
+  secretária em `packages/policy-engine/src/grants.ts` e `capabilities.ts`,
+  resumo de handoff tutor/pet em
+  `packages/agent-core/src/commands/create-handoff-summary.ts`, bootstrap da
+  secretária na API (`apps/api/src/__tests__/secretary-bootstrap.test.ts`).
+- Como: mover para `legacy/packages/secretary-profile`; o harness expõe só o
+  mecanismo de perfil/preset e grants genéricos.
+- Pronto: `platform`, `policy-engine` e `agent-core` sem vocabulário da
+  secretária; testes verdes.
+
+### PR-L06 — Isolar os datasets de evals da secretária (DL-01) · P1 · SPEC+BUILD
+
+- O que/onde: `packages/agent-evals/src/datasets/core.ts` e cenários de
+  evals do harness que usam tutor/pet/consulta.
+- Como: mover os cenários para `legacy/`; criar dataset neutro para o gate
+  `test:evals` cobrindo policy, approval, handoff, prompt injection e ação
+  proibida.
+- Pronto: `test:evals` verde só com o dataset neutro.
+
+### PR-L07 — Fluxo de referência neutro · P0 · SPEC+BUILD
+
+- O que: hoje o único fluxo ponta a ponta exercitado pelos testes, E2E e
+  certificação é a jornada da secretária. Sem substituto, apagar o legado
+  esvazia a certificação.
+- Como: produto de referência sintético e neutro (ex.: "solicitação
+  operacional" com coleta de dados, efeito externo em rascunho com approval,
+  tarefa e handoff), escrito como consumidor do harness pelos contratos
+  públicos, dentro de `examples/` ou de um pacote de referência.
+- Pronto: E2E, `test:postgres`, `verify:phase2/3/4a` e certificação passam
+  com o fluxo neutro, sem carregar `legacy/`.
+
+### PR-L08 — Mover a documentação de produto para `legacy/docs` (DL-03) · P1 · DOC
+
+- O que/onde: `docs/00_discovery/0001–0009`, `docs/01_prd/0010–0020` e
+  `aaa_decision_brief.md`, `docs/blueprint/`, `docs/CODEX_MASTER_INSTRUCTIONS.md`
+  e demais documentos de produto identificados em PR-L01.
+- Como: `git mv` para `legacy/docs/` com índice; o histórico de auditoria
+  (`docs/04_audit/**`, evidências com hash) fica no lugar, marcado como
+  `HISTORY` no inventário. Ajustar `tests/docs-readiness.test.js` (lê
+  `0013_requisitos_funcionais.md` e a matriz `0304`) e os links.
+- Pronto: `docs:check-links` e `npm test` verdes; `docs/` vigente só com
+  documentação do harness.
+
+### PR-L09 — Constituição e instruções de agente do harness · P0 · DOC
+
+- O que/onde: `AGENTS.md` da raiz (título `cvg-agent-secretary-v2`),
+  `docs/07_agents/AGENTS.md` ("construir a Esmeralda V2"), skills em
+  `.agents/`, `.codex/` e `.agent/` que citam o produto legado.
+- Como: reescrever para o harness, preservando pipeline, estados e regras de
+  segurança; a versão antiga vai para `legacy/docs`.
+- Pronto: nenhuma instrução de agente vigente cita o legado como produto;
+  aprovação humana da nova constituição registrada.
+
+### PR-L10 — Resíduos de nome · P2 · SPEC+BUILD
+
+- O que/onde: tag `cvg-agent-secretary:local` no `Dockerfile`, banco
+  `cvg_agent_secretary_v2` no `.env.example`, chave
+  `cvg-agent-secretary:migrations` do advisory lock em
+  `packages/persistence/src/postgres-migrations.ts`, nomes de teste.
+- Como: renomear; a chave do advisory lock só muda com janela de
+  compatibilidade (as duas chaves adquiridas durante uma versão) para não
+  permitir migrações concorrentes durante o deploy.
+- Pronto: `git grep -i secretary` fora de `legacy/` e do histórico vazio.
+
+### PR-L11 — Apagar o legado isolado (DL-05) · P1 · SPEC+BUILD
+
+- O que: remover `legacy/packages/*` e as tabelas de jornada quando PR-L07
+  estiver verde e DL-05 autorizar.
+- Como: migration expand/contract para descartar as tabelas legadas, com
+  backup verificado antes; `legacy/` fica só com README, inventário e
+  `legacy/docs`.
+- Pronto: build, testes, E2E e certificação verdes sem `legacy/packages`.
+
+### PR-L12 — Guarda de CI contra resíduo do legado · P1 · SPEC+BUILD
+
+- Como: gate `legacy-residue` em `scripts/ci-bar.mjs` que falha se termos do
+  legado aparecerem fora de `legacy/` e de uma allowlist de histórico
+  versionada; pacote sem consumidor também falha o gate.
+- Pronto: gate no `verify.yml`, com caso negativo provado.
+
+## F1 — Decisões de plataforma e escopo
+
+### PR-101 — Discovery de plataforma · P0 · DISC
+
+- O que: quais produtos vão consumir o harness, qual é o primeiro, que
+  capacidades eles precisam (runtime, approvals, handoff, canal, conhecimento,
+  efeito externo), volumes, operadores e restrições legais. O legado
+  (Esmeralda V2) não é insumo de escopo.
 - Pronto: documento em `docs/00_discovery/` e validação aprovada.
 
-### PR-102 — PRD adendo de produção (D-03) · P0 · PRD
+### PR-102 — PRD adendo de plataforma (D-03) · P0 · PRD
 
-- O que: casos de uso liberados, intenções atendidas, intenções sempre em
-  handoff, métricas de sucesso, não-objetivos permanentes do plano 0354.
+- O que: capacidades da plataforma liberadas para produção, contrato público
+  que os produtos consomem, SLOs da plataforma, métricas de sucesso e
+  não-objetivos permanentes do plano 0354. Substitui, para o harness, o PRD
+  original da secretária, que vai para `legacy/docs` (PR-L08).
 - Pronto: PRD adendo aprovado e `01_prd/0090_prd_validation.md` atualizado.
 
-### PR-103 — Tenant piloto e níveis de serviço (D-04) · P0 · HUMAN
+### PR-103 — Primeiro consumidor, tenant piloto e níveis de serviço (D-04) · P0 · HUMAN
 
-- Pronto: tenant, volume, horário de cobertura humana, SLA de handoff e
-  metas numéricas de sucesso registrados.
+- Pronto: produto consumidor do piloto, tenant, volume, horário de cobertura
+  humana, SLA de handoff e metas numéricas de sucesso registrados.
 
 ### PR-104 — Provider de LLM (D-05) · P0 · HUMAN
 
@@ -133,10 +281,10 @@
 - Pronto: decisão registrada com análise de risco de bloqueio de número,
   custo e termos de uso.
 
-### PR-106 — Fontes institucionais do RAG (D-07) · P1 · HUMAN
+### PR-106 — Fontes de conhecimento aprovadas (D-07) · P1 · HUMAN
 
-- Pronto: dono das fontes, processo de publicação/revogação e lista inicial
-  aprovada.
+- Pronto: dono das fontes do primeiro consumidor, processo de
+  publicação/revogação na plataforma e lista inicial aprovada.
 
 ### PR-107 — Nuvem, região e orçamento (D-08) · P0 · HUMAN
 
@@ -200,12 +348,14 @@
 - Pronto: `npm ls` coerente; SBOM sem dependência órfã; uma única cópia do
   código SSRF.
 
-### PR-206 — Destino dos pacotes órfãos (RA26-13, D-11) · P1 · HUMAN + SPEC+BUILD
+### PR-206 — Destino de `conversation`, `rag`, `channel-gateway` e Drizzle (RA26-12/13, D-11) · P1 · HUMAN + SPEC+BUILD
 
-- O que: `@cvg/conversation` (7 917 linhas, sem importador em apps),
-  `@cvg/memory`, `@cvg/workflows`, `@cvg/tools`, `@cvg/rag`.
-- Pronto: cada pacote `WIRED`, `SPEC_ONLY` ou `ARCHIVED`, conforme o escopo
-  do PRD adendo.
+- O que: `@cvg/conversation` (7 917 linhas, camada Phase 4A do harness, sem
+  importador em apps), `@cvg/rag` e `@cvg/channel-gateway` sem consumidor de
+  runtime; `drizzle-orm` sem uso. `workflows`, `tools` e `memory` saíram
+  deste item: são legado e são apagados na PR-L02 (DL-02).
+- Pronto: cada pacote `WIRED`, `SPEC_ONLY` ou `ARCHIVED`, conforme o PRD
+  adendo de plataforma.
 
 ### PR-207 — Contrato de API publicado e versionado · P2 · SPEC+BUILD
 
@@ -268,11 +418,15 @@
 
 ## F4 — Dados, privacidade e LGPD
 
-### PR-401 — Inventário de dados e RIPD (D-10) · P0 · DOC + HUMAN
+### PR-401 — Inventário de dados pessoais da plataforma (D-10) · P0 · DOC + HUMAN
 
-- O que: dado de saúde é dado sensível (LGPD art. 11). Mapear dados por
-  tabela, log, telemetria, provider e canal; base legal por finalidade.
-- Pronto: inventário versionado e RIPD aprovado pelo DPO.
+- O que: mapear que dado pessoal a plataforma guarda por tabela, log,
+  telemetria, provider e canal (remetente, texto de mensagem, identidade de
+  operador), independentemente do produto; cada produto consumidor declara
+  as categorias que traz e a base legal. Tabelas do legado (jornadas) entram
+  como `LEGACY` até a remoção.
+- Pronto: inventário versionado; modelo de RIPD para produtos consumidores
+  aprovado pelo DPO.
 
 ### PR-402 — Retenção e descarte aplicados · P0 · SPEC+BUILD
 
@@ -286,8 +440,8 @@
 - Como: redação/pseudonimização de PII antes do provider quando a finalidade
   permitir; logs e telemetria sem PII; teste negativo em CI com dados
   fictícios.
-- Pronto: teste prova que CPF, telefone, e-mail e dados clínicos fictícios
-  não chegam ao provider nem aos logs.
+- Pronto: teste prova que CPF, telefone, e-mail e texto livre fictícios não
+  chegam ao provider nem aos logs.
 
 ### PR-404 — Direitos do titular · P1 · SPEC+BUILD
 
@@ -343,17 +497,19 @@
 - Pronto: mensagens ponta a ponta em staging com número de teste;
   duplicidade e reentrega provadas sem efeito duplicado.
 
-### PR-504 — RAG com fontes institucionais (RA26-10) · P1 · PRD + SPEC+BUILD
+### PR-504 — Conhecimento com fonte aprovada (RA26-10) · P1 · PRD + SPEC+BUILD
 
 - Pronto: resposta só com fonte publicada e citada; fonte revogada bloqueia;
   ausência de fonte gera handoff.
 
-### PR-505 — Agenda da clínica em modo leitura com rascunho · P1 · PRD + SPEC+BUILD
+### PR-505 — Efeito externo genérico com rascunho e approval · P1 · PRD + SPEC+BUILD
 
-- Como: leitura de disponibilidade; qualquer alteração vira rascunho que
-  exige approval humano.
-- Pronto: teste negativo prova que nenhuma rota confirma, cancela ou
-  reagenda sem approval.
+- O que: a plataforma oferece aos produtos um padrão único para efeitos em
+  sistemas externos (leitura livre; escrita sempre como rascunho com approval
+  humano, idempotência e effect journal). Substitui o fluxo de agenda da
+  secretária, que é legado (PR-L04).
+- Pronto: teste negativo prova que nenhum efeito de escrita externo ocorre
+  sem approval; exemplo de uso no fluxo de referência neutro (PR-L07).
 
 ### PR-506 — Handoff humano operacional · P0 · SPEC+BUILD
 
@@ -413,14 +569,16 @@
 
 ## F7 — Homologação, piloto e GA
 
-### PR-701 — Staging completo com E2E da jornada · P0 · OPS + SPEC+BUILD
+### PR-701 — Staging completo com E2E da jornada de referência · P0 · OPS + SPEC+BUILD
 
-- Pronto: jornada completa (canal → agente → approval/handoff → resposta) em
-  staging com dados sintéticos, automatizada.
+- Pronto: jornada completa do fluxo de referência neutro (canal → agente →
+  approval/handoff → resposta) em staging com dados sintéticos, automatizada,
+  sem nenhum componente de `legacy/`.
 
 ### PR-702 — UAT e treinamento de operadores · P0 · HUMAN
 
-- Pronto: roteiro de UAT aprovado; operadores treinados; manual de uso.
+- Pronto: roteiro de UAT do primeiro produto consumidor aprovado; operadores
+  treinados; manual de uso da console do harness.
 
 ### PR-703 — Auditoria independente pré-piloto · P0 · AUDIT
 
@@ -434,8 +592,9 @@
 
 ### PR-705 — Piloto controlado · P0 · OPS
 
-- Escopo: um tenant, contatos permitidos, horário comercial, approval em
-  100% das ações sensíveis, hypercare diário.
+- Escopo: primeiro produto consumidor, um tenant, contatos permitidos,
+  horário de operação com humano, approval em 100% das ações sensíveis,
+  hypercare diário.
 - Pronto: critérios de saída do roadmap 0355 atingidos por duas semanas.
 
 ### PR-706 — Avaliação do piloto · P0 · AUDIT
@@ -462,6 +621,7 @@
 | Fase      | Tasks        | P0     | P1     | P2    |
 | --------- | ------------ | ------ | ------ | ----- |
 | F0        | PR-001 a 009 | 4      | 2      | 3     |
+| FL        | PR-L01 a L12 | 7      | 4      | 1     |
 | F1        | PR-101 a 109 | 8      | 1      | 0     |
 | F2        | PR-201 a 207 | 1      | 4      | 2     |
 | F3        | PR-301 a 307 | 4      | 3      | 0     |
@@ -469,4 +629,4 @@
 | F5        | PR-501 a 507 | 5      | 2      | 0     |
 | F6        | PR-601 a 608 | 4      | 3      | 1     |
 | F7        | PR-701 a 709 | 7      | 2      | 0     |
-| **Total** | **63**       | **39** | **18** | **6** |
+| **Total** | **75**       | **46** | **22** | **7** |

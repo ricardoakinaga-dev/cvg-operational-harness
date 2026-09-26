@@ -1,3 +1,11 @@
+# PROD-20260926 — plano redirecionado ao harness e frente FL do legado — 2026-09-26
+
+- status: `WAITING_HUMAN_APPROVAL`. Programa com 75 tasks `PROPOSED` (46 P0, 22 P1, 7 P2) em F0, FL e F1–F7. Nenhuma task autorizada para BUILD. M07-S1 `FAIL / OPEN`; produção `NO_GO`.
+- last_completed_action: o usuário esclareceu que a Esmeralda V2 (`cvg-agent-secretary-v2`) é o programa legado e que o produto é o `cvg-operational-harness`. Registrei as decisões DL-01 a DL-04 (isolar o domínio vivo em `legacy/`, apagar `workflows`/`tools`/`memory`, mover docs de produto para `legacy/docs`, alvo de produção = harness como plataforma), redirecionei [0354](03_build/0354_production_executive_plan_2026-09-26.md), [0355](03_build/0355_production_roadmap_2026-09-26.md) e [0356](03_build/0356_production_backlog_2026-09-26.md), criei a frente FL (PR-L01–PR-L12), reescrevi o [pacote de decisões 0357](03_build/0357_production_decision_packet_2026-09-26.md) e acrescentei o item 17 (isolamento do legado, 30/100) em [AUD-0577](04_audit/0577_production_readiness_score_audit_2026-09-26.md) (geral 67/100). Gerei o [manifesto do estado Gauntlet](04_audit/evidence/AUD-20260926/gauntlet-state-manifest.json) (102 arquivos, 102 664 474 bytes).
+- verification_state: `npm run test:postgres` com Node 22.23.2 e PostgreSQL descartável `cvg-legacy-pg-20260926` → 35 arquivos / 258 testes PASS. Uma remoção dos três pacotes mortos chegou a ser iniciada e foi revertida sem commit quando o usuário pediu que a limpeza entrasse como melhoria planejada; o código está idêntico ao HEAD `c36994e`.
+- blocking_state: decisões D-02 a D-15 e DL-05 pendentes; o programa aguarda aprovação.
+- next_action: aprovar o plano; executar F0 e iniciar FL por PR-L01 (inventário do legado), PR-L02 (pacotes mortos) e PR-L03 (estrutura de `legacy/`).
+
 # PROD-20260926 — plano executivo, roadmap e backlog de produção — 2026-09-26
 
 - status: `WAITING_HUMAN_APPROVAL`. Programa `PROD-20260926` registrado com 63 tasks `PROPOSED` (39 P0, 18 P1, 6 P2) em sete fases F0–F7. Nenhuma task está autorizada para BUILD. M07-S1 `FAIL / OPEN`; produção `NO_GO`.

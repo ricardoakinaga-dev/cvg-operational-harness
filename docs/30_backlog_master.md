@@ -1,3 +1,9 @@
+# PROD-20260926 — frente FL (limpeza e isolamento do legado) — 26/09/2026
+
+- Fonte: [0356](03_build/0356_production_backlog_2026-09-26.md), seção FL; decisões DL-01 a DL-04 em [0357](03_build/0357_production_decision_packet_2026-09-26.md). Todas `PROPOSED`.
+- `PR-L01` inventário e classificação do legado; `PR-L02` apagar `workflows`, `tools`, `memory`; `PR-L03` estrutura de `legacy/` e regra de dependência; `PR-L04` jornadas tutor/pet/consulta; `PR-L05` perfil da secretária; `PR-L06` datasets de evals; `PR-L07` fluxo de referência neutro; `PR-L08` docs de produto para `legacy/docs`; `PR-L09` constituição do harness; `PR-L10` resíduos de nome; `PR-L11` apagar o legado isolado (DL-05); `PR-L12` guarda de CI contra resíduo.
+- O plano passou a mirar o harness como plataforma: PR-101/102/103/106/206/401/403/504/505/701/702/705 foram redirecionadas; PR-006 foi absorvida pela PR-004. Total: 75 tasks (46 P0, 22 P1, 7 P2). Produção `NO_GO`.
+
 # PROD-20260926 — backlog de produção PR-001–PR-709 registrado — 26/09/2026
 
 - Fonte: [AUD-0577](04_audit/0577_production_readiness_score_audit_2026-09-26.md); plano [0354](03_build/0354_production_executive_plan_2026-09-26.md); roadmap [0355](03_build/0355_production_roadmap_2026-09-26.md); tasks em [0356](03_build/0356_production_backlog_2026-09-26.md). Todas `PROPOSED`, exceto PR-001 `COMPLETED_PENDING_VERIFICATION`.

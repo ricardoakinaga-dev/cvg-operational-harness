@@ -8,7 +8,10 @@ CVG Operational Harness is a governed runtime foundation for reusable operationa
   [roadmap](docs/03_build/0355_production_roadmap_2026-09-26.md) e
   [backlog PR-001–PR-709](docs/03_build/0356_production_backlog_2026-09-26.md),
   a partir da [auditoria AUD-0577](docs/04_audit/0577_production_readiness_score_audit_2026-09-26.md)
-  (nota geral 68/100; prontidão para produção 25/100).
+  (nota geral 67/100; prontidão para produção 25/100; isolamento do legado 30/100).
+- O alvo é o harness como plataforma. A Esmeralda V2 (`cvg-agent-secretary-v2`)
+  é o programa legado: a frente FL (PR-L01–PR-L12) isola em `legacy/` ou apaga
+  o que restar dele.
 - Todas as tasks estão `PROPOSED` e aguardam decisão humana. Produção `NO_GO`.
 
 ## Estado anterior — 2026-09-26 — AUD-0576

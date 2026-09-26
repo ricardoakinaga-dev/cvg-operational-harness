@@ -1,3 +1,11 @@
+# PROD-20260926 — legado identificado e frente FL registrada — 26/09/2026
+
+- Correção do usuário: a Esmeralda V2 (`cvg-agent-secretary-v2`) é o programa legado; o produto é o `cvg-operational-harness`. Pedido: tudo o que for legado deve ficar isolado e identificado em `legacy/` ou ser apagado quando não for vital, e isso deve entrar como melhoria do programa.
+- Decisões do usuário (DL-01 a DL-04): isolar o domínio vivo em `legacy/`; apagar `workflows`, `tools` e `memory`; mover docs de produto para `legacy/docs`, mantendo o histórico de auditoria vinculado por hash; alvo de produção = harness como plataforma.
+- Entregas: [0354](03_build/0354_production_executive_plan_2026-09-26.md), [0355](03_build/0355_production_roadmap_2026-09-26.md) e [0356](03_build/0356_production_backlog_2026-09-26.md) redirecionados; frente FL com PR-L01–PR-L12; [0357](03_build/0357_production_decision_packet_2026-09-26.md) reescrito; [AUD-0577](04_audit/0577_production_readiness_score_audit_2026-09-26.md) com item 17 e geral 67/100; [manifesto Gauntlet](04_audit/evidence/AUD-20260926/gauntlet-state-manifest.json); nota de atualização em `legacy/secretary-product/README.md`.
+- Medições: domínio da secretária em 40 arquivos de produção (~19,5 mil linhas com termos do legado); `workflows` 266, `tools` 395 e `memory` 13 linhas sem consumidor; `test:postgres` em Node 22 com PostgreSQL descartável → 35/258 PASS.
+- Uma remoção dos pacotes mortos foi iniciada e revertida sem commit ao receber o pedido de planejar; nenhum código alterado. Produção `NO_GO`.
+
 # PROD-20260926 — auditoria AUD-0577 e programa de produção — 26/09/2026
 
 - Escopo: pedido do usuário por um plano executivo, um roadmap e um backlog com todas as mudanças necessárias para uso em produção. Base: auditoria read-only [AUD-0577](04_audit/0577_production_readiness_score_audit_2026-09-26.md) com nota por item (geral 68/100).
