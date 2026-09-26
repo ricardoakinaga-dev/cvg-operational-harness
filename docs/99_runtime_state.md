@@ -1,3 +1,12 @@
+# PROD-20260926 — plano executivo, roadmap e backlog de produção — 2026-09-26
+
+- status: `WAITING_HUMAN_APPROVAL`. Programa `PROD-20260926` registrado com 63 tasks `PROPOSED` (39 P0, 18 P1, 6 P2) em sete fases F0–F7. Nenhuma task está autorizada para BUILD. M07-S1 `FAIL / OPEN`; produção `NO_GO`.
+- last_completed_action: auditoria read-only [AUD-0577](04_audit/0577_production_readiness_score_audit_2026-09-26.md) (nota geral 68/100; prontidão para produção 25/100) e registro do [plano executivo 0354](03_build/0354_production_executive_plan_2026-09-26.md), do [roadmap 0355](03_build/0355_production_roadmap_2026-09-26.md) e do [backlog 0356](03_build/0356_production_backlog_2026-09-26.md). Os itens RA26 abertos foram absorvidos com referência cruzada. Nenhum arquivo de código foi alterado.
+- current_evidence: [0577](04_audit/0577_production_readiness_score_audit_2026-09-26.md), [0354](03_build/0354_production_executive_plan_2026-09-26.md), [0355](03_build/0355_production_roadmap_2026-09-26.md), [0356](03_build/0356_production_backlog_2026-09-26.md).
+- verification_state: `typecheck`, `lint` e `prettier --check` exit 0; `npm run test:coverage` exit 0 com 304 arquivos PASS / 20 skipped e 2 149 testes PASS / 146 skipped (sem PostgreSQL, Node 24.20); cobertura 90,88/85,88/92,97/91,83, abaixo do ledger anterior; `npm audit` 0 vulnerabilidades; `docs:check-links` OK. `node scripts/phase10-verify.mjs` exit 1 com 11 falhas por métricas e hash de cobertura divergentes. O worktree sujo (RA26-01) foi absorvido pelo commit `f9f84c9` durante a rodada; os gates sobre esse commit não foram executados.
+- blocking_state: decisões humanas D-02 a D-15 do plano 0354; o programa inteiro aguarda aprovação.
+- next_action: aprovar ou ajustar o plano 0354; decidir D-02 (estado Gauntlet fora do git), D-12 (governança proporcional) e D-13 (M07-S1/C1M); executar F0 começando por PR-001 (gates sobre `f9f84c9`), PR-002 (Node 22) e PR-003 (certificado reproduzível).
+
 # AUD-0576 — auditoria de nota por item e roadmap RA26 — 2026-09-26
 
 - status: `PROPOSED / DOCUMENTARY`. Notas 0–100 por item: docs 65, código 72, qualidade/CI 79, processo 58, nota geral `69/100`. Roadmap [0352](03_build/0352_score_roadmap_2026-09-26.md) e backlog [0353](03_build/0353_score_backlog_2026-09-26.md) registrados com 17 tasks `PROPOSED`. M07-S1 `FAIL / OPEN`; RA25-05 `BLOCKED_BY_C1M`; produção `NO_GO`.

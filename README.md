@@ -2,7 +2,16 @@
 
 CVG Operational Harness is a governed runtime foundation for reusable operational AI agents across the CVG ecosystem.
 
-## Estado atual — 2026-09-26 — AUD-0576
+## Estado atual — 2026-09-26 — PROD-20260926
+
+- Programa de produção controlada proposto: [plano executivo](docs/03_build/0354_production_executive_plan_2026-09-26.md),
+  [roadmap](docs/03_build/0355_production_roadmap_2026-09-26.md) e
+  [backlog PR-001–PR-709](docs/03_build/0356_production_backlog_2026-09-26.md),
+  a partir da [auditoria AUD-0577](docs/04_audit/0577_production_readiness_score_audit_2026-09-26.md)
+  (nota geral 68/100; prontidão para produção 25/100).
+- Todas as tasks estão `PROPOSED` e aguardam decisão humana. Produção `NO_GO`.
+
+## Estado anterior — 2026-09-26 — AUD-0576
 
 - A [auditoria AUD-0576](docs/04_audit/0576_repository_score_audit_2026-09-26.md)
   emiti nota de 0–100 por item: documentação 65, código 72, qualidade/CI 79,

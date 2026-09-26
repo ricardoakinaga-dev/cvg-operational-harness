@@ -1,3 +1,12 @@
+# PROD-20260926 — auditoria AUD-0577 e programa de produção — 26/09/2026
+
+- Escopo: pedido do usuário por um plano executivo, um roadmap e um backlog com todas as mudanças necessárias para uso em produção. Base: auditoria read-only [AUD-0577](04_audit/0577_production_readiness_score_audit_2026-09-26.md) com nota por item (geral 68/100).
+- Executado: `npm run typecheck`, `npm run lint` e `npx prettier --check .` exit 0; `npm run test:coverage` exit 0 (304/20 arquivos, 2 149/146 testes, sem PostgreSQL, Node 24.20); cobertura 90,88/85,88/92,97/91,83; `npm audit --audit-level=high` 0; `npm run docs:check-links` OK; `node scripts/phase10-verify.mjs` exit 1 (11 falhas de cobertura).
+- Lacunas de produção encontradas: worker compõe `DeterministicModelProvider`; canal e RAG sem consumidor de runtime; identidade por HMAC/keyring e web com token de bootstrap, sem IdP; `ENABLE_REAL_*` sem efeito; RLS opcional; sem IaC, telemetria de produção, runbooks de produção, RIPD ou retenção aplicada.
+- Entregas: [plano executivo 0354](03_build/0354_production_executive_plan_2026-09-26.md), [roadmap 0355](03_build/0355_production_roadmap_2026-09-26.md) e [backlog 0356](03_build/0356_production_backlog_2026-09-26.md) (PR-001–PR-709, 63 tasks, fases F0–F7, 15 decisões humanas D-01–D-15).
+- Durante a rodada, outro processo commitou `f9f84c9` (fatia 3 de RA25-07) e `02f586b` (AUD-0576); PR-001 foi marcado `COMPLETED_PENDING_VERIFICATION`.
+- Nenhum código alterado; nenhuma task autorizada. Produção `NO_GO`.
+
 # AUD-0576 — auditoria de nota por item, roadmap e backlog — 26/09/2026
 
 - Escopo: auditoria independente (documental, sem gate de BUILD) com nota de 0–100 por item. Fonte: [0576](04_audit/0576_repository_score_audit_2026-09-26.md). Notas: docs 65, código 72, qualidade/CI 79, processo 58; nota geral `69/100`.

@@ -1,3 +1,16 @@
+# PROD-20260926 — backlog de produção PR-001–PR-709 registrado — 26/09/2026
+
+- Fonte: [AUD-0577](04_audit/0577_production_readiness_score_audit_2026-09-26.md); plano [0354](03_build/0354_production_executive_plan_2026-09-26.md); roadmap [0355](03_build/0355_production_roadmap_2026-09-26.md); tasks em [0356](03_build/0356_production_backlog_2026-09-26.md). Todas `PROPOSED`, exceto PR-001 `COMPLETED_PENDING_VERIFICATION`.
+- `F0` base verificável (PR-001–009): toolchain Node 22, certificado reproduzível, estado Gauntlet fora do git, rotação de ledgers, cobertura com denominador completo.
+- `F1` decisões (PR-101–109): discovery e PRD adendo de produção, piloto, provider de LLM, canal, fontes RAG, nuvem, governança proporcional, M07-S1/C1M.
+- `F2` fundação (PR-201–207): `server.ts`, `runTurn`, `postgres.ts`, configuração única validada no boot, dependências, pacotes órfãos, OpenAPI.
+- `F3` segurança (PR-301–307): OIDC + MFA na API e na web, cofre de segredos, borda, supply chain assinado, threat model, pentest.
+- `F4` LGPD (PR-401–407): inventário e RIPD, retenção, minimização para o provider, direitos do titular, RLS obrigatório, PITR, contratos e DPO.
+- `F5` integrações (PR-501–507): provider real, evals e red team, canal, RAG, agenda somente leitura com rascunho, handoff, kill switch.
+- `F6` operação (PR-601–608): IaC, CD por digest, migrações, observabilidade, runbooks e on-call, carga, DR, suporte.
+- `F7` piloto e GA (PR-701–709): staging E2E, UAT, auditoria independente, go/no-go, piloto, GA gradual, auditoria de 30 dias.
+- RA26-01–17 continuam válidos em [0353](03_build/0353_score_backlog_2026-09-26.md) e estão mapeados nas tasks PR. Produção `NO_GO`.
+
 # AUD-0576 — backlog RA26-01–17 registrado — 26/09/2026
 
 - Fonte: [relatório 0576](04_audit/0576_repository_score_audit_2026-09-26.md) (nota geral `69/100`); sequência em [0352](03_build/0352_score_roadmap_2026-09-26.md); tasks em [0353](03_build/0353_score_backlog_2026-09-26.md). Registro `PROPOSED / DOCUMENTARY`, sem autoridade para BUILD. Produção `NO_GO`.
