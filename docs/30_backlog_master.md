@@ -1,3 +1,9 @@
+# PROD-20260926 — PR-L05 em andamento; novos P0 de CI — 26/09/2026
+
+- PR-L05: fatias 1 e 3 de [SPEC-LEGACY-002](02_spec/0136_legacy_secretary_profile_isolation.md) concluídas; fatia 2 pendente.
+- Novos: PR-010 (P0, fazer o `verify.yml` rodar no GitHub), PR-011 (P0, allowlist do Gitleaks para 480 falsos positivos), PR-012 (P0, `COMPLETED` — testes de processo usavam `dist` antigo). Total do programa: 79 tasks.
+- Produção `NO_GO`.
+
 # PROD-20260926 — F0 concluída; M07-S1 reclassificada — 26/09/2026
 
 - `COMPLETED`: PR-003 (certificado `94d7a211…`), PR-004 (estado Gauntlet fora do índice), PR-006, PR-108 (governança proporcional) e PR-109 (M07-S1 `ACCEPTED_WITH_RISK`).

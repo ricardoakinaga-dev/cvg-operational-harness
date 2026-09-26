@@ -1,3 +1,12 @@
+# PROD-20260926 — PR-L05 fatias 1 e 3; achados de CI — 26/09/2026
+
+- SPEC-LEGACY-002 aprovada pelo usuário ("Aprovo as 3 fatias"), trilha T3.
+- Fatia 1 (`692f032`): `PolicyProfile` neutro em `policy-engine/src/profile.ts`; conteúdo da secretária em `secretary-profile.ts`; engine e registry exigem perfil; runtime lê risco do perfil injetado; 491 testes afetados sem mudança de asserção; hash da mutação `policy-deny-effect` refixado e mutação morta.
+- Fatia 3 (`9098cd2`), executada antes da 2: `REFERENCE_POLICY_PROFILE` espelhando a secretária (comparação programática); 163 capacidades renomeadas em testes de `agent-runtime`/`chaos` e no kernel sintético do worker; `reference-engine.test.ts` (11 testes).
+- `ac11f66`: testes de processo do worker carregavam `dist/` antigo via `tsx`; `tsconfig.json` raiz agora herda os `paths`.
+- Achados (`be0135c`): `verify.yml` rejeitado no GitHub desde pelo menos 17/09 (PR-010); `secret-scan` falha com 480 falsos positivos `generic-api-key` numa varredura local com `--redact` (PR-011); E2E visual instável (PR-009).
+- Gates finais: 315/2 293 PASS, cobertura 92,58/87,59/94,90/93,57, `test:postgres` 35/258, `coverage:critical`/`mutation:guard`/`test:evals`/`test:worker:startup` PASS, E2E 12/12 (após uma falha visual). Produção `NO_GO`.
+
 # PROD-20260926 — PR-003 concluída; decisões D-02, D-12 e D-13 aplicadas — 26/09/2026
 
 - PR-003: `npm run certify` (`CI_RUN_ID=run-prod26-pr003-20260926`, Node 22.23.2, PostgreSQL `cvg-legacy-pg-20260926`) → 16 gates PASS, `CONDITIONAL_GO / AAA_CONTROLLED`, candidato `94d7a211…`; `certification:verify` exit 0 com 37 hashes. Cobertura 92,54/87,58/94,93/93,54. Commit `6e1a072`.

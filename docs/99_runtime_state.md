@@ -1,3 +1,12 @@
+# PROD-20260926 — PR-L05 com fatias 1 e 3 concluídas; CI remoto vermelho — 2026-09-26
+
+- status: `IN_PROGRESS`. PR-L05 (SPEC-LEGACY-002, T3 aprovada pelo usuário): fatia 1 e fatia 3 concluídas; fatia 2 pendente. PR-012 concluída. Novos P0: PR-010 (CI remoto não roda) e PR-011 (Gitleaks). Produção `NO_GO`.
+- last_completed_action: o `policy-engine` passou a receber o catálogo como `PolicyProfile` (`692f032`); criei o perfil de referência neutro e movi para ele os testes de `agent-runtime`, `chaos` e o kernel sintético do worker (`9098cd2`); corrigi a resolução do `tsx` para carregar o código-fonte (`ac11f66`); registrei os achados de CI (`be0135c`).
+- current_evidence: [SPEC-LEGACY-002](02_spec/0136_legacy_secretary_profile_isolation.md), [backlog 0356](03_build/0356_production_backlog_2026-09-26.md), [inventário](../legacy/LEGACY_INVENTORY.md).
+- verification_state: Node 22.23.2 com PostgreSQL descartável: `test:coverage` 315 arquivos / 2 293 testes PASS, cobertura 92,58/87,59/94,90/93,57; `coverage:critical`, `mutation:guard`, `test:worker:startup`, `test:evals` PASS; `test:postgres` 35/258; `test:e2e` 12/12 em duas repetições depois de uma falha visual instável. O certificado `94d7a211` está desatualizado em relação ao HEAD e seus testes de processo usaram `dist` antigo (PR-012).
+- blocking_state: nenhum bloqueio de decisão. `verify.yml` é rejeitado pelo GitHub ("workflow file issue") e `security.yml` falha no Gitleaks por falsos positivos — o CI remoto não valida nada desde pelo menos 17/09.
+- next_action: fatia 2 de SPEC-LEGACY-002 (pacote `@cvg/legacy-secretary-profile`, política de workspaces, pontos de composição da API, preset neutro de referência para os testes do harness, remoção da superfície de compatibilidade); PR-010 e PR-011 em paralelo; reemitir o certificado ao fim.
+
 # PROD-20260926 — certificado reemitido; D-02, D-12 e D-13 aplicadas — 2026-09-26
 
 - status: `READY_FOR_NEXT_STEP`. F0 concluída (PR-001 a PR-004 e PR-006); PR-108 e PR-109 concluídas; FL com PR-L01 a PR-L03 concluídas. M07-S1 `ACCEPTED_WITH_RISK`; produção `NO_GO`.
