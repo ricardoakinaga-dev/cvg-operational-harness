@@ -1,7 +1,7 @@
 # Backlog — programa PROD-20260926 — harness em produção controlada
 
-- Status: PR-001, PR-002, PR-L01, PR-L02 e PR-L03 `COMPLETED` e PR-003
-  `IN_PROGRESS` em 26/09/2026, sob a autorização do usuário ("então vamos
+- Status: PR-001 a PR-004, PR-006, PR-108, PR-109 e PR-L01 a PR-L03
+  `COMPLETED` em 26/09/2026, sob a autorização do usuário ("então vamos
   avançar"); as demais continuam `PROPOSED`.
 - Plano executivo: [0354](0354_production_executive_plan_2026-09-26.md).
   Roadmap e gates de fase: [0355](0355_production_roadmap_2026-09-26.md).
@@ -37,28 +37,30 @@
 
 ### PR-003 — Certificado reproduzível (RA26-02) · P0 · SPEC+BUILD
 
-- Estado: `IN_PROGRESS / CAUSE_IDENTIFIED`.
-- Causa da divergência, medida em 26/09: ambiente, não regressão. Sem
-  PostgreSQL e em Node 24 a suíte pula 20 arquivos (146 testes) e a cobertura
-  cai para 90,88/85,88/92,97/91,83. Em Node 22 com PostgreSQL descartável e
-  `PHASE4A_DISPOSABLE_PG=1`: 0 skips e 92,41/87,48/94,79/93,40 sobre
-  `001fc6f`; depois da PR-L02, 92,57/87,62/94,93/93,57.
-- Falta: reemitir o certificado (`npm run certify` com `CI_RUN_ID` novo) em
-  máquina ociosa, ou no CI, e confirmar `certification:verify` exit 0 em duas
-  execuções seguidas.
-- Pronto: duas execuções limpas seguidas geram as mesmas métricas;
-  `certification:verify` exit 0.
+- Estado: `COMPLETED` em 26/09/2026, com uma ressalva registrada.
+- Causa da divergência da AUD-0577: ambiente, não regressão. Sem PostgreSQL
+  e em Node 24 a suíte pulava 20 arquivos (146 testes).
+- Certificado reemitido: `npm run certify` com
+  `CI_RUN_ID=run-prod26-pr003-20260926`, Node 22.23.2 e PostgreSQL
+  descartável → 16 gates PASS, `CONDITIONAL_GO / AAA_CONTROLLED`, candidato
+  `94d7a211…`; `npm run certification:verify` exit 0 (37 hashes). Commit
+  `6e1a072`.
+- Ressalva: duas execuções limpas seguidas do mesmo candidato deram cobertura
+  92,57/87,62/94,93/93,57 (manual) e 92,54/87,58/94,93/93,54 (certify), uma
+  variação de até 0,04 pp. O critério "métricas iguais" não foi atingido
+  literalmente; a investigação da variação entra na PR-007.
 
 ### PR-004 — Tirar o estado Gauntlet do versionamento · P0 · HUMAN + DOC
 
-- O que/onde: 17 `state.json` de ~6 MB em `.gauntlet/`, `.gauntlet-*` e
-  `.gauntlet-archive/` (~100 MB).
-- Como: D-02; mover para armazenamento de artefatos (release asset ou bucket)
-  com manifesto de hashes versionado; `git rm --cached` e `.gitignore`.
-  Não reescrever histórico sem decisão separada.
-- Dependência: D-02.
-- Pronto: `git ls-files | grep state.json` vazio fora do manifesto; hashes
-  do manifesto conferem com os arquivos arquivados.
+- Estado: `COMPLETED` em 26/09/2026 (D-02, opção A).
+- Entregue: 102 arquivos (102 664 474 bytes) saíram do índice com
+  `git rm --cached`; continuam no disco e são ignorados por `.gitignore`
+  (`.gauntlet/`, `.gauntlet-*/`). Os 102 SHA-256 conferiram com o
+  [manifesto](../04_audit/evidence/AUD-20260926/gauntlet-state-manifest.json)
+  antes da remoção. Os dois links de docs para arquivos arquivados viraram
+  referência em código com ponteiro para o manifesto. O histórico git não foi
+  reescrito; cópia em armazenamento externo não foi feita (os arquivos seguem
+  só na máquina local).
 
 ### PR-005 — Rotacionar ledgers e reescrever o README (RA26-03/04/06) · P1 · DOC
 
@@ -75,13 +77,10 @@
 
 ### PR-006 — Reconciliar arquivos vazios versionados · P2 · DOC
 
-- Estado: `ABSORVIDA_POR_PR-004`.
-- Fato: dos 242 vazios versionados, 231 já estão catalogados em
-  `docs/04_audit/evidence/empty-artifact-status.json`; os 11 restantes são
-  `artifacts.jsonl` vazios dos diretórios `.gauntlet*` e saem do índice com a
-  PR-004. O inventário deles está no
-  [manifesto Gauntlet](../04_audit/evidence/AUD-20260926/gauntlet-state-manifest.json).
-- Pronto: PR-004 concluída; `evidence:check-hygiene` exit 0.
+- Estado: `COMPLETED` em 26/09/2026 junto com a PR-004: os 11 vazios fora do
+  catálogo eram `artifacts.jsonl` dos diretórios `.gauntlet*` e saíram do
+  índice; os 231 restantes seguem catalogados em
+  `docs/04_audit/evidence/empty-artifact-status.json`.
 
 ### PR-007 — Cobertura com denominador completo e lint type-aware (RA26-15) · P1 · SPEC+BUILD
 
@@ -94,6 +93,9 @@
 - Dependência: PR-003.
 - Pronto: dois relatórios verdes; margem ≥ 3 pp em todas as métricas;
   `npm run lint` exit 0 com as regras novas.
+- Achado de 26/09 (PR-003): duas execuções do mesmo candidato variaram até
+  0,04 pp na cobertura. Identificar a fonte da não determinação (testes com
+  tempo ou concorrência) antes de subir thresholds.
 
 ### PR-008 — Imagem web fixada e nome de imagem corrente · P2 · SPEC+BUILD
 
@@ -105,6 +107,11 @@
 
 - Pronto: `playwright-results.xml` e o relatório E2E da certificação com o
   mesmo `runId`; specs para aprovações e jornada completa.
+- Achado de 26/09: `tests/e2e/ux-accessibility.spec.ts` grava screenshots em
+  `docs/04_audit/evidence/AUD-20260919/AUD19-013/` a cada execução,
+  sobrescrevendo evidência histórica cujos hashes estão nos estados Gauntlet.
+  Na rodada PR-003 os três PNGs foram restaurados. Pronto também exige que o
+  E2E grave em `test-results/` e nunca em `docs/04_audit/evidence/`.
 
 ## FL — Limpeza e isolamento do legado
 
@@ -298,6 +305,8 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-108 — Governança proporcional (D-12) · P0 · HUMAN + DOC
 
+- Estado: `COMPLETED` em 26/09/2026 — trilhas T1–T4 e regras de baseline incorporadas a [`07_agents/AGENTS.md`](../07_agents/AGENTS.md).
+
 - O que: o processo atual exige gate hash-bound por edição e deixou C1L cair
   por drift de `0190_spec_validation.md`, que estava fora do escopo.
 - Como: gate hash-bound por release candidate e por capacidade sensível;
@@ -306,6 +315,8 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 - Pronto: constituição atualizada e aprovada; um exemplo de cada trilha.
 
 ### PR-109 — Encerrar M07-S1/C1M (RA26-17) · P0 · HUMAN
+
+- Estado: `COMPLETED` em 26/09/2026 — D-13 opção B: M07-S1 `ACCEPTED_WITH_RISK`, registrada em [0344](0344_reaudit_m07_backlog.md); findings na PR-208.
 
 - Como: D-13; completar o packet C1M com baseline rederivada e executar, ou
   reclassificar M07-S1 com justificativa e riscos aceitos.
@@ -367,6 +378,16 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 - Como: gerar OpenAPI a partir dos schemas zod existentes; teste de contrato
   que falha em quebra não versionada.
 - Pronto: documento OpenAPI gerado em CI e diff de contrato como gate.
+
+### PR-208 — Declarar as dependências de teste da M07-S1 · P2 · SPEC+BUILD
+
+- O que: os 11 findings `TEST_ONLY` aceitos na reclassificação da M07-S1
+  (lista em [0344](0344_reaudit_m07_backlog.md)): testes de `@cvg/api`,
+  `@cvg/worker` e `@cvg/chaos` importam workspaces não declarados em
+  `devDependencies`, e `api` ↔ `worker` se importam mutuamente em testes.
+- Como: declarar as `devDependencies` corretas; para `api` ↔ `worker`, mover
+  os testes cruzados para `tests/` na raiz em vez de criar dependência cíclica.
+- Pronto: `node scripts/workspace-dependency-audit.mjs` sem findings.
 
 ## F3 — Segurança e identidade
 
@@ -628,10 +649,10 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 | F0        | PR-001 a 009 | 4      | 2      | 3     |
 | FL        | PR-L01 a L12 | 7      | 4      | 1     |
 | F1        | PR-101 a 109 | 8      | 1      | 0     |
-| F2        | PR-201 a 207 | 1      | 4      | 2     |
+| F2        | PR-201 a 208 | 1      | 4      | 3     |
 | F3        | PR-301 a 307 | 4      | 3      | 0     |
 | F4        | PR-401 a 407 | 6      | 1      | 0     |
 | F5        | PR-501 a 507 | 5      | 2      | 0     |
 | F6        | PR-601 a 608 | 4      | 3      | 1     |
 | F7        | PR-701 a 709 | 7      | 2      | 0     |
-| **Total** | **75**       | **46** | **22** | **7** |
+| **Total** | **76**       | **46** | **22** | **8** |

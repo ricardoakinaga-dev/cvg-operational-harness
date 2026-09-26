@@ -1,3 +1,12 @@
+# PROD-20260926 — PR-003 concluída; decisões D-02, D-12 e D-13 aplicadas — 26/09/2026
+
+- PR-003: `npm run certify` (`CI_RUN_ID=run-prod26-pr003-20260926`, Node 22.23.2, PostgreSQL `cvg-legacy-pg-20260926`) → 16 gates PASS, `CONDITIONAL_GO / AAA_CONTROLLED`, candidato `94d7a211…`; `certification:verify` exit 0 com 37 hashes. Cobertura 92,54/87,58/94,93/93,54. Commit `6e1a072`.
+- Achado: `tests/e2e/ux-accessibility.spec.ts` sobrescreve três PNGs de `docs/04_audit/evidence/AUD-20260919/AUD19-013/` a cada execução; restaurados via `git checkout`, registrado na PR-009.
+- Decisões do usuário (pacote 0357, SHA-256 `efb683bcdd8691b8f463bf15597b5dd8ce78ade8145dd84a03fec9d742695cfb`): D-02 opção A, D-12 opção A, D-13 opção B.
+- D-02/PR-004: `git rm --cached` de 102 arquivos `.gauntlet*` (hashes conferidos com o manifesto); `.gitignore` com `.gauntlet/` e `.gauntlet-*/`; dois links em `99_runtime_state.md` e `0348` trocados por referência em código.
+- D-12/PR-108: trilhas T1–T4 e regras de baseline na constituição.
+- D-13/PR-109: M07-S1 `ACCEPTED_WITH_RISK` em 0344; 11 findings `TEST_ONLY` listados e encaminhados à nova PR-208. Produção `NO_GO`.
+
 # PROD-20260926 — PR-001, PR-002, PR-L01–L03 executadas — 26/09/2026
 
 - Autorização: usuário, "então vamos avançar", sobre o plano 0354 e as decisões DL-01–DL-04.

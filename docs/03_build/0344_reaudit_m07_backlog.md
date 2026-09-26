@@ -4,6 +4,13 @@
 >
 > Atualização 2026-09-25 (ciclo AUD-0573 / AUD53): o único tuple divergente mudou de novo. `docs/02_spec/0190_spec_validation.md` passou de `9e4432…` (observado em C1L) para `443f6a…`, porque as SPECs [0130](../02_spec/0130_doc_link_checker_extraction.md), [0131](../02_spec/0131_worker_startup_error_redaction.md) e [0132](../02_spec/0132_run_bound_closure_registry.md) foram registradas nele. O preview C1M precisa ser rederivado a partir desse hash antes de qualquer pedido de gate; nenhuma baseline, preview ou aprovação C1M/C1L foi reaproveitada, e `A24-03-C1M-PACKET` continua `IN_PROGRESS / DOCUMENTARY` sem gate aprovado. O ciclo AUD-0573 e a correção do certificado estão em [0574](../04_audit/0574_aud0573_execution_evidence_2026-09-25.md) e [0575](../04_audit/0575_aud53_closure_rebind_decision_packet.md).
 
+## PROD-20260926 — M07-S1 reclassificada `ACCEPTED_WITH_RISK` — 26/09/2026
+
+- Decisão D-13, opção B, do usuário sobre o [pacote 0357](0357_production_decision_packet_2026-09-26.md) (SHA-256 `efb683bcdd8691b8f463bf15597b5dd8ce78ade8145dd84a03fec9d742695cfb`).
+- Motivo: o bloqueio de M07-S1 era de processo (drift de documento fora do escopo em C1L; revisores indisponíveis em C1J), não de defeito de produto. C1J já tinha passado a suíte e fechado o inventário com 11 findings, zero gaps e zero unresolved.
+- Riscos aceitos: os 11 findings, todos `TEST_ONLY` — arquivos de teste que importam workspaces não declarados como dependência: `@cvg/api` → `@cvg/worker` (`MISSING_DIRECT_DEPENDENCY`), `@cvg/worker` → `@cvg/api` (`MISSING_DIRECT_DEPENDENCY`), `@cvg/api` → `@cvg/approval-engine` (2), `@cvg/harness-contracts` e `@cvg/rag`, e `@cvg/chaos` → `@cvg/adapters`, `@cvg/approval-engine`, `@cvg/channel-gateway`, `@cvg/model-gateway` e `@cvg/persistence` (`DEPENDENCY_CATEGORY_MISMATCH`). Remediação na PR-208 de [0356](0356_production_backlog_2026-09-26.md).
+- Consequências: `A24-03-C1M-PACKET` e os gates C1x deixam de ser pré-requisito; M07-S2/S3/S4 e RA25-05 deixam de estar `BLOCKED_BY_C1M` e passam a seguir a trilha da constituição (governança proporcional, D-12). O histórico abaixo é preservado.
+
 ## AUD53 — Preparar reconciliação de baseline para C1M — 24/09/2026
 
 ### A24-03-C1M-PACKET — Propor novo candidate com baseline currentizada

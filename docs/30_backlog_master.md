@@ -1,3 +1,10 @@
+# PROD-20260926 — F0 concluída; M07-S1 reclassificada — 26/09/2026
+
+- `COMPLETED`: PR-003 (certificado `94d7a211…`), PR-004 (estado Gauntlet fora do índice), PR-006, PR-108 (governança proporcional) e PR-109 (M07-S1 `ACCEPTED_WITH_RISK`).
+- Nova: PR-208 (P2) — declarar as dependências de teste dos 11 findings `TEST_ONLY` da M07-S1. Total do programa: 76 tasks.
+- `RA25-05` e `A24-03-C1M-PACKET` deixam de estar `BLOCKED_BY_C1M` (ver [0344](03_build/0344_reaudit_m07_backlog.md)).
+- Próximas: PR-L05 → PR-L06 → PR-L04 → PR-L07. Produção `NO_GO`.
+
 # PROD-20260926 — F0 e FL em andamento — 26/09/2026
 
 - `COMPLETED`: PR-001 (gates sobre `f9f84c9`), PR-002 (preflight de Node), PR-L01 (inventário), PR-L02 (pacotes mortos removidos) e PR-L03 (fronteira de `legacy/`). Evidência em [SPEC-LEGACY-001](02_spec/0135_legacy_dead_packages_and_boundary.md).

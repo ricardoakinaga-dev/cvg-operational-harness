@@ -1,7 +1,7 @@
 # Pacote de decisões — programa PROD-20260926
 
-- Status: DL-01 a DL-04 `DECIDED` pelo usuário em 26/09/2026; demais
-  `WAITING_HUMAN_APPROVAL`. As recomendações são do agente e não valem como
+- Status: DL-01 a DL-04, D-02, D-12 e D-13 `DECIDED` pelo usuário em
+  26/09/2026; demais `WAITING_HUMAN_APPROVAL`. As recomendações são do agente e não valem como
   decisão.
 - Plano: [0354](0354_production_executive_plan_2026-09-26.md). Backlog:
   [0356](0356_production_backlog_2026-09-26.md).
@@ -23,6 +23,17 @@ melhoria do programa (frente FL), para evitar confusão com resquícios.
 | DL-02 | Pacotes sem consumidor (`workflows`, `tools`, `memory`) | Apagar; o histórico continua no git (PR-L02)                                                                             |
 | DL-03 | Documentação da Esmeralda                               | Mover docs de produto para `legacy/docs`; histórico de auditoria vinculado por hash fica no lugar, identificado (PR-L08) |
 | DL-04 | Alvo de produção                                        | O harness como plataforma; nenhum produto específico no plano                                                            |
+
+## Decisões já tomadas — F0 e governança
+
+Respostas do usuário em 26/09/2026 sobre a versão deste pacote com SHA-256
+`efb683bcdd8691b8f463bf15597b5dd8ce78ade8145dd84a03fec9d742695cfb` (commit `001fc6f`).
+
+| ID   | Decisão                                                                                                                                                                                  |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D-02 | Opção A: parar de versionar `.gauntlet*` sem reescrever histórico; manifesto de hashes versionado (PR-004)                                                                               |
+| D-12 | Opção A: governança proporcional, incorporada à constituição em [`07_agents/AGENTS.md`](../07_agents/AGENTS.md) (PR-108)                                                                 |
+| D-13 | Opção B: M07-S1 reclassificada `ACCEPTED_WITH_RISK`; os 11 findings de dependência viram a PR-208; a política de workspaces pode aceitar `legacy/packages/*` em versão revisada (PR-109) |
 
 ### DL-05 — Quando apagar o legado isolado
 
