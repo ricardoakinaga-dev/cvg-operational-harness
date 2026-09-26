@@ -210,6 +210,8 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-L05 — Isolar o perfil da secretária (DL-01) · P0 · SPEC+BUILD
 
+- Estado: `COMPLETED` em 26/09/2026 sob [SPEC-LEGACY-002](../02_spec/0136_legacy_secretary_profile_isolation.md) (T3, aprovada pelo usuário). O vocabulário de agenda que resta nas guardas do `platform` segue para a PR-L07.
+
 - O que/onde: `packages/platform/src/secretary-preset.ts`, grants da
   secretária em `packages/policy-engine/src/grants.ts` e `capabilities.ts`,
   resumo de handoff tutor/pet em

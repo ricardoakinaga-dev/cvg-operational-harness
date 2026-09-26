@@ -237,3 +237,57 @@ de referência antes da mudança. O conteúdo aprovado das fatias não mudou.
   `test:postgres` 35/258; `test:evals` exit 0; `test:e2e` falhou uma vez em
   `visual-shell.spec.ts` (comparação de screenshot) e passou 12/12 em duas
   repetições seguidas — instabilidade registrada na PR-009.
+
+### Fatia 2 — concluída em 26/09/2026
+
+- Novo workspace `legacy/packages/*` com o pacote `@cvg/legacy-secretary-profile`:
+  `SECRETARY_POLICY_PROFILE` (dados idênticos, saídos do `policy-engine`),
+  superfície de compatibilidade só para os testes de conteúdo e o preset da
+  secretária (`ensureControlledSecretaryPreset`, `createControlledSecretaryConfig`
+  com a configuração byte a byte anterior).
+- `platform`: novo `controlled-preset.ts` com o mecanismo neutro
+  (`ensureControlledAgentPreset`, `createValidatedControlledReleaseCandidate`,
+  `createControlledAgentConfig`, `createControlledReferencePreset`,
+  `CONTROLLED_DEFAULT_TENANT_ID`); `secretary-preset.ts` removido.
+- `policy-engine`: `secretary-profile.ts`, `capabilities.ts`, `grants.ts` e os
+  schemas de compatibilidade removidos; o pacote exporta só o mecanismo e o
+  perfil de referência. `agent-evals` valida capacidades por formato
+  (`CapabilityNameSchema`) até a PR-L06.
+- Testes de conteúdo movidos com `git mv` para o pacote legado (5 do
+  `policy-engine`, `secretary-preset.test.ts`); o teste de hardening do preset
+  voltou ao `platform` como `controlled-preset-hardening.test.ts`, porque
+  testa o mecanismo.
+- Ponto de composição único: `apps/api/src/legacy-composition.ts`, declarado em
+  `LEGACY_COMPOSITION_POINTS`; o boot de desenvolvimento da API continua
+  publicando a secretária. Worker, `platform`, API e E2E passaram a usar o
+  preset e a configuração neutros.
+- Infraestrutura: `package.json` (workspaces), `tsconfig.base.json` (paths),
+  `tsconfig.json`, `tsconfig.typecheck.json`, `vitest.config.mts` (testes,
+  cobertura e alias), `apps/api` (dependência e referência), `Dockerfile`,
+  `scripts/build-runtime.mjs`; política de dependências
+  `config/workspace-dependency-policy.json` em `PROD26-L05-1` com o padrão
+  `legacy/packages/*` (liberado pela D-13) e o auditor ajustado; contrato
+  `0305` autoriza a dependência da API; `tests/vitest-hermetic.test.ts` aceita
+  aliases em `legacy/packages/`. Auditor de dependências: os mesmos 11 findings
+  aceitos, nenhum novo.
+- Mutação `policy-deny-effect`: hash refixado e arquivo de teste atualizado para
+  o novo caminho; `mutation:guard` PASS.
+- Gates (Node 22.23.2, PostgreSQL descartável): `typecheck`, `lint`,
+  `format:check`, `build`, `build:runtime`, `docs:check-links`, `sbom`,
+  `licenses:check`, `test:evals`, `test:worker:startup`, `test:e2e` exit 0;
+  `test:coverage` 316 arquivos / 2 304 testes PASS, cobertura
+  92,61/87,61/94,97/93,60; `coverage:critical` PASS; `test:postgres` 35/258.
+  A primeira rodada falhou em 3 testes (hash de mutação, contrato 0305 e
+  hermeticidade dos aliases), corrigidos e reexecutados.
+- Imagem de runtime: `docker build --target runtime` exit 0; smoke em contêiner
+  somente leitura, sem rede e sem capabilities → `{"status":"PASS","live":200,"ready":200,"sourceIncluded":false}`;
+  o `dist` do pacote legado está na imagem.
+
+## Resultado da PR-L05
+
+`policy-engine` e `platform` não carregam mais o catálogo, os perfis nem o
+preset da secretária; o conteúdo está em `legacy/packages/secretary-profile` e
+só a API o compõe, por um ponto declarado. Resta no `platform` o vocabulário de
+agenda das guardas controladas (`policy-evaluator.ts`, `test-lab.ts`,
+`critical-safety-preflight.ts`, `output-policy.ts`, plugin
+`scheduling.controlled`), registrado como `HARNESS_REVIEW` para a PR-L07.
