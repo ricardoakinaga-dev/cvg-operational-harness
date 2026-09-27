@@ -1,3 +1,8 @@
+# PR-008 — recon e SPEC da imagem web — 27/09/2026
+
+- Dockerfile: estágio web com tag `nginxinc/nginx-unprivileged:1.27-alpine` sem digest e comentário `cvg-agent-secretary:local`. O registry retornou índice OCI multiarch `sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0`.
+- [SPEC-PR008-001](02_spec/0146_web_image_digest_and_name.md) registrada sob T2; BUILD ainda não executado. Produção `NO_GO`.
+
 # PR-009 I2 — gate E2E do ci-bar e negativo de snapshot — 27/09/2026
 
 - Worktree detached `1413809`, Node 22.23.2, `npm ci --ignore-scripts`, `build:runtime`, portas próprias 3209/4183. `ci-bar init` gerou candidato `16136c55…`; `ci-bar gate e2e` PASS, Chromium 12/12, UUID `2309ccef-a58c-4dbd-b590-1ac47ea6c00d`, `outputFailures=[]`. Log e snapshots arquivados em [prova I2](04_audit/evidence/PR009-20260927-r2/proof.json), hashes revalidados após cópia.

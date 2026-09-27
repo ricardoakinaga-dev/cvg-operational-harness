@@ -1,3 +1,12 @@
+# PR-008 — SPEC da imagem web — 27/09/2026
+
+- status: `SPEC_READY / BUILD_T2` para PR-008; produção `NO_GO`.
+- last_completed_action: registrei [SPEC-PR008-001](02_spec/0146_web_image_digest_and_name.md) após consultar o índice OCI multiarch da tag NGINX web e reconfirmar o nome legado no Dockerfile.
+- current_evidence: [backlog 0356](03_build/0356_production_backlog_2026-09-26.md), [SPEC](02_spec/0146_web_image_digest_and_name.md).
+- verification_state: consulta `docker buildx imagetools inspect` retornou índice `sha256:65e3e85d…`; gates de BUILD da PR-008 ainda pendentes. Estado PR-009 permanece na entrada abaixo.
+- blocking_state: produção/CI/certificado integrado ainda não aprovados; PR-L04 e I2 seguem seus claims.
+- next_action: fixar digest e comentário no Dockerfile, validar imagem web e gates T2 sob Node 22.
+
 # PR-009 I2 — E2E/ci-bar isolado verificado — 27/09/2026
 
 - status: `E2E_CI_BAR_VERIFIED_ISOLATED / I2_RECHECK_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

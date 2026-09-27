@@ -104,6 +104,9 @@
 
 ### PR-008 — Imagem web fixada e nome de imagem corrente · P2 · SPEC+BUILD
 
+- Estado: `SPEC_READY / BUILD_T2` em 27/09/2026.
+  [SPEC-PR008-001](../02_spec/0146_web_image_digest_and_name.md) fixa o
+  índice OCI multiarch observado no registry e o gate de imagem/Node 22.
 - O que/onde: `Dockerfile` usa `nginxinc/nginx-unprivileged:1.27-alpine` sem
   digest; comentário e tag ainda citam `cvg-agent-secretary`.
 - Pronto: digest fixado; gate `image` verde; nome coerente com o projeto.
