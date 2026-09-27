@@ -1,3 +1,9 @@
+# PR-009 fatia 3 — correção da crítica I2 — 27/09/2026
+
+- I2 read-only: `REJECT` para o vínculo de `executionId` no certificado, captura de bytes do `certify` e validação dos snapshots do ci-bar. A troca conjunta de UUID em JSON/JUnit era aceita pela verificação anterior.
+- Corrigido: comprovante único no log, UUID no gate/manifesto, comparação dentro do verificador, buffers validados e usados para hash pelo `certify`, snapshots validados e hash-bound no estado/finalização do ci-bar. Self-test C30–C32 e 12 testes focados PASS.
+- Node 22.23.2: `typecheck`, `lint`, `format:check`, `npm test` 299/2.178 e `test:postgres` 35/258 PASS; banco descartável próprio removido. E2E/ci-bar do código corrigido e nova crítica I2 pendentes. Produção `NO_GO`.
+
 # PR-009 fatia 3 — prova E2E isolada — 27/09/2026
 
 - Worktree detached no commit `6bc3bfc`, Node 22.23.2, dependências de lockfile. Tentativa 1 interrompida após falhas de Vite por `@cvg/shared` sem `dist/`; `npm run build:runtime` em seguida PASS, servidores próprios encerrados antes do retry.

@@ -30,6 +30,10 @@ import {
   computeCurrentFindings,
   issueClosureRegistry
 } from './lib/finding-governance.mjs'
+import {
+  parseE2eEvidenceLog,
+  validateE2eReportPair
+} from './lib/e2e-report-binding.mjs'
 import { buildSkipInventory, loadSkipCatalog } from './lib/skip-governance.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -294,6 +298,7 @@ process.stderr.write(
 const gates = []
 const gateOutputs = new Map()
 const gateEvidence = new Map()
+const capturedE2e = new Map()
 const extraResultsByGate = {
   coverage: [
     'certification/critical-coverage.json',
@@ -304,6 +309,38 @@ const extraResultsByGate = {
 for (const entry of commands) {
   const record = run(entry, { runId, candidateId: candidate.candidateId })
   const logContent = fs.readFileSync(path.join(root, record.log), 'utf8')
+  if (entry.id === 'e2e' && record.status === 'PASS') {
+    const summary = parsePlaywrightSummary(logContent)
+    if (!summary || summary.failed || summary.skipped || summary.other) {
+      throw new Error('e2e_certificate_log_not_clean')
+    }
+    for (const artifactPath of [
+      'certification/e2e-test-report.json',
+      'playwright-results.xml'
+    ]) {
+      capturedE2e.set(
+        artifactPath,
+        fs.readFileSync(path.join(root, artifactPath))
+      )
+    }
+    const proof = parseE2eEvidenceLog({
+      logContent,
+      expectedRunId: runId,
+      expectedCandidateId: candidate.candidateId,
+      expectedTestCount: summary.passed
+    })
+    const pair = validateE2eReportPair({
+      jsonContent: capturedE2e.get('certification/e2e-test-report.json'),
+      xmlContent: capturedE2e.get('playwright-results.xml'),
+      expectedRunId: runId,
+      expectedCandidateId: candidate.candidateId,
+      expectedTestCount: summary.passed
+    })
+    if (pair.executionId !== proof.executionId) {
+      throw new Error('e2e_certificate_execution_mismatch')
+    }
+    record.executionId = proof.executionId
+  }
   const matrix =
     GATE_EVIDENCE_MATRIX[entry.id] ?? GATE_ENVIRONMENT_EVIDENCE_MATRIX[entry.id]
   const evidence = [
@@ -312,7 +349,8 @@ for (const entry of commands) {
       sha256: sha256Bytes(Buffer.from(logContent)),
       size: Buffer.byteLength(logContent),
       kind: 'log',
-      runId
+      runId,
+      ...(record.executionId ? { executionId: record.executionId } : {})
     }
   ]
   for (const artifactPath of [
@@ -321,13 +359,14 @@ for (const entry of commands) {
   ]) {
     const absolute = path.join(root, artifactPath)
     if (!fs.existsSync(absolute)) continue
-    const content = fs.readFileSync(absolute)
+    const content = capturedE2e.get(artifactPath) ?? fs.readFileSync(absolute)
     evidence.push({
       path: artifactPath,
       sha256: sha256Bytes(content),
       size: content.byteLength,
       kind: 'result',
-      runId
+      runId,
+      ...(record.executionId ? { executionId: record.executionId } : {})
     })
   }
   const metrics = deriveGateMetrics(entry.id, logContent)
@@ -522,7 +561,8 @@ for (const record of gates) {
       size: item.size,
       producer: 'scripts/phase10-certify.mjs',
       recordedAt: new Date().toISOString(),
-      gateId: record.id
+      gateId: record.id,
+      ...(item.executionId ? { executionId: item.executionId } : {})
     })
   }
 }
@@ -557,6 +597,13 @@ for (const gate of gates) {
 }
 if (
   !candidateUnchanged ||
+  [...capturedE2e].some(([artifactPath, content]) => {
+    const absolute = path.join(root, artifactPath)
+    return (
+      !fs.existsSync(absolute) ||
+      sha256Bytes(fs.readFileSync(absolute)) !== sha256Bytes(content)
+    )
+  }) ||
   gates.some((gate) => gate.status === 'FAIL') ||
   PHASE10_REQUIRED_LOCAL_GATES.some(
     (id) => gates.find((gate) => gate.id === id)?.status !== 'PASS'

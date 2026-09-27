@@ -1,6 +1,6 @@
 # SPEC-PR009-003 — vínculo da execução E2E entre JSON e JUnit
 
-- Estado: `E2E_VERIFIED_ISOLATED / CERTIFICATION_PENDING_INTEGRATED`. Task: PR-009, fatia 3, em
+- Estado: `BUILD_VERIFIED_LOCAL_R2 / CI_BAR_E2E_PENDING`. Task: PR-009, fatia 3, em
   [0356](../03_build/0356_production_backlog_2026-09-26.md). Sem mudança de API,
   schema, identidade ou efeito externo. Gate T2 em
   [AGENTS](../07_agents/AGENTS.md).
@@ -81,3 +81,26 @@
 - Pendente: certificação no candidato integrado após a PR-L04 liberar o
   catálogo de skips e os artefatos compartilhados. O E2E isolado prova esta
   fatia, mas não substitui o certificado nem o CI remoto do SHA integrado.
+
+## Crítica independente I2 e correção da fatia
+
+- I2 retornou `REJECT` sobre `6bc3bfc`/`725a1b3`: o par estava coerente,
+  mas a verificação não comparava `executionId` ao log, o certificado
+  não revalidava os bytes que registrava, e o ci-bar verificava arquivos
+  vivos após copiar snapshots. A troca conjunta dos IDs em JSON/JUnit
+  foi reproduzida em memória pelo crítico. O veredito não foi promovido a
+  aceite pela prova E2E anterior.
+- Correção: o log do wrapper contém exatamente um comprovante de tentativa;
+  resultado do gate e artefatos do manifesto carregam o mesmo
+  `executionId`. O verificador compara os três vínculos. `certify` valida
+  os buffers capturados antes de atribuir PASS e registra hashes desses
+  mesmos buffers; uma checagem final rejeita troca posterior nos destinos.
+  O ci-bar valida os **snapshots** copiados, guarda seus hashes/UUID no estado
+  e exige os mesmos hashes na finalização.
+- Regressões: C30–C32 do self-test PASS, incluindo substituição conjunta
+  de JSON/JUnit com hashes atualizados e log original; testes focados
+  12/12 PASS. Node 22.23.2: `typecheck`, `lint`, `format:check`,
+  `npm test` 299 arquivos/2.178 PASS (20 arquivos/146 testes pulados sem
+  banco) e `test:postgres` 35/258 PASS em banco próprio descartável.
+  Pendente nova prova E2E/ci-bar no código corrigido e reavaliação I2;
+  certificação integrada continua pendente após PR-L04.

@@ -7,7 +7,10 @@ import {
   evaluateCriticalCoverage,
   evaluateGlobalCoverage
 } from './coverage-gate.mjs'
-import { validateE2eReportPair } from './e2e-report-binding.mjs'
+import {
+  parseE2eEvidenceLog,
+  validateE2eReportPair
+} from './e2e-report-binding.mjs'
 import { validateSkipInventory } from './skip-governance.mjs'
 
 export const PHASE10_REQUIRED_LOCAL_GATES = [
@@ -86,7 +89,8 @@ export const GateEvidenceSchema = z.object({
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   size: z.number().int().nonnegative(),
   kind: z.enum(['log', 'result']),
-  runId: z.string().min(1).optional()
+  runId: z.string().min(1).optional(),
+  executionId: z.string().uuid().optional()
 })
 
 export const GateResultSchema = z.object({
@@ -99,7 +103,8 @@ export const GateResultSchema = z.object({
   logSha256: z.string().optional(),
   evidence: z.array(GateEvidenceSchema).optional(),
   metrics: z.record(z.string(), z.unknown()).optional(),
-  skipJustification: z.string().min(1).optional()
+  skipJustification: z.string().min(1).optional(),
+  executionId: z.string().uuid().optional()
 })
 
 export const ScoresSchema = z.record(z.string(), z.number().min(0).max(100))
@@ -169,7 +174,8 @@ export const ArtifactRecordSchema = z.object({
   size: z.number().int().nonnegative(),
   producer: z.string().min(1),
   recordedAt: z.string().datetime(),
-  gateId: z.string().min(1).optional()
+  gateId: z.string().min(1).optional(),
+  executionId: z.string().uuid().optional()
 })
 
 export const CertificationManifestSchema = z.object({
@@ -705,13 +711,25 @@ function deriveGateOutcome({ gate, entry, artifactReader, log, result }) {
       }
       if (entry.kind === 'playwright') {
         try {
-          validateE2eReportPair({
+          const proof = parseE2eEvidenceLog({
+            logContent: text,
+            expectedRunId: result.runId,
+            expectedCandidateId: result.candidate?.candidateId,
+            expectedTestCount: summary.files.passed
+          })
+          const pair = validateE2eReportPair({
             jsonContent: artifactReader('certification/e2e-test-report.json'),
             xmlContent: artifactReader('playwright-results.xml'),
             expectedRunId: result.runId,
             expectedCandidateId: result.candidate?.candidateId,
             expectedTestCount: summary.files.passed
           })
+          if (
+            pair.executionId !== proof.executionId ||
+            gate.executionId !== proof.executionId
+          ) {
+            throw new Error('gate log/report execution mismatch')
+          }
         } catch (error) {
           failures.push(
             `e2e_report_invalid:${error instanceof Error ? error.message : String(error)}`
@@ -1258,6 +1276,13 @@ export function verifyGateEvidence({ result, manifest, artifactReader }) {
           failures.push(
             `gate_evidence_wrong_owner:${item.path}:${record.gateId}`
           )
+        }
+        if (
+          gate.id === 'e2e' &&
+          (item.executionId !== gate.executionId ||
+            record.executionId !== gate.executionId)
+        ) {
+          failures.push(`e2e_manifest_execution_mismatch:${item.path}`)
         }
       }
       if (!evidenceOwners.has(item.path)) evidenceOwners.set(item.path, [])

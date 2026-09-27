@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { validateE2eReportPair } from '../scripts/lib/e2e-report-binding.mjs'
+import {
+  parseE2eEvidenceLog,
+  validateE2eReportPair
+} from '../scripts/lib/e2e-report-binding.mjs'
 
 const runId = 'run-009'
 const candidateId = 'a'.repeat(64)
@@ -63,6 +66,29 @@ function validate(report, xml, options = {}) {
 }
 
 describe('E2E JSON/JUnit report binding', () => {
+  it('binds the pair execution ID to exactly one gate log proof', () => {
+    const { report, xml } = fixture()
+    const logContent = `[e2e-evidence] runId=${runId} candidateId=${candidateId} executionId=${executionId} tests=2 PASS\n`
+    const proof = parseE2eEvidenceLog({
+      logContent,
+      expectedRunId: runId,
+      expectedCandidateId: candidateId,
+      expectedTestCount: 2
+    })
+    expect(proof.executionId).toBe(validate(report, xml).executionId)
+    const changed = '123e4567-e89b-12d3-a456-426614174001'
+    report.config.metadata.cvgE2e.executionId = changed
+    const changedXml = xml.replace(executionId, changed)
+    expect(validate(report, changedXml).executionId).toBe(changed)
+    expect(validate(report, changedXml).executionId).not.toBe(proof.executionId)
+    expect(() =>
+      parseE2eEvidenceLog({
+        logContent: logContent + logContent,
+        expectedRunId: runId,
+        expectedCandidateId: candidateId
+      })
+    ).toThrow(/duplicate gate log proof/)
+  })
   it('accepts a same-execution pair with an identical case inventory', () => {
     const { report, xml } = fixture()
     expect(validate(report, xml)).toEqual({

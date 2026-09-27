@@ -1,3 +1,12 @@
+# PR-009 fatia 3 — crítica I2 corrigida localmente — 27/09/2026
+
+- status: `BUILD_VERIFIED_LOCAL_R2 / CI_BAR_E2E_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: crítica independente I2 rejeitou o vínculo de `executionId` com log e snapshots; corrigi a verificação do certificado/ci-bar, captura dos buffers e hashes dos snapshots.
+- current_evidence: [SPEC-PR009-003](02_spec/0145_e2e_junit_json_run_binding.md), [prova E2E do commit anterior](04_audit/evidence/PR009-20260927/proof.json), [backlog 0356](03_build/0356_production_backlog_2026-09-26.md).
+- verification_state: Node 22.23.2 — testes focados 12/12, self-test C30–C32 PASS, typecheck, lint, formato, `npm test` 299 arquivos/2.178 PASS (20 arquivos/146 testes pulados sem banco), PostgreSQL descartável 35/258 PASS; banco removido. A prova E2E 12/12 anterior refere-se a `6bc3bfc`, não ao código I2 corrigido.
+- blocking_state: PR-L04 ainda detém catálogo/artefatos; recertificação e prova remota do SHA integrado, PR-301/302 e 13 condições de GO permanecem pendentes.
+- next_action: executar E2E via ci-bar em worktree isolado sobre o código corrigido, obter reavaliação I2 e depois certificar o candidato integrado quando PR-L04 liberar seus caminhos.
+
 # PR-009 fatia 3 — E2E isolado verificado — 27/09/2026
 
 - status: `E2E_VERIFIED_ISOLATED / CERTIFICATION_PENDING_INTEGRATED`; programa `IN_PROGRESS`; produção `NO_GO`.

@@ -404,3 +404,37 @@ export function validateE2eReportPair({
     cases: jsonCases
   }
 }
+
+export function parseE2eEvidenceLog({
+  logContent,
+  expectedRunId,
+  expectedCandidateId,
+  expectedTestCount
+}) {
+  const lines = requireValue(reportText(logContent), 'E2E gate log')
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('[e2e-evidence]'))
+  if (lines.length !== 1) {
+    throw new Error('E2E report binding: missing or duplicate gate log proof')
+  }
+  const match =
+    /^\[e2e-evidence\] runId=([^\s]+) candidateId=([0-9a-f]{64}) executionId=([0-9a-f-]+) tests=([0-9]+) PASS$/.exec(
+      lines[0]
+    )
+  if (
+    !match ||
+    match[1] !== expectedRunId ||
+    match[2] !== expectedCandidateId ||
+    !UUID.test(match[3])
+  ) {
+    throw new Error('E2E report binding: invalid gate log proof IDs')
+  }
+  const testCount = requireCount(Number(match[4]), 'gate log test count')
+  if (
+    testCount === 0 ||
+    (expectedTestCount !== undefined && testCount !== expectedTestCount)
+  ) {
+    throw new Error('E2E report binding: gate log test count mismatch')
+  }
+  return { executionId: match[3], testCount }
+}

@@ -8,7 +8,10 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { CI_BAR_GATES, CI_BAR_VERSION } from './ci-bar-contract.mjs'
 import { parsePlaywrightSummary } from './lib/certification-rules.mjs'
-import { validateE2eReportPair } from './lib/e2e-report-binding.mjs'
+import {
+  parseE2eEvidenceLog,
+  validateE2eReportPair
+} from './lib/e2e-report-binding.mjs'
 import { validateRem21010ProofReport } from './rem21-010-postgres-proof-contract.mjs'
 import { validateRem21011ProofReport } from './rem21-011-observability-proof-contract.mjs'
 import { validateRem21014BrowserProofReport } from './rem21-014-browser-proof-contract.mjs'
@@ -257,6 +260,7 @@ function skippedTests(report) {
 
 function validateGateOutputs(id, gate, startedMs, state, outputText) {
   const failures = []
+  let e2eEvidence
   for (const relativePath of gate?.artifacts ?? []) {
     const absolute = path.join(root, relativePath)
     if (!fs.existsSync(absolute)) {
@@ -295,15 +299,35 @@ function validateGateOutputs(id, gate, startedMs, state, outputText) {
       if (!summary || summary.failed || summary.skipped || summary.other) {
         throw new Error('e2e_log_not_clean')
       }
-      validateE2eReportPair({
-        jsonContent: fs.readFileSync(
-          path.join(root, 'certification/e2e-test-report.json')
-        ),
-        xmlContent: fs.readFileSync(path.join(root, 'playwright-results.xml')),
+      const jsonContent = fs.readFileSync(
+        gateArtifactSnapshotPath(id, 'certification/e2e-test-report.json')
+      )
+      const xmlContent = fs.readFileSync(
+        gateArtifactSnapshotPath(id, 'playwright-results.xml')
+      )
+      const proof = parseE2eEvidenceLog({
+        logContent: outputText,
         expectedRunId: state.runId,
         expectedCandidateId: state.candidateId,
         expectedTestCount: summary.passed
       })
+      const pair = validateE2eReportPair({
+        jsonContent,
+        xmlContent,
+        expectedRunId: state.runId,
+        expectedCandidateId: state.candidateId,
+        expectedTestCount: summary.passed
+      })
+      if (pair.executionId !== proof.executionId) {
+        throw new Error('gate log/report execution mismatch')
+      }
+      e2eEvidence = {
+        executionId: proof.executionId,
+        artifactSha256: {
+          'certification/e2e-test-report.json': sha256(jsonContent),
+          'playwright-results.xml': sha256(xmlContent)
+        }
+      }
     } catch (error) {
       failures.push(
         `e2e_report_invalid:${error instanceof Error ? error.message : String(error)}`
@@ -437,7 +461,7 @@ function validateGateOutputs(id, gate, startedMs, state, outputText) {
       }
     }
   }
-  return failures
+  return { failures, e2eEvidence }
 }
 
 function ensureRunId() {
@@ -528,19 +552,17 @@ function runGate(id) {
   })
   let exitCode = result.status ?? 1
   const snapshotFailures = exitCode === 0 ? snapshotGateArtifacts(id, gate) : []
-  const outputFailures =
+  const validation =
     exitCode === 0
-      ? [
-          ...snapshotFailures,
-          ...validateGateOutputs(
-            id,
-            gate,
-            startedMs,
-            state,
-            `${result.stdout ?? ''}\n${result.stderr ?? ''}`
-          )
-        ]
-      : snapshotFailures
+      ? validateGateOutputs(
+          id,
+          gate,
+          startedMs,
+          state,
+          `${result.stdout ?? ''}\n${result.stderr ?? ''}`
+        )
+      : { failures: [] }
+  const outputFailures = [...snapshotFailures, ...validation.failures]
   if (outputFailures.length > 0) exitCode = 1
   const log = [
     `$ ${bin} ${commandArgs.join(' ')}`,
@@ -569,6 +591,7 @@ function runGate(id) {
     nodeVersion: state.nodeVersion,
     runId: state.runId,
     candidateId: state.candidateId,
+    ...(validation.e2eEvidence ?? {}),
     outputFailures,
     log: normalizePath(path.relative(rootArtifactDir, logPath)),
     logSha256: sha256(Buffer.from(log))
@@ -606,6 +629,21 @@ function runArtifacts(state) {
         failures.push(`missing_run_artifact:${gate.id}:${relativePath}`)
       }
     }
+  }
+  const e2eEntry = observed.get('e2e')
+  for (const [relativePath, expectedHash] of Object.entries(
+    e2eEntry?.artifactSha256 ?? {}
+  )) {
+    const snapshot = gateArtifactSnapshotPath('e2e', relativePath)
+    if (
+      !fs.existsSync(snapshot) ||
+      sha256(fs.readFileSync(snapshot)) !== expectedHash
+    ) {
+      failures.push(`e2e_snapshot_hash_mismatch:${relativePath}`)
+    }
+  }
+  if (!e2eEntry?.executionId || !e2eEntry.artifactSha256) {
+    failures.push('e2e_snapshot_binding_missing')
   }
   const artifactEntry = {
     id: 'artifacts',

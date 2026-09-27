@@ -528,7 +528,13 @@ function runSelfTest() {
     }
     const gateRecord = (
       id,
-      { status = 'PASS', exitCode = 0, metrics, skipJustification } = {}
+      {
+        status = 'PASS',
+        exitCode = 0,
+        metrics,
+        skipJustification,
+        executionId
+      } = {}
     ) => ({
       id,
       command: `fixture ${id}`,
@@ -537,7 +543,8 @@ function runSelfTest() {
       durationMs: 1,
       evidence: raw.get(id) ?? [],
       ...(metrics ? { metrics } : {}),
-      ...(skipJustification ? { skipJustification } : {})
+      ...(skipJustification ? { skipJustification } : {}),
+      ...(executionId ? { executionId } : {})
     })
 
     emitLog('format', 'fixture ok')
@@ -569,8 +576,11 @@ function runSelfTest() {
     )
     emitLog('security', 'found 0 vulnerabilities\n')
     emitLog('worker_startup', '{"event":"worker.startup_smoke_passed"}\n')
-    emitLog('e2e', 'Running 1 test using 1 worker\n\n  1 passed (0.1s)\n')
     const e2eExecutionId = '11111111-1111-4111-8111-111111111111'
+    emitLog(
+      'e2e',
+      `Running 1 test using 1 worker\n\n  1 passed (0.1s)\n[e2e-evidence] runId=${runId} candidateId=${candidateId} executionId=${e2eExecutionId} tests=1 PASS\n`
+    )
     const e2eReport = emitResult(
       'e2e',
       'certification/e2e-test-report.json',
@@ -616,6 +626,7 @@ function runSelfTest() {
       'playwright-results.xml',
       `<testsuites id="${runId}" name="candidateId=${candidateId};executionId=${e2eExecutionId}" tests="1" failures="0" skipped="0" errors="0"><testsuite name="fixture.spec.ts" tests="1" failures="0" skipped="0" errors="0"><testcase name="fixture passes" classname="fixture.spec.ts"></testcase></testsuite></testsuites>`
     )
+    for (const item of raw.get('e2e')) item.executionId = e2eExecutionId
     emitLog('evals', '{"event":"evals.completed","verdict":"PASS"}\n')
     emitResult(
       'evals',
@@ -804,7 +815,8 @@ function runSelfTest() {
       gateRecord('security'),
       gateRecord('worker_startup'),
       gateRecord('e2e', {
-        metrics: { filesPassed: 1, filesFailed: 0, filesSkipped: 0 }
+        metrics: { filesPassed: 1, filesFailed: 0, filesSkipped: 0 },
+        executionId: e2eExecutionId
       }),
       gateRecord('evals'),
       gateRecord('chaos'),
@@ -824,7 +836,8 @@ function runSelfTest() {
           recordedAt: new Date().toISOString(),
           gateId: [...raw.entries()].find(([, list]) =>
             list.includes(item)
-          )?.[0]
+          )?.[0],
+          ...(item.executionId ? { executionId: item.executionId } : {})
         })
       }
     }
@@ -1109,6 +1122,35 @@ function runSelfTest() {
           'executionId=11111111-1111-4111-8111-111111111111',
           'executionId=22222222-2222-4222-8222-222222222222'
         )
+      )
+    }
+  )
+  runCliCase(
+    'C32',
+    'JSON and JUnit replaced together with another execution',
+    'e2e_report_invalid:',
+    (state) => {
+      const replacement = '22222222-2222-4222-8222-222222222222'
+      const report = JSON.parse(
+        fs.readFileSync(
+          path.join(state.fixtureRoot, 'certification/e2e-test-report.json'),
+          'utf8'
+        )
+      )
+      report.config.metadata.cvgE2e.executionId = replacement
+      rewriteEvidence(
+        state,
+        'certification/e2e-test-report.json',
+        JSON.stringify(report)
+      )
+      const xml = fs.readFileSync(
+        path.join(state.fixtureRoot, 'playwright-results.xml'),
+        'utf8'
+      )
+      rewriteEvidence(
+        state,
+        'playwright-results.xml',
+        xml.replace('11111111-1111-4111-8111-111111111111', replacement)
       )
     }
   )
