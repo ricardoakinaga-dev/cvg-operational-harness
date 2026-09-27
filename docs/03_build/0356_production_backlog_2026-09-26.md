@@ -114,6 +114,7 @@
 
 ### PR-009 — Coerência do E2E e JUnit (RA26-16) · P2 · SPEC+BUILD
 
+- Fatia 3 `VERIFIED_LOCAL` em 27/09/2026: [SPEC 0148](../02_spec/0148_e2e_junit_json_run_binding.md); JSON e JUnit em `certification/` gerados pela mesma invocação, ambos com `run-pr009-proof-20260927`, 12/12 E2E em Node 22, zero falhas/skips no JUnit. Certificador, verificador e barra CI rejeitam runId divergente/ausente; o XML entra na lista de artefatos com hash. A certificação do candidato integrado e o Verify remoto ainda são necessários. Jornadas de aprovação e prova de estabilidade visual permanecem abertas.
 - Fatia 1 `VERIFIED_LOCAL` em 26/09/2026: [SPEC-PR009-001](../02_spec/0137_e2e_artifact_isolation.md); quatro screenshots agora em `test-results/`, hashes históricos iguais, E2E 12/12. A task inteira continua aberta para JUnit/runId, jornadas de aprovação e estabilidade visual.
 - Fatia 2 `VERIFIED_LOCAL` em 27/09/2026: [SPEC 0139](../02_spec/0139_visual_font_fallback.md); fonte Inter variável local, snapshots mobile/tablet inspecionados, visual 2/2 no Ubuntu isolado e E2E 12/12 no host. A prova remota do novo SHA ainda é necessária.
 - Pronto: `playwright-results.xml` e o relatório E2E da certificação com o

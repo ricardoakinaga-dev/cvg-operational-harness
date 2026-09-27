@@ -7,6 +7,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { CI_BAR_GATES, CI_BAR_VERSION } from './ci-bar-contract.mjs'
+import { validateE2ERunBinding } from './lib/certification-rules.mjs'
 import { validateRem21010ProofReport } from './rem21-010-postgres-proof-contract.mjs'
 import { validateRem21011ProofReport } from './rem21-011-observability-proof-contract.mjs'
 import { validateRem21014BrowserProofReport } from './rem21-014-browser-proof-contract.mjs'
@@ -59,6 +60,7 @@ const EXCLUDED_FILES = new Set([
   'certification/unit-test-report.json',
   'certification/postgres-test-report.json',
   'certification/e2e-test-report.json',
+  'certification/e2e-results.xml',
   'certification/skip-inventory.json',
   'certification/skip-negative-validation.json',
   'certification/runtime-image.json',
@@ -284,6 +286,13 @@ function validateGateOutputs(id, gate, startedMs, state) {
     } else if (skippedTests(report) > 0) {
       failures.push(`required_skip:${id}`)
     }
+  }
+
+  if (id === 'e2e') {
+    const report = readJson('certification/e2e-test-report.json')
+    const xmlPath = path.join(root, 'certification/e2e-results.xml')
+    const xml = fs.existsSync(xmlPath) ? fs.readFileSync(xmlPath, 'utf8') : ''
+    failures.push(...validateE2ERunBinding(report, xml, state.runId))
   }
 
   if (id === 'postgres') {

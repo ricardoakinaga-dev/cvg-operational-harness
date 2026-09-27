@@ -178,7 +178,10 @@ export const CI_BAR_GATES = [
     command: shell(
       'PLAYWRIGHT_JSON_OUTPUT_NAME=certification/e2e-test-report.json npm run test:e2e'
     ),
-    artifacts: ['certification/e2e-test-report.json'],
+    artifacts: [
+      'certification/e2e-test-report.json',
+      'certification/e2e-results.xml'
+    ],
     skipPolicy: 'none'
   },
   {

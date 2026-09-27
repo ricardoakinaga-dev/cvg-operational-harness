@@ -231,6 +231,7 @@ export const CANDIDATE_EXCLUDED_FILES = [
   'certification/unit-test-report.json',
   'certification/postgres-test-report.json',
   'certification/e2e-test-report.json',
+  'certification/e2e-results.xml',
   'certification/skip-inventory.json',
   'certification/skip-negative-validation.json',
   'certification/negative-validation.json',
@@ -425,7 +426,10 @@ export const GATE_EVIDENCE_MATRIX = {
   },
   e2e: {
     log: 'certification/logs/e2e.log',
-    results: ['certification/e2e-test-report.json'],
+    results: [
+      'certification/e2e-test-report.json',
+      'certification/e2e-results.xml'
+    ],
     kind: 'playwright',
     skipPolicy: 'none'
   },
@@ -643,6 +647,24 @@ export function parsePlaywrightSummary(log) {
   return found ? counts : null
 }
 
+export function validateE2ERunBinding(report, junitXml, runId) {
+  const failures = []
+  if (typeof runId !== 'string' || runId.length === 0) {
+    failures.push('e2e_run_id_missing')
+  }
+  if (report?.config?.metadata?.runId !== runId || !runId) {
+    failures.push('e2e_json_run_id_mismatch')
+  }
+  const root = /<testsuites\b[^>]*>/.exec(String(junitXml ?? ''))?.[0]
+  if (!root) {
+    failures.push('e2e_junit_root_missing')
+  } else {
+    const id = /\bid=(["'])(.*?)\1/.exec(root)?.[2]
+    if (id !== runId || !runId) failures.push('e2e_junit_run_id_mismatch')
+  }
+  return failures
+}
+
 function parseJson(reader, relativePath, failures, gateId) {
   const content = reader(relativePath)
   if (content === undefined) {
@@ -773,6 +795,18 @@ function deriveGateOutcome({ gate, entry, artifactReader, log, result }) {
         ) {
           failures.push(`undeclared_skips:${gate.id}`)
         }
+      }
+      if (entry.kind === 'playwright' && gate.id === 'e2e') {
+        const report = parseJson(
+          artifactReader,
+          'certification/e2e-test-report.json',
+          failures,
+          gate.id
+        )
+        const xml = artifactReader('certification/e2e-results.xml')
+        failures.push(
+          ...validateE2ERunBinding(report, xml?.toString('utf8'), result.runId)
+        )
       }
       return { pass: rawPass && failures.length === 0, failures }
     }

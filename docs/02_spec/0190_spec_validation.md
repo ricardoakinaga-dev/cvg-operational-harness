@@ -3,10 +3,10 @@
 ## AUD-0578 / PR-009 — JUnit e JSON E2E no mesmo runId
 
 - [SPEC 0148](0148_e2e_junit_json_run_binding.md) está
-  `BUILD_LOCAL_AUTHORIZED` em T2: o modo de certificação hoje seleciona só
-  JSON, deixando o JUnit sem vínculo de execução. A mudança produz os dois
-  artefatos na mesma invocação e verifica `runId`/hash sem alterar fluxo de
-  produto ou autorização de produção.
+  `VERIFIED_LOCAL` em T2: JSON/JUnit foram produzidos na mesma invocação,
+  com runId idêntico, E2E 12/12 em Node 22; certificador, verificador e
+  barra CI validam o vínculo e o hash do XML. Certificação/Verify do SHA
+  integrado ainda pendentes; nenhuma autorização de produção.
 
 ## AUD-0578 / PR-010 — métricas do certificado no CI
 
