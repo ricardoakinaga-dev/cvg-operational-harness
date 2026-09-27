@@ -104,7 +104,7 @@ describe('chaos: outbox and side effects', () => {
     const second = outbox.claimNext({ tenantId: TENANT, workerId: 'worker-b' })
     expect(second?.id).toBe(event.id)
     let effects = 0
-    outbox.ack({
+    await outbox.ack({
       tenantId: TENANT,
       eventId: event.id,
       workerId: 'worker-b',

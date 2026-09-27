@@ -92,6 +92,7 @@
 
 ### PR-007 — Cobertura com denominador completo e lint type-aware (RA26-15) · P1 · SPEC+BUILD
 
+- Fatia R2 de 27/09/2026: [SPEC 0145](../02_spec/0145_web_postgres_coverage_and_typed_lint.md) define dois relatórios adicionais e dois gates CI. Web: 13 arquivos, 25 suites/87 testes, 78,39/75,51/75,97/81,34% (S/B/F/L). PostgreSQL: 13 arquivos, 35 suites/258 testes, 79,92/69,33/85,52/80,76%. Todas as métricas têm margem acima de 3 pp sobre limites próprios. `no-floating-promises` e `no-misused-promises` estão ativas para TS com programa explícito; oito violações em testes corrigidas. Certificação/Verify do candidato R2 ainda pendentes.
 - O que/onde: `vitest.config.mts` exclui `apps/web/src/**` e `*postgres*.ts`
   (~23% do código); branches com margem de 0,88 pp; `eslint.config.js` só com
   `recommended`.
@@ -128,6 +129,7 @@
 
 ### PR-010 — Fazer o CI rodar no GitHub · P0 · SPEC+BUILD
 
+- Verify `36298961234` no SHA `5ee02e8` passou até a certificação. Os 16 comandos internos do `certify` saíram com código 0, porém o schema rejeitou `metrics.unit=null` porque a leitura do resumo textual não encontrou a linha esperada. [SPEC 0147](../02_spec/0147_certification_vitest_json_metrics.md) deriva métricas do relatório JSON e valida o leitor com texto sem resumo. Novo Verify no SHA R2 pendente.
 - Checkout limpo de 27/09/2026 ([SPEC 0143](../02_spec/0143_clean_build_for_e2e.md)):
   a certificação chegava ao E2E sem `packages/shared/dist` porque `npm run
 build` não executava `build:harness`. Após a compilação do harness, E2E

@@ -563,6 +563,66 @@ export function parseVitestSummary(log, label) {
   }
 }
 
+export const VITEST_REPORT_PATHS = Object.freeze({
+  unit: 'certification/unit-test-report.json',
+  postgres: 'certification/postgres-test-report.json',
+  chaos: 'certification/chaos-report.json'
+})
+
+export function parseVitestJsonMetrics(report) {
+  if (
+    !report ||
+    !Array.isArray(report.testResults) ||
+    report.testResults.length === 0
+  ) {
+    return null
+  }
+  const counts = {
+    filesPassed: 0,
+    filesFailed: 0,
+    filesSkipped: 0,
+    testsPassed: 0,
+    testsFailed: 0,
+    testsSkipped: 0
+  }
+  for (const file of report.testResults) {
+    if (!Array.isArray(file.assertionResults)) return null
+    if (file.status === 'passed') counts.filesPassed += 1
+    else if (file.status === 'failed') counts.filesFailed += 1
+    else if (file.status === 'pending' || file.status === 'skipped') {
+      counts.filesSkipped += 1
+    } else return null
+    for (const assertion of file.assertionResults) {
+      if (assertion.status === 'passed') counts.testsPassed += 1
+      else if (assertion.status === 'failed') counts.testsFailed += 1
+      else if (['pending', 'skipped', 'todo'].includes(assertion.status)) {
+        counts.testsSkipped += 1
+      } else return null
+    }
+  }
+  const expected = {
+    testsPassed: report.numPassedTests,
+    testsFailed: report.numFailedTests,
+    testsSkipped: report.numPendingTests + report.numTodoTests
+  }
+  if (
+    ![
+      report.numTotalTests,
+      report.numPassedTests,
+      report.numFailedTests,
+      report.numPendingTests,
+      report.numTodoTests
+    ].every((value) => Number.isSafeInteger(value) && value >= 0) ||
+    report.numTotalTests === 0 ||
+    report.numTotalTests !==
+      counts.testsPassed + counts.testsFailed + counts.testsSkipped ||
+    Object.entries(expected).some(([key, value]) => counts[key] !== value)
+  ) {
+    return null
+  }
+  return counts
+}
+
 export function parsePlaywrightSummary(log) {
   const counts = { passed: 0, failed: 0, skipped: 0, other: 0 }
   let found = false
@@ -610,49 +670,62 @@ function deriveGateOutcome({ gate, entry, artifactReader, log, result }) {
     }
     case 'vitest':
     case 'playwright': {
-      const summary =
-        entry.kind === 'vitest'
-          ? {
-              files: parseVitestSummary(text, 'Test Files'),
-              tests: parseVitestSummary(text, 'Tests')
+      let derivedMetrics
+      if (entry.kind === 'vitest') {
+        const reportPath = VITEST_REPORT_PATHS[gate.id]
+        const reportBytes = reportPath ? artifactReader(reportPath) : undefined
+        if (reportBytes !== undefined) {
+          const report = parseJson(
+            artifactReader,
+            reportPath,
+            failures,
+            gate.id
+          )
+          derivedMetrics = parseVitestJsonMetrics(report)
+        } else {
+          // Historical certificates may predate the machine-readable report.
+          const files = parseVitestSummary(text, 'Test Files')
+          const tests = parseVitestSummary(text, 'Tests')
+          if (files && tests) {
+            derivedMetrics = {
+              filesPassed: files.passed,
+              filesFailed: files.failed,
+              filesSkipped: files.skipped,
+              testsPassed: tests.passed,
+              testsFailed: tests.failed,
+              testsSkipped: tests.skipped
             }
-          : { files: parsePlaywrightSummary(text), tests: null }
-      if (entry.kind === 'vitest' && (!summary.files || !summary.tests)) {
-        failures.push(`gate_inventory_unparsable:${gate.id}`)
-        return { pass: false, failures }
+          }
+        }
+      } else {
+        const files = parsePlaywrightSummary(text)
+        if (files) {
+          derivedMetrics = {
+            filesPassed: files.passed,
+            filesFailed: files.failed + files.other,
+            filesSkipped: files.skipped
+          }
+        }
       }
-      if (entry.kind === 'playwright' && !summary.files) {
+      if (!derivedMetrics) {
         failures.push(`gate_inventory_unparsable:${gate.id}`)
         return { pass: false, failures }
       }
       const passed =
-        entry.kind === 'vitest' ? summary.tests.passed : summary.files.passed
+        entry.kind === 'vitest'
+          ? derivedMetrics.testsPassed
+          : derivedMetrics.filesPassed
       const failed =
         entry.kind === 'vitest'
-          ? summary.tests.failed + summary.files.failed
-          : summary.files.failed + summary.files.other
+          ? derivedMetrics.testsFailed + derivedMetrics.filesFailed
+          : derivedMetrics.filesFailed
       const skipped =
         entry.kind === 'vitest'
-          ? summary.tests.skipped + summary.files.skipped
-          : summary.files.skipped
+          ? derivedMetrics.testsSkipped + derivedMetrics.filesSkipped
+          : derivedMetrics.filesSkipped
       const rawPass = gate.exitCode === 0 && failed === 0 && passed > 0
       if (!rawPass) failures.push(`gate_raw_failure:${gate.id}`)
       const metrics = gate.metrics ?? {}
-      const derivedMetrics =
-        entry.kind === 'vitest'
-          ? {
-              filesPassed: summary.files.passed,
-              filesFailed: summary.files.failed,
-              filesSkipped: summary.files.skipped,
-              testsPassed: summary.tests.passed,
-              testsFailed: summary.tests.failed,
-              testsSkipped: summary.tests.skipped
-            }
-          : {
-              filesPassed: summary.files.passed,
-              filesFailed: summary.files.failed + summary.files.other,
-              filesSkipped: summary.files.skipped
-            }
       for (const [key, value] of Object.entries(derivedMetrics)) {
         if (metrics[key] !== value) {
           failures.push(`gate_metrics_mismatch:${gate.id}:${key}`)

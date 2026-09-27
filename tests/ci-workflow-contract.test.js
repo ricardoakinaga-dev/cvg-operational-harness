@@ -31,6 +31,8 @@ describe('controlled CI workflow contract', () => {
     expect(workflow).toContain('node scripts/ci-bar.mjs gate e2e')
     expect(workflow).toContain('node scripts/ci-bar.mjs gate worker-startup')
     expect(workflow).toContain('node scripts/ci-bar.mjs gate coverage-critical')
+    expect(workflow).toContain('node scripts/ci-bar.mjs gate coverage-web')
+    expect(workflow).toContain('node scripts/ci-bar.mjs gate coverage-postgres')
     expect(workflow).toContain('node scripts/ci-bar.mjs gate mutation')
     expect(workflow).toContain('node scripts/ci-bar.mjs gate skip')
     expect(workflow).toContain('node scripts/ci-bar.mjs gate load')

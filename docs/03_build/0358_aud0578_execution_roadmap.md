@@ -24,6 +24,14 @@
 
 ## Próximo incremento executável
 
+R2 documental PR-005 concluiu rotação byte a byte dos três ledgers e README em `docs/08_runtime/archive/`, com hashes originais, links e formatação conferidos; os ledgers vigentes têm menos de 300 linhas. PR-007 possui [SPEC 0145](../02_spec/0145_web_postgres_coverage_and_typed_lint.md), dois relatórios e gates CI locais verdes; sua certificação/Verify no candidato integrado ainda está pendente.
+
+O Verify R1 `36298961234` passou os gates até a certificação; a leitura do
+resumo textual unitário devolveu `null` apesar dos 16 comandos internos
+verdes. [SPEC 0147](../02_spec/0147_certification_vitest_json_metrics.md)
+leva as métricas ao JSON bruto. [SPEC 0146](../02_spec/0146_pinned_ssrf_lookup_node22.md)
+mantém em revisão T3 o defeito de lookup SSRF descoberto com Node 22.
+
 1. **Verificado localmente:** [SPEC curta PR-009](../02_spec/0137_e2e_artifact_isolation.md), E2E 12/12 em `test-results/`, quatro hashes históricos preservados, gates T2 verdes. A PR-009 permanece aberta para JUnit/runId, jornadas e flake visual.
 2. **Verificado localmente no candidato anterior:** [SPEC-PR003-002](../02_spec/0138_skip_catalog_rebind.md) reconciliou dois hashes do catálogo de skips; `certify` 16/16 PASS e `certification:verify` exit 0 no candidato `b41f1e2e…`. O candidato com a fonte da [SPEC 0139](../02_spec/0139_visual_font_fallback.md) precisa de nova emissão.
 3. **CI remoto:** Security passou no SHA `81bb91f`; Verify passou E2E e browser-proof, mas o catálogo bloqueou um hash de teste desatualizado. [SPEC 0144](../02_spec/0144_homolog_skip_catalog_rebind.md) delimita o rebind. Repetir Verify e Security no mesmo SHA novo antes de fechar PR-010/011.

@@ -25,6 +25,10 @@ Os achados F01–F09 permanecem abertos até os critérios acima serem observado
 
 ## Progresso local desta rodada
 
+- F06 / PR-005: os três ledgers correntes foram reduzidos a 11–18 linhas; originais preservados byte a byte com SHA-256 e cópias navegáveis em `docs/08_runtime/archive/`. README atualizado para estado único; `docs:check-links` e formato parcial verdes. A suíte completa e o CI R2 ainda são gates de aceite.
+- F04 / PR-007: [SPEC 0145](../02_spec/0145_web_postgres_coverage_and_typed_lint.md), cobertura web e PostgreSQL separada com 13 fontes em cada relatório, thresholds com margem ≥3 pp, duas regras tipadas e gates explícitos no Verify. Suites web 87/87 e PostgreSQL 258/258 PASS; certificação integrada ainda pendente.
+- F01 / PR-010: Verify `36298961234` chegou ao `certify`, onde todos os 16 comandos internos passaram mas `metrics.unit=null` impediu o schema. [SPEC 0147](../02_spec/0147_certification_vitest_json_metrics.md) registra correção e teste focado; novo SHA remoto ainda pendente.
+- F04 / PR-007: [SPEC 0146](../02_spec/0146_pinned_ssrf_lookup_node22.md) documenta falha reproduzida de `pinnedLookup` em Node 22 em dois módulos; trilha T3 exige revisão humana antes de alterar o código de segurança. A matriz falhando está arquivada como evidência e fora da suíte certificável.
 - F05 / PR-009 fatia 1 `VERIFIED_LOCAL`: E2E 12/12, quatro PNGs novos em `test-results/`, quatro hashes históricos imutáveis. JUnit/runId, jornadas e flake visual continuam abertos.
 - F05 / PR-009 fatia 2 `VERIFIED_LOCAL`: [SPEC 0139](../02_spec/0139_visual_font_fallback.md), fonte Inter local e snapshots mobile/tablet revisados; visual Ubuntu 2/2 e E2E host 12/12. A estabilidade no Verify do novo SHA ainda será observada.
 - F03 / F07: D-03 = opção A decidida em 27/09/2026; D-04 encaminhada para discovery, sem produto ou tenant escolhido. PR-101/102/103 continuam sem aceite de fase.

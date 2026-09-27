@@ -1,5 +1,22 @@
 # 0190 — SPEC Validation
 
+## AUD-0578 / PR-010 — métricas do certificado no CI
+
+- [SPEC 0147](0147_certification_vitest_json_metrics.md) está
+  `BUILD_LOCAL_AUTHORIZED` em T2: Verify `36298961234` executou os 16
+  comandos do certificador com exit 0, mas a leitura textual das métricas
+  unitárias retornou `null` e falhou no schema. A correção usa o relatório
+  JSON já produzido, com rejeição explícita de ausência ou inconsistência;
+  não concede autorização de produção.
+
+## AUD-0578 / PR-007 — callback do lookup fixado em Node 22
+
+- [SPEC 0146](0146_pinned_ssrf_lookup_node22.md) está
+  `SPEC_DRAFT_FOR_REVIEW` em T3. A matriz sintética reproduziu
+  `Invalid IP address: undefined` em ambos os transportes SSRF;
+  a correção de segurança proposta exige revisão explícita do usuário antes
+  do BUILD. Nenhum código desses módulos está autorizado por este registro.
+
 ## AUD-0578 / PR-007 — cobertura adicional e lint tipado
 
 - [SPEC 0145](0145_web_postgres_coverage_and_typed_lint.md) está

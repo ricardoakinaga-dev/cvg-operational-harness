@@ -22,7 +22,8 @@ import {
   computeDecision,
   diffCandidateFiles,
   parsePlaywrightSummary,
-  parseVitestSummary,
+  parseVitestJsonMetrics,
+  VITEST_REPORT_PATHS,
   sha256Bytes
 } from './lib/certification-rules.mjs'
 import {
@@ -140,16 +141,16 @@ function deriveGateMetrics(entryId, logContent) {
     GATE_EVIDENCE_MATRIX[entryId] ?? GATE_ENVIRONMENT_EVIDENCE_MATRIX[entryId]
   if (!entry) return undefined
   if (entry.kind === 'vitest') {
-    const files = parseVitestSummary(logContent, 'Test Files')
-    const tests = parseVitestSummary(logContent, 'Tests')
-    if (!files || !tests) return undefined
-    return {
-      filesPassed: files.passed,
-      filesFailed: files.failed,
-      filesSkipped: files.skipped,
-      testsPassed: tests.passed,
-      testsFailed: tests.failed,
-      testsSkipped: tests.skipped
+    const reportPath = VITEST_REPORT_PATHS[entryId]
+    if (!reportPath) return undefined
+    try {
+      return (
+        parseVitestJsonMetrics(
+          JSON.parse(fs.readFileSync(path.join(root, reportPath), 'utf8'))
+        ) ?? undefined
+      )
+    } catch {
+      return undefined
     }
   }
   if (entry.kind === 'playwright') {
@@ -287,7 +288,6 @@ process.stderr.write(
 )
 
 const gates = []
-const gateOutputs = new Map()
 const gateEvidence = new Map()
 const extraResultsByGate = {
   coverage: [
@@ -328,11 +328,17 @@ for (const entry of commands) {
   const metrics = deriveGateMetrics(entry.id, logContent)
   record.evidence = evidence
   if (metrics) record.metrics = metrics
+  if (matrix?.kind === 'vitest' && !metrics) {
+    record.status = 'FAIL'
+    record.metrics = {
+      verdict: 'INVALID_REPORT',
+      reason: 'vitest_json_metrics_missing_or_inconsistent'
+    }
+  }
   const skipJustification = skipJustificationFor(entry.id, metrics)
   if (skipJustification) record.skipJustification = skipJustification
   gates.push(record)
   gateEvidence.set(entry.id, evidence)
-  gateOutputs.set(entry.id, logContent)
 }
 
 const skipInventory = buildSkipInventory({
@@ -456,9 +462,9 @@ const resultPayload = {
   gates,
   externalGates,
   metrics: {
-    unit:
-      gates.find((gate) => gate.id === 'unit')?.metrics ??
-      parseVitestSummary(gateOutputs.get('unit') ?? '', 'Tests'),
+    unit: gates.find((gate) => gate.id === 'unit')?.metrics ?? {
+      verdict: 'NOT_EXECUTED'
+    },
     coverage: readCoverage(),
     evals: evalReport
       ? { verdict: evalReport.verdict, ...evalReport.metrics }

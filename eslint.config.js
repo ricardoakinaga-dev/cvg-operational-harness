@@ -16,6 +16,24 @@ module.exports = tseslint.config(
   },
   ...tseslint.configs.recommended,
   {
+    files: [
+      'apps/**/*.{ts,tsx}',
+      'packages/**/*.{ts,tsx}',
+      'legacy/**/*.{ts,tsx}',
+      'tests/**/*.ts'
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: './tsconfig.typecheck.json',
+        tsconfigRootDir: __dirname
+      }
+    },
+    rules: {
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-misused-promises': 'error'
+    }
+  },
+  {
     files: ['**/*.js'],
     rules: {
       '@typescript-eslint/no-require-imports': 'off'
