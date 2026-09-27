@@ -61,8 +61,7 @@ const commands = [
   },
   {
     id: 'e2e',
-    command:
-      'PLAYWRIGHT_JSON_OUTPUT_NAME=certification/e2e-test-report.json npm run test:e2e'
+    command: 'node scripts/run-e2e-evidence.mjs'
   },
   { id: 'evals', command: 'npx tsx scripts/phase10-eval-report.ts' },
   {
@@ -81,7 +80,12 @@ function run(entry, { runId, candidateId }) {
   // CI provides a disposable PostgreSQL service. Keep it available to every
   // certification subgate so unit/coverage/chaos cannot silently lower their
   // denominator through conditional integration skips.
-  const environment = { ...process.env, CI: process.env.CI ?? 'true' }
+  const environment = {
+    ...process.env,
+    CI: process.env.CI ?? 'true',
+    CI_RUN_ID: runId,
+    CI_CANDIDATE_ID: candidateId
+  }
   const result = spawnSync(entry.command, {
     cwd: root,
     shell: true,
@@ -276,6 +280,7 @@ for (const generatedPath of [
   'certification/unit-test-report.json',
   'certification/postgres-test-report.json',
   'certification/e2e-test-report.json',
+  'playwright-results.xml',
   'certification/skip-inventory.json',
   'certification/skip-negative-validation.json'
 ]) {

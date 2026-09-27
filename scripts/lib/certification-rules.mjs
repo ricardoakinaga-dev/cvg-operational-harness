@@ -7,6 +7,7 @@ import {
   evaluateCriticalCoverage,
   evaluateGlobalCoverage
 } from './coverage-gate.mjs'
+import { validateE2eReportPair } from './e2e-report-binding.mjs'
 import { validateSkipInventory } from './skip-governance.mjs'
 
 export const PHASE10_REQUIRED_LOCAL_GATES = [
@@ -231,6 +232,7 @@ export const CANDIDATE_EXCLUDED_FILES = [
   'certification/unit-test-report.json',
   'certification/postgres-test-report.json',
   'certification/e2e-test-report.json',
+  'playwright-results.xml',
   'certification/skip-inventory.json',
   'certification/skip-negative-validation.json',
   'certification/negative-validation.json',
@@ -425,7 +427,7 @@ export const GATE_EVIDENCE_MATRIX = {
   },
   e2e: {
     log: 'certification/logs/e2e.log',
-    results: ['certification/e2e-test-report.json'],
+    results: ['certification/e2e-test-report.json', 'playwright-results.xml'],
     kind: 'playwright',
     skipPolicy: 'none'
   },
@@ -699,6 +701,21 @@ function deriveGateOutcome({ gate, entry, artifactReader, log, result }) {
           !gate.skipJustification
         ) {
           failures.push(`undeclared_skips:${gate.id}`)
+        }
+      }
+      if (entry.kind === 'playwright') {
+        try {
+          validateE2eReportPair({
+            jsonContent: artifactReader('certification/e2e-test-report.json'),
+            xmlContent: artifactReader('playwright-results.xml'),
+            expectedRunId: result.runId,
+            expectedCandidateId: result.candidate?.candidateId,
+            expectedTestCount: summary.files.passed
+          })
+        } catch (error) {
+          failures.push(
+            `e2e_report_invalid:${error instanceof Error ? error.message : String(error)}`
+          )
         }
       }
       return { pass: rawPass && failures.length === 0, failures }

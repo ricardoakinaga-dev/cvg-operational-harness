@@ -7,6 +7,8 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { CI_BAR_GATES, CI_BAR_VERSION } from './ci-bar-contract.mjs'
+import { parsePlaywrightSummary } from './lib/certification-rules.mjs'
+import { validateE2eReportPair } from './lib/e2e-report-binding.mjs'
 import { validateRem21010ProofReport } from './rem21-010-postgres-proof-contract.mjs'
 import { validateRem21011ProofReport } from './rem21-011-observability-proof-contract.mjs'
 import { validateRem21014BrowserProofReport } from './rem21-014-browser-proof-contract.mjs'
@@ -59,6 +61,7 @@ const EXCLUDED_FILES = new Set([
   'certification/unit-test-report.json',
   'certification/postgres-test-report.json',
   'certification/e2e-test-report.json',
+  'playwright-results.xml',
   'certification/skip-inventory.json',
   'certification/skip-negative-validation.json',
   'certification/runtime-image.json',
@@ -252,7 +255,7 @@ function skippedTests(report) {
   )
 }
 
-function validateGateOutputs(id, gate, startedMs, state) {
+function validateGateOutputs(id, gate, startedMs, state, outputText) {
   const failures = []
   for (const relativePath of gate?.artifacts ?? []) {
     const absolute = path.join(root, relativePath)
@@ -283,6 +286,28 @@ function validateGateOutputs(id, gate, startedMs, state) {
       failures.push(`required_report_missing:${id}`)
     } else if (skippedTests(report) > 0) {
       failures.push(`required_skip:${id}`)
+    }
+  }
+
+  if (id === 'e2e') {
+    try {
+      const summary = parsePlaywrightSummary(outputText)
+      if (!summary || summary.failed || summary.skipped || summary.other) {
+        throw new Error('e2e_log_not_clean')
+      }
+      validateE2eReportPair({
+        jsonContent: fs.readFileSync(
+          path.join(root, 'certification/e2e-test-report.json')
+        ),
+        xmlContent: fs.readFileSync(path.join(root, 'playwright-results.xml')),
+        expectedRunId: state.runId,
+        expectedCandidateId: state.candidateId,
+        expectedTestCount: summary.passed
+      })
+    } catch (error) {
+      failures.push(
+        `e2e_report_invalid:${error instanceof Error ? error.message : String(error)}`
+      )
     }
   }
 
@@ -507,7 +532,13 @@ function runGate(id) {
     exitCode === 0
       ? [
           ...snapshotFailures,
-          ...validateGateOutputs(id, gate, startedMs, state)
+          ...validateGateOutputs(
+            id,
+            gate,
+            startedMs,
+            state,
+            `${result.stdout ?? ''}\n${result.stderr ?? ''}`
+          )
         ]
       : snapshotFailures
   if (outputFailures.length > 0) exitCode = 1

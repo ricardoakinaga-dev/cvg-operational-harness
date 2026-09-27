@@ -5,7 +5,7 @@
  *   node scripts/phase10-verify.mjs              # current candidate (default)
  *   node scripts/phase10-verify.mjs --historical # historical coherence only
  *   node scripts/phase10-verify.mjs --historical --base <preserved-certificate-dir>
- *   node scripts/phase10-verify.mjs --self-test  # N1-N9 + C0-C9 negative validation
+ *   node scripts/phase10-verify.mjs --self-test  # helper + public-CLI negative validation
  *
  * Historical coherence never qualifies the current working tree. Current mode
  * recomputes the candidate id from the live files and refuses to qualify when
@@ -379,6 +379,7 @@ function runSelfTest() {
     for (const relative of [
       'scripts/lib/certification-rules.mjs',
       'scripts/lib/coverage-gate.mjs',
+      'scripts/lib/e2e-report-binding.mjs',
       'scripts/lib/finding-governance.mjs',
       'scripts/lib/skip-governance.mjs',
       'scripts/phase10-verify.mjs'
@@ -569,10 +570,51 @@ function runSelfTest() {
     emitLog('security', 'found 0 vulnerabilities\n')
     emitLog('worker_startup', '{"event":"worker.startup_smoke_passed"}\n')
     emitLog('e2e', 'Running 1 test using 1 worker\n\n  1 passed (0.1s)\n')
+    const e2eExecutionId = '11111111-1111-4111-8111-111111111111'
     const e2eReport = emitResult(
       'e2e',
       'certification/e2e-test-report.json',
-      '{}'
+      JSON.stringify({
+        config: {
+          metadata: {
+            cvgE2e: { runId, candidateId, executionId: e2eExecutionId }
+          }
+        },
+        suites: [
+          {
+            file: 'fixture.spec.ts',
+            title: 'fixture.spec.ts',
+            specs: [
+              {
+                title: 'fixture passes',
+                file: 'fixture.spec.ts',
+                ok: true,
+                tests: [
+                  {
+                    expectedStatus: 'passed',
+                    status: 'expected',
+                    results: [{ status: 'passed', retry: 0, errors: [] }]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        errors: [],
+        stats: {
+          startTime: '2026-09-27T00:00:00.000Z',
+          duration: 100,
+          expected: 1,
+          skipped: 0,
+          unexpected: 0,
+          flaky: 0
+        }
+      })
+    )
+    emitResult(
+      'e2e',
+      'playwright-results.xml',
+      `<testsuites id="${runId}" name="candidateId=${candidateId};executionId=${e2eExecutionId}" tests="1" failures="0" skipped="0" errors="0"><testsuite name="fixture.spec.ts" tests="1" failures="0" skipped="0" errors="0"><testcase name="fixture passes" classname="fixture.spec.ts"></testcase></testsuite></testsuites>`
     )
     emitLog('evals', '{"event":"evals.completed","verdict":"PASS"}\n')
     emitResult(
@@ -1040,6 +1082,34 @@ function runSelfTest() {
       const unit = state.result.gates.find((record) => record.id === 'unit')
       const lint = state.result.gates.find((record) => record.id === 'lint')
       lint.evidence.push({ ...unit.evidence[0] })
+    }
+  )
+
+  // C30/C31: a valid log and manifest cannot launder unbound or stale E2E
+  // reports, even when their hashes are rewritten consistently.
+  runCliCase(
+    'C30',
+    'empty Playwright JSON behind a passing log',
+    'e2e_report_invalid:',
+    (state) => {
+      rewriteEvidence(state, 'certification/e2e-test-report.json', '{}')
+    }
+  )
+  runCliCase(
+    'C31',
+    'JUnit from another E2E attempt',
+    'e2e_report_invalid:',
+    (state) => {
+      const xmlPath = path.join(state.fixtureRoot, 'playwright-results.xml')
+      const xml = fs.readFileSync(xmlPath, 'utf8')
+      rewriteEvidence(
+        state,
+        'playwright-results.xml',
+        xml.replace(
+          'executionId=11111111-1111-4111-8111-111111111111',
+          'executionId=22222222-2222-4222-8222-222222222222'
+        )
+      )
     }
   )
 

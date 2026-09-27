@@ -1,3 +1,12 @@
+# PR-009 fatia 3 — BUILD verificado localmente — 27/09/2026
+
+- status: `BUILD_VERIFIED_LOCAL / E2E_PENDING_ISOLATED`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: implementei par JSON/JUnit da mesma invocação com `runId`, `candidateId` e `executionId` internos, inventário/totais validados pelo ci-bar e certificado; corrigi teste documental da rotação PR-005.
+- current_evidence: [SPEC-PR009-003](02_spec/0145_e2e_junit_json_run_binding.md), [backlog 0356](03_build/0356_production_backlog_2026-09-26.md), [log](20_master_execution_log.md).
+- verification_state: Node 22.23.2 — testes focados 18/18, `typecheck`, `lint`, `format:check`, links, self-test do verificador, `npm test` 299 arquivos/2.177 PASS (20 arquivos/146 testes pulados sem banco) e `test:postgres` 35/258 PASS. E2E real da nova fatia ainda pendente.
+- blocking_state: PR-L04 mantém claim dos artefatos E2E no diretório compartilhado; PR-003, PR-301/302 e 13 condições de GO continuam pendentes. Banco descartável da rodada removido; artefato de self-test restaurado.
+- next_action: executar E2E da PR-009 em worktree isolado com claim próprio e, após PR-L04, certificar o candidato integrado; produção permanece `NO_GO`.
+
 # PR-009 fatia 3 — SPEC de evidência JSON/JUnit — 27/09/2026
 
 - status: `SPEC_READY / BUILD_T2`; produção `NO_GO`.

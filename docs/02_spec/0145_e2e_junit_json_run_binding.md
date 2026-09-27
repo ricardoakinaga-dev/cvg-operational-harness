@@ -1,6 +1,6 @@
 # SPEC-PR009-003 — vínculo da execução E2E entre JSON e JUnit
 
-- Estado: `SPEC_READY / BUILD_T2`. Task: PR-009, fatia 3, em
+- Estado: `BUILD_VERIFIED_LOCAL / E2E_PENDING_ISOLATED`. Task: PR-009, fatia 3, em
   [0356](../03_build/0356_production_backlog_2026-09-26.md). Sem mudança de API,
   schema, identidade ou efeito externo. Gate T2 em
   [AGENTS](../07_agents/AGENTS.md).
@@ -49,3 +49,24 @@
 - Este gate não autoriza produção: as 13 condições de GO de
   [0354](../03_build/0354_production_executive_plan_2026-09-26.md) e a decisão
   humana de release continuam necessárias.
+
+## Execução de 27/09/2026
+
+- Código: `run-e2e-evidence.mjs` remove os destinos, cria `executionId`,
+  executa um Playwright com JSON e JUnit e valida o par. O ci-bar e o
+  certificado incluem ambos os arquivos; o verificador lê os IDs internos,
+  inventário e totais. A prova de browser sem `executionId` não regrava o
+  JUnit vinculado.
+- Node 22.23.2: testes focados 18/18 PASS; `typecheck`, `lint`,
+  `format:check`, `docs:check-links` PASS; self-test do verificador PASS,
+  inclusive JSON vazio e JUnit de outra tentativa. `npm test`: 299 arquivos,
+  2.177 testes PASS, 20 arquivos/146 testes pulados sem PostgreSQL;
+  `test:postgres` em banco descartável próprio: 35 arquivos/258 testes PASS.
+  A primeira suíte geral teve uma falha de teste documental herdado da
+  rotação PR-005; o teste foi reconciliado com o arquivo histórico, e a
+  segunda suíte passou. O banco foi removido e o artefato de self-test foi
+  restaurado aos bytes do HEAD.
+- Pendente: E2E real e certificação no candidato integrado. A PR-L04 tem
+  claim ativo de `test-results/**` e `playwright-results.xml` no diretório
+  compartilhado; esta fatia só pode executar E2E com claim próprio em
+  worktree isolado ou após liberação desses caminhos.

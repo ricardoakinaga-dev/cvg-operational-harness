@@ -163,10 +163,8 @@ export const CI_BAR_GATES = [
   {
     id: 'e2e',
     marker: 'node scripts/ci-bar.mjs gate e2e',
-    command: shell(
-      'PLAYWRIGHT_JSON_OUTPUT_NAME=certification/e2e-test-report.json npm run test:e2e'
-    ),
-    artifacts: ['certification/e2e-test-report.json'],
+    command: shell('node scripts/run-e2e-evidence.mjs'),
+    artifacts: ['certification/e2e-test-report.json', 'playwright-results.xml'],
     skipPolicy: 'none'
   },
   {

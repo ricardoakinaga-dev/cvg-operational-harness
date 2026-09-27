@@ -110,11 +110,14 @@
 
 ### PR-009 — Coerência do E2E e JUnit (RA26-16) · P2 · SPEC+BUILD
 
-- Fatia 3 `SPEC_READY / BUILD_T2` em 27/09/2026:
+- Fatia 3 `BUILD_VERIFIED_LOCAL / E2E_PENDING_ISOLATED` em 27/09/2026:
   [SPEC-PR009-003](../02_spec/0145_e2e_junit_json_run_binding.md). Recon
   confirmou que o JSON e o XML atuais vêm de tentativas distintas, sem
   `runId`/`candidateId` internos; a nova evidência deverá incluir também um
-  `executionId` único por invocação e validar inventário/totais.
+  `executionId` único por invocação e validar inventário/totais. Código
+  implementado; Node 22: `typecheck`, `lint`, `format:check`, self-test,
+  `npm test` 299/2.177 e PostgreSQL 35/258 PASS. Falta E2E real da fatia
+  em claim isolado e certificado no candidato integrado.
 - Fatia 1 `VERIFIED_LOCAL` em 26/09/2026: [SPEC-PR009-001](../02_spec/0137_e2e_artifact_isolation.md); quatro screenshots agora em `test-results/`, hashes históricos iguais, E2E 12/12. A task inteira continua aberta para JUnit/runId, jornadas de aprovação e estabilidade visual.
 - Fatia 2 `VERIFIED_LOCAL` em 27/09/2026: [SPEC 0139](../02_spec/0139_visual_font_fallback.md); fonte Inter variável local, snapshots mobile/tablet inspecionados, visual 2/2 no Ubuntu isolado e E2E 12/12 no host. A prova remota do novo SHA ainda é necessária.
 - Pronto: `playwright-results.xml` e o relatório E2E da certificação com o
