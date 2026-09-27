@@ -18,7 +18,11 @@ import type {
   ProviderRequest,
   ProviderResult
 } from '@cvg/model-gateway'
-import { PolicyEngine, type Capability } from '@cvg/policy-engine'
+import {
+  PolicyEngine,
+  type Capability,
+  REFERENCE_POLICY_PROFILE
+} from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import { GovernedAgentRuntime, sweepExpiredApprovals } from '../runtime.ts'
 import {
@@ -49,7 +53,7 @@ const NOW = new Date('2026-09-13T12:00:00.000Z')
 const PAYLOAD_SCHEMA = z.object({ text: z.string() })
 
 const FAKE_CANCEL_SCOPE: Partial<Record<Capability, EffectScope>> = {
-  'appointment.cancel': 'controlled_fake'
+  'record.cancel': 'controlled_fake'
 }
 
 interface HarnessOptions {
@@ -75,7 +79,7 @@ function buildHarness(options: HarnessOptions = {}) {
   prompts.register({
     promptId: 'recovery-core',
     version: '1.0.0',
-    content: 'You are the CVG secretary.',
+    content: 'You are the CVG operational assistant.',
     owner: 'platform',
     approvedBy: 'reviewer',
     status: 'approved',
@@ -121,7 +125,11 @@ function buildHarness(options: HarnessOptions = {}) {
     clock,
     retry: { maxRetries: 0 }
   })
-  const policy = new PolicyEngine({ documents: [], clock })
+  const policy = new PolicyEngine({
+    profile: REFERENCE_POLICY_PROFILE,
+    documents: [],
+    clock
+  })
   const store = options.store ?? new InMemoryApprovalStore()
   const approvals = new ApprovalEngine({ store, clock })
   const telemetry = new InMemoryTelemetry({ clock })
@@ -182,12 +190,12 @@ function turnInput(
     operatorRole: 'Supervisor',
     agentId: AGENT,
     agentVersion: 'v1',
-    agentProfile: 'secretary',
+    agentProfile: 'assistant',
     conversationId: 'conv_1',
     correlationId: CORRELATION,
-    capability: 'appointment.cancel',
-    action: 'appointment.cancel',
-    resource: { type: 'appointment', id: 'apt_1', tenantId: TENANT },
+    capability: 'record.cancel',
+    action: 'record.cancel',
+    resource: { type: 'record', id: 'apt_1', tenantId: TENANT },
     dataClassification: 'INTERNAL',
     prompt: { promptId: 'recovery-core', version: '1.0.0' },
     modelProfile: 'fast',
@@ -218,9 +226,9 @@ function expectedDerivedOperationKey(proposalHash: string): string {
     .update(
       canonicalizeJson({
         tenantId: TENANT,
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
-        resource: { type: 'appointment', id: 'apt_1' },
+        capability: 'record.cancel',
+        action: 'record.cancel',
+        resource: { type: 'record', id: 'apt_1' },
         proposalHash
       }),
       'utf8'
@@ -246,14 +254,14 @@ function reserveBinding(
   const reservation = harness.approvals.reserve({
     tenantId: TENANT,
     approvalId,
-    action: 'appointment.cancel',
-    resource: { type: 'appointment', id: 'apt_1' },
+    action: 'record.cancel',
+    resource: { type: 'record', id: 'apt_1' },
     payload: stored.proposalPayload,
     proposalHash: stored.proposalHash,
     agentId: AGENT,
     agentVersion: 'v1',
     policyVersion: stored.policyVersion,
-    capability: 'appointment.cancel',
+    capability: 'record.cancel',
     ttlMs,
     ...(options.operationKey !== undefined
       ? { operationKey: options.operationKey }
@@ -584,7 +592,7 @@ describe('execution header fencing', () => {
     const record = harness.approvals.get(TENANT, approvalId)
     vi.spyOn(harness.approvals, 'get').mockImplementation(() => ({
       ...record,
-      action: 'appointment.reschedule'
+      action: 'record.reschedule'
     }))
 
     const result = await harness.runtime.runTurn(turnInput({ approvalId }))
@@ -604,7 +612,7 @@ describe('execution header fencing', () => {
     const missingIdRecord = missingId.approvals.get(TENANT, missingIdApproval)
     vi.spyOn(missingId.approvals, 'get').mockImplementation(() => ({
       ...missingIdRecord,
-      resource: { type: 'appointment' }
+      resource: { type: 'record' }
     }))
 
     const missingResult = await missingId.runtime.runTurn(
@@ -622,7 +630,7 @@ describe('execution header fencing', () => {
     const extraResult = await extraId.runtime.runTurn(
       turnInput({
         approvalId: extraIdApproval,
-        resource: { type: 'appointment', tenantId: TENANT }
+        resource: { type: 'record', tenantId: TENANT }
       })
     )
     expect(extraResult.outcome).toBe('denied')
@@ -640,7 +648,7 @@ describe('execution header fencing', () => {
     const record = harness.approvals.get(TENANT, approvalId)
     vi.spyOn(harness.approvals, 'get').mockImplementation(() => ({
       ...record,
-      capability: 'appointment.create'
+      capability: 'record.create'
     }))
 
     const result = await harness.runtime.runTurn(turnInput({ approvalId }))
@@ -1764,13 +1772,13 @@ describe('approval sweep evidence resolution', () => {
       operatorId: 'op_1',
       agentId: AGENT,
       agentVersion: 'v1',
-      action: 'appointment.cancel',
-      resource: { type: 'appointment', id: 'apt_1' },
+      action: 'record.cancel',
+      resource: { type: 'record', id: 'apt_1' },
       payload: { text: 'sweep' },
       policyVersion: 'policy-v1',
       correlationId: CORRELATION,
       expiresInMs: 60_000,
-      capability: 'appointment.cancel',
+      capability: 'record.cancel',
       ...(proposalHash !== undefined ? { proposalHash } : {})
     })
     approvals.submit(TENANT, requested.approvalId, 'op_1')
@@ -1778,13 +1786,13 @@ describe('approval sweep evidence resolution', () => {
     approvals.reserve({
       tenantId: TENANT,
       approvalId: requested.approvalId,
-      action: 'appointment.cancel',
-      resource: { type: 'appointment', id: 'apt_1' },
+      action: 'record.cancel',
+      resource: { type: 'record', id: 'apt_1' },
       payload: { text: 'sweep' },
       agentId: AGENT,
       agentVersion: 'v1',
       policyVersion: 'policy-v1',
-      capability: 'appointment.cancel',
+      capability: 'record.cancel',
       ttlMs: 1_000
     })
     now = new Date(now.getTime() + 2_000)

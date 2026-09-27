@@ -20,7 +20,7 @@ import {
   PromptRegistry
 } from '@cvg/model-gateway'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
-import { PolicyEngine } from '@cvg/policy-engine'
+import { PolicyEngine, REFERENCE_POLICY_PROFILE } from '@cvg/policy-engine'
 import {
   PostgresEffectJournal,
   runPostgresMigrations,
@@ -89,7 +89,9 @@ function validCompositionInput(
   overrides: Partial<GovernedRuntimeCompositionInput> = {}
 ): GovernedRuntimeCompositionInput {
   return {
-    policy: new PolicyEngine(),
+    policy: new PolicyEngine({
+      profile: REFERENCE_POLICY_PROFILE
+    }),
     approvals: new ApprovalEngine({ store: new InMemoryApprovalStore() }),
     modelGateway: new ModelGateway({
       providers: [new DeterministicModelProvider()],
@@ -216,9 +218,9 @@ describe('AAA-21 fail-closed coordinator and composition selection', () => {
     }
     const step: WorkflowStep = {
       stepId: 'step_synthetic',
-      capability: 'appointment.modify',
-      action: 'appointment.modify',
-      resource: { type: 'appointment_draft', id: 'draft_synthetic' },
+      capability: 'record.update',
+      action: 'record.update',
+      resource: { type: 'record_draft', id: 'draft_synthetic' },
       dataClassification: 'INTERNAL',
       idempotencyKey: 'kernel-step-key-1'
     }
@@ -227,7 +229,7 @@ describe('AAA-21 fail-closed coordinator and composition selection', () => {
       operatorRole: 'Operator',
       agentId: AGENT,
       agentVersion: 'synthetic-v1',
-      agentProfile: 'secretary',
+      agentProfile: 'assistant',
       prompt: { promptId: 'synthetic-prompt', version: '1.0.0' },
       modelProfile: 'fast'
     })
@@ -236,9 +238,9 @@ describe('AAA-21 fail-closed coordinator and composition selection', () => {
       conversationId: 'conv_synthetic',
       sessionId: 'sess_synthetic',
       correlationId: plan.correlationId,
-      capability: 'appointment.modify',
-      action: 'appointment.modify',
-      resource: { type: 'appointment_draft', id: 'draft_synthetic' },
+      capability: 'record.update',
+      action: 'record.update',
+      resource: { type: 'record_draft', id: 'draft_synthetic' },
       idempotencyKey: 'kernel-step-key-1',
       operatorId: 'op_synthetic',
       agentId: AGENT
@@ -252,14 +254,14 @@ describe('AAA-21 fail-closed coordinator and composition selection', () => {
       (rule) => rule.capabilities ?? []
     )
     expect(capabilities).toEqual(
-      expect.arrayContaining(['schedule.read', 'appointment.modify'])
+      expect.arrayContaining(['resource.read', 'record.update'])
     )
     expect(
       CONTROLLED_KERNEL_POLICY_DOCUMENT.rules.some(
         (rule) =>
           rule.effect === 'REQUIRE_APPROVAL' &&
-          rule.capabilities?.includes('appointment.modify') === true &&
-          rule.resourceTypes?.includes('appointment_draft') === true
+          rule.capabilities?.includes('record.update') === true &&
+          rule.resourceTypes?.includes('record_draft') === true
       )
     ).toBe(true)
   })
@@ -359,16 +361,16 @@ describe('AAA-21 composed kernel path over API → outbox → worker (PostgreSQL
   function envelopeBody(overrides: Record<string, unknown> = {}): string {
     return JSON.stringify({
       cvgTurn: {
-        capability: 'appointment.modify',
-        action: 'appointment.modify',
-        resource: { type: 'appointment_draft', id: 'draft_synthetic_alpha' },
+        capability: 'record.update',
+        action: 'record.update',
+        resource: { type: 'record_draft', id: 'draft_synthetic_alpha' },
         dataClassification: 'INTERNAL',
         operatorId: 'op_synthetic_kernel',
         operatorRole: 'Operator',
         agentVersion: 'synthetic-v1',
-        agentProfile: 'secretary',
+        agentProfile: 'assistant',
         modelProfile: 'fast',
-        message: 'synthetic controlled appointment draft update',
+        message: 'synthetic controlled record draft update',
         idempotencyKey: 'kernel-op-alpha',
         ...overrides
       }
@@ -565,8 +567,8 @@ describe('AAA-21 composed kernel path over API → outbox → worker (PostgreSQL
 
       expect(kernelRuntime1.toolInvocations).toHaveLength(1)
       const invocation = kernelRuntime1.toolInvocations[0]!
-      expect(invocation.capability).toBe('appointment.modify')
-      expect(invocation.action).toBe('appointment.modify')
+      expect(invocation.capability).toBe('record.update')
+      expect(invocation.action).toBe('record.update')
       expect(invocation.payload).toEqual({
         text: 'SYNTHETIC_CONTROLLED_KERNEL_PAYLOAD'
       })

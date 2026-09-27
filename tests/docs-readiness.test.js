@@ -90,12 +90,16 @@ describe('enterprise build documentation readiness', () => {
 
   it('records closed conservative decisions with an official runtime status', () => {
     const runtimeState = readDoc('docs/99_runtime_state.md')
+    const archivedState = readDoc(
+      'docs/08_runtime/archive/2026-09-27-pr005-runtime-state-source.txt'
+    )
     const decisions = readJson(
       'docs/03_build/tracking/enterprise_decisions.json'
     )
 
-    expect(runtimeState).toMatch(/status: (READY_FOR_NEXT_STEP|IN_PROGRESS)/)
-    expect(runtimeState).toMatch(/human_decision_required: no/)
+    expect(runtimeState).toMatch(/status: `IN_PROGRESS`/)
+    expect(runtimeState).toMatch(/human_decision_required: `yes`/)
+    expect(archivedState).toMatch(/human_decision_required: no/)
     expect(decisions.status).toBe('APPROVED_CONSERVATIVE_DEFAULTS')
     expect(decisions.decisions).toHaveLength(5)
     expect(

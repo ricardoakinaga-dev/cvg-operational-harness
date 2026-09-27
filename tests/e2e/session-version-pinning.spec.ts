@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import {
   AgentConfigSchema,
-  createControlledSecretaryConfig,
+  createControlledAgentConfig,
   createValidatedControlledReleaseCandidate,
   InMemoryControlPlaneStore
 } from '@cvg/platform'
@@ -56,7 +56,7 @@ test('keeps a browser/API conversation on its first published snapshot', async (
   const firstVersion = await publishVersion(
     platform,
     agent.id,
-    createControlledSecretaryConfig(),
+    createControlledAgentConfig(),
     'e2e.session-pin'
   )
   const app = buildServer({

@@ -1,5 +1,5 @@
 import {
-  createControlledSecretaryConfig,
+  createControlledAgentConfig,
   CapabilityGateway,
   createValidatedControlledReleaseCandidate,
   InMemoryControlPlaneStore,
@@ -22,7 +22,7 @@ async function publishVersion(
   const draft = await store.createVersion(
     { tenantId },
     agentId,
-    createControlledSecretaryConfig(),
+    createControlledAgentConfig(),
     'worker.test'
   )
   const testing = await store.transitionVersion(
@@ -235,7 +235,7 @@ describe('published worker runtime boundary', () => {
     const draft = await platform.createVersion(
       { tenantId },
       agent.id,
-      createControlledSecretaryConfig(),
+      createControlledAgentConfig(),
       'worker.test'
     )
     const otherVersion = await publishVersion(platform, otherAgent.id)

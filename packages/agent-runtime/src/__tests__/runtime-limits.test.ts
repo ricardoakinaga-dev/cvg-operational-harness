@@ -12,7 +12,11 @@ import type {
   ProviderRequest,
   ProviderResult
 } from '@cvg/model-gateway'
-import { PolicyEngine, type Capability } from '@cvg/policy-engine'
+import {
+  PolicyEngine,
+  type Capability,
+  REFERENCE_POLICY_PROFILE
+} from '@cvg/policy-engine'
 import { canonicalizeJson } from '@cvg/shared'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import type { ActiveSpan, Attributes, TraceContext } from '@cvg/observability'
@@ -32,10 +36,10 @@ const NOW = new Date('2026-09-12T12:00:00.000Z')
 const PAYLOAD_SCHEMA = z.object({ text: z.string() })
 
 const FAKE_CREATE_SCOPE: Partial<Record<Capability, EffectScope>> = {
-  'appointment.create': 'controlled_fake'
+  'record.create': 'controlled_fake'
 }
 const FAKE_CANCEL_SCOPE: Partial<Record<Capability, EffectScope>> = {
-  'appointment.cancel': 'controlled_fake'
+  'record.cancel': 'controlled_fake'
 }
 
 interface SpanTracker {
@@ -97,7 +101,7 @@ function buildHarness(options: HarnessOptions = {}) {
   prompts.register({
     promptId: 'limits-core',
     version: '1.0.0',
-    content: 'You are the CVG secretary.',
+    content: 'You are the CVG operational assistant.',
     owner: 'platform',
     approvedBy: 'reviewer',
     status: 'approved',
@@ -144,7 +148,11 @@ function buildHarness(options: HarnessOptions = {}) {
     clock,
     retry: { maxRetries: 0 }
   })
-  const policy = new PolicyEngine({ documents: [], clock })
+  const policy = new PolicyEngine({
+    profile: REFERENCE_POLICY_PROFILE,
+    documents: [],
+    clock
+  })
   const approvals = new ApprovalEngine({
     store: new InMemoryApprovalStore(),
     clock
@@ -199,12 +207,12 @@ function turnInput(
     operatorRole: 'Supervisor',
     agentId: AGENT,
     agentVersion: 'v1',
-    agentProfile: 'secretary',
+    agentProfile: 'assistant',
     conversationId: 'conv_1',
     correlationId: CORRELATION,
-    capability: 'appointment.create',
-    action: 'appointment.create',
-    resource: { type: 'appointment', id: 'apt_1', tenantId: TENANT },
+    capability: 'record.create',
+    action: 'record.create',
+    resource: { type: 'record', id: 'apt_1', tenantId: TENANT },
     dataClassification: 'INTERNAL',
     prompt: { promptId: 'limits-core', version: '1.0.0' },
     modelProfile: 'fast',
@@ -220,8 +228,8 @@ async function requestApproval(
 ): Promise<string> {
   const requested = await harness.runtime.runTurn(
     turnInput({
-      capability: 'appointment.cancel',
-      action: 'appointment.cancel',
+      capability: 'record.cancel',
+      action: 'record.cancel',
       ...overrides
     })
   )
@@ -238,9 +246,9 @@ function expectedDerivedOperationKey(proposalHash: string): string {
     .update(
       canonicalizeJson({
         tenantId: TENANT,
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
-        resource: { type: 'appointment', id: 'apt_1' },
+        capability: 'record.cancel',
+        action: 'record.cancel',
+        resource: { type: 'record', id: 'apt_1' },
         proposalHash
       }),
       'utf8'
@@ -311,8 +319,8 @@ describe('AAA-11 T-10: deadline with a dependency that ignores AbortSignal', () 
 
     const result = await harness.runtime.runTurn(
       turnInput({
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
+        capability: 'record.cancel',
+        action: 'record.cancel',
         approvalId,
         limits: { maxDurationMs: 1_000 }
       })
@@ -375,8 +383,8 @@ describe('AAA-11 T-11: cooperative cancellation', () => {
 
     const result = await harness.runtime.runTurn(
       turnInput({
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
+        capability: 'record.cancel',
+        action: 'record.cancel',
         approvalId,
         cancelSignal: controller.signal
       })
@@ -435,8 +443,8 @@ describe('AAA-11 outbox stage after an executed effect', () => {
 
     const result = await harness.runtime.runTurn(
       turnInput({
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
+        capability: 'record.cancel',
+        action: 'record.cancel',
         approvalId,
         limits: { maxSteps: 1 }
       })
@@ -633,8 +641,8 @@ describe('AAA-11 span closure', () => {
     await expect(
       policyDenied.runtime.runTurn(
         turnInput({
-          capability: 'patient.record.write',
-          action: 'patient.record.write'
+          capability: 'subject.record.write',
+          action: 'subject.record.write'
         })
       )
     ).resolves.toMatchObject({ outcome: 'denied', reason: 'policy_denied' })

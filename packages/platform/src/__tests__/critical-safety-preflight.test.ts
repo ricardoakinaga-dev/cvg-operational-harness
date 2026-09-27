@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import * as testLab from '../test-lab.ts'
 import {
   AgentConfigSchema,
-  createControlledSecretaryConfig,
+  createControlledAgentConfig,
   InMemoryControlPlaneStore,
   runCriticalSafetyPreflight,
   type TenantScope,
@@ -21,7 +21,7 @@ async function createCandidate(store: InMemoryControlPlaneStore) {
   const version = await store.createVersion(
     scope,
     agent.id,
-    AgentConfigSchema.parse(createControlledSecretaryConfig()),
+    AgentConfigSchema.parse(createControlledAgentConfig()),
     'admin.preflight'
   )
   return { scope, agent, version }
@@ -137,7 +137,7 @@ describe('critical safety publish preflight', () => {
       .spyOn(testLab, 'runTestLab')
       .mockImplementation(async (input) => {
         if (input.message.includes('sangue') && input.capabilityGateway) {
-          const emptyConfig = createControlledSecretaryConfig()
+          const emptyConfig = createControlledAgentConfig()
           emptyConfig.plugins = []
           expect(
             input.capabilityGateway.planTools(emptyConfig, 'scheduling')

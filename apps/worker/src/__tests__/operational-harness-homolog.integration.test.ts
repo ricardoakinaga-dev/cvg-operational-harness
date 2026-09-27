@@ -271,14 +271,29 @@ describeWithPostgres('homologation durable worker smoke (AUD19-008)', () => {
         interruptedExit.signal === 'SIGKILL' || interruptedExit.code === 137
       ).toBe(true)
 
-      await waitFor(async () => {
+      try {
+        await waitFor(async () => {
+          const snapshot = await admin.query(
+            `SELECT state FROM ${schema}.operational_executions
+              WHERE tenant_id = $1 AND id = $2`,
+            [tenantIdRaw, submitted.record.id]
+          )
+          return snapshot.rows[0]?.state === 'SUCCEEDED'
+        }, 30_000)
+      } catch (error) {
         const snapshot = await admin.query(
-          `SELECT state FROM ${schema}.operational_executions
+          `SELECT state, attempt FROM ${schema}.operational_executions
             WHERE tenant_id = $1 AND id = $2`,
           [tenantIdRaw, submitted.record.id]
         )
-        return snapshot.rows[0]?.state === 'SUCCEEDED'
-      })
+        const recentEvents = parseJsonLines(recovery.output())
+          .slice(-12)
+          .map((line) => String(line.event ?? 'unknown'))
+        throw new Error(
+          `homolog recovery timeout: state=${String(snapshot.rows[0]?.state)} attempt=${String(snapshot.rows[0]?.attempt)} childExit=${String(recovery.child.exitCode)} signal=${String(recovery.child.signalCode)} events=${recentEvents.join(',')}`,
+          { cause: error }
+        )
+      }
       const recoveryExit = await waitForExit(recovery)
       expect(recoveryExit).toEqual({ code: 0, signal: null })
 
@@ -385,7 +400,7 @@ describeWithPostgres('homologation durable worker smoke (AUD19-008)', () => {
         `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO ${role}`
       )
       await admin.query(`ALTER ROLE ${role} SET search_path TO ${schema}`)
-      idle = spawnWorker(
+      const activeIdle = spawnWorker(
         homologEnv(role, schema, `homolog-drain-${suffix}`, {
           maxEvents: '10',
           idleWaitMs: 60_000,
@@ -393,9 +408,15 @@ describeWithPostgres('homologation durable worker smoke (AUD19-008)', () => {
           healthIntervalMs: 25
         })
       )
-      await delay(1_500)
-      idle.child.kill('SIGTERM')
-      const exit = await waitForExit(idle, 20_000)
+      idle = activeIdle
+      await waitFor(() =>
+        parseJsonLines(activeIdle.output()).some(
+          (line) =>
+            line.event === 'worker.homolog_health' && line.healthy === true
+        )
+      )
+      activeIdle.child.kill('SIGTERM')
+      const exit = await waitForExit(activeIdle, 20_000)
       expect(exit).toEqual({ code: 0, signal: null })
       const lines = parseJsonLines(idle.output())
       const notReadyIndex = lines.findIndex(

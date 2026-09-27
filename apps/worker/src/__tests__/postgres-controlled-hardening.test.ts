@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  ensureControlledSecretaryPreset,
+  ensureControlledAgentPreset,
+  createControlledReferencePreset,
   InMemoryControlPlaneStore,
   TenantIdSchema
 } from '@cvg/platform'
@@ -185,7 +186,11 @@ describe('controlled PostgreSQL worker environment gates', () => {
 describe('controlled PostgreSQL inbound handler paths', () => {
   it('runs the pinned session version, redacts history and never rebinds', async () => {
     const platform = new InMemoryControlPlaneStore()
-    const agent = await ensureControlledSecretaryPreset(platform, tenantId)
+    const agent = await ensureControlledAgentPreset(
+      platform,
+      createControlledReferencePreset(),
+      tenantId
+    )
     const published = await platform.resolvePublished({ tenantId }, agent.id)
     if (!published) throw new Error('Fixture preset did not publish a version')
 
@@ -317,7 +322,11 @@ describe('controlled PostgreSQL inbound handler paths', () => {
 
   it('marks the inbound message completed when the pinned runtime cannot execute', async () => {
     const platform = new InMemoryControlPlaneStore()
-    const agent = await ensureControlledSecretaryPreset(platform, tenantId)
+    const agent = await ensureControlledAgentPreset(
+      platform,
+      createControlledReferencePreset(),
+      tenantId
+    )
     const session = {
       id: 'sess_worker_hardening_182',
       conversationId: 'conv_worker_hardening_182',

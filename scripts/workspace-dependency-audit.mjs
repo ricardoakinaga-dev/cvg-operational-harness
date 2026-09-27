@@ -199,10 +199,10 @@ function validatePolicy(policy, options = {}) {
   }
   if (
     stableStringify([...(policy.workspacePatterns ?? [])].sort()) !==
-    stableStringify(['apps/*', 'packages/*'])
+    stableStringify(['apps/*', 'legacy/packages/*', 'packages/*'])
   ) {
     errors.push(
-      'workspacePatterns must match the reviewed apps/* and packages/* inventory'
+      'workspacePatterns must match the reviewed apps/*, packages/* and legacy/packages/* inventory'
     )
   }
   if (!policy.fileDiscovery || typeof policy.fileDiscovery !== 'object') {

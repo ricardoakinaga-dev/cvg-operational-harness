@@ -23,6 +23,7 @@ export default defineConfig({
       'tests/**/*.test.js',
       'tests/**/*.test.ts',
       'packages/**/*.test.ts',
+      'legacy/**/*.test.ts',
       'apps/**/*.test.ts',
       'apps/**/*.test.tsx'
     ],
@@ -40,7 +41,12 @@ export default defineConfig({
         functions: 90,
         lines: 90
       },
-      include: ['packages/**/*.ts', 'apps/**/*.ts', 'apps/**/*.tsx'],
+      include: [
+        'packages/**/*.ts',
+        'legacy/**/*.ts',
+        'apps/**/*.ts',
+        'apps/**/*.tsx'
+      ],
       // Process bootstraps, browser rendering, and PostgreSQL adapters have
       // dedicated smoke/E2E/integration gates. Keep them out of the unit
       // denominator so this threshold measures the deterministic core rather
@@ -82,17 +88,19 @@ export default defineConfig({
         'packages/persistence/src/index.ts'
       ),
       '@cvg/policy': resolve(workspaceRoot, 'packages/policy/src/index.ts'),
-      '@cvg/tools': resolve(workspaceRoot, 'packages/tools/src/index.ts'),
       '@cvg/agent-core': resolve(
         workspaceRoot,
         'packages/agent-core/src/index.ts'
       ),
-      '@cvg/workflows': resolve(
+      '@cvg/legacy-secretary-evals': resolve(
         workspaceRoot,
-        'packages/workflows/src/index.ts'
+        'legacy/packages/secretary-evals/src/index.ts'
+      ),
+      '@cvg/legacy-secretary-profile': resolve(
+        workspaceRoot,
+        'legacy/packages/secretary-profile/src/index.ts'
       ),
       '@cvg/adapters': resolve(workspaceRoot, 'packages/adapters/src/index.ts'),
-      '@cvg/memory': resolve(workspaceRoot, 'packages/memory/src/index.ts'),
       '@cvg/rag': resolve(workspaceRoot, 'packages/rag/src/index.ts'),
       '@cvg/platform': resolve(workspaceRoot, 'packages/platform/src/index.ts'),
       '@cvg/model-gateway': resolve(

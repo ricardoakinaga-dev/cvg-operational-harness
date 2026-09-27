@@ -1,4 +1,4 @@
-export const CI_BAR_VERSION = 'rem21-014-v1'
+export const CI_BAR_VERSION = 'aud0578-pr007-v1'
 
 const npm = (...args) => ['npm', args]
 const shell = (command) => ['sh', ['-c', command]]
@@ -53,6 +53,12 @@ export const CI_BAR_GATES = [
     artifacts: ['coverage/coverage-summary.json']
   },
   {
+    id: 'coverage-web',
+    marker: 'node scripts/ci-bar.mjs gate coverage-web',
+    command: npm('run', 'coverage:web'),
+    artifacts: ['coverage/web/coverage-summary.json']
+  },
+  {
     id: 'coverage-critical',
     marker: 'node scripts/ci-bar.mjs gate coverage-critical',
     command: npm('run', 'coverage:critical'),
@@ -88,6 +94,12 @@ export const CI_BAR_GATES = [
     ),
     artifacts: ['certification/postgres-test-report.json'],
     skipPolicy: 'none'
+  },
+  {
+    id: 'coverage-postgres',
+    marker: 'node scripts/ci-bar.mjs gate coverage-postgres',
+    command: npm('run', 'coverage:postgres'),
+    artifacts: ['coverage/postgres/coverage-summary.json']
   },
   {
     id: 'postgres-proof',
@@ -166,7 +178,10 @@ export const CI_BAR_GATES = [
     command: shell(
       'PLAYWRIGHT_JSON_OUTPUT_NAME=certification/e2e-test-report.json npm run test:e2e'
     ),
-    artifacts: ['certification/e2e-test-report.json'],
+    artifacts: [
+      'certification/e2e-test-report.json',
+      'certification/e2e-results.xml'
+    ],
     skipPolicy: 'none'
   },
   {

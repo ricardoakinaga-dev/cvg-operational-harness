@@ -22,7 +22,9 @@ import {
   computeDecision,
   diffCandidateFiles,
   parsePlaywrightSummary,
-  parseVitestSummary,
+  parseVitestJsonMetrics,
+  validateE2ERunBinding,
+  VITEST_REPORT_PATHS,
   sha256Bytes
 } from './lib/certification-rules.mjs'
 import {
@@ -81,7 +83,11 @@ function run(entry, { runId, candidateId }) {
   // CI provides a disposable PostgreSQL service. Keep it available to every
   // certification subgate so unit/coverage/chaos cannot silently lower their
   // denominator through conditional integration skips.
-  const environment = { ...process.env, CI: process.env.CI ?? 'true' }
+  const environment = {
+    ...process.env,
+    CI: process.env.CI ?? 'true',
+    CI_RUN_ID: runId
+  }
   const result = spawnSync(entry.command, {
     cwd: root,
     shell: true,
@@ -140,16 +146,16 @@ function deriveGateMetrics(entryId, logContent) {
     GATE_EVIDENCE_MATRIX[entryId] ?? GATE_ENVIRONMENT_EVIDENCE_MATRIX[entryId]
   if (!entry) return undefined
   if (entry.kind === 'vitest') {
-    const files = parseVitestSummary(logContent, 'Test Files')
-    const tests = parseVitestSummary(logContent, 'Tests')
-    if (!files || !tests) return undefined
-    return {
-      filesPassed: files.passed,
-      filesFailed: files.failed,
-      filesSkipped: files.skipped,
-      testsPassed: tests.passed,
-      testsFailed: tests.failed,
-      testsSkipped: tests.skipped
+    const reportPath = VITEST_REPORT_PATHS[entryId]
+    if (!reportPath) return undefined
+    try {
+      return (
+        parseVitestJsonMetrics(
+          JSON.parse(fs.readFileSync(path.join(root, reportPath), 'utf8'))
+        ) ?? undefined
+      )
+    } catch {
+      return undefined
     }
   }
   if (entry.kind === 'playwright') {
@@ -276,6 +282,7 @@ for (const generatedPath of [
   'certification/unit-test-report.json',
   'certification/postgres-test-report.json',
   'certification/e2e-test-report.json',
+  'certification/e2e-results.xml',
   'certification/skip-inventory.json',
   'certification/skip-negative-validation.json'
 ]) {
@@ -287,7 +294,6 @@ process.stderr.write(
 )
 
 const gates = []
-const gateOutputs = new Map()
 const gateEvidence = new Map()
 const extraResultsByGate = {
   coverage: [
@@ -328,11 +334,40 @@ for (const entry of commands) {
   const metrics = deriveGateMetrics(entry.id, logContent)
   record.evidence = evidence
   if (metrics) record.metrics = metrics
+  if (matrix?.kind === 'vitest' && !metrics) {
+    record.status = 'FAIL'
+    record.metrics = {
+      verdict: 'INVALID_REPORT',
+      reason: 'vitest_json_metrics_missing_or_inconsistent'
+    }
+  }
+  if (entry.id === 'e2e') {
+    let report
+    try {
+      report = JSON.parse(
+        fs.readFileSync(
+          path.join(root, 'certification/e2e-test-report.json'),
+          'utf8'
+        )
+      )
+    } catch {
+      report = null
+    }
+    const xmlPath = path.join(root, 'certification/e2e-results.xml')
+    const xml = fs.existsSync(xmlPath) ? fs.readFileSync(xmlPath, 'utf8') : ''
+    const failures = validateE2ERunBinding(report, xml, runId)
+    if (failures.length > 0) {
+      record.status = 'FAIL'
+      record.metrics = {
+        ...(record.metrics ?? {}),
+        runBindingFailures: failures
+      }
+    }
+  }
   const skipJustification = skipJustificationFor(entry.id, metrics)
   if (skipJustification) record.skipJustification = skipJustification
   gates.push(record)
   gateEvidence.set(entry.id, evidence)
-  gateOutputs.set(entry.id, logContent)
 }
 
 const skipInventory = buildSkipInventory({
@@ -456,9 +491,9 @@ const resultPayload = {
   gates,
   externalGates,
   metrics: {
-    unit:
-      gates.find((gate) => gate.id === 'unit')?.metrics ??
-      parseVitestSummary(gateOutputs.get('unit') ?? '', 'Tests'),
+    unit: gates.find((gate) => gate.id === 'unit')?.metrics ?? {
+      verdict: 'NOT_EXECUTED'
+    },
     coverage: readCoverage(),
     evals: evalReport
       ? { verdict: evalReport.verdict, ...evalReport.metrics }

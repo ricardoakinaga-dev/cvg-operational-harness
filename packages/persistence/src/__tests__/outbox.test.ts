@@ -59,7 +59,7 @@ function enqueue(repository: OutboxRepository, key = 'outbox-key-1') {
 }
 
 describe('in-memory durable outbox', () => {
-  it('sanitizes the legacy overload and durable effect journal before storage', () => {
+  it('sanitizes the legacy overload and durable effect journal before storage', async () => {
     const { repository, db } = createRepository()
     const legacy = repository.enqueue('message.outbound', {
       body: 'Mensagem interna sem PII',
@@ -72,7 +72,7 @@ describe('in-memory durable outbox', () => {
 
     const event = enqueue(repository, 'outbox-redaction-journal-1')
     repository.claimNext({ tenantId: tenantA, workerId: 'worker-redaction' })
-    repository.ack({
+    await repository.ack({
       tenantId: tenantA,
       eventId: event.id,
       workerId: 'worker-redaction',

@@ -1,5 +1,73 @@
 # 0190 — SPEC Validation
 
+## AUD-0578 / PR-009 — JUnit e JSON E2E no mesmo runId
+
+- [SPEC 0148](0148_e2e_junit_json_run_binding.md) está
+  `VERIFIED_LOCAL` em T2: JSON/JUnit foram produzidos na mesma invocação,
+  com runId idêntico, E2E 12/12 em Node 22; certificador, verificador e
+  barra CI validam o vínculo e o hash do XML. Certificação/Verify do SHA
+  integrado ainda pendentes; nenhuma autorização de produção.
+
+## AUD-0578 / PR-010 — métricas do certificado no CI
+
+- [SPEC 0147](0147_certification_vitest_json_metrics.md) está
+  `BUILD_LOCAL_AUTHORIZED` em T2: Verify `36298961234` executou os 16
+  comandos do certificador com exit 0, mas a leitura textual das métricas
+  unitárias retornou `null` e falhou no schema. A correção usa o relatório
+  JSON já produzido, com rejeição explícita de ausência ou inconsistência;
+  não concede autorização de produção.
+
+## AUD-0578 / PR-007 — callback do lookup fixado em Node 22
+
+- [SPEC 0146](0146_pinned_ssrf_lookup_node22.md) está
+  `SPEC_DRAFT_FOR_REVIEW` em T3. A matriz sintética reproduziu
+  `Invalid IP address: undefined` em ambos os transportes SSRF;
+  a correção de segurança proposta exige revisão explícita do usuário antes
+  do BUILD. Nenhum código desses módulos está autorizado por este registro.
+
+## AUD-0578 / PR-007 — cobertura adicional e lint tipado
+
+- [SPEC 0145](0145_web_postgres_coverage_and_typed_lint.md) está
+  `BUILD_LOCAL_AUTHORIZED` em T2: PR-007 já consta do backlog 0356; a
+  configuração ampliará a medição sem alterar o denominador principal, os
+  contratos públicos ou os gates de produção. Aceite exige dois relatórios
+  próprios, margem medida de ao menos 3 pp, lint tipado e gates T2.
+
+## AUD-0578 / PR-003 — rebind de skip do worker homolog
+
+- [SPEC 0144](0144_homolog_skip_catalog_rebind.md) está
+  `BUILD_LOCAL_AUTHORIZED` em T2: o hash do teste homolog mudou na SPEC 0141,
+  o catálogo bloqueou corretamente Verify e certificação, e todos os
+  relatórios registraram zero skips. A correção permitida altera apenas um
+  `sourceSha256`; não concede exceção de skip nem autorização de produção.
+
+## AUD-0578 / PR-010 — build limpo para E2E
+
+- [SPEC 0143](0143_clean_build_for_e2e.md) está `BUILD_LOCAL_AUTHORIZED` em
+  T2: a certificação em checkout limpo revelou `@cvg/shared` sem `dist` no
+  servidor Vite; `build:harness` seguido de E2E 12/12 reproduziu a solução.
+  A task PR-010 está registrada em 0356. Nenhuma produção é autorizada.
+
+## AUD-0578 / PR-010 — prontidão do worker homolog
+
+- [SPEC 0141](0141_homolog_worker_shutdown_readiness.md) está
+  `BUILD_LOCAL_AUTHORIZED` em T2: duas execuções da suíte revelaram um
+  timeout fixo antes de SIGTERM; o teste passará a aguardar o evento de saúde
+  do processo. Não modifica runtime, contrato público nem autorização de
+  produção.
+
+## AUD-0578 / PR-009 — fatia 2, peso tipográfico de fallback
+
+- [SPEC-PR009-002](0139_visual_font_fallback.md) está `BUILD_LOCAL_AUTHORIZED` em T2: falha visual observada no Verify remoto, reprodução em Ubuntu e regra de correção registrados antes do código. Não altera contrato público nem autoriza produção.
+
+## AUD-0578 / PR-003 — rebind do catálogo de skips
+
+- [SPEC-PR003-002](0138_skip_catalog_rebind.md) está `BUILD_LOCAL_AUTHORIZED` em T2 para reconciliar somente dois hashes de testes alterados na PR-L05. A task PR-003 está registrada em 0356; recon, regras e aceite precedem a edição do catálogo. Não altera autorização de produção nem suprime o gate de skips.
+
+## AUD-0578 / PR-009 — fatia 1, isolamento de artefatos E2E
+
+- [SPEC-PR009-001](0137_e2e_artifact_isolation.md) está `BUILD_LOCAL_AUTHORIZED` na trilha T2: task registrada em 0356, recon, regras e aceite publicados antes do código. A autorização do usuário de implementar o planejamento cobre a correção local e reversível; não cobre T3/T4 nem produção. Resultado dos gates será anotado na SPEC e nos ledgers. As demais fatias de PR-009 continuam abertas.
+
 ## L03 operational index generator — draft v0.4, not approved
 
 - [SPEC-DOC-001](0129_l03_operational_index_generator.md), revision 0.4, SHA-256 `7a144a686d7a5ce7333efa50c7f476b662b9da4a6b97936f85a0bb07504bc0a9`, is `SPEC_DRAFT_FOR_REVIEW` for the internal documentation utility in L03/P3-S7. The L03 backlog is its originating requirement; no product-facing PRD applies to this tool-only scope.
@@ -18,6 +86,9 @@
 - [SPEC-STRUCT-001](0133_iterative_runtime_slice_extraction.md) (RA25-07) está `SPEC_DRAFT_FOR_REVIEW`. A fatia 1 foi executada em 2026-09-25 sob a instrução do usuário (“siga pra próxima ação”): 1 065 linhas movidas para `packages/harness/src/iterative-dispatch.ts`, `iterative-runtime.ts` de 2 455 para 1 488 linhas, suíte completa 2 295 testes `PASS` e cobertura acima dos thresholds. Restam três hotspots, cada um com SPEC própria. Revisão independente e humana: `NOT_RUN`.
 
 - [SPEC-STRUCT-002](0134_postgres_slice_extraction.md) (RA25-07, fatia 2) está `SPEC_DRAFT_FOR_REVIEW`. Executada em 2026-09-25: 816 linhas movidas para `packages/persistence/src/postgres-outbox.ts` (900 linhas), `postgres.ts` de 3 354 para 2 572; suíte completa 2 295 testes e `test:postgres` 258 testes `PASS`, cobertura inalterada. Registra explicitamente a leitura do critério de tamanho: cada fatia entrega módulo abaixo de ~1 500 linhas e reduz o alvo de forma monotônica, com o alvo de `postgres.ts` atingido na fatia 4. Revisão independente e humana: `NOT_RUN`.
+- [SPEC-LEGACY-001](0135_legacy_dead_packages_and_boundary.md) (PR-L02/PR-L03, frente FL do programa PROD-20260926) está `EXECUTED`. Executada em 2026-09-26 sob a autorização do usuário ("então vamos avançar"): `packages/workflows`, `packages/tools` e `packages/memory` removidos (sem consumidor, decisão DL-02); teste de fronteira `tests/architecture/legacy-boundary.test.ts`; classe `removedTargets` no checker de links para relatórios históricos vinculados por hash. Suíte completa 2 280 testes e `test:postgres` 258 testes `PASS` em Node 22 com PostgreSQL. Revisão independente e humana: `NOT_RUN`.
+- [SPEC-LEGACY-002](0136_legacy_secretary_profile_isolation.md) (PR-L05, trilha T3) está `SPEC_APPROVED_BY_USER` ("Aprovo as 3 fatias", 2026-09-26). Fatias 1, 3 e 2 executadas (nessa ordem): `policy-engine` recebe o catálogo como `PolicyProfile`; perfil de referência neutro para os testes do harness; conteúdo e preset da secretária em `legacy/packages/secretary-profile`, compostos só por `apps/api/src/legacy-composition.ts`; suíte 2 304 testes e `test:postgres` 258 testes PASS.
+- [SPEC-LEGACY-003](0140_legacy_secretary_evals_isolation.md) (PR-L06, trilha T2) está `EXECUTED` (2026-09-27, `2533153`): `@cvg/agent-evals` neutro com regras de proteção e corpus de referência de 48 cenários nos mesmos thresholds; corpus, categorias e regras da secretária em `@cvg/legacy-secretary-evals`, que nenhum runtime compõe. Revisão independente e humana: `NOT_RUN`.
 
 ## Gate específico P1-S1 / M07 SPEC — aprovado; M07-S1 BUILD aguarda decisão
 

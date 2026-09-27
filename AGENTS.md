@@ -21,4 +21,18 @@ Regras principais:
 - Toda acao sensivel exige approval ou handoff.
 - Ao final de qualquer rodada, atualizar runtime state, execution log, backlog quando aplicavel e evidencias.
 
+## Trabalho simultâneo com outros agentes
+
+Codex e Claude Code trabalham ao mesmo tempo neste repositório, no mesmo
+diretório e no mesmo `main`. Antes de alterar qualquer arquivo, leia e siga
+`docs/08_runtime/agent_coordination.md`:
+
+- registre um claim com a tarefa e os caminhos antes de começar;
+- faça commit apenas dos arquivos que você alterou (`git add <caminho>`), nunca
+  `git add -A`, `git add .` ou `git commit -a`;
+- não use `git checkout --`, `git restore`, `git stash`, `git reset` ou
+  `git clean` em arquivos de outro agente, nem reescreva histórico;
+- `certify`, `test:e2e`, `sbom`, `licenses:check` e mudanças no lockfile só com
+  claim próprio; push só com autorização do usuário.
+
 Fonte operacional completa: `docs/07_agents/AGENTS.md`.

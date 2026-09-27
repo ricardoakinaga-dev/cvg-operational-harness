@@ -20,7 +20,8 @@ import type {
 import {
   PolicyEngine,
   type Capability,
-  type PolicyDocument
+  type PolicyDocument,
+  REFERENCE_POLICY_PROFILE
 } from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import type { ActiveSpan, Attributes, TraceContext } from '@cvg/observability'
@@ -44,13 +45,13 @@ const NOW = new Date('2026-09-13T12:00:00.000Z')
 const PAYLOAD_SCHEMA = z.object({ text: z.string() })
 
 const FAKE_CREATE_SCOPE: Partial<Record<Capability, EffectScope>> = {
-  'appointment.create': 'controlled_fake'
+  'record.create': 'controlled_fake'
 }
 const FAKE_SEND_SCOPE: Partial<Record<Capability, EffectScope>> = {
   'message.send': 'controlled_fake'
 }
 const FAKE_CANCEL_SCOPE: Partial<Record<Capability, EffectScope>> = {
-  'appointment.cancel': 'controlled_fake'
+  'record.cancel': 'controlled_fake'
 }
 
 interface SpanTracker {
@@ -111,7 +112,7 @@ function buildHarness(options: HarnessOptions = {}) {
   prompts.register({
     promptId: 'kernel-core',
     version: '1.0.0',
-    content: 'You are the CVG secretary.',
+    content: 'You are the CVG operational assistant.',
     owner: 'platform',
     approvedBy: 'reviewer',
     status: 'approved',
@@ -158,6 +159,7 @@ function buildHarness(options: HarnessOptions = {}) {
     retry: { maxRetries: 0 }
   })
   const policy = new PolicyEngine({
+    profile: REFERENCE_POLICY_PROFILE,
     documents: options.documents ?? [],
     clock
   })
@@ -225,12 +227,12 @@ function turnInput(
     operatorRole: 'Supervisor',
     agentId: AGENT,
     agentVersion: 'v1',
-    agentProfile: 'secretary',
+    agentProfile: 'assistant',
     conversationId: 'conv_1',
     correlationId: CORRELATION,
-    capability: 'appointment.create',
-    action: 'appointment.create',
-    resource: { type: 'appointment', id: 'apt_1', tenantId: TENANT },
+    capability: 'record.create',
+    action: 'record.create',
+    resource: { type: 'record', id: 'apt_1', tenantId: TENANT },
     dataClassification: 'INTERNAL',
     prompt: { promptId: 'kernel-core', version: '1.0.0' },
     modelProfile: 'fast',
@@ -278,7 +280,7 @@ describe('kernel policy matrix through the public runTurn', () => {
           id: 'deny-create',
           effect: 'DENY',
           priority: 10,
-          capabilities: ['appointment.create'],
+          capabilities: ['record.create'],
           reason: 'tenant forbids automatic creation'
         })
       ]
@@ -303,7 +305,7 @@ describe('kernel policy matrix through the public runTurn', () => {
           id: 'deny-create',
           effect: 'DENY',
           priority: 10,
-          capabilities: ['appointment.create'],
+          capabilities: ['record.create'],
           reason: 'tenant forbids automatic creation'
         })
       ]
@@ -347,7 +349,7 @@ describe('kernel policy matrix through the public runTurn', () => {
           id: 'approval-create',
           effect: 'REQUIRE_APPROVAL',
           priority: 5,
-          capabilities: ['appointment.create'],
+          capabilities: ['record.create'],
           reason: 'synthetic tightened policy'
         })
       ]
@@ -507,8 +509,8 @@ describe('kernel model failure handling', () => {
 
     const result = await harness.runtime.runTurn(
       turnInput({
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel'
+        capability: 'record.cancel',
+        action: 'record.cancel'
       })
     )
 
@@ -527,8 +529,8 @@ describe('kernel model failure handling', () => {
 
     const result = await harness.runtime.runTurn(
       turnInput({
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel'
+        capability: 'record.cancel',
+        action: 'record.cancel'
       })
     )
 
@@ -733,21 +735,21 @@ const MODIFY_DOCUMENTS: PolicyDocument[] = [
     id: 'modify-requires-approval',
     effect: 'REQUIRE_APPROVAL',
     priority: 5,
-    capabilities: ['appointment.modify'],
+    capabilities: ['record.update'],
     reason: 'synthetic approval requirement'
   })
 ]
 const FAKE_MODIFY_SCOPE: Partial<Record<Capability, EffectScope>> = {
-  'appointment.modify': 'controlled_fake'
+  'record.update': 'controlled_fake'
 }
 
 function modifyInput(
   overrides: Partial<GovernedTurnInput> = {}
 ): GovernedTurnInput {
   return turnInput({
-    capability: 'appointment.modify',
-    action: 'appointment.modify',
-    resource: { type: 'appointment_draft', id: 'draft_1', tenantId: TENANT },
+    capability: 'record.update',
+    action: 'record.update',
+    resource: { type: 'record_draft', id: 'draft_1', tenantId: TENANT },
     ...overrides
   })
 }
@@ -765,7 +767,7 @@ describe('kernel optional input wiring and adapter fallbacks', () => {
   it('carries sessionId, prompt sha256 and task through a successful turn', async () => {
     const harness = buildHarness()
     const sha256 = createHash('sha256')
-      .update('You are the CVG secretary.', 'utf8')
+      .update('You are the CVG operational assistant.', 'utf8')
       .digest('hex')
 
     const result = await harness.runtime.runTurn(
@@ -796,9 +798,9 @@ describe('kernel optional input wiring and adapter fallbacks', () => {
       journal: new InMemoryEffectJournal({ clock: () => NOW })
     })
     const input = turnInput({
-      capability: 'appointment.cancel',
-      action: 'appointment.cancel',
-      resource: { type: 'appointment' }
+      capability: 'record.cancel',
+      action: 'record.cancel',
+      resource: { type: 'record' }
     })
     const requested = await harness.runtime.runTurn(input)
     expect(requested.outcome).toBe('approval_required')
@@ -857,9 +859,7 @@ describe('kernel execution without a durable journal', () => {
     expect(harness.toolExecutor).toHaveBeenCalledTimes(1)
     expect(harness.outbox).toHaveBeenCalledTimes(1)
     const event = harness.outbox.mock.calls[0]?.[0]
-    expect(event?.idempotencyKey).toBe(
-      `${TENANT}:appointment.modify:${CORRELATION}`
-    )
+    expect(event?.idempotencyKey).toBe(`${TENANT}:record.update:${CORRELATION}`)
   })
 
   it('omits the proposal id from the outbox payload for a legacy approval', async () => {

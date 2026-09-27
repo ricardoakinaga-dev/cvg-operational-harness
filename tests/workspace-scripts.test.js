@@ -14,13 +14,17 @@ describe('workspace quality scripts', () => {
     const packageJson = readJson('package.json')
 
     expect(packageJson.private).toBe(true)
-    expect(packageJson.workspaces).toEqual(['apps/*', 'packages/*'])
+    expect(packageJson.workspaces).toEqual([
+      'apps/*',
+      'packages/*',
+      'legacy/packages/*'
+    ])
     expect(packageJson.scripts.typecheck).toBe(
       'tsc -p tsconfig.typecheck.json --noEmit'
     )
     expect(packageJson.scripts['dev:api']).toBe('tsx apps/api/src/main.ts')
     expect(packageJson.scripts.build).toBe(
-      'npm run typecheck && npm run build:web'
+      'npm run typecheck && npm run build:harness -- --force && npm run build:web'
     )
     expect(packageJson.scripts['build:web']).toBe(
       'vite --config vite.config.mts build apps/web'

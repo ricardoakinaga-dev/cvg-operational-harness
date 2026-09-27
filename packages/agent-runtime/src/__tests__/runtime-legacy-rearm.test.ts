@@ -9,7 +9,11 @@ import {
   PromptRegistry
 } from '@cvg/model-gateway'
 import type { ModelProfile } from '@cvg/model-gateway'
-import { PolicyEngine, type Capability } from '@cvg/policy-engine'
+import {
+  PolicyEngine,
+  type Capability,
+  REFERENCE_POLICY_PROFILE
+} from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import { GovernedAgentRuntime } from '../runtime.ts'
 import {
@@ -36,7 +40,7 @@ const CALLER_KEY_A = 'legacy-rearm-caller-A'
 const CALLER_KEY_B = 'legacy-rearm-caller-B'
 
 const FAKE_CANCEL_SCOPE: Partial<Record<Capability, EffectScope>> = {
-  'appointment.cancel': 'controlled_fake'
+  'record.cancel': 'controlled_fake'
 }
 
 interface HarnessOptions {
@@ -53,7 +57,7 @@ function buildHarness(options: HarnessOptions = {}) {
   prompts.register({
     promptId: 'legacy-rearm-core',
     version: '1.0.0',
-    content: 'You are the CVG secretary.',
+    content: 'You are the CVG operational assistant.',
     owner: 'platform',
     approvedBy: 'reviewer',
     status: 'approved',
@@ -90,7 +94,11 @@ function buildHarness(options: HarnessOptions = {}) {
     clock: now,
     retry: { maxRetries: 0 }
   })
-  const policy = new PolicyEngine({ documents: [], clock: now })
+  const policy = new PolicyEngine({
+    profile: REFERENCE_POLICY_PROFILE,
+    documents: [],
+    clock: now
+  })
   const store = new InMemoryApprovalStore()
   const approvals = new ApprovalEngine({ store, clock: now })
   const telemetry = new InMemoryTelemetry({ clock: now })
@@ -135,12 +143,12 @@ function turnInput(
     operatorRole: 'Supervisor',
     agentId: AGENT,
     agentVersion: 'v1',
-    agentProfile: 'secretary',
+    agentProfile: 'assistant',
     conversationId: 'conv_1',
     correlationId: CORRELATION,
-    capability: 'appointment.cancel',
-    action: 'appointment.cancel',
-    resource: { type: 'appointment', id: 'apt_1', tenantId: TENANT },
+    capability: 'record.cancel',
+    action: 'record.cancel',
+    resource: { type: 'record', id: 'apt_1', tenantId: TENANT },
     dataClassification: 'INTERNAL',
     prompt: { promptId: 'legacy-rearm-core', version: '1.0.0' },
     modelProfile: 'fast',
@@ -180,9 +188,9 @@ function derivedOperationKey(proposalHash: string): string {
     .update(
       canonicalizeJson({
         tenantId: TENANT,
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
-        resource: { type: 'appointment', id: 'apt_1' },
+        capability: 'record.cancel',
+        action: 'record.cancel',
+        resource: { type: 'record', id: 'apt_1' },
         proposalHash
       }),
       'utf8'
@@ -206,14 +214,14 @@ function reserveApproval(
   const reservation = harness.approvals.reserve({
     tenantId: TENANT,
     approvalId,
-    action: 'appointment.cancel',
-    resource: { type: 'appointment', id: 'apt_1' },
+    action: 'record.cancel',
+    resource: { type: 'record', id: 'apt_1' },
     payload: stored.proposalPayload,
     proposalHash: stored.proposalHash,
     agentId: AGENT,
     agentVersion: 'v1',
     policyVersion: stored.policyVersion,
-    capability: 'appointment.cancel',
+    capability: 'record.cancel',
     ttlMs,
     ...(options.operationKey !== undefined
       ? { operationKey: options.operationKey }

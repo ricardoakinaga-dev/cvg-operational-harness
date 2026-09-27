@@ -1,0 +1,156 @@
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse
+} from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { describe, expect, it } from 'vitest'
+import { fetchWithResolvedAddress as modelFetch } from '../packages/model-gateway/src/providers/ssrf-node.ts'
+import { fetchWithResolvedAddress as channelFetch } from '../packages/channel-gateway/src/adapters/ssrf-node.ts'
+
+const transports = [
+  { name: 'model gateway', fetch: modelFetch },
+  { name: 'channel gateway', fetch: channelFetch }
+]
+
+async function withServer<T>(
+  handler: (request: IncomingMessage, response: ServerResponse) => void,
+  exercise: (port: number) => Promise<T>
+): Promise<T> {
+  const server = createServer(handler)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const address = server.address() as AddressInfo
+    return await exercise(address.port)
+  } finally {
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+}
+
+async function readBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+describe.each(transports)('$name pinned transport', ({ fetch }) => {
+  it('rejects missing, non-IP and unsupported destinations before connecting', async () => {
+    await expect(fetch('http://allowed.example', {}, [])).rejects.toThrow(
+      'No resolved address available'
+    )
+    await expect(
+      fetch('http://allowed.example', {}, ['not-an-ip'])
+    ).rejects.toThrow('Resolved address is not an IP literal')
+    await expect(fetch('file:///synthetic', {}, ['127.0.0.1'])).rejects.toThrow(
+      'Unsupported transport protocol'
+    )
+    await expect(
+      fetch('http://allowed.example', { body: { unsupported: true } }, [
+        '127.0.0.1'
+      ])
+    ).rejects.toThrow('Unsupported request body')
+  })
+
+  it('pins the socket to loopback while preserving HTTP authority, path and headers', async () => {
+    let observed: {
+      host?: string
+      path?: string
+      body?: string
+      custom?: string
+    } = {}
+    await withServer(
+      (request, response) => {
+        void readBody(request).then((body) => {
+          observed = {
+            host: request.headers.host,
+            path: request.url,
+            custom: request.headers['x-fixture'] as string | undefined,
+            body
+          }
+          response.writeHead(202, {
+            'content-type': 'text/plain',
+            'x-fixture-response': ['one', 'two']
+          })
+          response.end('accepted')
+        })
+      },
+      async (port) => {
+        const response = await fetch(
+          `http://allowed.example:${port}/v1/chat?synthetic=1`,
+          {
+            method: 'POST',
+            body: 'fixture-body',
+            headers: { host: 'attacker.invalid', 'x-fixture': ['a', 'b'] }
+          },
+          ['127.0.0.1']
+        )
+        expect(response.status).toBe(202)
+        expect(response.headers.get('x-fixture-response')).toContain('one')
+        expect(await response.text()).toBe('accepted')
+        expect(observed).toEqual({
+          host: `allowed.example:${port}`,
+          path: '/v1/chat?synthetic=1',
+          custom: 'a, b',
+          body: 'fixture-body'
+        })
+      }
+    )
+  })
+
+  it('encodes supported body and header forms without losing bytes', async () => {
+    await withServer(
+      (request, response) => {
+        void readBody(request).then((body) => {
+          response.writeHead(200, { 'content-type': 'text/plain' })
+          response.end(body)
+        })
+      },
+      async (port) => {
+        const cases: Array<{ body: unknown; expected: string }> = [
+          { body: new Uint8Array([97, 98]), expected: 'ab' },
+          { body: new Uint8Array([99, 100]).buffer, expected: 'cd' },
+          {
+            body: new DataView(new Uint8Array([101, 102]).buffer),
+            expected: 'ef'
+          },
+          {
+            body: new URLSearchParams({ fixture: '1' }),
+            expected: 'fixture=1'
+          },
+          { body: new Blob(['blob-fixture']), expected: 'blob-fixture' }
+        ]
+        for (const entry of cases) {
+          const response = await fetch(
+            `http://allowed.example:${port}/echo`,
+            {
+              method: 'POST',
+              body: entry.body,
+              headers: new Headers({ 'x-test': '1' })
+            },
+            ['127.0.0.1']
+          )
+          expect(await response.text()).toBe(entry.expected)
+        }
+        const response = await fetch(
+          `http://allowed.example:${port}/echo`,
+          { method: 'POST', body: 'array-headers', headers: [['x-test', '2']] },
+          ['127.0.0.1']
+        )
+        expect(await response.text()).toBe('array-headers')
+      }
+    )
+  })
+
+  it('propagates an abort reason before any request is sent', async () => {
+    const controller = new AbortController()
+    controller.abort(new Error('synthetic abort'))
+    await expect(
+      fetch('http://allowed.example', { signal: controller.signal }, [
+        '127.0.0.1'
+      ])
+    ).rejects.toThrow('synthetic abort')
+  })
+})

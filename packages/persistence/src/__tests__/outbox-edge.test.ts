@@ -317,11 +317,11 @@ describe('outbox edge paths', () => {
     expect(journal?.result).toMatchObject({ channel: 'web' })
   })
 
-  it('uses the fallback result when an effect resolves undefined', () => {
+  it('uses the fallback result when an effect resolves undefined', async () => {
     const { repository } = fixture()
     const event = enqueue(repository, 'outbox-edge-key-20')
     repository.claimNext({ tenantId: tenantA, workerId: 'worker-a' })
-    repository.ack({
+    await repository.ack({
       tenantId: tenantA,
       eventId: event.id,
       workerId: 'worker-a',
@@ -333,11 +333,11 @@ describe('outbox edge paths', () => {
     })
   })
 
-  it('summarizes primitive and structured results in the transition audit', () => {
+  it('summarizes primitive and structured results in the transition audit', async () => {
     const { repository, db } = fixture()
     const numeric = enqueue(repository, 'outbox-edge-key-21')
     repository.claimNext({ tenantId: tenantA, workerId: 'worker-a' })
-    repository.ack({
+    await repository.ack({
       tenantId: tenantA,
       eventId: numeric.id,
       workerId: 'worker-a',
@@ -349,7 +349,7 @@ describe('outbox edge paths', () => {
 
     const boolean = enqueue(repository, 'outbox-edge-key-22')
     repository.claimNext({ tenantId: tenantA, workerId: 'worker-b' })
-    repository.ack({
+    await repository.ack({
       tenantId: tenantA,
       eventId: boolean.id,
       workerId: 'worker-b',
@@ -361,7 +361,7 @@ describe('outbox edge paths', () => {
 
     const structured = enqueue(repository, 'outbox-edge-key-23')
     repository.claimNext({ tenantId: tenantA, workerId: 'worker-c' })
-    repository.ack({
+    await repository.ack({
       tenantId: tenantA,
       eventId: structured.id,
       workerId: 'worker-c',

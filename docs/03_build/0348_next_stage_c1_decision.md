@@ -12,7 +12,7 @@ Estado: M07-S1 permanece `FAIL / OPEN`; C1H terminou `candidate-freeze` exit 64 
 
 ## Resultado C1H preservado
 
-C1H encontrou dois tuples R1 stale: `docs/02_spec/0190_spec_validation.md` e `docs/07_agents/AGENTS.md`. Candidate freeze rejeitou o baseline, nenhum candidate ou check posterior foi produzido e a tentativa não pode ser repetida sob o mesmo gate. Ver [resultado C1H](../04_audit/evidence/AUD-20260924/M07-S1-C1H/final-gate-result.md), [quality bar](../04_audit/evidence/AUD-20260924/M07-S1-C1H/quality-bar-results.json), [command records](../04_audit/evidence/AUD-20260924/M07-S1-C1H/command-records.json) e [verificação final do Gauntlet arquivada](../../.gauntlet-archive/m07-s1-c1h-20260924-finished-fail/c1h-final-verification.json).
+C1H encontrou dois tuples R1 stale: `docs/02_spec/0190_spec_validation.md` e `docs/07_agents/AGENTS.md`. Candidate freeze rejeitou o baseline, nenhum candidate ou check posterior foi produzido e a tentativa não pode ser repetida sob o mesmo gate. Ver [resultado C1H](../04_audit/evidence/AUD-20260924/M07-S1-C1H/final-gate-result.md), [quality bar](../04_audit/evidence/AUD-20260924/M07-S1-C1H/quality-bar-results.json), [command records](../04_audit/evidence/AUD-20260924/M07-S1-C1H/command-records.json) e verificação final do Gauntlet arquivada (`.gauntlet-archive/m07-s1-c1h-20260924-finished-fail/c1h-final-verification.json`, fora do versionamento desde a PR-004; SHA-256 no [manifesto Gauntlet](../04_audit/evidence/AUD-20260926/gauntlet-state-manifest.json)).
 
 ## Packet C1I proposto
 

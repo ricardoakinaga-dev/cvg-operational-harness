@@ -1,5 +1,13 @@
 # 0090 — Discovery Validation
 
+## PR-101 / plataforma — 27/09/2026
+
+`IN_PROGRESS / NOT_VALIDATED`: [0019_platform_first_consumer_pilot.md](0019_platform_first_consumer_pilot.md)
+registra D-03 = A e o encaminhamento D-04 para discovery. Produto, tenant,
+fluxo piloto, volume, cobertura humana, SLA e métricas permanecem sem
+definição; o gate de PRD do novo consumidor ainda não foi alcançado.
+O usuário informou em 27/09/2026 que não há candidatos a produto definidos.
+
 ## Gate incremental REM-0539 R2 — 2026-09-05
 
 `DISCOVERY_VALIDATED_CONTROLLED`: [0012_rem0539_r2_durability.md](0012_rem0539_r2_durability.md). O problema de durabilidade está delimitado para PRD/SPEC e BUILD local controlado; integração externa continua fora do gate.

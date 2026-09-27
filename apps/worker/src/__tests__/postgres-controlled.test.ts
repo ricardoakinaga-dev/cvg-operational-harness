@@ -7,7 +7,8 @@ import {
   POSTGRES_CONTROLLED_QUEUE_ADAPTER
 } from '../postgres-controlled.ts'
 import {
-  ensureControlledSecretaryPreset,
+  ensureControlledAgentPreset,
+  createControlledReferencePreset,
   InMemoryControlPlaneStore,
   TenantIdSchema
 } from '@cvg/platform'
@@ -59,7 +60,11 @@ describe('controlled PostgreSQL worker boundary', () => {
 
   it('runs a committed inbound event through the deterministic runtime and finalizer', async () => {
     const platform = new InMemoryControlPlaneStore()
-    const agent = await ensureControlledSecretaryPreset(platform, tenantId)
+    const agent = await ensureControlledAgentPreset(
+      platform,
+      createControlledReferencePreset(),
+      tenantId
+    )
     const published = await platform.resolvePublished({ tenantId }, agent.id)
     if (!published) throw new Error('Worker fixture did not publish a version')
 

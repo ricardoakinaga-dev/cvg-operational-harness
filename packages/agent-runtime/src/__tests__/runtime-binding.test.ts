@@ -14,7 +14,8 @@ import type { ModelProfile } from '@cvg/model-gateway'
 import {
   PolicyEngine,
   type Capability,
-  type PolicyDocument
+  type PolicyDocument,
+  REFERENCE_POLICY_PROFILE
 } from '@cvg/policy-engine'
 import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
 import { GovernedAgentRuntime } from '../runtime.ts'
@@ -55,7 +56,7 @@ function buildHarness(options: HarnessOptions = {}) {
   prompts.register({
     promptId: 'binding-core',
     version: '1.0.0',
-    content: 'You are the CVG secretary.',
+    content: 'You are the CVG operational assistant.',
     owner: 'platform',
     approvedBy: 'reviewer',
     status: 'approved',
@@ -101,6 +102,7 @@ function buildHarness(options: HarnessOptions = {}) {
     retry: { maxRetries: 0 }
   })
   const policy = new PolicyEngine({
+    profile: REFERENCE_POLICY_PROFILE,
     documents: options.documents ?? [],
     clock: now
   })
@@ -157,12 +159,12 @@ function turnInput(
     operatorRole: 'Supervisor',
     agentId: AGENT,
     agentVersion: 'v1',
-    agentProfile: 'secretary',
+    agentProfile: 'assistant',
     conversationId: 'conv_1',
     correlationId: CORRELATION,
-    capability: 'appointment.cancel',
-    action: 'appointment.cancel',
-    resource: { type: 'appointment', id: 'apt_1', tenantId: TENANT },
+    capability: 'record.cancel',
+    action: 'record.cancel',
+    resource: { type: 'record', id: 'apt_1', tenantId: TENANT },
     dataClassification: 'INTERNAL',
     prompt: { promptId: 'binding-core', version: '1.0.0' },
     modelProfile: 'fast',
@@ -180,7 +182,7 @@ function approveApproval(harness: Harness, approvalId: string): void {
 }
 
 const FAKE_CANCEL_SCOPE: Partial<Record<Capability, EffectScope>> = {
-  'appointment.cancel': 'controlled_fake'
+  'record.cancel': 'controlled_fake'
 }
 
 describe('AAA-09 T-16: legacy consumption path removed from the governed runtime', () => {
@@ -208,10 +210,10 @@ describe('AAA-09 proposal art. 3: immutable ExecutionProposal', () => {
         operatorId: 'op_1',
         agentId: AGENT,
         agentVersion: 'v1',
-        agentProfile: 'secretary',
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
-        resource: { type: 'appointment', id: 'apt_1' },
+        agentProfile: 'assistant',
+        capability: 'record.cancel',
+        action: 'record.cancel',
+        resource: { type: 'record', id: 'apt_1' },
         dataClassification: 'INTERNAL',
         policyVersion: 'policy-engine-v1',
         promptVersion: '1.0.0',
@@ -255,10 +257,10 @@ describe('AAA-09 proposal art. 3: immutable ExecutionProposal', () => {
         operatorId: 'op_1',
         agentId: AGENT,
         agentVersion: 'v1',
-        agentProfile: 'secretary',
-        capability: 'appointment.cancel',
-        action: 'appointment.cancel',
-        resource: { type: 'appointment', id: 'apt_1' },
+        agentProfile: 'assistant',
+        capability: 'record.cancel',
+        action: 'record.cancel',
+        resource: { type: 'record', id: 'apt_1' },
         dataClassification: 'INTERNAL',
         policyVersion: 'policy-engine-v1',
         payload: { text: 'APPROVED_PAYLOAD' }
@@ -273,10 +275,10 @@ describe('AAA-09 proposal art. 3: immutable ExecutionProposal', () => {
           operatorId: 'op_1',
           agentId: AGENT,
           agentVersion: 'v1',
-          agentProfile: 'secretary',
-          capability: 'appointment.cancel',
-          action: 'appointment.cancel',
-          resource: { type: 'appointment', id: 'apt_1' },
+          agentProfile: 'assistant',
+          capability: 'record.cancel',
+          action: 'record.cancel',
+          resource: { type: 'record', id: 'apt_1' },
           dataClassification: 'INTERNAL',
           payload: { text: 'APPROVED_PAYLOAD' }
         }),
@@ -401,7 +403,7 @@ describe('AAA-09 T-02: mutated or adulterated proposal never reaches the tool', 
     const changedResource = await harness.runtime.runTurn(
       turnInput({
         approvalId,
-        resource: { type: 'appointment', id: 'apt_other', tenantId: TENANT }
+        resource: { type: 'record', id: 'apt_other', tenantId: TENANT }
       })
     )
     expect(changedResource.outcome).toBe('denied')
@@ -440,7 +442,7 @@ describe('AAA-09 T-02: mutated or adulterated proposal never reaches the tool', 
               id: 'cancel-requires-approval',
               effect: 'REQUIRE_APPROVAL',
               priority: 5,
-              capabilities: ['appointment.cancel'],
+              capabilities: ['record.cancel'],
               reason: 'Synthetic tightened policy'
             }
           ]
@@ -512,7 +514,7 @@ describe('AAA-09 T-19: fail-closed real-effect authorization', () => {
 
   it('denies real_authorized without an explicit authorization entry', async () => {
     const harness = buildHarness({
-      effectScopes: { 'appointment.cancel': 'real_authorized' }
+      effectScopes: { 'record.cancel': 'real_authorized' }
     })
     const result = await harness.runtime.runTurn(turnInput())
     expect(result.outcome).toBe('denied')
@@ -528,7 +530,7 @@ describe('AAA-09 T-19: fail-closed real-effect authorization', () => {
     approveApproval(harness, approvalId)
 
     const restricted = buildHarness({
-      effectScopes: { 'appointment.cancel': 'real_authorized' }
+      effectScopes: { 'record.cancel': 'real_authorized' }
     })
     const restrictedRuntime = new GovernedAgentRuntime({
       policy: harness.policy,
@@ -539,7 +541,7 @@ describe('AAA-09 T-19: fail-closed real-effect authorization', () => {
       toolExecutor: harness.toolExecutor,
       outbox: harness.outbox,
       clock: () => NOW,
-      effectScopes: { 'appointment.cancel': 'real_authorized' }
+      effectScopes: { 'record.cancel': 'real_authorized' }
     })
     const result = await restrictedRuntime.runTurn(turnInput({ approvalId }))
     expect(result.outcome).toBe('denied')

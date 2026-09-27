@@ -14,7 +14,7 @@ import {
   PromptRegistry,
   type ModelProfile
 } from '@cvg/model-gateway'
-import { PolicyEngine } from '@cvg/policy-engine'
+import { PolicyEngine, REFERENCE_POLICY_PROFILE } from '@cvg/policy-engine'
 import { InMemoryDatabase, OutboxRepository } from '@cvg/persistence'
 import { ChaosLedger } from '../faults.ts'
 
@@ -104,7 +104,7 @@ describe('chaos: outbox and side effects', () => {
     const second = outbox.claimNext({ tenantId: TENANT, workerId: 'worker-b' })
     expect(second?.id).toBe(event.id)
     let effects = 0
-    outbox.ack({
+    await outbox.ack({
       tenantId: TENANT,
       eventId: event.id,
       workerId: 'worker-b',
@@ -436,8 +436,8 @@ describe('chaos: approvals and tenants', () => {
       operatorId: 'op_1',
       agentId: 'agent_1',
       agentVersion: 'v1',
-      action: 'appointment.cancel',
-      resource: { type: 'appointment', id: 'apt_1' },
+      action: 'record.cancel',
+      resource: { type: 'record', id: 'apt_1' },
       payload: { reason: 'x' },
       policyVersion: 'v1',
       correlationId: CORRELATION,
@@ -450,8 +450,8 @@ describe('chaos: approvals and tenants', () => {
       approvals.verifyAndConsume({
         tenantId: TENANT,
         approvalId: record.approvalId,
-        action: 'appointment.cancel',
-        resource: { type: 'appointment', id: 'apt_1' },
+        action: 'record.cancel',
+        resource: { type: 'record', id: 'apt_1' },
         payload: { reason: 'x' }
       })
     ).toThrowError(expect.objectContaining({ code: 'expired' }))
@@ -465,8 +465,8 @@ describe('chaos: approvals and tenants', () => {
       operatorId: 'op_1',
       agentId: 'agent_1',
       agentVersion: 'v1',
-      action: 'appointment.cancel',
-      resource: { type: 'appointment', id: 'apt_1' },
+      action: 'record.cancel',
+      resource: { type: 'record', id: 'apt_1' },
       payload: {},
       policyVersion: 'v1',
       correlationId: CORRELATION
@@ -474,17 +474,20 @@ describe('chaos: approvals and tenants', () => {
     expect(() => approvals.get(OTHER_TENANT, record.approvalId)).toThrowError(
       expect.objectContaining({ code: 'not_found' })
     )
-    const policy = new PolicyEngine({ clock: () => NOW })
+    const policy = new PolicyEngine({
+      profile: REFERENCE_POLICY_PROFILE,
+      clock: () => NOW
+    })
     const decision = policy.evaluate({
       tenantId: TENANT,
       operatorId: 'op_1',
       operatorRole: 'Supervisor',
       agentId: 'agent_1',
-      agentProfile: 'secretary',
-      capability: 'appointment.modify',
-      action: 'appointment.modify',
+      agentProfile: 'assistant',
+      capability: 'record.update',
+      action: 'record.update',
       correlationId: CORRELATION,
-      resource: { type: 'appointment', id: 'apt_1', tenantId: OTHER_TENANT }
+      resource: { type: 'record', id: 'apt_1', tenantId: OTHER_TENANT }
     })
     expect(decision.decision).toBe('DENY')
     expect(decision.reason).toBe('tenant_mismatch')

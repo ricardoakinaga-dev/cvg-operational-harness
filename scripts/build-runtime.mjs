@@ -22,6 +22,7 @@ export const RUNTIME_WORKSPACES = [
   'packages/policy',
   'packages/persistence',
   'packages/agent-core',
+  'legacy/packages/secretary-profile',
   'apps/api'
 ]
 
@@ -202,7 +203,7 @@ function assertCompiledOutput(relativePath) {
 function copyWorkspaceManifests() {
   copyFile('package.json')
   copyFile('package-lock.json')
-  for (const group of ['apps', 'packages']) {
+  for (const group of ['apps', 'packages', 'legacy/packages']) {
     const directory = path.join(root, group)
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue

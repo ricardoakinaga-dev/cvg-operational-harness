@@ -87,6 +87,31 @@ Marcar `WAITING_HUMAN_APPROVAL` quando houver decisao de negocio, alteracao de e
 
 O Codex nao pode assumir silenciosamente decisoes de negocio.
 
+## Governança proporcional (D-12, 26/09/2026)
+
+Decisão do usuário registrada no
+[pacote 0357](../03_build/0357_production_decision_packet_2026-09-26.md). O
+rigor do gate acompanha o risco da mudança. As regras de segurança desta
+constituição (sem dado real, sem produção irrestrita, sem ação clínica,
+financeira ou de agenda automática, approval ou handoff para ação sensível)
+não mudam.
+
+| Trilha | Quando se aplica                                                                                         | O que exige                                                                                                                                                                            |
+| ------ | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| T1     | Documentação, ledgers, planos, inventários                                                               | Links e formatação verdes; atualizar estado, log e backlog                                                                                                                             |
+| T2     | Refatoração, remoção ou isolamento de código sem efeito externo e sem mudança de contrato público        | Task registrada, SPEC curta (recon, regras, critério de pronto), `typecheck`, `lint`, `npm test`, `test:postgres` e E2E verdes em Node 22; registro do resultado na SPEC e nos ledgers |
+| T3     | Mudança de contrato público, schema ou migration, segurança, identidade, policy ou approval              | T2 + revisão explícita da SPEC pelo usuário antes do BUILD                                                                                                                             |
+| T4     | Capacidade sensível (provider, canal, conhecimento, efeito externo real, dado real) ou release candidate | Gate hash-bound: pacote de decisão com SHA-256, candidato congelado, certificação completa e decisão humana registrada                                                                 |
+
+Regras de baseline:
+
+1. A baseline de um gate T4 inclui só os arquivos que são input daquele gate.
+   Mudança em documento que não é input não invalida o gate.
+2. A certificação (`npm run certify`) é reemitida por release candidate e ao
+   fim de cada rodada com código, não a cada edição documental.
+3. Uma trilha só pode ser rebaixada por decisão humana registrada; em dúvida,
+   usar a trilha mais alta.
+
 ## Regras de Build
 
 BUILD deve sempre comecar por:

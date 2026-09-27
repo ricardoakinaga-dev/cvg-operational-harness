@@ -14,6 +14,13 @@
  * in prose and is reported as a broken link. Normative rules: SPEC-DOC-002 in
  * docs/02_spec/0130_doc_link_checker_extraction.md.
  *
+ * A link in a frozen historical document whose target was deliberately removed
+ * by a registered task (for example PR-L02, SPEC-LEGACY-001) is classified as
+ * `historicalRemovedTargets` only when docs/doc-link-policy.json lists that
+ * exact file, the exact repository path of the target and the removing task
+ * under `removedTargets`. Such documents are hash-bound evidence and cannot be
+ * edited. A listed target that exists again fails the check (stale policy).
+ *
  * Usage: node scripts/check-doc-links.mjs [roots...]
  * Exit 0 when no broken internal link exists in the scanned roots.
  */
@@ -128,6 +135,8 @@ function maskSource(text) {
 }
 
 const broken = []
+const historicalRemovedTargets = []
+const staleRemovedTargets = []
 const nonPortableAbsolute = []
 const unallowlistedNonPortableAbsolute = []
 
@@ -155,6 +164,25 @@ function isAllowlistedAbsolute(file, target) {
   return Boolean(
     filePolicy?.targetSuffixes?.some((suffix) => target.endsWith(suffix))
   )
+}
+
+function removedTargetPolicy(file, absoluteTarget) {
+  const target = relativeFile(absoluteTarget)
+  return linkPolicy.removedTargets?.find(
+    (entry) =>
+      entry.file === relativeFile(file) &&
+      typeof entry.removedBy === 'string' &&
+      entry.removedBy.trim() !== '' &&
+      entry.targets?.includes(target)
+  )
+}
+
+for (const entry of linkPolicy.removedTargets ?? []) {
+  for (const target of entry.targets ?? []) {
+    if (existsSync(resolve(target))) {
+      staleRemovedTargets.push({ file: entry.file, target })
+    }
+  }
 }
 
 function parseTarget(rawTarget) {
@@ -220,7 +248,18 @@ for (const root of roots) {
       }
       const decoded = decodeURIComponent(parsed.path)
       const absolute = resolve(dirname(file), decoded)
-      if (!existsSync(absolute)) broken.push({ file, target })
+      if (!existsSync(absolute)) {
+        const removed = removedTargetPolicy(file, absolute)
+        if (removed) {
+          historicalRemovedTargets.push({
+            file,
+            target,
+            removedBy: removed.removedBy
+          })
+        } else {
+          broken.push({ file, target })
+        }
+      }
     }
   }
 }
@@ -230,6 +269,8 @@ console.log(
     {
       scannedRoots: roots,
       broken,
+      historicalRemovedTargets,
+      staleRemovedTargets,
       nonPortableAbsolute,
       unallowlistedNonPortableAbsolute
     },
@@ -237,9 +278,16 @@ console.log(
     2
   )
 )
-if (broken.length > 0 || unallowlistedNonPortableAbsolute.length > 0) {
+if (
+  broken.length > 0 ||
+  staleRemovedTargets.length > 0 ||
+  unallowlistedNonPortableAbsolute.length > 0
+) {
   if (broken.length > 0) {
     console.error(`BROKEN_INTERNAL_LINKS=${broken.length}`)
+  }
+  if (staleRemovedTargets.length > 0) {
+    console.error(`STALE_REMOVED_TARGETS=${staleRemovedTargets.length}`)
   }
   if (unallowlistedNonPortableAbsolute.length > 0) {
     console.error(

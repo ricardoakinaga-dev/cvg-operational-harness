@@ -24,10 +24,10 @@ function proposalInput(overrides: Record<string, unknown> = {}) {
     operatorId: 'op_1',
     agentId: AGENT,
     agentVersion: 'v1',
-    agentProfile: 'secretary' as const,
-    capability: 'appointment.cancel' as const,
-    action: 'appointment.cancel',
-    resource: { type: 'appointment', id: 'apt_1' },
+    agentProfile: 'assistant' as const,
+    capability: 'record.cancel' as const,
+    action: 'record.cancel',
+    resource: { type: 'record', id: 'apt_1' },
     dataClassification: 'INTERNAL' as const,
     policyVersion: 'policy-v1',
     payload: { text: 'APPROVED_PAYLOAD' },
@@ -44,10 +44,10 @@ function hashInput(
     operatorId: 'op_1',
     agentId: AGENT,
     agentVersion: 'v1',
-    agentProfile: 'secretary',
-    capability: 'appointment.cancel',
-    action: 'appointment.cancel',
-    resource: { type: 'appointment', id: 'apt_1' },
+    agentProfile: 'assistant',
+    capability: 'record.cancel',
+    action: 'record.cancel',
+    resource: { type: 'record', id: 'apt_1' },
     dataClassification: 'INTERNAL',
     payload: { text: 'APPROVED_PAYLOAD' },
     ...overrides
@@ -143,7 +143,7 @@ describe('execution proposal digest matrix', () => {
   it('applies an explicit TTL and omits absent optional fields', () => {
     const proposal = createExecutionProposal(
       proposalInput({
-        resource: { type: 'appointment' },
+        resource: { type: 'record' },
         promptVersion: undefined
       }),
       { now: NOW, expiresAtMs: 1_000 }
@@ -152,7 +152,7 @@ describe('execution proposal digest matrix', () => {
     expect(
       Date.parse(proposal.expiresAt) - Date.parse(proposal.createdAt)
     ).toBe(1_000)
-    expect(proposal.resource).toEqual({ type: 'appointment' })
+    expect(proposal.resource).toEqual({ type: 'record' })
     expect(proposal.promptVersion).toBeUndefined()
     expect(
       Object.prototype.hasOwnProperty.call(proposal, 'promptVersion')
@@ -162,14 +162,14 @@ describe('execution proposal digest matrix', () => {
   it('copies resource tenant scoping when provided', () => {
     const proposal = createExecutionProposal(
       proposalInput({
-        resource: { type: 'appointment', id: 'apt_1', tenantId: TENANT },
+        resource: { type: 'record', id: 'apt_1', tenantId: TENANT },
         promptVersion: '1.0.0'
       }),
       { now: NOW }
     )
 
     expect(proposal.resource).toEqual({
-      type: 'appointment',
+      type: 'record',
       id: 'apt_1',
       tenantId: TENANT
     })
@@ -183,11 +183,11 @@ describe('execution proposal digest matrix', () => {
       hashInput({ operatorId: 'op_2' }),
       hashInput({ agentId: 'agent_other' }),
       hashInput({ agentVersion: 'v2' }),
-      hashInput({ agentProfile: 'clinical' }),
-      hashInput({ capability: 'appointment.create' }),
-      hashInput({ action: 'appointment.reschedule' }),
-      hashInput({ resource: { type: 'appointment', id: 'apt_2' } }),
-      hashInput({ resource: { type: 'appointment_draft', id: 'apt_1' } }),
+      hashInput({ agentProfile: 'specialist' }),
+      hashInput({ capability: 'record.create' }),
+      hashInput({ action: 'record.reschedule' }),
+      hashInput({ resource: { type: 'record', id: 'apt_2' } }),
+      hashInput({ resource: { type: 'record_draft', id: 'apt_1' } }),
       hashInput({ dataClassification: 'CLINICAL' }),
       hashInput({ payload: { text: 'MUTATED_PAYLOAD' } })
     ]
@@ -197,7 +197,7 @@ describe('execution proposal digest matrix', () => {
     }
     expect(
       computeExecutionProposalHash(
-        hashInput({ resource: { type: 'appointment', id: 'apt_1' } })
+        hashInput({ resource: { type: 'record', id: 'apt_1' } })
       )
     ).toBe(base.proposalHash)
   })
@@ -212,10 +212,10 @@ describe('execution proposal digest matrix', () => {
           operatorId: 'op_1',
           agentId: AGENT,
           agentVersion: 'v1',
-          agentProfile: 'secretary',
-          capability: 'appointment.cancel',
-          action: 'appointment.cancel',
-          resource: { type: 'appointment', id: 'apt_1' },
+          agentProfile: 'assistant',
+          capability: 'record.cancel',
+          action: 'record.cancel',
+          resource: { type: 'record', id: 'apt_1' },
           dataClassification: 'INTERNAL',
           payload: { text: 'APPROVED_PAYLOAD' }
         }),

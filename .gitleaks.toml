@@ -1,0 +1,28 @@
+# Gitleaks configuration (PR-011, docs/03_build/0356_production_backlog_2026-09-26.md).
+# Every default rule stays active. Only the generic-api-key heuristic gets
+# rule-scoped allowlists, where the 2026-09-26 triage found non-secret values:
+# 445 SHA-256 digests in hash-bound audit evidence and synthetic test fixtures
+# (the constitution forbids real data in this repository). Specific rules
+# such as aws-access-token still fire inside test files. Single historical
+# findings are pinned by fingerprint in .gitleaksignore.
+title = "cvg-operational-harness"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "SHA-256 digests recorded in hash-bound audit evidence"
+condition = "AND"
+paths = ['''^docs/04_audit/evidence/''']
+regexTarget = "secret"
+regexes = ['''^[a-f0-9]{64}$''']
+
+[[rules.allowlists]]
+description = "Synthetic fixtures in test files"
+paths = [
+  '''(^|/)__tests__/[^/]+\.test\.tsx?$''',
+  '''^tests/e2e/[^/]+\.spec\.ts$'''
+]

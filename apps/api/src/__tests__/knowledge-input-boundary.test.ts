@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   AgentConfigSchema,
-  createControlledSecretaryConfig,
+  createControlledAgentConfig,
   InMemoryControlPlaneStore,
   type ApprovedKnowledgeResolver
 } from '@cvg/platform'
@@ -30,7 +30,7 @@ describe('API controlled knowledge input boundary', () => {
     const version = await platform.createVersion(
       { tenantId },
       agent.id,
-      createControlledSecretaryConfig(),
+      createControlledAgentConfig(),
       'test.knowledge-api-boundary'
     )
     const app = buildServer({ platform })
@@ -74,7 +74,7 @@ describe('API controlled knowledge input boundary', () => {
       { tenantId },
       agent.id,
       AgentConfigSchema.parse({
-        ...createControlledSecretaryConfig(),
+        ...createControlledAgentConfig(),
         knowledge: [
           {
             source: 'controlled://institutional-hours',

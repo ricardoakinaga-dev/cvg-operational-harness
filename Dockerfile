@@ -11,6 +11,7 @@ COPY package.json package-lock.json ./
 COPY tsconfig.base.json tsconfig.json tsconfig.typecheck.json tsconfig.runtime.json vite.config.mts ./
 COPY apps ./apps
 COPY packages ./packages
+COPY legacy ./legacy
 COPY scripts ./scripts
 RUN npm ci --ignore-scripts && npm run build:web && npm run build:runtime
 

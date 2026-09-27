@@ -1,43 +1,15 @@
 import { z } from 'zod'
-import { DataClassificationSchema } from '@cvg/shared'
-import { CapabilitySchema } from './capabilities.ts'
-import { AgentProfileNameSchema, RoleNameSchema } from './grants.ts'
+import type { PolicyProfile } from './profile.ts'
 
 export const PolicyEffectSchema = z.enum(['ALLOW', 'DENY', 'REQUIRE_APPROVAL'])
 export type PolicyEffect = z.infer<typeof PolicyEffectSchema>
 
-export const PolicyRuleSchema = z
-  .object({
-    id: z.string().min(1).max(120),
-    effect: PolicyEffectSchema,
-    priority: z.number().int().min(-100).max(100).default(0),
-    capabilities: z.array(CapabilitySchema).min(1).optional(),
-    agentProfiles: z.array(AgentProfileNameSchema).min(1).optional(),
-    roles: z.array(RoleNameSchema).min(1).optional(),
-    actions: z.array(z.string().min(1).max(120)).min(1).optional(),
-    resourceTypes: z.array(z.string().min(1).max(120)).min(1).optional(),
-    /** Rule applies when the request classification rank is >= this value. */
-    classificationAtLeast: DataClassificationSchema.optional(),
-    reason: z.string().min(1).max(240)
-  })
-  .strict()
+/** Policy documents are validated by `PolicyProfile.policyDocumentSchema`. */
+export type PolicyRule = z.output<PolicyProfile['policyRuleSchema']>
+export type PolicyRuleInput = z.input<PolicyProfile['policyRuleSchema']>
 
-export type PolicyRule = z.output<typeof PolicyRuleSchema>
-export type PolicyRuleInput = z.input<typeof PolicyRuleSchema>
-
-export const PolicyDocumentSchema = z
-  .object({
-    policyId: z.string().min(1).max(120),
-    version: z.string().min(1).max(60),
-    tenantId: z.string().min(1).max(120).optional(),
-    effectiveFrom: z.string().datetime(),
-    effectiveUntil: z.string().datetime().optional(),
-    rules: z.array(PolicyRuleSchema).min(1)
-  })
-  .strict()
-
-export type PolicyDocument = z.output<typeof PolicyDocumentSchema>
-export type PolicyDocumentInput = z.input<typeof PolicyDocumentSchema>
+export type PolicyDocument = z.output<PolicyProfile['policyDocumentSchema']>
+export type PolicyDocumentInput = z.input<PolicyProfile['policyDocumentSchema']>
 
 export const ENGINE_POLICY_ID = 'builtin.deny_by_default'
 export const ENGINE_POLICY_VERSION = 'policy-engine-v1'
@@ -63,9 +35,15 @@ export class PolicyRegistryError extends Error {
  */
 export class PolicyRegistry {
   readonly #documents = new Map<string, PolicyDocument>()
+  readonly #profile: PolicyProfile
+
+  /** Documents are validated against the capabilities of `profile`. */
+  constructor(profile: PolicyProfile) {
+    this.#profile = profile
+  }
 
   register(input: PolicyDocumentInput): PolicyDocument {
-    const parsed = PolicyDocumentSchema.parse(input)
+    const parsed = this.#profile.policyDocumentSchema.parse(input)
     const key = policyDocumentKey(parsed.policyId, parsed.version)
     const existing = this.#documents.get(key)
     if (existing) {

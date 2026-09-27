@@ -12,6 +12,7 @@ import type { ProviderRequest } from '../contracts.ts'
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
 
 const servers: Server[] = []
+const handlerErrors: unknown[] = []
 
 afterEach(async () => {
   await Promise.all(
@@ -23,15 +24,24 @@ afterEach(async () => {
         })
     )
   )
+  const errors = handlerErrors.splice(0)
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'local provider server handler failed')
+  }
 })
 
 async function startServer(
   handler: (
     request: IncomingMessage,
     response: import('node:http').ServerResponse
-  ) => void
+  ) => void | Promise<void>
 ): Promise<string> {
-  const server = createServer(handler)
+  const server = createServer((request, response) => {
+    void Promise.resolve(handler(request, response)).catch((error: unknown) => {
+      handlerErrors.push(error)
+      response.destroy(error instanceof Error ? error : undefined)
+    })
+  })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   servers.push(server)
   const address = server.address() as AddressInfo

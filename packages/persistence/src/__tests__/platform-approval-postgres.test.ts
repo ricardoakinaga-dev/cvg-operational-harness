@@ -8,6 +8,7 @@ import {
 } from '@cvg/platform'
 import {
   PostgresCapabilityApprovalRepository,
+  TenantScopedPostgresCapabilityApprovalRepository,
   runPostgresMigrations
 } from '../index.ts'
 
@@ -254,6 +255,38 @@ describe('PostgreSQL capability approval authority', () => {
         await expect(
           repository.verifyAndConsume(verificationInput(revocable.id))
         ).resolves.toBeNull()
+
+        let scopedConnections = 0
+        const scoped = new TenantScopedPostgresCapabilityApprovalRepository(
+          {
+            connect: async () => {
+              scopedConnections += 1
+              return {
+                query: secondClient.query.bind(secondClient),
+                release: () => undefined
+              }
+            }
+          },
+          { now: () => now }
+        )
+        const scopedIssued = await scoped.issue(
+          issueInput({ nonce: 'nonce_tenant_scoped_fixture' })
+        )
+        await expect(
+          scoped.get(scopedIssued.id, tenantA)
+        ).resolves.toMatchObject({
+          status: 'issued'
+        })
+        await expect(scoped.get(scopedIssued.id, tenantB)).resolves.toBeNull()
+        await expect(
+          scoped.verifyAndConsume(verificationInput(scopedIssued.id))
+        ).resolves.toMatchObject({ status: 'consumed' })
+        const beforeInvalid = scopedConnections
+        await expect(scoped.get(scopedIssued.id)).resolves.toBeNull()
+        await expect(
+          scoped.revoke(scopedIssued.id, 'approver.fixture')
+        ).resolves.toBe(false)
+        expect(scopedConnections).toBe(beforeInvalid)
       } finally {
         await firstClient.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`)
         secondClient.release()

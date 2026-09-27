@@ -1,6 +1,6 @@
 import {
   AgentConfigSchema,
-  createControlledSecretaryConfig,
+  createControlledAgentConfig,
   createValidatedControlledReleaseCandidate,
   InMemoryControlPlaneStore,
   TenantIdSchema,
@@ -28,7 +28,7 @@ async function publishKnowledgeVersion(store: InMemoryControlPlaneStore) {
     }
   )
   const config = AgentConfigSchema.parse({
-    ...createControlledSecretaryConfig(),
+    ...createControlledAgentConfig(),
     knowledge: [
       {
         source: knowledge.source,

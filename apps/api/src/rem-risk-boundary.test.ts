@@ -1,6 +1,6 @@
 import {
   CapabilityGateway,
-  createControlledSecretaryConfig,
+  createControlledAgentConfig,
   createValidatedControlledReleaseCandidate,
   InMemoryControlPlaneStore
 } from '@cvg/platform'
@@ -20,7 +20,7 @@ describe('REM risk public API boundary', () => {
     const draft = await platform.createVersion(
       scope,
       agent.id,
-      createControlledSecretaryConfig(),
+      createControlledAgentConfig(),
       'admin.synthetic'
     )
     await platform.transitionVersion(scope, draft.id, 'TESTING')
@@ -81,7 +81,7 @@ describe('REM risk public API boundary', () => {
     const draft = await platform.createVersion(
       scope,
       agent.id,
-      createControlledSecretaryConfig(),
+      createControlledAgentConfig(),
       'admin.synthetic'
     )
     await platform.transitionVersion(scope, draft.id, 'TESTING')
