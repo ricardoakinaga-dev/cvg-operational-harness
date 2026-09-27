@@ -22,8 +22,9 @@ remoto executa `npm run build` no gate build, e a certificação também.
 
 ## Regra e aceite
 
-1. `npm run build` deve executar typecheck, `build:harness` e build web nessa
-   ordem, de modo que o E2E funcione após `npm ci` sem artefatos residuais.
+1. `npm run build` deve executar typecheck, `build:harness -- --force` e build
+   web nessa ordem, de modo que o E2E funcione após `npm ci` sem artefatos
+   residuais e recupere saídas ausentes mesmo com cache incremental presente.
    Preservar os comandos internos existentes e as restrições do runtime.
 2. Verificar o `build` em checkout limpo e `test:e2e` 12/12 em Node 22.
    Reexecutar certificação completa e `certification:verify` sobre candidato
@@ -32,9 +33,12 @@ remoto executa `npm run build` no gate build, e a certificação também.
 
 ## Execução e provas
 
-- `package.json` agora executa `typecheck -> build:harness -> build:web` em
-  `npm run build`; o comando passou em Node 22 e gerou
-  `packages/shared/dist/index.js` antes do bundle web.
+- Primeiro ensaio: `typecheck -> build:harness -> build:web` passou em Node
+  22, mas ao mover `packages/shared/dist` para um backup fora do worktree e
+  repetir o build, o cache incremental não recriou `dist/index.js`. O comando
+  de build foi ajustado para forçar a emissão dos pacotes do harness.
+- Segundo ensaio: `npm run build` com `--force` recriou
+  `packages/shared/dist/index.js` e concluiu o bundle web com exit 0.
 - No checkout limpo, `npm run build:harness` seguido de `npm run test:e2e`
   passou 12/12. A falha anterior do E2E era o overlay Vite para
   `@cvg/shared`, e não um defeito visual dos snapshots.
