@@ -527,6 +527,8 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-301 — Autenticação de operador por OIDC com MFA na API (D-09) · P0 · SPEC+BUILD
 
+- 27/09/2026, [AUD-0580](../04_audit/0580_cross_origin_oidc_gap_2026-09-27.md) reproduziu `GET 200` e `OPTIONS 204` com `Access-Control-Allow-Origin` correto, mas sem `Access-Control-Allow-Credentials`, em Node 22 no hook real do branch `85c2c7d`. O cliente web usa URL relativa e proxy Vite; o NGINX web também faz proxy `/v1`, então o E2E atual não exercita API/console em hosts distintos. A [SPEC-PR301/302-002](../02_spec/0150_cross_origin_operator_console.md) define origem de API fixada no bundle, CORS com credenciais só para console, CSRF por `Origin`, cookies `__Host-`, `/v1` sem cache compartilhado, CSP e prova HTTPS sintética. I27/I28 `ACCEPT_SPEC_REVIEW_READY` após corrigir injeção por origem irmã, cache entre tenants e rollback antigo; revisão humana T3, BUILD e prova continuam pendentes. `NO_GO`.
+
 - 27/09/2026, I26 `ACCEPT_LOCAL` após rechecagem adversarial das rotas: a revogação por digest antigo é o contrato explícito da SPEC 0144 para serializar logout e `replace`, com risco de disponibilidade conhecido, sem bypass novo. Ficou um P3 apenas no harness sintético: API e Vite em portas diferentes do mesmo hostname recebem o mesmo cookie host-only `Path=/`, como prevê a [RFC 6265 §8.5](https://www.rfc-editor.org/rfc/rfc6265.html#section-8.5). Antes de produção, escolher hosts HTTPS distintos no mesmo site para console/API, manter cookie host-only `Secure; HttpOnly; SameSite=Strict` emitido só pela API e provar em navegador que o servidor web não o recebe, a API o recebe e o callback IdP depende só do cookie pendente Lax. O IdP local já é recusado fora de dev/test; essa prova de topologia corporativa segue P0 de GO.
 
 - 27/09/2026, rollout da purge: a [SPEC 0149](../02_spec/0149_operator_auth_purge.md) agora define A0–A4, com release de preflight que aceita somente inventários `0001` e `0002` completos, drenagem verificada do binário antigo antes da migration, runner com alvo explícito, restart para repetir preflight após DDL e rollback apenas até o release compatível. Ainda é proposta T3 em revisão; nenhum binário compatível, migration `0002` ou job de purge foi construído. `PENDENTE / NO_GO`.
@@ -556,6 +558,8 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
   tenant ausente e MFA ausente; replay continua bloqueado.
 
 ### PR-302 — Login web por OIDC · P0 · SPEC+BUILD
+
+- A [SPEC 0150](../02_spec/0150_cross_origin_operator_console.md) é gate T3 para o console chamar a API no host HTTPS correto sem enviar cookie ao servidor estático; deve preservar recarga, 401/503 e logout com `credentials: include`. O build de produção não pode depender do proxy Vite. Revisão humana, BUILD e prova de navegador em hosts distintos pendentes.
 
 - 27/09/2026, I22 rechecagem `ACCEPT_LOCAL_PROOF` após reforço entre sites (`8b0f92d`). O commit isolado `0b57416` corrigiu a descrição de sessão antiga e só emite E2E PASS após comprovar cleanup de usuário e zero roles/schemas; uma tentativa com timeout deixou objetos sintéticos, removidos manualmente antes da execução final verde em Node 22. Prova: `docs/04_audit/evidence/PR301-302-TRUSTED-E2E-20260927/proof.json` no branch. Compatibilidade de rollout, integração após PR-L04, IdP corporativo, dados e certificação do SHA integrado ainda pendentes. `ACCEPT_LOCAL_PROOF / NO_GO`.
 

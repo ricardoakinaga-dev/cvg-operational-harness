@@ -1,3 +1,11 @@
+# PR-301/302 — fronteira HTTPS console/API, SPEC 0150 pronta — 27/09/2026
+
+- status: `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [AUD-0580](04_audit/0580_cross_origin_oidc_gap_2026-09-27.md) inspecionou o branch OIDC `85c2c7d`: cliente web usa fetch relativo, Vite/NGINX encaminham `/v1` no host do console e o hook HTTP não emite `Access-Control-Allow-Credentials`. Node 22, `Fastify.inject`: `GET 200` e `OPTIONS 204` da origem permitida vieram com ACAO e `Vary`, sem ACAC. A [SPEC 0150](02_spec/0150_cross_origin_operator_console.md) propõe hosts HTTPS distintos, origem fixa, CORS/CSRF, cookies `__Host-`, cache privado sem armazenamento, CSP e cutover seguro. I27/I28 rejeitaram a primeira versão e aceitaram a revisão `ACCEPT_SPEC_REVIEW_READY` somente para revisão humana.
+- verification_state: inspeção de código/hashes, sonda HTTP sintética Node 22 e críticas independentes; formatação, links e higiene documental em fechamento. Nenhum código foi alterado, nem HTTPS/Chromium com dois hosts, IdP corporativo, deploy ou certificação executados nesta rodada.
+- blocking_state: aprovação explícita T3 da SPEC 0150 para BUILD; domínio/issuer corporativo e revisão dos parâmetros OIDC; PR-L04 ativo para integração root; retenção/purge DP-01 a DP-06 e certificação no SHA integrado. Produção `NO_GO`.
+- next_action: apresentar a SPEC 0150 para revisão; após aprovação, construir e provar o transporte em hosts HTTPS sintéticos no branch isolado, então integrar quando PR-L04 liberar e certificar o candidato completo.
+
 # PR-301/402 — rollout de purge especificado e I25 aceito — 27/09/2026
 
 - status: `SPEC_REVIEW_READY / DPO_POLICY_PENDING / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

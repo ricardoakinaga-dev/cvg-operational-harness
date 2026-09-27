@@ -1,3 +1,7 @@
+# PR-301/302 — cross-origin HTTPS do console — 27/09/2026
+
+- `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING / NO_GO`: [AUD-0580](04_audit/0580_cross_origin_oidc_gap_2026-09-27.md) provou falta de ACAC no GET/OPTIONS do hook em Node 22; web e NGINX usam `/v1` relativo/proxy. [SPEC 0150](02_spec/0150_cross_origin_operator_console.md) recebeu I27/I28 `ACCEPT_SPEC_REVIEW_READY` após corrigir cookie de domínio irmão, cache entre tenants, rollback e CSP. Aprovação T3, BUILD, hosts HTTPS/Chromium, integração e certificação permanecem P0. O E2E local anterior não cobre essa topologia.
+
 # PR-301/402 — rollout de purge e topologia de cookie — 27/09/2026
 
 - `SPEC_REVIEW_READY / DPO_POLICY_PENDING / NO_GO`: [SPEC 0149](02_spec/0149_operator_auth_purge.md) inclui matriz A0–A4, runner versionado, attest da policy, comparação/lock antes de purge e isolamento `READ COMMITTED`; I25 `ACCEPT_SPEC_REVIEW_READY` após dois P1 corrigidos. DP-01 a DP-06, revisão T3 humana, código, PostgreSQL, staging e certificado do candidato integrado pendentes.
