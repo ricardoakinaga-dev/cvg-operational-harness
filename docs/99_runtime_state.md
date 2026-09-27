@@ -1,3 +1,11 @@
+# PR-301-PG-INDEX — inventário de índices no preflight — 27/09/2026
+
+- status: `PG_INDEX_BOUNDARY_ACCEPTED_LOCAL / INTEGRATION_PENDING`; produção `NO_GO`.
+- last_completed_action: o preflight da role de sessão passou a verificar os cinco índices canônicos do schema de autenticação, incluindo validade, chave, owner, método, ausência de expressão/predicado e inventário exato. Negativos em banco descartável rejeitaram índice ausente, chave trocada, parcial e índice extra.
+- verification_state: [prova](04_audit/evidence/PR301-PG-INDEX-20260927/proof.json); Node 22: PostgreSQL 16 focado 9/9, suíte geral 304 arquivos/2.220 testes PASS (20/154 skipped sem banco) e PostgreSQL completo 35 arquivos/258 testes PASS; typecheck/lint/formato PASS. Crítica I13 `ACCEPT_LOCAL`; banco descartável removido.
+- blocking_state: composição do store no servidor, cliente OIDC/JWKS/callback, web confiável, E2E e certificação integrada aguardam caminhos PR-L04 e demais gates; sem produção.
+- next_action: integrar API/web após liberação dos claims, revalidar entrypoint publicado e certificar o mesmo SHA; manter `NO_GO`.
+
 # PR-301-OIDC-MAP — vínculo de identidade — 27/09/2026
 
 - status: `OIDC_MAPPING_ACCEPTED_LOCAL / API_INTEGRATION_PENDING`; produção `NO_GO`.

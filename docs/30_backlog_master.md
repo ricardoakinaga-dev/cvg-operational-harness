@@ -1,3 +1,7 @@
+# PR-301-PG-INDEX — índices de sessão PostgreSQL — 27/09/2026
+
+- `PG_INDEX_BOUNDARY_ACCEPTED_LOCAL / INTEGRATION_PENDING / NO_GO`: [preflight](../apps/api/src/operator-session-preflight.ts) exige cinco índices canônicos e falha fechado em drift de chave, predicado ou inventário; [prova PostgreSQL](04_audit/evidence/PR301-PG-INDEX-20260927/proof.json) Node 22 com 9/9 focados, suíte geral 304/2.220 e PostgreSQL 35/258 PASS; I13 `ACCEPT_LOCAL`. PR-301 ainda depende de OIDC criptográfico, composição API/web, E2E e certificação no SHA integrado.
+
 # PR-301-OIDC-MAP — identidade OIDC verificada — 27/09/2026
 
 - `MAPPING_ACCEPTED_LOCAL / API_INTEGRATION_PENDING / NO_GO`: [mapeador](../apps/api/src/oidc-identity.ts) e [prova](04_audit/evidence/PR301-OIDC-MAP-20260927/proof.json) exigem MFA, autenticação recente e grupo único após verificação de ID token. Keycloak real confirmou `pwd`/`otp`/`auth_time`; Node 22: 22 testes focados, suíte geral 304/2.220 e PostgreSQL 35/258 PASS; I12 `ACCEPT_LOCAL`. PR-301 ainda precisa validar assinatura/JWKS/nonce/state/PKCE na API, compor sessão PostgreSQL, integrar web, E2E e certificar o candidato; produção não autorizada.

@@ -331,6 +331,55 @@ describe('PostgreSQL operator session boundary', () => {
   )
 
   itWithPostgres(
+    'rejects missing, altered, partial, and extra auth indexes at startup',
+    async () => {
+      await withAuthDatabase(
+        async ({ schema, productSchema, pool, admin, sessionRole }) => {
+          const verify = () =>
+            assertPostgresOperatorSessionBoundary(pool, {
+              authSchemaName: schema,
+              expectedSessionRole: sessionRole,
+              productSchemaName: productSchema
+            })
+          await verify()
+
+          await admin.query(
+            `DROP INDEX ${schema}.operator_sessions_expires_at_idx`
+          )
+          await expect(verify()).rejects.toThrow('session index inventory')
+          await admin.query(
+            `CREATE INDEX operator_sessions_expires_at_idx ON ${schema}.operator_sessions (role)`
+          )
+          await expect(verify()).rejects.toThrow('session index inventory')
+          await admin.query(
+            `DROP INDEX ${schema}.operator_sessions_expires_at_idx`
+          )
+          await admin.query(
+            `CREATE INDEX operator_sessions_expires_at_idx ON ${schema}.operator_sessions (expires_at)`
+          )
+          await verify()
+
+          await admin.query(`DROP INDEX ${schema}.operator_sessions_family_idx`)
+          await admin.query(
+            `CREATE INDEX operator_sessions_family_idx ON ${schema}.operator_sessions (family_id) WHERE revoked_at IS NULL`
+          )
+          await expect(verify()).rejects.toThrow('session index inventory')
+          await admin.query(`DROP INDEX ${schema}.operator_sessions_family_idx`)
+          await admin.query(
+            `CREATE INDEX operator_sessions_family_idx ON ${schema}.operator_sessions (family_id)`
+          )
+          await verify()
+
+          await admin.query(
+            `CREATE INDEX unexpected_auth_idx ON ${schema}.operator_sessions (operator_id)`
+          )
+          await expect(verify()).rejects.toThrow('session index inventory')
+        }
+      )
+    }
+  )
+
+  itWithPostgres(
     'refuses a pool as a migration transaction client',
     async () => {
       await withAuthDatabase(

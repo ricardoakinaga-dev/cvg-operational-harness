@@ -113,6 +113,26 @@ interface RelationRow {
   unexpected_column_grants: boolean
 }
 
+interface IndexRow {
+  name: string
+  table_name: string
+  owner: string
+  same_schema: boolean
+  kind: string
+  access_method: string
+  primary: boolean
+  unique: boolean
+  valid: boolean
+  ready: boolean
+  live: boolean
+  attributes: number
+  key_attributes: number
+  no_expressions: boolean
+  no_predicate: boolean
+  default_options: boolean
+  key_definition: string
+}
+
 interface FunctionRow {
   oid: string
   name: string
@@ -352,6 +372,66 @@ export async function assertPostgresOperatorSessionBoundary(
     )
   ) {
     invalid('primary or foreign keys')
+  }
+
+  const indexes = await pool.query<IndexRow>(
+    `SELECT idx.relname AS name, tab.relname AS table_name,
+            pg_get_userbyid(idx.relowner) AS owner,
+            idx.relnamespace = n.oid AS same_schema,
+            idx.relkind AS kind, am.amname AS access_method,
+            i.indisprimary AS primary, i.indisunique AS unique,
+            i.indisvalid AS valid, i.indisready AS ready, i.indislive AS live,
+            i.indnatts::int AS attributes, i.indnkeyatts::int AS key_attributes,
+            i.indexprs IS NULL AS no_expressions,
+            i.indpred IS NULL AS no_predicate,
+            idx.reloptions IS NULL AS default_options,
+            pg_get_indexdef(i.indexrelid, 1, false) AS key_definition
+     FROM pg_index i JOIN pg_class idx ON idx.oid = i.indexrelid
+     JOIN pg_class tab ON tab.oid = i.indrelid
+     JOIN pg_namespace n ON n.oid = tab.relnamespace
+     JOIN pg_am am ON am.oid = idx.relam
+     WHERE n.nspname = $1`,
+    [schemaName]
+  )
+  const expectedIndexes = new Map<string, readonly [string, string, boolean]>([
+    ['schema_migrations_pkey', ['schema_migrations', 'version', true]],
+    [
+      'operator_session_families_pkey',
+      ['operator_session_families', 'family_id', true]
+    ],
+    ['operator_sessions_pkey', ['operator_sessions', 'token_digest', true]],
+    [
+      'operator_sessions_expires_at_idx',
+      ['operator_sessions', 'expires_at', false]
+    ],
+    ['operator_sessions_family_idx', ['operator_sessions', 'family_id', false]]
+  ])
+  if (
+    indexes.rows.length !== expectedIndexes.size ||
+    indexes.rows.some((index) => {
+      const expected = expectedIndexes.get(index.name)
+      return (
+        !expected ||
+        index.table_name !== expected[0] ||
+        index.key_definition !== expected[1] ||
+        index.primary !== expected[2] ||
+        index.unique !== expected[2] ||
+        index.owner !== schema.owner ||
+        !index.same_schema ||
+        index.kind !== 'i' ||
+        index.access_method !== 'btree' ||
+        !index.valid ||
+        !index.ready ||
+        !index.live ||
+        index.attributes !== 1 ||
+        index.key_attributes !== 1 ||
+        !index.no_expressions ||
+        !index.no_predicate ||
+        !index.default_options
+      )
+    })
+  ) {
+    invalid('session index inventory')
   }
 
   const checks = await pool.query<{

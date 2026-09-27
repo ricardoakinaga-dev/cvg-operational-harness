@@ -1,3 +1,7 @@
+# PR-301-PG-INDEX — preflight de índices de autenticação — 27/09/2026
+
+- Sob [SPEC 0144](02_spec/0144_trusted_operator_session_production.md) aprovada e claim próprio, acrescentei inventário exato dos cinco índices de autenticação ao preflight. Negativos reais no PostgreSQL 16 para índice ausente, chave trocada, predicado parcial e índice extra foram rejeitados; Node 22: 9/9 focados, suíte geral 304 arquivos/2.220 testes e PostgreSQL completo 35 arquivos/258 testes PASS. Crítica I13 `ACCEPT_LOCAL`; [prova](04_audit/evidence/PR301-PG-INDEX-20260927/proof.json). API/OIDC/web e produção seguem `NO_GO`.
+
 # PR-301-OIDC-MAP — vínculo dos claims verificados — 27/09/2026
 
 - Sob [SPEC 0144](02_spec/0144_trusted_operator_session_production.md) aprovada e claim próprio, implementei o mapeador de identidade com MFA `pwd`+`otp`, autenticação recente, issuer/audience/`azp`, subject opaco e um único grupo tenant/papel. Keycloak local em Chromium confirmou os claims reais e limpou o usuário sintético. Node 22: focados 22/22, suíte geral 304 arquivos/2.220 testes e PostgreSQL descartável 35 arquivos/258 testes PASS; tipo/lint/formato PASS. I12 `ACCEPT_LOCAL` encontrou incompatibilidade de audience em lista unitária, corrigida/testada e aceita na rechecagem. [Prova](04_audit/evidence/PR301-OIDC-MAP-20260927/proof.json). Sem verificação JWT/JWKS/nonce no callback nem integração API/web; produção `NO_GO`.
