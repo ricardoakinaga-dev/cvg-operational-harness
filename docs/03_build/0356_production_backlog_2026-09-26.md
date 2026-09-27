@@ -1,8 +1,10 @@
 # Backlog — programa PROD-20260926 — harness em produção controlada
 
-- Status: PR-001 a PR-004, PR-006, PR-108, PR-109 e PR-L01 a PR-L03
-  `COMPLETED` em 26/09/2026, sob a autorização do usuário ("então vamos
-  avançar"); as demais continuam `PROPOSED`.
+- Status: PR-001 a PR-004, PR-006, PR-108, PR-109, PR-012, PR-L01 a
+  PR-L03 e PR-L05 `COMPLETED` em 26/09/2026. PR-010/011 têm correção
+  implementada localmente, mas continuam abertas até Verify e Security
+  passarem no GitHub sobre o mesmo SHA. As demais ainda não iniciadas
+  continuam `PROPOSED`.
 - Plano executivo: [0354](0354_production_executive_plan_2026-09-26.md).
   Roadmap e gates de fase: [0355](0355_production_roadmap_2026-09-26.md).
   Baseline: [AUD-0577](../04_audit/0577_production_readiness_score_audit_2026-09-26.md).
@@ -37,6 +39,7 @@
 
 ### PR-003 — Certificado reproduzível (RA26-02) · P0 · SPEC+BUILD
 
+- Estado corrente da nova fatia: `IN_PROGRESS` após a certificação AUD-0578, que teve 16 comandos exit 0 e adjudicação `NO_GO` por dois hashes obsoletos no catálogo de skips. [SPEC-PR003-002](../02_spec/0138_skip_catalog_rebind.md) limita a reconciliação a esses dois contratos e exige nova certificação e verificador.
 - Estado: `COMPLETED` em 26/09/2026, com uma ressalva registrada.
 - Causa da divergência da AUD-0577: ambiente, não regressão. Sem PostgreSQL
   e em Node 24 a suíte pulava 20 arquivos (146 testes).
@@ -105,6 +108,7 @@
 
 ### PR-009 — Coerência do E2E e JUnit (RA26-16) · P2 · SPEC+BUILD
 
+- Fatia 1 `VERIFIED_LOCAL` em 26/09/2026: [SPEC-PR009-001](../02_spec/0137_e2e_artifact_isolation.md); quatro screenshots agora em `test-results/`, hashes históricos iguais, E2E 12/12. A task inteira continua aberta para JUnit/runId, jornadas de aprovação e estabilidade visual.
 - Pronto: `playwright-results.xml` e o relatório E2E da certificação com o
   mesmo `runId`; specs para aprovações e jornada completa.
 - Achado de 26/09: `tests/e2e/ux-accessibility.spec.ts` grava screenshots em
@@ -118,6 +122,11 @@
 
 ### PR-010 — Fazer o CI rodar no GitHub · P0 · SPEC+BUILD
 
+- Estado em 26/09/2026: `IN_PROGRESS`; implementação local no commit
+  `3382286`; o último run remoto ainda é de `02f586b…` e falhou sem jobs.
+  A [AUD-0578](../04_audit/0578_program_comprehensive_audit_2026-09-26.md)
+  preserva o P0 até execução verde no SHA corrente.
+
 - Fato (26/09/2026, `gh run list`): o `verify.yml` falha em 0 s com "This run
   likely failed because of a workflow file issue" desde pelo menos 17/09; a
   barra de 29 gates nunca rodou no remoto nesse período.
@@ -126,6 +135,11 @@
 - Pronto: `verify.yml` verde em `main` no GitHub.
 
 ### PR-011 — Triagem do Gitleaks · P0 · SPEC+BUILD
+
+- Estado em 26/09/2026: `IN_PROGRESS`; implementação local no commit
+  `503ded7`; teste local de configuração passa, mas o scan real ainda não
+  rodou no remoto nesse SHA. A [AUD-0578](../04_audit/0578_program_comprehensive_audit_2026-09-26.md)
+  preserva o P0 até execução verde e revisão das exclusões.
 
 - Fato: o job `secret-scan` do `security.yml` falha (exit 1). Varredura local
   com a mesma ferramenta, `--redact`: 480 achados, todos da regra genérica

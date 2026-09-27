@@ -1,3 +1,20 @@
+# AUD-0578 — primeira execução do roadmap e backlog — 26/09/2026
+
+- Plano: [0358](03_build/0358_aud0578_execution_roadmap.md) e [0359](03_build/0359_aud0578_execution_backlog.md) derivados da [AUD-0578](04_audit/0578_program_comprehensive_audit_2026-09-26.md), vinculados às 79 tasks de [0356](03_build/0356_production_backlog_2026-09-26.md).
+- PR-009 fatia 1, [SPEC-PR009-001](02_spec/0137_e2e_artifact_isolation.md): quatro `page.screenshot` passaram a usar `testInfo.outputPath()`; Playwright 12/12; novos PNGs somente em `test-results/`; hashes históricos `56a6085a…`, `7746703e…`, `67b9b698…`, `73024c34…` idênticos antes, após o E2E e após a certificação.
+- Gates T2: Node 22.23.2, `typecheck`/`lint`/links/diff PASS; `npm test` 316 arquivos/2.305 testes PASS e um skip Phase 4A; `test:postgres` 35/258 PASS com PostgreSQL descartável; `test:e2e` 12/12 PASS. O container próprio `cvg-aud0578-pg-20260926` foi removido.
+- Primeira `certify`, run `run-aud0578-pr009-20260926`, candidato `99a4f8de…`: 16 comandos exit 0, adjudicação `NO_GO` por `skip_catalog_source_drift` em dois testes da PR-L05. [SPEC-PR003-002](02_spec/0138_skip_catalog_rebind.md) reconcilia apenas os SHA-256 de `SKIP-PG-012` e `SKIP-PG-018`; `skip:governance` e autoteste PASS, zero skips nos relatórios.
+- Segunda `certify`, run `run-aud0578-pr003-rebind-20260926`, candidato `6e07c5f4e5d2fe679728b3f119143e70209658cf9619d5b308e0f2fcbc1913f8`: 16/16 gates PASS, 317 arquivos/2.306 testes unitários, 35/258 PostgreSQL, 12/12 E2E, zero skips; `CONDITIONAL_GO / AAA_CONTROLLED`; `certification:verify` exit 0 com 37 hashes. É certificado local controlado, sem autorização de produção.
+- Prova remota: `gh run list` ainda mostra Verify e Security falhos em `02f586b…` (26/09), sem run do SHA local. Próxima ação: publicar branch/PR e observar os dois workflows no mesmo SHA; PR-009 restante e FL seguem tasks separadas. Produção `NO_GO`.
+
+# AUD-0578 — auditoria minuciosa do programa e nota por item — 26/09/2026
+
+- Baseline auditada: `503ded798ccb64e35b9fc591817d23f5130daff4`, worktree inicial limpo, `main` 17 commits à frente de `origin/main`. Relatório [0578](04_audit/0578_program_comprehensive_audit_2026-09-26.md): 17 notas, geral ponderada `67/100`, prontidão de produção `25/100`, veredito `NO_GO`.
+- Achados centrais: últimos Verify e Security remotos falharam sobre `02f586b…`; PR-010/011 implementadas localmente sem prova remota; `certification:verify` exit 1 com 15 falhas de candidato, hashes e cobertura; PR-L05 concluída no código, com legado residual em jornadas/evals/docs.
+- Evidência desta rodada em Node 22.23.2: `typecheck`, `lint`, `docs:check-links` e `audit:security` exit 0; testes focados CI/security/legacy 3 arquivos/8 testes; `npm test` 297 arquivos/2.160 testes PASS, 20 arquivos/146 testes skipped sem banco; `test:postgres` em PostgreSQL próprio descartável 35 arquivos/258 testes PASS; `test:coverage` com banco 317 arquivos/2.306 testes PASS, zero skipped, cobertura 92,58/87,59/94,97/93,57; `coverage:critical`, `build` (web 168 módulos) e `test:worker:startup` PASS. O container de auditoria foi removido.
+- Limites: nenhum E2E nesta rodada por escrita em evidência histórica; sem deploy, dado real, provider/canal externo, run remoto do candidato ou decisão humana de release. O certificado anterior não foi reemitido. `certification/critical-coverage.json`, alterado pelo check, foi restaurado aos bytes versionados; somente documentos de auditoria e ledgers permanecem modificados.
+- Próxima ação: obter Verify e Security verdes no GitHub sobre o mesmo SHA após publicação controlada dos commits locais; então reemitir certificação para o candidato congelado. Produção permanece `NO_GO`.
+
 # PROD-20260926 — PR-L05 fatias 1 e 3; achados de CI — 26/09/2026
 
 - SPEC-LEGACY-002 aprovada pelo usuário ("Aprovo as 3 fatias"), trilha T3.

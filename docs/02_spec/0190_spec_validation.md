@@ -1,5 +1,13 @@
 # 0190 — SPEC Validation
 
+## AUD-0578 / PR-003 — rebind do catálogo de skips
+
+- [SPEC-PR003-002](0138_skip_catalog_rebind.md) está `BUILD_LOCAL_AUTHORIZED` em T2 para reconciliar somente dois hashes de testes alterados na PR-L05. A task PR-003 está registrada em 0356; recon, regras e aceite precedem a edição do catálogo. Não altera autorização de produção nem suprime o gate de skips.
+
+## AUD-0578 / PR-009 — fatia 1, isolamento de artefatos E2E
+
+- [SPEC-PR009-001](0137_e2e_artifact_isolation.md) está `BUILD_LOCAL_AUTHORIZED` na trilha T2: task registrada em 0356, recon, regras e aceite publicados antes do código. A autorização do usuário de implementar o planejamento cobre a correção local e reversível; não cobre T3/T4 nem produção. Resultado dos gates será anotado na SPEC e nos ledgers. As demais fatias de PR-009 continuam abertas.
+
 ## L03 operational index generator — draft v0.4, not approved
 
 - [SPEC-DOC-001](0129_l03_operational_index_generator.md), revision 0.4, SHA-256 `7a144a686d7a5ce7333efa50c7f476b662b9da4a6b97936f85a0bb07504bc0a9`, is `SPEC_DRAFT_FOR_REVIEW` for the internal documentation utility in L03/P3-S7. The L03 backlog is its originating requirement; no product-facing PRD applies to this tool-only scope.

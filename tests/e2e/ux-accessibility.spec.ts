@@ -1,8 +1,6 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test } from '@playwright/test'
 
-const EVIDENCE = 'docs/04_audit/evidence/AUD-20260919/AUD19-013'
-
 async function fillIdentity(
   page: import('@playwright/test').Page,
   operatorId: string,
@@ -81,7 +79,7 @@ test('keyboard-only operators reach, activate and see focus on key controls', as
 
 test('empty, loading, error and overflow states stay comprehensible', async ({
   page
-}) => {
+}, testInfo) => {
   await page.setViewportSize({ width: 375, height: 812 })
   // Loading: block the API without responding; a loading status appears.
   await page.route('**/v1/conversations**', () => undefined)
@@ -162,10 +160,12 @@ test('empty, loading, error and overflow states stay comprehensible', async ({
     scrollWidth: document.documentElement.scrollWidth
   }))
   expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.viewport)
-  await page.screenshot({ path: `${EVIDENCE}/ux-error-mobile.png` })
+  await page.screenshot({ path: testInfo.outputPath('ux-error-mobile.png') })
 })
 
-test('switching tenant clears the previous identity data', async ({ page }) => {
+test('switching tenant clears the previous identity data', async ({
+  page
+}, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/', { waitUntil: 'networkidle' })
   await fillIdentity(
@@ -176,7 +176,7 @@ test('switching tenant clears the previous identity data', async ({ page }) => {
   await expect(
     page.getByRole('heading', { name: 'CVG Agent Secretary' })
   ).toBeVisible()
-  await page.screenshot({ path: `${EVIDENCE}/ux-tenant-a.png` })
+  await page.screenshot({ path: testInfo.outputPath('ux-tenant-a.png') })
   await fillIdentity(
     page,
     'operator.tenant-b',
@@ -184,12 +184,12 @@ test('switching tenant clears the previous identity data', async ({ page }) => {
   )
   const body = await page.textContent('body')
   expect(body).not.toContain('tenant_00000000-0000-4000-8000-000000000a13')
-  await page.screenshot({ path: `${EVIDENCE}/ux-tenant-b.png` })
+  await page.screenshot({ path: testInfo.outputPath('ux-tenant-b.png') })
 })
 
 test('authorization and server failures render comprehensible UI', async ({
   page
-}) => {
+}, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   const cases: Array<{ status: number; code: string }> = [
     { status: 401, code: 'unauthorized' },
@@ -222,7 +222,7 @@ test('authorization and server failures render comprehensible UI', async ({
       page.getByRole('heading', { name: 'CVG Agent Secretary' })
     ).toBeVisible()
   }
-  await page.screenshot({ path: `${EVIDENCE}/ux-authz-desktop.png` })
+  await page.screenshot({ path: testInfo.outputPath('ux-authz-desktop.png') })
 })
 
 test('reduced motion keeps journeys operable', async ({ page }) => {

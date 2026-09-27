@@ -1,8 +1,17 @@
-# PROD-20260926 — PR-L05 em andamento; novos P0 de CI — 26/09/2026
+# AUD-0578 — execução de R0/R1 local — 26/09/2026
 
-- PR-L05: fatias 1 e 3 de [SPEC-LEGACY-002](02_spec/0136_legacy_secretary_profile_isolation.md) concluídas; fatia 2 pendente.
-- Novos: PR-010 (P0, fazer o `verify.yml` rodar no GitHub), PR-011 (P0, allowlist do Gitleaks para 480 falsos positivos), PR-012 (P0, `COMPLETED` — testes de processo usavam `dist` antigo). Total do programa: 79 tasks.
+- [Roadmap 0358](03_build/0358_aud0578_execution_roadmap.md) e [backlog 0359](03_build/0359_aud0578_execution_backlog.md) indexam F01–F09 sem duplicar as 79 tasks de [0356](03_build/0356_production_backlog_2026-09-26.md).
+- PR-009 fatia 1 `VERIFIED_LOCAL`: screenshots isolados, hashes históricos preservados, E2E 12/12. Task ainda aberta para JUnit/runId, jornadas de aprovação e flake visual.
+- PR-003 rebind `VERIFIED_LOCAL`: dois hashes obsoletos do catálogo de skips corrigidos; `certify` 16/16 PASS no candidato `6e07c5f4…`, `certification:verify` exit 0. O certificado histórico `94d7a211…` foi supersedido para o escopo local; release e produção continuam `NO_GO`.
+- PR-010/011 `IN_PROGRESS`: Verify e Security do SHA atual ainda não executados no GitHub. Próximas tasks independentes: PR-009 restantes, PR-L06 e PR-005/007 sob suas trilhas. D-03/D-04 e demais decisões da F1/F5–F7 aguardam o usuário.
+
+# PROD-20260926 — AUD-0578; PR-L05 concluída, CI remoto pendente — 26/09/2026
+
+- PR-L05: três fatias de [SPEC-LEGACY-002](02_spec/0136_legacy_secretary_profile_isolation.md) concluídas; perfil da secretária isolado em `legacy/packages/secretary-profile`.
+- PR-010 e PR-011: `IN_PROGRESS`, com correções implementadas localmente (`3382286`, `503ded7`); continuam P0 até Verify e Security verdes no GitHub sobre o mesmo SHA. PR-012 `COMPLETED`. Total do programa: 79 tasks.
+- [AUD-0578](04_audit/0578_program_comprehensive_audit_2026-09-26.md): nota geral 67/100, produção 25/100 e `NO_GO`; certificado anterior falha na verificação do candidato corrente.
 - Produção `NO_GO`.
+- Próximas: PR-010/011 (prova remota), reemitir certificado para o candidato atual (rotina PR-003), PR-L06 → PR-L04 → PR-L07.
 
 # PROD-20260926 — F0 concluída; M07-S1 reclassificada — 26/09/2026
 
