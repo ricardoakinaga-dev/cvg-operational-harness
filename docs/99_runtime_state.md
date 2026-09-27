@@ -1,3 +1,11 @@
+# PR-301 — prova sintética HTTPS de cookies — 27/09/2026
+
+- status: `SYNTHETIC_BROWSER_SEMANTICS_PASS / SPEC0150_T3_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [prova Chromium](04_audit/evidence/PR301-CROSS-ORIGIN-PROBE-20260927/proof.json) com hosts HTTPS sintéticos distintos confirmou que o console não recebeu cookies da API, a requisição CORS com credenciais levou o cookie operacional `Strict` à API, a navegação iniciada em documento do IdP levou o cookie pendente `Lax` ao callback sem levar o `Strict`, e um host irmão não conseguiu injetar/substituir cookie `__Host-` da API.
+- verification_state: Node 22.23.2, Chromium 147.0.7727.15, quatro servidores HTTPS sintéticos e certificado descartável; `result.json` SHA-256 `7c1a30960d993590a6c9e443c96a008cc7d20053381055a9b8d59721f889a76f`. Uma navegação inicial direta com redirecionamento do IdP enviou `Strict` e foi descartada como modelo inadequado do callback; a execução final usou documento do IdP com link. Nenhum código do produto, troca OIDC, banco, CDN ou NGINX foi testado.
+- blocking_state: revisão humana T3 da SPEC 0150, implementação e E2E real entre hosts; issuer corporativo, PR-L04, purge/retensão e certificação do SHA integrado. Produção `NO_GO`.
+- next_action: após aprovação da SPEC 0150, implementar em branch isolado, provar o fluxo real em navegador e integrar quando PR-L04 liberar; avançar gates independentes enquanto isso.
+
 # PR-301/302 — fronteira HTTPS console/API, SPEC 0150 pronta — 27/09/2026
 
 - status: `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

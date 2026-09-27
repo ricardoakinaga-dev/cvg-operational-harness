@@ -1,3 +1,8 @@
+# PR-301 — prova Chromium da semântica HTTPS de cookies — 27/09/2026
+
+- Claim próprio `PR-301-CROSS-ORIGIN-BROWSER-PROBE`. Em Node 22/Chromium 147, quatro servidores HTTPS descartáveis em `api.example.test`, `console.example.test`, `sibling.example.test` e `idp.other.test` verificaram escopo host-only, CORS com credenciais, `SameSite=Strict` operacional, cookie pendente `Lax` no callback e rejeição de injeção `__Host-` por host irmão. [Prova e resultado](04_audit/evidence/PR301-CROSS-ORIGIN-PROBE-20260927/proof.json), SHA-256 do resultado `7c1a30960d993590a6c9e443c96a008cc7d20053381055a9b8d59721f889a76f`.
+- Diagnóstico preservado: navegação direta de Playwright a um endpoint do IdP que redirecionou imediatamente enviou `Strict` ao callback; a prova final carregou documento do IdP e clicou um link para iniciar a navegação entre sites. Isso valida a semântica observada do navegador nesse cenário, sem provar o fluxo OIDC do produto. Nenhum código de aplicação, dado real ou deploy foi alterado. SPEC 0150 T3, BUILD, E2E integrado e produção continuam pendentes; `NO_GO`.
+
 # PR-301/302 — AUD-0580 e SPEC 0150 de hosts distintos — 27/09/2026
 
 - No branch isolado `85c2c7d`, `apps/web/src/api/client.ts` usa `fetch(path)` com `credentials: include`; Vite e `deploy/nginx.web.conf` fazem proxy de `/v1` no hostname do console. Com `Fastify.inject` real do `http-security.ts` em Node 22.23.2, origem `https://console.example.test` e cookie sintético: GET `/v1/session` 200 e OPTIONS 204 emitiram ACAO/Vary, mas `Access-Control-Allow-Credentials=null`. [AUD-0580](04_audit/0580_cross_origin_oidc_gap_2026-09-27.md) vincula fontes por SHA-256; nenhuma chamada externa, dado real ou browser foi usada nessa sonda.

@@ -1,3 +1,7 @@
+# PR-301 — prova sintética de topologia HTTPS — 27/09/2026
+
+- `SYNTHETIC_BROWSER_SEMANTICS_PASS / NO_GO`: [prova Chromium](04_audit/evidence/PR301-CROSS-ORIGIN-PROBE-20260927/proof.json) em quatro hosts HTTPS sintéticos confirma isolamento de cookies da API em relação ao console e host irmão, envio do `Strict` por CORS com credenciais e retorno do `Lax` sem `Strict` por navegação iniciada no documento do IdP. É prova do navegador, não do produto. SPEC 0150 T3, BUILD, E2E integrado, issuer corporativo e certificação do SHA integrado continuam P0.
+
 # PR-301/302 — cross-origin HTTPS do console — 27/09/2026
 
 - `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING / NO_GO`: [AUD-0580](04_audit/0580_cross_origin_oidc_gap_2026-09-27.md) provou falta de ACAC no GET/OPTIONS do hook em Node 22; web e NGINX usam `/v1` relativo/proxy. [SPEC 0150](02_spec/0150_cross_origin_operator_console.md) recebeu I27/I28 `ACCEPT_SPEC_REVIEW_READY` após corrigir cookie de domínio irmão, cache entre tenants, rollback e CSP. Aprovação T3, BUILD, hosts HTTPS/Chromium, integração e certificação permanecem P0. O E2E local anterior não cobre essa topologia.
