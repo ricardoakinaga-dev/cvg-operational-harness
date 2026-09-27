@@ -68,16 +68,17 @@
 
 ### PR-005 — Rotacionar ledgers e reescrever o README (RA26-03/04/06) · P1 · DOC
 
-- O que/onde: `99_runtime_state.md` (3 764 linhas),
-  `20_master_execution_log.md` (7 680), `30_backlog_master.md` (2 504);
-  README como pilha de estados.
-- Como: estado vigente em arquivo curto; ciclos encerrados em
-  `docs/08_runtime/archive/<ciclo>.md`; README com uma seção única de
-  estado atual e links; reconciliar status RA25 (RA26-03).
-- Dependência: PR-001; aprovação de D-12.
-- Pronto: cada ledger vigente com menos de 300 linhas; `docs:check-links`
-  exit 0; nenhum conteúdo histórico perdido (hash do arquivo original no
-  arquivo arquivado).
+- Estado: `COMPLETED` em 27/09/2026 sob D-12. Os ledgers vigentes têm
+  13, 13 e 15 linhas; o README mantém uma seção de estado corrente.
+- Histórico integral em [runtime](../08_runtime/archive/prod20260926_runtime_state_history.md),
+  [log](../08_runtime/archive/prod20260926_execution_log_history.md) e
+  [backlog](../08_runtime/archive/prod20260926_backlog_history.md). Fontes originais
+  da revisão `4aac877`: SHA-256 `d8092246…`, `576ac3f7…` e `fedc1c99…`,
+  respectivamente. Os links relativos foram rebaseados e a reversão do
+  prefixo reproduz o hash de cada arquivo original.
+- RA25 reconciliada no [backlog mestre](../30_backlog_master.md) com 0574/0575;
+  o catálogo 0351 conserva o estado de sua data. Critério de pronto:
+  `docs:check-links`, `format:check` e reconstrução hash dos três arquivos — todos PASS.
 
 ### PR-006 — Reconciliar arquivos vazios versionados · P2 · DOC
 

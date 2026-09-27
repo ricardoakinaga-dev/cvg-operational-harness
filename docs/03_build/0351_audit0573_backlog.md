@@ -5,7 +5,18 @@ Sequência e gates em [roadmap 0350](0350_audit0573_roadmap.md). Este backlog
 não substitui [0344](0344_reaudit_m07_backlog.md), que continua sendo o
 registro do ciclo M07-S1. Produção `NO_GO`.
 
-## Estado corrente
+## Estado na emissão de 24/09/2026
+
+Os estados nos itens abaixo são a fotografia da emissão original. Para o
+estado vigente reconciliado, consulte o [backlog mestre](../30_backlog_master.md)
+e o [programa de produção 0356](0356_production_backlog_2026-09-26.md).
+
+Atualização de 27/09/2026: [0574](../04_audit/0574_aud0573_execution_evidence_2026-09-25.md)
+comprova RA25-01/02/03/06/08/09 concluídas e RA25-10 com política registrada;
+[0575](../04_audit/0575_aud53_closure_rebind_decision_packet.md) concluiu
+RA25-04/11. RA25-07 teve fatias 1–3 executadas e permanece aberta para as
+fatias restantes; RA25-05 requer matriz atual e decisão humana aplicável.
+Nenhum estado histórico `PROPOSED` abaixo deve ser lido como estado vigente.
 
 - Todos os itens abaixo estão `PROPOSED / NOT_STARTED` até decisão humana de
   escopo; nenhum comando de produto foi executado por esta auditoria.
