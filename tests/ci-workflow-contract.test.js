@@ -16,6 +16,11 @@ describe('controlled CI workflow contract', () => {
     expect(workflow).toContain('concurrency:')
     expect(workflow).toContain('cancel-in-progress: true')
     expect(workflow).toContain('persist-credentials: false')
+    // PR-010: the runner context is invalid in job-level env and made GitHub
+    // reject the whole workflow before any gate ran.
+    const jobEnv = workflow.split('\n    services:')[0]
+    expect(jobEnv).not.toContain('runner.')
+    expect(workflow).toContain('CI_ARTIFACT_DIR=${RUNNER_TEMP}/cvg-ci/')
   })
 
   it('calls every available construction gate explicitly', () => {

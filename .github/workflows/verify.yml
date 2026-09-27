@@ -21,7 +21,6 @@ jobs:
     timeout-minutes: 180
     env:
       CI_RUN_ID: run-${{ github.run_id }}-${{ github.run_attempt }}
-      CI_ARTIFACT_DIR: ${{ runner.temp }}/cvg-ci/${{ github.run_id }}-${{ github.run_attempt }}
       TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cvg_test
       PHASE4A_DISPOSABLE_PG: '1'
     services:
@@ -43,6 +42,11 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+
+      # The runner context is not available in job-level env (PR-010), so the
+      # artifact directory is resolved here and exported to later steps.
+      - name: Resolve CI artifact directory
+        run: echo "CI_ARTIFACT_DIR=${RUNNER_TEMP}/cvg-ci/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
 
       - name: Setup Node 22
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
