@@ -1,3 +1,11 @@
+# PR-301-OIDC-TRANSACTION — transação PKCE isolada — 27/09/2026
+
+- status: `OIDC_TRANSACTION_ACCEPTED_LOCAL / DISTRIBUTED_STORE_AND_API_INTEGRATION_PENDING`; produção `NO_GO`.
+- last_completed_action: implementei `state`, `nonce` e PKCE S256 ligados a cookie de callback AES-256-GCM de cinco minutos, `SameSite=Lax` e `response_mode=query`; callback consome digest do state pelo contrato `OidcLoginStateStore`. Corrigi replay e URI de callback apontados por I15; crítica final `ACCEPT_LOCAL`.
+- verification_state: [prova](04_audit/evidence/PR301-OIDC-TRANSACTION-20260927/proof.json): Node 22, focados 6/6, suíte geral 305 arquivos/2.226 testes PASS (20/154 skipped sem banco), PostgreSQL 16 descartável 35/258 PASS, typecheck/lint PASS. Banco removido.
+- blocking_state: falta implementação durável do store de state, discovery e token exchange, validação assinada do ID token/nonce, composição da API e web, E2E confiável e certificação integrada. PR-L04 ainda possui caminhos de rotas/web; produção `NO_GO`.
+- next_action: após liberação dos claims PR-L04, implementar adapter compartilhado de state e ligar cliente OIDC, store de sessão e web ao Keycloak local; testar callback real e reemitir certificado no mesmo SHA.
+
 # PR-003-INTERIM — certificação isolada do SHA corrente — 27/09/2026
 
 - status: `INTERIM_CERTIFICATION_NO_GO / PR-L04_CLAIM_PENDING`; produção `NO_GO`.

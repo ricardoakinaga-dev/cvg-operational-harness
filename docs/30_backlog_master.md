@@ -1,3 +1,7 @@
+# PR-301-OIDC-TRANSACTION — contrato de início/callback — 27/09/2026
+
+- `ACCEPT_LOCAL / INTEGRATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-OIDC-TRANSACTION-20260927/proof.json) de state/nonce/PKCE S256 e cookie temporário autenticado; I15 rechecagem aceitou após corrigir replay e callback exato do Keycloak. Node 22: 6/6 focados, suíte geral 305/2.226 PASS (20/154 skipped sem banco), PostgreSQL 35/258 PASS. PR-301 permanece P0: implementar state store durável e atômico, cliente OIDC/discovery/JWKS, rotas e sessão/web confiáveis, E2E e certificação no mesmo SHA.
+
 # PR-003-INTERIM — certificado diagnóstico do candidato — 27/09/2026
 
 - `NO_GO / PR-L04_PENDING`: [prova isolada](04_audit/evidence/PR003-INTERIM-20260927/proof.json) do SHA `c634fcd`: 16 comandos exit 0, 15 gates PASS/1 FAIL após adjudicação; E2E em simulação 12/12, PostgreSQL 35/258. `SKIP-PG-014` tem hash de fonte vencido sob claim PR-L04. Suíte unitária completa com ambiente PostgreSQL correto passou 324/2.374 sem skips, mas o certificado arquivado não foi promovido. I14 aceitou os fatos e 38/38 hashes do bundle. Reemitir no candidato integrado após correção do catálogo; OIDC e condições de GO abertas.
