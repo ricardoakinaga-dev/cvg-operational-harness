@@ -1,3 +1,9 @@
+# PR-301/302 — crítica I22 e correção da prova — 27/09/2026
+
+- I22, revisão independente somente leitura, encontrou dois falsos positivos possíveis no E2E anterior: logout apagava cookie no browser antes da verificação, e IdP/API usavam o mesmo site. Nenhum bypass concreto no código de autenticação foi encontrado; o veredito da prova anterior foi `REJECT_LOCAL_PROOF`.
+- Commit isolado `8b0f92d` adicionou perfil de Keycloak em `localhost:8087` com API/web em `127.0.0.1`, segunda autenticação com sessão antiga, asserção de cookie temporário Lax presente e operacional Strict ausente no callback, troca de cookie e replay da sessão antiga 401. O teste agora reutiliza o cookie salvo antes do logout para exigir 401 diretamente da API após revogação. Node 22.23.2, Keycloak/Chromium/PostgreSQL descartável: execução final PASS. O segundo OTP espera novo intervalo porque Keycloak recusa reutilização do código; roles/schemas e contêineres removidos. Prova/hashes no branch isolado em `docs/04_audit/evidence/PR301-302-TRUSTED-E2E-20260927/proof.json`; rechecagem I22 solicitada.
+- Logs do E2E no mesmo host são diagnósticos históricos e não comprovam os dois pontos corrigidos. Integração, IdP corporativo, política de dados, rollout e CI/certificado do SHA final continuam pendentes; produção `NO_GO`.
+
 # PR-301/302 — E2E confiável local completo — 27/09/2026
 
 - Sob SPEC 0144 e claim isolado, `deploy/local-oidc/verify-full.mjs` cria roles/schemas e operador sintéticos, sobe API e web, navega via Keycloak real e OTP, comprova que OTP errado não emite sessão, completa callback com OTP correto, confirma cookie HttpOnly/Strict, recarga da mesma identidade sem token/header de operador e revogação no logout. Commit isolado `cb943e8`; nenhuma credencial real, deploy ou push.

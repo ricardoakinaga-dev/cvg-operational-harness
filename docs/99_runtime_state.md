@@ -1,3 +1,11 @@
+# PR-301/302 — I22: prova E2E entre sites reforçada — 27/09/2026
+
+- status: `CROSS_SITE_E2E_PASS_LOCAL / I22_RECHECK_PENDING / ROOT_INTEGRATION_PENDING`; produção `NO_GO`.
+- last_completed_action: crítica independente I22 rejeitou duas inferências da prova `cb943e8`: 401 após limpar cookie no browser não comprovava revogação no servidor, e IdP/API no mesmo host não comprovavam callback entre sites. Commit isolado `8b0f92d` reforçou o verificador com replay do cookie salvo após logout e segundo login com IdP `localhost`, API `127.0.0.1`, cookie pendente Lax presente e cookie operacional Strict ausente no callback, nova sessão e replay da antiga 401.
+- verification_state: `docs/04_audit/evidence/PR301-302-TRUSTED-E2E-20260927/proof.json` **no branch isolado** registra Node 22.23.2, Chromium/Keycloak OTP real, PostgreSQL sintético e execução entre sites PASS. Roles/schemas zerados, serviços e contêineres removidos. Logs anteriores são diagnósticos e não sustentam as inferências corrigidas; rechecagem independente I22 solicitada.
+- blocking_state: revisão I22, integração após PR-L04, compatibilidade com API legada sem rota OIDC, IdP corporativo, retenção/purge, rollout, startup de produção sem DDL e certificação/CI do SHA integrado pendentes.
+- next_action: receber rechecagem I22; integrar branch após liberação PR-L04 e recertificar. Produção segue `NO_GO`.
+
 # PR-301/302 — E2E OIDC confiável local isolado — 27/09/2026
 
 - status: `TRUSTED_BROWSER_E2E_PASS_LOCAL / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
