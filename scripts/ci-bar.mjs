@@ -613,6 +613,18 @@ function runArtifacts(state) {
     const entry = observed.get(id)
     if (!entry) failures.push(`missing_gate:${id}`)
     else if (entry.status !== 'PASS') failures.push(`gate_not_pass:${id}`)
+    if (
+      entry &&
+      id !== 'runtime' &&
+      (entry.runId !== state.runId ||
+        entry.candidateId !== state.candidateId ||
+        entry.nodeVersion !== state.nodeVersion ||
+        entry.exitCode !== 0 ||
+        !Array.isArray(entry.outputFailures) ||
+        entry.outputFailures.length !== 0)
+    ) {
+      failures.push(`gate_run_binding_mismatch:${id}`)
+    }
   }
   if (currentCandidateId !== state.candidateId) failures.push('candidate_drift')
   const runtimeFiles = fs.readdirSync(path.join(rootArtifactDir, 'gates'))
@@ -631,9 +643,25 @@ function runArtifacts(state) {
     }
   }
   const e2eEntry = observed.get('e2e')
-  for (const [relativePath, expectedHash] of Object.entries(
-    e2eEntry?.artifactSha256 ?? {}
-  )) {
+  const requiredE2ePaths =
+    CI_BAR_GATES.find((gate) => gate.id === 'e2e')?.artifacts ?? []
+  const e2eHashes = e2eEntry?.artifactSha256
+  const hashKeys =
+    e2eHashes && typeof e2eHashes === 'object' && !Array.isArray(e2eHashes)
+      ? Object.keys(e2eHashes)
+      : []
+  if (
+    !e2eEntry?.executionId ||
+    requiredE2ePaths.length !== 2 ||
+    hashKeys.length !== requiredE2ePaths.length ||
+    requiredE2ePaths.some(
+      (relativePath) => !/^[0-9a-f]{64}$/.test(e2eHashes?.[relativePath] ?? '')
+    )
+  ) {
+    failures.push('e2e_snapshot_binding_missing')
+  }
+  for (const relativePath of requiredE2ePaths) {
+    const expectedHash = e2eHashes?.[relativePath]
     const snapshot = gateArtifactSnapshotPath('e2e', relativePath)
     if (
       !fs.existsSync(snapshot) ||
@@ -642,8 +670,57 @@ function runArtifacts(state) {
       failures.push(`e2e_snapshot_hash_mismatch:${relativePath}`)
     }
   }
-  if (!e2eEntry?.executionId || !e2eEntry.artifactSha256) {
-    failures.push('e2e_snapshot_binding_missing')
+  const e2eLogPath = path.join(rootArtifactDir, 'gates', 'e2e.log')
+  const e2eLog = fs.existsSync(e2eLogPath)
+    ? fs.readFileSync(e2eLogPath)
+    : undefined
+  if (
+    e2eEntry?.log !== 'gates/e2e.log' ||
+    !/^[0-9a-f]{64}$/.test(e2eEntry?.logSha256 ?? '') ||
+    !e2eLog ||
+    sha256(e2eLog) !== e2eEntry.logSha256
+  ) {
+    failures.push('e2e_log_hash_mismatch')
+  }
+  if (
+    e2eLog &&
+    requiredE2ePaths.every((item) =>
+      fs.existsSync(gateArtifactSnapshotPath('e2e', item))
+    )
+  ) {
+    try {
+      const summary = parsePlaywrightSummary(e2eLog.toString('utf8'))
+      if (!summary || summary.failed || summary.skipped || summary.other) {
+        throw new Error('e2e_log_not_clean')
+      }
+      const proof = parseE2eEvidenceLog({
+        logContent: e2eLog,
+        expectedRunId: state.runId,
+        expectedCandidateId: state.candidateId,
+        expectedTestCount: summary.passed
+      })
+      const pair = validateE2eReportPair({
+        jsonContent: fs.readFileSync(
+          gateArtifactSnapshotPath('e2e', requiredE2ePaths[0])
+        ),
+        xmlContent: fs.readFileSync(
+          gateArtifactSnapshotPath('e2e', requiredE2ePaths[1])
+        ),
+        expectedRunId: state.runId,
+        expectedCandidateId: state.candidateId,
+        expectedTestCount: summary.passed
+      })
+      if (
+        proof.executionId !== pair.executionId ||
+        proof.executionId !== e2eEntry?.executionId
+      ) {
+        throw new Error('gate log/report/state execution mismatch')
+      }
+    } catch (error) {
+      failures.push(
+        `e2e_final_binding_invalid:${error instanceof Error ? error.message : String(error)}`
+      )
+    }
   }
   const artifactEntry = {
     id: 'artifacts',
