@@ -81,6 +81,10 @@ describe('controlled CI workflow contract', () => {
       '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/verify.yml"'
     )
     expect(workflow).toContain('--source-digest "$GITHUB_SHA"')
+    const independentVerifier = workflow
+      .split('      - name: Verify subject, signer and source commit')[1]
+      ?.split('        run: |')[0]
+    expect(independentVerifier).toContain('GH_TOKEN: ${{ github.token }}')
     expect(workflow).toContain('retention-days: 90')
     expect(workflow).toContain('include-hidden-files: true')
     expect(workflow).toContain("actual_files == manifest['artifactHashes']")
