@@ -65,6 +65,12 @@ automático, skip ou redução de threshold.
 Validação local após a mudança: 35/35 arquivos e 258/258 testes PASS; cobertura
 79,92/69,33/85,52/80,76% (statements/branches/functions/lines). O Verify
 remoto do novo SHA permanece pendente.
+
+Após a certificação local do SHA `8779437`, a política de skips rejeitou o
+hash antigo de `operational-harness-homolog.integration.test.ts`. O campo
+`sourceSha256` da entrada `SKIP-PG-014` foi vinculado aos bytes atuais;
+35 entradas e as regras de skip ficaram iguais. `skip:governance` passou com
+zero skips e zero falhas em unitário, PostgreSQL, chaos e E2E.
 Os testes unitários importam validação de configuração e preflight, enquanto
 as jornadas do processo real usam `spawn`; é inferência que a cobertura V8 do
 processo Vitest não contabilize as linhas executadas no processo filho. O
