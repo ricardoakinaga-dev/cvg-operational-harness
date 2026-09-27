@@ -1,3 +1,8 @@
+# PR-009-PROV — início do BUILD T3 aprovado — 27/09/2026
+
+- Usuário aprovou a [SPEC 0147](02_spec/0147_ci_bar_external_provenance.md) para BUILD. Claim `77397a1` cobre script, workflow, testes e ledgers. `ci-bar` emite selo fora do diretório mutável para 34 gates; finalizador compara bytes de log/snapshots e entry/state ao output do runner, distingue `LOCAL_UNSEALED` de `GITHUB_STEP_OUTPUT_SEALED` e publica hash do manifesto em output.
+- Workflow de Verify passou a ter job de atestação com permissão própria, verificação independente do bundle, sujeito, signer workflow e SHA, e job final de política que falha se qualquer dependência for skipped/fail. I1 `REJECT`: hashes de todos os arquivos, runtime e política de fork adicionados. I2 `REJECT`: gate extra/duplicado agora invalida o inventário. I3 `REJECT`: job independente passou a fixar conjunto de 34 gates e versão do contrato; teste executa seu Python contra substituição coerente. I4 `ACCEPT_LOCAL` para o modelo aprovado. [Prova local e logs](04_audit/evidence/PR009-PROV-20260927/proof.json): testes focados 4/24, `typecheck`, lint, build, actionlint 1.7.12, links/higiene/formato PASS; suíte completa repetida 301 arquivos/2.196 testes PASS, 20/146 skipped sem banco. Leitura GitHub: `main` sem branch protection (404) e sem rulesets. Sem prova remota ou certificado integrado; produção `NO_GO`.
+
 # PR-401 — inventário pessoal e RIPD proposto — 27/09/2026
 
 - Claim exclusivo `PR-401` registrado antes de editar. Duas inspeções independentes somente leitura cobriram schema PostgreSQL e superfícies de API, worker, canal, modelo, logs, telemetria, caches e CI. Nenhum banco foi consultado e nenhum dado real, provider externo ou canal real foi usado.

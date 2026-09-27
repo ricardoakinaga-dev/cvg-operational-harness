@@ -161,12 +161,21 @@
 
 ### PR-009-PROV — Âncora externa da prova do ci-bar · P0 para promoção · SPEC T3
 
-- Estado: `SPEC_PROPOSED / WAITING_HUMAN_REVIEW` em 27/09/2026.
+- Estado: `SPEC_APPROVED / BUILD_T3_IN_PROGRESS` em 27/09/2026, após
+  aprovação explícita do usuário. Selo em output de passo e workflow de
+  atestação implementados localmente; críticas I1–I3 corrigidas, I4
+  `ACCEPT_LOCAL`; 24 testes focados, actionlint 1.7.12, tipo, lint e build
+  PASS. [Prova local](../04_audit/evidence/PR009-PROV-20260927/proof.json)
+  inclui suíte completa 301 arquivos/2.196 testes PASS, 20 arquivos/146
+  skipped sem banco. O GitHub não mostra
+  branch protection nem ruleset para `main`; exigir o check `Provenance
+policy` ainda é mudança externa pendente. Imagem OCI publicável ainda
+  não existe para atestação. Prova remota no SHA integrado pendente.
+  Nenhum push, certificação ou release autorizado.
   [SPEC-PR009-PROV-001](../02_spec/0147_ci_bar_external_provenance.md)
   registra a ameaça de troca coerente de estado/log/relatórios após o gate,
   o limite dos hashes no mesmo diretório e a proposta de selo via output do
-  runner com atestação do manifesto. Nenhum BUILD do workflow de segurança
-  está autorizado antes da revisão explícita T3.
+  runner com atestação do manifesto.
 - Pronto: teste negativo troca todos os arquivos após selar e falha;
   Verify/Security no mesmo SHA, manifesto e imagem com proveniência
   verificável fora do job; política de retenção e revisão de segurança.

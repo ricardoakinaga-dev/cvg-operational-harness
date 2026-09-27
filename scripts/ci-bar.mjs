@@ -7,6 +7,13 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { CI_BAR_GATES, CI_BAR_VERSION } from './ci-bar-contract.mjs'
+import {
+  artifactInventory,
+  createGateSeal,
+  encodeGateSeal,
+  runnerIdentity,
+  verifyGateSeals
+} from './ci-bar-provenance.mjs'
 import { parsePlaywrightSummary } from './lib/certification-rules.mjs'
 import {
   parseE2eEvidenceLog,
@@ -129,7 +136,8 @@ function listFiles(directory, prefix = '') {
     const absolute = path.join(directory, entry.name)
     const relative = path.join(prefix, entry.name)
     if (entry.isDirectory()) files.push(...listFiles(absolute, relative))
-    else files.push(normalizePath(relative))
+    else if (entry.isFile()) files.push(normalizePath(relative))
+    else throw new Error(`ci_bar_unsafe_artifact:${normalizePath(relative)}`)
   }
   return files
 }
@@ -323,6 +331,18 @@ function validateGateOutputs(id, gate, startedMs, state, outputText) {
       }
       e2eEvidence = {
         executionId: proof.executionId,
+        testCount: pair.testCount,
+        testInventorySha256: sha256(
+          canonicalJson(
+            pair.cases
+              .map(({ file, title }) => ({ file, title }))
+              .sort((left, right) =>
+                `${left.file}:${left.title}`.localeCompare(
+                  `${right.file}:${right.title}`
+                )
+              )
+          )
+        ),
         artifactSha256: {
           'certification/e2e-test-report.json': sha256(jsonContent),
           'playwright-results.xml': sha256(xmlContent)
@@ -471,6 +491,20 @@ function ensureRunId() {
   )
 }
 
+function emitRunnerGateSeal(id, state) {
+  if (process.env.GITHUB_ACTIONS !== 'true') return
+  if (!process.env.GITHUB_OUTPUT) {
+    throw new Error('ci_bar_provenance_step_output_missing')
+  }
+  const seal = createGateSeal({
+    id,
+    state,
+    artifactDir: rootArtifactDir,
+    github: runnerIdentity(process.env)
+  })
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `seal=${encodeGateSeal(seal)}\n`)
+}
+
 function init() {
   fs.mkdirSync(path.join(rootArtifactDir, 'gates'), { recursive: true })
   const nodeVersion = process.versions.node
@@ -508,6 +542,7 @@ function init() {
   process.stdout.write(
     `${JSON.stringify({ runId, candidateId: state.candidateId, nodeVersion, artifactDir: rootArtifactDir })}\n`
   )
+  if (/^22\./.test(nodeVersion)) emitRunnerGateSeal('runtime', state)
   if (!/^22\./.test(nodeVersion)) process.exitCode = 1
 }
 
@@ -599,6 +634,7 @@ function runGate(id) {
   state.gates = [...state.gates.filter((gate) => gate.id !== id), entry]
   writeState(state)
   process.stdout.write(`${JSON.stringify(entry)}\n`)
+  if (exitCode === 0) emitRunnerGateSeal(id, state)
   process.exitCode = exitCode
 }
 
@@ -608,6 +644,35 @@ function runArtifacts(state) {
   const expected = new Set(CI_BAR_GATES.map((gate) => gate.id))
   const observed = new Map(state.gates.map((gate) => [gate.id, gate]))
   const failures = []
+  const expectedGateIds = CI_BAR_GATES.filter((gate) => gate.id !== 'artifacts')
+    .map((gate) => gate.id)
+    .sort()
+  const observedGateIds = state.gates.map((gate) => gate.id).sort()
+  if (
+    observedGateIds.length !== expectedGateIds.length ||
+    observedGateIds.some((id, index) => id !== expectedGateIds[index])
+  ) {
+    failures.push('gate_inventory_mismatch')
+  }
+  let provenance = { mode: 'LOCAL_UNSEALED' }
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    try {
+      if (!process.env.CI_BAR_STEPS_JSON) {
+        throw new Error('ci_bar_provenance_steps_context_missing')
+      }
+      provenance = verifyGateSeals({
+        state,
+        artifactDir: rootArtifactDir,
+        steps: JSON.parse(process.env.CI_BAR_STEPS_JSON),
+        github: runnerIdentity(process.env)
+      })
+      failures.push(...provenance.failures)
+    } catch (error) {
+      failures.push(
+        `ci_bar_provenance_failed:${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+  }
   for (const id of expected) {
     if (id === 'artifacts') continue
     const entry = observed.get(id)
@@ -739,6 +804,9 @@ function runArtifacts(state) {
     ...state.gates.filter((gate) => gate.id !== 'artifacts'),
     artifactEntry
   ]
+  const artifactFiles = listFiles(rootArtifactDir)
+    .filter((file) => file !== 'ci-bar-manifest.json')
+    .sort()
   const manifest = {
     schemaVersion: 1,
     kind: 'cvg-ci-bar-manifest',
@@ -752,9 +820,9 @@ function runArtifacts(state) {
     finishedAt: new Date().toISOString(),
     gates: state.gates,
     candidateFileCount: state.candidateFiles.length,
-    artifactFiles: listFiles(rootArtifactDir)
-      .filter((file) => file !== 'ci-bar-manifest.json')
-      .sort(),
+    provenance,
+    artifactFiles,
+    artifactHashes: artifactInventory(rootArtifactDir, artifactFiles),
     failures,
     verdict: failures.length === 0 ? 'PASS' : 'FAIL'
   }
@@ -764,6 +832,17 @@ function runArtifacts(state) {
   }
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
   process.stdout.write(`${JSON.stringify(manifest)}\n`)
+  if (failures.length === 0 && process.env.GITHUB_ACTIONS === 'true') {
+    if (!process.env.GITHUB_OUTPUT) {
+      throw new Error('ci_bar_provenance_manifest_output_missing')
+    }
+    fs.appendFileSync(
+      process.env.GITHUB_OUTPUT,
+      `manifest_sha256=${sha256(fs.readFileSync(manifestPath))}\n` +
+        `candidate_id=${state.candidateId}\n` +
+        `run_id=${state.runId}\n`
+    )
+  }
   process.exitCode = failures.length === 0 ? 0 : 1
 }
 

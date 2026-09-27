@@ -1,3 +1,7 @@
+# PR-009-PROV — BUILD T3 autorizado — 27/09/2026
+
+- Usuário aprovou [SPEC 0147](02_spec/0147_ci_bar_external_provenance.md). Selo de cada gate em output externo ao diretório, inventário de hashes brutos e jobs separados de atestação/verificação implementados localmente. I1–I3 `REJECT` corrigidos; I4 `ACCEPT_LOCAL`; [prova local](04_audit/evidence/PR009-PROV-20260927/proof.json) com 24 testes focados e suíte completa 301/2.196 PASS, 20/146 skipped sem banco. [Task 0356](03_build/0356_production_backlog_2026-09-26.md) segue `REMOTE_PROOF_PENDING`: prova remota no SHA integrado, digest OCI publicável, proteção de `main` e política de retenção/exportação pendentes. Produção `NO_GO`.
+
 # PR-401 — inventário de dados pessoais — 27/09/2026
 
 - `INVENTORY_DRAFT / DPO_APPROVAL_PENDING`: [inventário técnico](platform/09-personal-data-inventory.md) por schema, fluxo e legado, e [modelo RIPD](platform/10-ripd-template.md) sem valores reais. Críticas I1–I3 corrigidas; I4 `ACCEPT` factual; links, higiene e formato PASS. D-10 e [PR-401](03_build/0356_production_backlog_2026-09-26.md) só fecham após revisão/aprovação do controlador/DPO e preenchimento por produto. PR-402/403/405 e gates de produção permanecem abertos; `NO_GO`.

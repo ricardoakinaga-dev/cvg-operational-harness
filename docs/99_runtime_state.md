@@ -1,3 +1,11 @@
+# PR-009-PROV — BUILD T3 da proveniência selada — 27/09/2026
+
+- status: `SPEC_APPROVED / BUILD_ACCEPTED_LOCAL / REMOTE_PROVENANCE_PENDING`; produção `NO_GO`.
+- last_completed_action: usuário aprovou explicitamente [SPEC 0147](02_spec/0147_ci_bar_external_provenance.md); claim `77397a1`. Implementei selo por gate em `GITHUB_OUTPUT`, verificação em finalização, hash de manifesto como output, job separado de atestação e job independente de verificação da assinatura/commit.
+- verification_state: [prova local](04_audit/evidence/PR009-PROV-20260927/proof.json): críticas I1–I3 `REJECT` corrigidas; I4 `ACCEPT_LOCAL`. Testes focados 4 arquivos/24 PASS e suíte completa repetida 301 arquivos/2.196 testes PASS, 20 arquivos/146 skipped sem PostgreSQL; Node 22.23.2, `typecheck`, lint, build, actionlint 1.7.12, links/higiene/formato PASS. Nenhum run remoto/atestado neste SHA.
+- blocking_state: PR-L04/certificação integrada, Verify/Security remotos no mesmo SHA, atestação de digest OCI quando existir imagem publicável, retenção/exportação e proteção de `main` permanecem abertos. GitHub `main` retornou 404 para branch protection e rulesets `[]`; push ou alteração externa requer decisão do usuário.
+- next_action: commitar a fatia e preparar execução remota para aprovação final de push; depois verificar attestation, digest e política de branch no SHA integrado.
+
 # PR-401 — inventário técnico e modelo RIPD — 27/09/2026
 
 - status: `INVENTORY_DRAFT / DPO_APPROVAL_PENDING`; produção `NO_GO`.

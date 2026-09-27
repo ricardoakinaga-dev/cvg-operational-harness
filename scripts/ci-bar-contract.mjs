@@ -1,4 +1,4 @@
-export const CI_BAR_VERSION = 'rem21-014-v1'
+export const CI_BAR_VERSION = 'rem21-014-v2-sealed'
 
 const npm = (...args) => ['npm', args]
 const shell = (command) => ['sh', ['-c', command]]
@@ -329,7 +329,15 @@ export function validateCiBarContract({
   if (!workflow.includes('actions/upload-artifact')) {
     addFailure(failures, 'artifact_upload_missing')
   }
-  if (!workflow.includes('if-no-files-found: error')) {
+  const uploadActionCount =
+    workflow.match(/actions\/upload-artifact@/g)?.length ?? 0
+  const failClosedUploadCount =
+    workflow.match(/if-no-files-found: error/g)?.length ?? 0
+  if (
+    failClosedUploadCount === 0 ||
+    failClosedUploadCount < uploadActionCount ||
+    /if-no-files-found:\s*(?:warn|ignore)/.test(workflow)
+  ) {
     addFailure(failures, 'artifacts_not_fail_closed')
   }
   if (!workflow.includes('if: always()')) {

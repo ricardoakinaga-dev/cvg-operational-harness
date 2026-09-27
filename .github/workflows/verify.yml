@@ -19,6 +19,10 @@ jobs:
     name: REM21 CI bar (Node 22)
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    outputs:
+      manifest_sha256: ${{ steps.finalize.outputs.manifest_sha256 }}
+      candidate_id: ${{ steps.finalize.outputs.candidate_id }}
+      ci_run_id: ${{ steps.finalize.outputs.run_id }}
     env:
       CI_RUN_ID: run-${{ github.run_id }}-${{ github.run_attempt }}
       TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cvg_test
@@ -60,116 +64,155 @@ jobs:
           npm --version
 
       - name: Initialize candidate/run bar
+        id: gate_runtime
         run: node scripts/ci-bar.mjs init
 
       - name: Gate install
+        id: gate_install
         run: node scripts/ci-bar.mjs gate install
 
       - name: Gate readiness
+        id: gate_readiness
         run: node scripts/ci-bar.mjs gate readiness
 
       - name: Gate format
+        id: gate_format
         run: node scripts/ci-bar.mjs gate format
 
       - name: Gate typecheck
+        id: gate_typecheck
         run: node scripts/ci-bar.mjs gate typecheck
 
       - name: Gate lint
+        id: gate_lint
         run: node scripts/ci-bar.mjs gate lint
 
       - name: Gate build
+        id: gate_build
         run: node scripts/ci-bar.mjs gate build
 
       - name: Gate unit
+        id: gate_unit
         run: node scripts/ci-bar.mjs gate unit
 
       - name: Gate coverage
+        id: gate_coverage
         run: node scripts/ci-bar.mjs gate coverage
 
       - name: Gate critical coverage
+        id: gate_coverage_critical
         run: node scripts/ci-bar.mjs gate coverage-critical
 
       - name: Gate mutation
+        id: gate_mutation
         run: node scripts/ci-bar.mjs gate mutation
 
       - name: Gate worker startup
+        id: gate_worker_startup
         run: node scripts/ci-bar.mjs gate worker-startup
 
       - name: Gate PostgreSQL
+        id: gate_postgres
         run: node scripts/ci-bar.mjs gate postgres
 
       - name: Gate PostgreSQL backup restore rollback proof
+        id: gate_postgres_proof
         run: node scripts/ci-bar.mjs gate postgres-proof
 
       - name: Gate observability exporter and SLO proof
+        id: gate_observability_proof
         run: node scripts/ci-bar.mjs gate observability-proof
 
       - name: Gate phase 2
+        id: gate_phase2
         run: node scripts/ci-bar.mjs gate phase2
 
       - name: Gate phase 3
+        id: gate_phase3
         run: node scripts/ci-bar.mjs gate phase3
 
       - name: Gate phase 4A
+        id: gate_phase4a
         run: node scripts/ci-bar.mjs gate phase4a
 
       - name: Gate phase 4A identity
+        id: gate_phase4a_identity
         run: node scripts/ci-bar.mjs gate phase4a-identity
 
       - name: Gate chaos
+        id: gate_chaos
         run: node scripts/ci-bar.mjs gate chaos
 
       - name: Gate evals
+        id: gate_evals
         run: node scripts/ci-bar.mjs gate evals
 
       - name: Gate load
+        id: gate_load
         run: node scripts/ci-bar.mjs gate load
 
       - name: Gate restore
+        id: gate_restore
         run: node scripts/ci-bar.mjs gate restore
 
       - name: Gate docs and links
+        id: gate_docs
         run: node scripts/ci-bar.mjs gate docs
 
       - name: Install declared browser
         run: npx playwright install --with-deps chromium firefox webkit
 
       - name: Gate E2E
+        id: gate_e2e
         run: node scripts/ci-bar.mjs gate e2e
 
       - name: Gate REM21-014 trusted browser and accessibility proof
+        id: gate_browser_proof
         run: node scripts/ci-bar.mjs gate browser-proof
 
       - name: Gate skip governance
+        id: gate_skip
         run: node scripts/ci-bar.mjs gate skip
 
       - name: Gate image build and non-root smoke
+        id: gate_image
         run: node scripts/ci-bar.mjs gate image
 
       - name: Gate SBOM
+        id: gate_sbom
         run: node scripts/ci-bar.mjs gate sbom
 
       - name: Gate licenses
+        id: gate_licenses
         run: node scripts/ci-bar.mjs gate licenses
 
       - name: Gate security audit
+        id: gate_security
         run: node scripts/ci-bar.mjs gate security
 
       - name: Gate certification
+        id: gate_certify
         run: node scripts/ci-bar.mjs gate certify
 
       - name: Gate certification verifier
+        id: gate_certification_verify
         run: node scripts/ci-bar.mjs gate certification-verify
 
       - name: Gate diff
+        id: gate_diff
         run: node scripts/ci-bar.mjs gate diff
 
       - name: Gate artifacts and candidate drift
         if: always()
+        env:
+          CI_BAR_STEPS_JSON: ${{ toJSON(steps) }}
         run: node scripts/ci-bar.mjs gate artifacts
 
       - name: Finalize CI bar
+        id: finalize
         if: always()
+        env:
+          CI_BAR_STEPS_JSON: ${{ toJSON(steps) }}
         run: node scripts/ci-bar.mjs finalize
 
       - name: Upload CI bar artifacts
@@ -179,4 +222,195 @@ jobs:
           name: cvg-ci-bar-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/cvg-ci/${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
-          retention-days: 7
+          include-hidden-files: true
+          retention-days: 90
+
+  attest:
+    name: Attest sealed CI manifest
+    needs: verify
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Download immutable CI artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cvg-ci-bar-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-artifacts
+
+      - name: Match downloaded manifest to producer output
+        env:
+          EXPECTED_SHA256: ${{ needs.verify.outputs.manifest_sha256 }}
+          EXPECTED_CANDIDATE: ${{ needs.verify.outputs.candidate_id }}
+          EXPECTED_RUN: ${{ needs.verify.outputs.ci_run_id }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib
+          def require(condition, label):
+              if not condition:
+                  raise SystemExit(label)
+          def sha256(raw):
+              return hashlib.sha256(raw).hexdigest()
+          def canonical(value):
+              return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+          manifest_path = pathlib.Path('ci-artifacts/ci-bar-manifest.json')
+          raw = manifest_path.read_bytes()
+          manifest = json.loads(raw)
+          require(sha256(raw) == os.environ['EXPECTED_SHA256'], 'manifest_digest_mismatch')
+          require(manifest['verdict'] == 'PASS', 'manifest_not_pass')
+          require(manifest['candidateId'] == os.environ['EXPECTED_CANDIDATE'], 'candidate_mismatch')
+          require(manifest['runId'] == os.environ['EXPECTED_RUN'], 'run_mismatch')
+          provenance = manifest['provenance']
+          require(provenance['mode'] == 'GITHUB_STEP_OUTPUT_SEALED', 'unsealed_manifest')
+          require(provenance['verifiedGateCount'] == 34, 'gate_count_mismatch')
+          require(provenance['github'] == {
+              'runId': os.environ['GITHUB_RUN_ID'],
+              'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'sha': os.environ['GITHUB_SHA'].lower(),
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'workflow': os.environ['GITHUB_WORKFLOW'],
+          }, 'github_context_mismatch')
+          artifact_root = pathlib.Path('ci-artifacts').resolve()
+          actual_files = []
+          for file in artifact_root.rglob('*'):
+              require(not file.is_symlink(), 'artifact_symlink')
+              if file.is_dir():
+                  continue
+              require(file.is_file(), 'artifact_not_file')
+              relative = file.relative_to(artifact_root).as_posix()
+              if relative != 'ci-bar-manifest.json':
+                  actual_files.append({'path': relative, 'sha256': sha256(file.read_bytes()), 'size': file.stat().st_size})
+          actual_files.sort(key=lambda item: item['path'])
+          require(actual_files == manifest['artifactHashes'], 'artifact_inventory_mismatch')
+          require([item['path'] for item in actual_files] == manifest['artifactFiles'], 'artifact_files_mismatch')
+          state = json.loads((artifact_root / 'ci-bar-state.json').read_text())
+          require(state['runId'] == manifest['runId'], 'state_run_mismatch')
+          require(state['candidateId'] == manifest['candidateId'], 'state_candidate_mismatch')
+          approved_contract = 'rem21-014-v2-sealed'
+          approved_gates = set('runtime install readiness format typecheck lint build unit coverage coverage-critical mutation skip worker-startup postgres postgres-proof observability-proof phase2 phase3 phase4a phase4a-identity chaos evals load restore docs e2e browser-proof image sbom licenses security certify certification-verify diff'.split())
+          require(manifest['contract'] == approved_contract and state['contract'] == approved_contract, 'contract_mismatch')
+          entries = {item['id']: item for item in state['gates']}
+          seals = provenance['gateSeals']
+          require(len(seals) == len(approved_gates) and {item['gateId'] for item in seals} == approved_gates, 'seal_inventory_mismatch')
+          require(len(state['gates']) == len(approved_gates) and set(entries) == approved_gates, 'state_gate_inventory_mismatch')
+          require(len(manifest['gates']) == len(approved_gates) + 1 and {item['id'] for item in manifest['gates']} == approved_gates | {'artifacts'}, 'manifest_gate_inventory_mismatch')
+          require(sha256(canonical(seals)) == provenance['sealSetSha256'], 'seal_set_digest_mismatch')
+          for item in seals:
+              seal = item['seal']
+              gate = item['gateId']
+              require(seal['gateId'] == gate, 'seal_gate_mismatch')
+              require(seal['contract'] == approved_contract, 'seal_contract_mismatch')
+              encoded_seal = base64.urlsafe_b64encode(canonical(seal)).rstrip(b'=')
+              require(sha256(encoded_seal) == item['sealSha256'], 'seal_digest_mismatch')
+              require(seal['github'] == provenance['github'], 'seal_runner_mismatch')
+              require(seal['runId'] == manifest['runId'], 'seal_run_mismatch')
+              require(seal['candidateId'] == manifest['candidateId'], 'seal_candidate_mismatch')
+              require(seal['status'] == 'PASS' and seal['exitCode'] == 0, 'seal_gate_not_pass')
+              require(sha256(canonical(entries[gate])) == seal['entrySha256'], 'sealed_entry_mismatch')
+              if seal['logSha256'] is not None:
+                  require(sha256((artifact_root / 'gates' / (gate + '.log')).read_bytes()) == seal['logSha256'], 'sealed_log_mismatch')
+              for relative, digest in seal['snapshotSha256'].items():
+                  fragment = pathlib.PurePosixPath(relative)
+                  require(not fragment.is_absolute() and '..' not in fragment.parts and '\\' not in relative, 'unsafe_snapshot_path')
+                  snapshot = (artifact_root / 'gate-outputs' / gate / relative).resolve()
+                  require(snapshot.is_relative_to(artifact_root), 'snapshot_outside_artifact')
+                  require(sha256(snapshot.read_bytes()) == digest, 'sealed_snapshot_mismatch')
+          PY
+
+      - name: Attest CI manifest
+        id: attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ci-artifacts/ci-bar-manifest.json
+
+      - name: Preserve attestation bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cvg-ci-attestation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.attestation.outputs.bundle-path }}
+          if-no-files-found: error
+          retention-days: 90
+
+  provenance-verify:
+    name: Verify manifest attestation independently
+    needs: [verify, attest]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    steps:
+      - name: Download CI artifact in independent job
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cvg-ci-bar-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-artifacts
+
+      - name: Download attestation bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cvg-ci-attestation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-attestation
+
+      - name: Verify subject, signer and source commit
+        env:
+          EXPECTED_SHA256: ${{ needs.verify.outputs.manifest_sha256 }}
+        run: |
+          test "$(sha256sum ci-artifacts/ci-bar-manifest.json | cut -d ' ' -f1)" = "$EXPECTED_SHA256"
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          root = pathlib.Path('ci-artifacts').resolve()
+          manifest = json.loads((root / 'ci-bar-manifest.json').read_text())
+          actual = []
+          for file in root.rglob('*'):
+              if file.is_symlink():
+                  raise SystemExit('artifact_symlink')
+              if file.is_dir():
+                  continue
+              if not file.is_file():
+                  raise SystemExit('artifact_not_file')
+              relative = file.relative_to(root).as_posix()
+              if relative != 'ci-bar-manifest.json':
+                  actual.append({'path': relative, 'sha256': hashlib.sha256(file.read_bytes()).hexdigest(), 'size': file.stat().st_size})
+          actual.sort(key=lambda item: item['path'])
+          if actual != manifest['artifactHashes'] or [item['path'] for item in actual] != manifest['artifactFiles']:
+              raise SystemExit('artifact_inventory_mismatch')
+          PY
+          mapfile -t bundles < <(find ci-attestation -type f -name '*.json')
+          test "${#bundles[@]}" -eq 1
+          gh attestation verify ci-artifacts/ci-bar-manifest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --bundle "${bundles[0]}" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/verify.yml" \
+            --source-digest "$GITHUB_SHA" \
+            --deny-self-hosted-runners \
+            --format json > "$RUNNER_TEMP/ci-attestation-verification.json"
+
+  provenance-policy:
+    name: Provenance policy
+    needs: [verify, attest, provenance-verify]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require complete independently verified provenance
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          ATTEST_RESULT: ${{ needs.attest.result }}
+          PROVENANCE_RESULT: ${{ needs['provenance-verify'].result }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          if [ "$IS_FORK" = 'true' ]; then
+            echo 'Fork PRs require a trusted follow-up workflow before their evidence can be promoted.' >&2
+            exit 1
+          fi
+          if [ "$VERIFY_RESULT" != 'success' ] || [ "$ATTEST_RESULT" != 'success' ] || [ "$PROVENANCE_RESULT" != 'success' ]; then
+            echo 'Sealed provenance is incomplete or failed.' >&2
+            exit 1
+          fi
