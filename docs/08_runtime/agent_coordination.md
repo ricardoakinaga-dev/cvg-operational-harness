@@ -37,16 +37,16 @@
    um `git worktree` em branch própria e integrar em `main` só com todos os
    gates verdes; o claim continua obrigatório.
 
-## Divisão de frentes (proposta de 27/09/2026, aguarda confirmação do usuário)
+## Divisão de frentes (confirmada pelo usuário em 27/09/2026)
 
-| Frente                                                                                                               | Dono proposto | Referência                                                                                                |
-| -------------------------------------------------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------- |
-| AUD-0578 R0–R2: CI remoto, E2E (PR-009), candidato e certificação (PR-003), qualidade (PR-005/007), discovery PR-101 | Codex         | [0358](../03_build/0358_aud0578_execution_roadmap.md)                                                     |
-| Frente FL do legado: PR-L04, PR-L06 a PR-L10, PR-L12 (R3 do 0358)                                                    | Claude Code   | [0356](../03_build/0356_production_backlog_2026-09-26.md), [inventário](../../legacy/LEGACY_INVENTORY.md) |
+| Frente                                                                                                               | Dono        | Referência                                                                                                |
+| -------------------------------------------------------------------------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------- |
+| AUD-0578 R0–R2: CI remoto, E2E (PR-009), candidato e certificação (PR-003), qualidade (PR-005/007), discovery PR-101 | Codex       | [0358](../03_build/0358_aud0578_execution_roadmap.md)                                                     |
+| Frente FL do legado: PR-L04, PR-L06 a PR-L10, PR-L12 (R3 do 0358)                                                    | Claude Code | [0356](../03_build/0356_production_backlog_2026-09-26.md), [inventário](../../legacy/LEGACY_INVENTORY.md) |
 
 ## Quadro de claims
 
 | Tarefa                                        | Agente      | Caminhos                                                                                                                                                                               | Desde      | Estado                                                |
 | --------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------- |
 | SPEC 0139 — fonte visual do E2E (AUD-0578 R1) | Codex       | `apps/web/**`, `package-lock.json`, `tests/e2e/**`, `certification/license-report.json`, `docs/02_spec/0139_*`, `docs/03_build/0358_*`, `docs/03_build/0305_*`, `docs/03_build/0356_*` | 27/09/2026 | `ATIVO` (registrado pelo Claude a partir do worktree) |
-| PR-L06 — evals neutros                        | Claude Code | `packages/agent-evals/**`, `legacy/**`, `docs/02_spec/` (SPEC nova)                                                                                                                    | —          | `PROPOSTO` — começa após confirmação da divisão       |
+| PR-L06 — evals neutros                        | Claude Code | `packages/agent-evals/**`, `legacy/**`, `scripts/phase10-eval-report.ts`, `packages/harness/src/__tests__/agent-loop-evals.test.ts`, `docs/02_spec/0140_*`                             | 27/09/2026 | `ATIVO`                                               |
