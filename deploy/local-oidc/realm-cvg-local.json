@@ -1,0 +1,139 @@
+{
+  "realm": "cvg-local",
+  "enabled": true,
+  "displayName": "CVG local synthetic identity",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "loginWithEmailAllowed": false,
+  "duplicateEmailsAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionMaxLifespan": 900,
+  "browserFlow": "cvg-browser-mfa",
+  "authenticationFlows": [
+    {
+      "alias": "cvg-browser-mfa",
+      "description": "Local browser authentication with mandatory password and OTP",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticatorFlow": true,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "flowAlias": "cvg-browser-forms-mfa",
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "cvg-browser-forms-mfa",
+      "description": "Every local operator must complete OTP",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-username-password-form",
+          "authenticatorConfig": "cvg-password-reference",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "authenticatorConfig": "cvg-otp-reference",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": true
+        }
+      ]
+    }
+  ],
+  "authenticatorConfig": [
+    {
+      "alias": "cvg-password-reference",
+      "config": {
+        "default.reference.value": "pwd",
+        "default.reference.maxAge": "900"
+      }
+    },
+    {
+      "alias": "cvg-otp-reference",
+      "config": {
+        "default.reference.value": "otp",
+        "default.reference.maxAge": "900"
+      }
+    }
+  ],
+  "requiredActions": [
+    {
+      "alias": "CONFIGURE_TOTP",
+      "name": "Configure OTP",
+      "providerId": "CONFIGURE_TOTP",
+      "enabled": true,
+      "defaultAction": true,
+      "priority": 10
+    }
+  ],
+  "groups": [
+    {
+      "name": "tenant_00000000-0000-4000-8000-000000000701",
+      "subGroups": [
+        {
+          "name": "Supervisor"
+        },
+        {
+          "name": "Operator"
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "cvg-local-operator",
+      "name": "CVG local operator console",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "bearerOnly": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://127.0.0.1:3000/v1/auth/oidc/callback"],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "cvg-amr",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-amr-mapper",
+          "config": {
+            "id.token.claim": "true",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "cvg-groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "full.path": "true",
+            "claim.name": "groups",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

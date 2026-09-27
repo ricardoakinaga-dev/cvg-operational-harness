@@ -1,0 +1,22 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4@sha256:82a77884f3af238beab1e7afd63b5f530e1b5c0590bd7aa60b40a40463e29b2c
+    command:
+      - start-dev
+      - --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: local-admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${CVG_LOCAL_IDP_ADMIN_PASSWORD:?Set a temporary synthetic local admin password}
+      KC_HOSTNAME: http://127.0.0.1:8087
+    ports:
+      - 127.0.0.1:8087:8080
+    volumes:
+      - ./realm-cvg-local.json:/opt/keycloak/data/import/cvg-local-realm.json:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /bin/bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080; printf "GET /realms/cvg-local/.well-known/openid-configuration HTTP/1.0\r\n\r\n" >&3; grep -q "200 OK" <&3'
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 40s

@@ -1,3 +1,7 @@
+# PR-301-OIDC-LOCAL — IdP de homologação — 27/09/2026
+
+- `BUILD_ACCEPTED_LOCAL / API_INTEGRATION_PENDING / NO_GO`: [D-09](03_build/0357_production_decision_packet_2026-09-26.md) aplica IdP OIDC local com MFA e identidades sintéticas. [Keycloak local](../deploy/local-oidc/README.md) importou realm e passou prova real de PKCE S256 obrigatório, redirect exato, setup e validação OTP, `amr: otp` e grupo sintético no ID token ([prova](04_audit/evidence/PR301-OIDC-LOCAL-20260927/proof.json)); I11 `ACCEPT_LOCAL`. Sem composição de API/web, validação de assinatura/nonce, E2E confiável ou IdP corporativo; nenhum GO.
+
 # PR-301 — store PostgreSQL em BUILD T3 — 27/09/2026
 
 - `PG_STORE_ACCEPTED_LOCAL / INTEGRATION_PENDING / NO_GO`: [SPEC 0144](02_spec/0144_trusted_operator_session_production.md) aprovada e D-09 esclarecida para IdP OIDC local com MFA em desenvolvimento/homologação ([pacote](03_build/0357_production_decision_packet_2026-09-26.md), SHA-256 `0309ca28394c2499f0a47b60b90281b8ceca214d27066be8fd420ab1bcb15460`). Migration isolada, adapter, preflight e negativos em PostgreSQL 16: 8/8 do store e 16/16 focados PASS; tipo/lint/formato/links PASS. I7–I9 rejeitaram sete lacunas corrigidas; I10 `ACCEPT_LOCAL`. A [task PR-301](03_build/0356_production_backlog_2026-09-26.md) mantém composição, OIDC/PKCE, IdP local, web, E2E e certificação abertos; nenhum GO.

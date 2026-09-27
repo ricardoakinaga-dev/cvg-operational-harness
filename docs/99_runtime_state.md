@@ -1,3 +1,11 @@
+# PR-301-OIDC-LOCAL — IdP local com MFA — 27/09/2026
+
+- status: `OIDC_LOCAL_ACCEPTED / API_INTEGRATION_PENDING`; produção `NO_GO`.
+- last_completed_action: Keycloak 26.7.4 com digest OCI fixado, realm importado em loopback, fluxo próprio de senha e OTP obrigatórios, client Code + PKCE `S256`, direct grant desativado, mapper `amr` e grupo de tenant/papel sintético. Configuração em [deploy/local-oidc](../deploy/local-oidc/README.md).
+- verification_state: container descartável saudável e discovery HTTP 200; [verificador](04_audit/evidence/PR301-OIDC-LOCAL-20260927/proof.json) em Chromium real PASS para PKCE ausente, redirect inválido, cadastro OTP, OTP incorreto, token com `amr: otp` após código válido e grupo sintético. I11 `ACCEPT_LOCAL`; assinatura/nonce não são validadas pelo verificador e permanecem gate da API. Container removido após a prova. Nenhum usuário/senha real no repositório.
+- blocking_state: API ainda não implementa Authorization Code + PKCE, callback/validação JWKS/issuer/audience/MFA, mapeamento de grupos e store composto; web não tem fluxo confiável. Configuração usa HTTP e `start-dev` apenas em loopback; issuer corporativo de produção ainda pendente.
+- next_action: integrar API/web e testar fluxo ponta a ponta sob SPEC 0144 após liberação dos caminhos PR-L04; manter `NO_GO`.
+
 # PR-301 — sessão PostgreSQL isolada em BUILD T3 — 27/09/2026
 
 - status: `SPEC_APPROVED / PG_STORE_ACCEPTED_LOCAL / INTEGRATION_PENDING`; produção `NO_GO`.
