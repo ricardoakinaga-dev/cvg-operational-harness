@@ -1,3 +1,7 @@
+/**
+ * LEGACY CONTENT — Esmeralda V2 tutor/pet/appointment journeys, moved from
+ * @cvg/persistence by SPEC-LEGACY-004 (PR-L04), slice 1. Logic unchanged.
+ */
 import {
   CorrelationIdSchema,
   createDomainId,
@@ -5,15 +9,17 @@ import {
   redactSensitiveText
 } from '@cvg/shared'
 import { TenantIdSchema, type TenantId } from '@cvg/platform'
-import type { InMemoryDatabase } from './db.ts'
-import { AuditRepository } from './repositories/audit-repository.ts'
-import { TaskRepository } from './repositories/task-repository.ts'
+import {
+  AuditRepository,
+  TaskRepository,
+  type InMemoryDatabase
+} from '@cvg/persistence'
 import type {
   AppointmentDraftRecord,
   OwnerDraftRecord,
   PatientDraftRecord,
   TaskRecord
-} from './schema.ts'
+} from '@cvg/persistence'
 
 export const SYNTHETIC_SCHEDULE_VERSION = 'synthetic-schedule-v1'
 export const DEFAULT_DRAFT_TTL_MS = 24 * 60 * 60 * 1000

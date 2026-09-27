@@ -1,40 +1,51 @@
 import { describe, expect, it } from 'vitest'
 import { InMemoryDatabase } from '../db.ts'
-import { JourneyRepository } from '../journeys.ts'
 import { createDatabaseSnapshot, restoreDatabaseSnapshot } from '../restore.ts'
 
 const tenantId = 'tenant_00000000-0000-0000-0000-000000000701' as const
 
 describe('controlled snapshot restore', () => {
   it('restores an exact synthetic state by digest and rejects tampering/cross-tenant content', () => {
+    // SPEC-LEGACY-004: a neutral tenant-scoped record exercises the restore
+    // mechanism; the legacy journey tables are covered in their own package.
+    const conversation = (
+      tenant: string,
+      id: string
+    ): InMemoryDatabase['state']['conversations'][number] => ({
+      tenantId: tenant,
+      id,
+      channel: 'web',
+      senderRef: 'sender-restore-fixture',
+      senderRefHash: 'fixture-hash',
+      status: 'active',
+      correlationId: `corr_${id}`,
+      createdAt: new Date('2026-09-05T12:00:00.000Z'),
+      updatedAt: new Date('2026-09-05T12:00:00.000Z')
+    })
     const source = new InMemoryDatabase()
-    const journeys = new JourneyRepository(source, {
-      clock: () => new Date('2026-09-05T12:00:00.000Z')
-    })
-    journeys.createOwnerDraft({
-      tenantId,
-      phone: '+5511999990001',
-      idempotencyKey: 'restore-owner-701'
-    })
+    source.state.conversations.push(
+      conversation(tenantId, 'conversation_restore_701')
+    )
     const snapshot = createDatabaseSnapshot(source, { tenantId })
     const restored = new InMemoryDatabase()
     expect(
       restoreDatabaseSnapshot(restored, snapshot, { tenantId }).digest
     ).toBe(snapshot.digest)
-    expect(restored.state.ownerDrafts).toHaveLength(1)
+    expect(restored.state.conversations).toHaveLength(1)
     const tampered = {
       ...snapshot,
-      state: { ...snapshot.state, ownerDrafts: [] }
+      state: { ...snapshot.state, conversations: [] }
     }
     expect(() =>
       restoreDatabaseSnapshot(new InMemoryDatabase(), tampered)
     ).toThrow(/digest/i)
     const otherTenant = new InMemoryDatabase()
-    new JourneyRepository(otherTenant).createOwnerDraft({
-      tenantId: 'tenant_00000000-0000-0000-0000-000000000702',
-      phone: '+5511999990001',
-      idempotencyKey: 'restore-owner-702'
-    })
+    otherTenant.state.conversations.push(
+      conversation(
+        'tenant_00000000-0000-0000-0000-000000000702',
+        'conversation_restore_702'
+      )
+    )
     expect(() =>
       restoreDatabaseSnapshot(
         otherTenant,

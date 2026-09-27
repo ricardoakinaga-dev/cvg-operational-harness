@@ -73,7 +73,12 @@ import {
   type TestSuiteRunRecord,
   type TestSuiteVariantResult
 } from '@cvg/platform'
-import { ensureControlledSecretaryPreset } from './legacy-composition.ts'
+import {
+  JourneyRepository,
+  PostgresJourneyRepository,
+  ensureControlledSecretaryPreset,
+  type JourneyRepositoryPort
+} from './legacy-composition.ts'
 import {
   ApprovalEngine,
   ApprovalRepository,
@@ -93,11 +98,8 @@ import {
   ConversationRepository,
   type DurableOutboxAdapter,
   InMemoryDatabase,
-  JourneyRepository,
-  type JourneyRepositoryPort,
   OutboxRepository,
   PostgresApprovalAuthority,
-  PostgresJourneyRepository,
   PostgresOperationalExecutionStore,
   PostgresRuntimeRepository,
   PostgresControlPlaneRepository,

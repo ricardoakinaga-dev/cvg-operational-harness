@@ -1,3 +1,7 @@
+/**
+ * LEGACY CONTENT — PostgreSQL adapter of the Esmeralda V2 journeys, moved from
+ * @cvg/persistence by SPEC-LEGACY-004 (PR-L04), slice 1. SQL unchanged.
+ */
 import {
   createDomainId,
   DomainError,
@@ -32,20 +36,20 @@ import {
   type PatientDraftInput,
   type RecordHandoffInput,
   type SearchPatientInput
-} from './journeys.ts'
-import { PostgresRuntimeRepository } from './postgres.ts'
+} from './memory-repository.ts'
+import { PostgresRuntimeRepository } from '@cvg/persistence'
 import {
   withTenantTransaction,
   type PostgresPoolClient,
   type PostgresPoolLike
-} from './tenant-scoped-postgres.ts'
+} from '@cvg/persistence'
 import type {
   AppointmentDraftRecord,
   JourneyDraftStatus,
   OwnerDraftRecord,
   PatientDraftRecord,
   TaskRecord
-} from './schema.ts'
+} from '@cvg/persistence'
 
 interface OwnerDraftRow extends QueryResultRow {
   tenant_id: string

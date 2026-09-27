@@ -88,3 +88,32 @@ backup e janela — isso é a PR-L11, depois da DL-05. Esses pontos ficam marcad
 `git grep` por `JourneyRepository|/v1/journeys|features/journeys` fora de
 `legacy/` e dos pontos de composição retorna só os resíduos de schema
 listados; testes, E2E, `test:postgres` e imagem verdes; inventário atualizado.
+
+## Execução
+
+### Fatia 1 — repositórios (27/09/2026)
+
+- `packages/persistence/src/journeys.ts` e `journeys-postgres.ts` movidos com
+  `git mv` para `legacy/packages/secretary-journeys/src/memory-repository.ts` e
+  `postgres-repository.ts` (`@cvg/legacy-secretary-journeys`); só os imports
+  mudaram, agora de `@cvg/persistence`. `@cvg/persistence` deixou de
+  exportá-los.
+- Os três testes de persistência de jornada foram movidos com `git mv`; a lista
+  do `test:postgres`, as entradas `SKIP-PG-025/026` do catálogo de skips (com o
+  novo SHA-256 dos arquivos) e a exclusão de cobertura do adaptador PostgreSQL
+  apontam para o novo caminho.
+- `restore.test.ts` do `persistence` usava jornadas só como exemplo de dado com
+  tenant; a fixture passou a ser uma conversa, com as mesmas asserções de digest,
+  adulteração e tenant cruzado.
+- A API recebe `JourneyRepository`, `PostgresJourneyRepository` e o tipo da
+  porta pelo ponto de composição `apps/api/src/legacy-composition.ts`; o build
+  de runtime compila o novo pacote.
+- Gates (Node 22.23.2, PostgreSQL próprio em `127.0.0.1:5437`):
+  `format:check`, `lint`, `typecheck`, `docs:check-links`, `build:runtime` e
+  `mutation:guard` exit 0; suíte com cobertura 318 arquivos / 2 316 testes
+  PASS, 92,63/87,62/95,04/93,62; `test:postgres` 35/258; imagem de runtime com
+  smoke PASS. `skip:governance` acusa drift só no teste de homologação do
+  worker, alterado pelo Codex em `a67726b` (fora desta fatia). O E2E fica
+  para quando o claim de certificação do Codex (que cobre `test-results/**` e
+  `playwright-results.xml`) for liberado; as rotas da API não mudaram nesta
+  fatia.

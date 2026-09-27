@@ -23,6 +23,7 @@ export const RUNTIME_WORKSPACES = [
   'packages/persistence',
   'packages/agent-core',
   'legacy/packages/secretary-profile',
+  'legacy/packages/secretary-journeys',
   'apps/api'
 ]
 

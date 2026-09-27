@@ -2,16 +2,19 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { Client, Pool } from 'pg'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type { TenantId } from '@cvg/platform'
-import { InMemoryDatabase } from '../db.ts'
-import { ConversationRepository } from '../repositories/conversation-repository.ts'
+import { InMemoryDatabase } from '@cvg/persistence'
+import { ConversationRepository } from '@cvg/persistence'
 import {
   JourneyRepository,
   SYNTHETIC_SCHEDULE_VERSION,
   type JourneyRepositoryPort
-} from '../journeys.ts'
-import { PostgresJourneyRepository } from '../journeys-postgres.ts'
-import { readPostgresMigrationSql, runPostgresMigrations } from '../postgres.ts'
-import { withTenantContext } from '../tenant-scoped-postgres.ts'
+} from '../memory-repository.ts'
+import { PostgresJourneyRepository } from '../postgres-repository.ts'
+import {
+  readPostgresMigrationSql,
+  runPostgresMigrations
+} from '@cvg/persistence'
+import { withTenantContext } from '@cvg/persistence'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 

@@ -2,16 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { Client, Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { TenantId } from '@cvg/platform'
-import { InMemoryDatabase } from '../db.ts'
-import { JourneyRepository } from '../journeys.ts'
-import { ConversationRepository } from '../repositories/conversation-repository.ts'
-import { AuditRepository } from '../repositories/audit-repository.ts'
-import { PostgresJourneyRepository } from '../journeys-postgres.ts'
-import { runPostgresMigrations } from '../postgres.ts'
-import {
-  withTenantTransaction,
-  type PostgresPoolLike
-} from '../tenant-scoped-postgres.ts'
+import { InMemoryDatabase } from '@cvg/persistence'
+import { JourneyRepository } from '../memory-repository.ts'
+import { ConversationRepository } from '@cvg/persistence'
+import { AuditRepository } from '@cvg/persistence'
+import { PostgresJourneyRepository } from '../postgres-repository.ts'
+import { runPostgresMigrations } from '@cvg/persistence'
+import { withTenantTransaction, type PostgresPoolLike } from '@cvg/persistence'
 
 const tenantId = `tenant_${randomUUID()}` as TenantId
 const context = {

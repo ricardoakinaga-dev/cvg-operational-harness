@@ -62,6 +62,7 @@ export default defineConfig({
         'apps/web/src/**',
         'packages/persistence/src/postgres.ts',
         'packages/persistence/src/*postgres*.ts',
+        'legacy/packages/secretary-journeys/src/postgres-repository.ts',
         'packages/persistence/src/platform-control-plane-repository.ts',
         'packages/persistence/src/platform-approval-repository.ts',
         'packages/persistence/src/tenant-scoped-capability-approval-repository.ts'
@@ -95,6 +96,10 @@ export default defineConfig({
       '@cvg/legacy-secretary-evals': resolve(
         workspaceRoot,
         'legacy/packages/secretary-evals/src/index.ts'
+      ),
+      '@cvg/legacy-secretary-journeys': resolve(
+        workspaceRoot,
+        'legacy/packages/secretary-journeys/src/index.ts'
       ),
       '@cvg/legacy-secretary-profile': resolve(
         workspaceRoot,

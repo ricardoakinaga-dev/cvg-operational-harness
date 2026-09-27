@@ -35,7 +35,7 @@ com ocorrência. Cada ocorrência foi agrupada por domínio abaixo.
 | `packages/tools`     | 395                | nenhum       | Tools de jornada (buscar tutor, criar draft de pet/consulta)      |
 | `packages/memory`    | 13                 | nenhum       | Fatos de memória sem uso                                          |
 
-### `LEGACY_ISOLATE` — domínio de jornadas tutor → pet → consulta (PR-L04)
+### `LEGACY_ISOLATE` — domínio de jornadas tutor → pet → consulta (PR-L04; repositórios isolados em 27/09/2026, rotas e web pendentes)
 
 | Onde                                                                                                                                                                                 | O quê                                                                                            |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |

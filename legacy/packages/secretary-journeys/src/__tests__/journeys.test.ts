@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { InMemoryDatabase } from '../db.ts'
-import { ConversationRepository } from '../repositories/conversation-repository.ts'
-import { JourneyRepository } from '../journeys.ts'
+import { InMemoryDatabase } from '@cvg/persistence'
+import { ConversationRepository } from '@cvg/persistence'
+import { JourneyRepository } from '../memory-repository.ts'
 
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000301' as const
 const tenantB = 'tenant_00000000-0000-4000-8000-000000000302' as const
