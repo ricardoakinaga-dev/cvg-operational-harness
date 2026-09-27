@@ -1,3 +1,9 @@
+# PR-301/302 — I22 ACCEPT_LOCAL_PROOF e gate de limpeza — 27/09/2026
+
+- I22 rechecagem independente somente leitura aceitou o commit `8b0f92d`: o verificador retorna 401 ao reapresentar o cookie salvo após logout; no callback entre Keycloak `localhost` e API `127.0.0.1`, observa pending Lax presente e cookie operacional Strict ausente, cria nova sessão e rejeita o cookie anterior. O crítico não rerodou o browser; sua observação restante era apenas a expressão “família antiga”, alterada para “sessão antiga”.
+- Na repetição após essa edição, um listener de callback com timeout curto rejeitou antes de terminar a espera por outro OTP e deixou quatro roles/dois schemas **sintéticos** no PostgreSQL descartável. Foram removidos manualmente e checados em zero. O commit `0b57416` aumentou o timeout, tratou a rejeição e moveu `PASS` para depois da remoção de usuário e da consulta que exige zero roles/schemas. E2E final Node 22.23.2 passou nesse código; inventário zero conferido também fora do script; contêineres removidos. [Prova no branch isolado: `docs/04_audit/evidence/PR301-302-TRUSTED-E2E-20260927/proof.json`].
+- Os logs anteriores são diagnósticos; o manifesto final distingue a execução entre sites aceita. Integração, IdP corporativo, dados/rollout, serving sem DDL e certificação remota do SHA integrado seguem pendentes. Produção `NO_GO`.
+
 # PR-301/302 — crítica I22 e correção da prova — 27/09/2026
 
 - I22, revisão independente somente leitura, encontrou dois falsos positivos possíveis no E2E anterior: logout apagava cookie no browser antes da verificação, e IdP/API usavam o mesmo site. Nenhum bypass concreto no código de autenticação foi encontrado; o veredito da prova anterior foi `REJECT_LOCAL_PROOF`.

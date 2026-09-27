@@ -1,3 +1,11 @@
+# PR-301/302 — I22 rechecagem aceita e cleanup verificado — 27/09/2026
+
+- status: `I22_ACCEPT_LOCAL_PROOF / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: revisão independente I22 aceitou a prova local reforçada de callback entre sites, substituição de sessão e revogação após replay do cookie salvo. Commits isolados `8b0f92d` e `0b57416`; a frase imprecisa “família antiga” foi corrigida para “sessão antiga”. Uma tentativa posterior de E2E deixou quatro roles/dois schemas sintéticos após rejeição assíncrona não tratada; foram removidos manualmente. O verificador agora só emite `PASS` após confirmar zero roles/schemas e remoção do usuário sintético.
+- verification_state: Node 22.23.2, Chromium, Keycloak `localhost`, API/web `127.0.0.1` e PostgreSQL 16 descartável: `TRUSTED_OIDC_BROWSER_E2E_PASS` final, OTP errado rejeitado, pending Lax recebido sem cookie Strict no callback, cookie antigo rejeitado após replace e cookie salvo rejeitado após logout. Prova/hashes em `docs/04_audit/evidence/PR301-302-TRUSTED-E2E-20260927/proof.json` **no branch isolado**; lint, tipo, links, formato e higiene PASS. Contêineres removidos.
+- blocking_state: branch ainda fora do checkout compartilhado por PR-L04; rollout compatível com API confiável legada, IdP corporativo, retenção/purge, startup de produção sem DDL, certificação/CI no mesmo SHA e demais condições humanas de GO pendentes.
+- next_action: integrar branch após liberação PR-L04, revisar o candidato integrado e certificar o mesmo SHA. Produção continua `NO_GO`.
+
 # PR-301/302 — I22: prova E2E entre sites reforçada — 27/09/2026
 
 - status: `CROSS_SITE_E2E_PASS_LOCAL / I22_RECHECK_PENDING / ROOT_INTEGRATION_PENDING`; produção `NO_GO`.
