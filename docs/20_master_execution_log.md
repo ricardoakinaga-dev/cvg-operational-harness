@@ -1,5 +1,12 @@
 # Log de execução corrente — 27/09/2026
 
+## AUD-0578 R2 — certificação local e Verify em curso
+
+- Código no SHA `2154f85`, digest `cfb2af6e7ee9f5a68961f584719241daeaab930bfdefd5a387c657eb66853dde`, run `run-aud0578-r2-skipfix-20260927`: `certify` 16/16 PASS em Node 22/PostgreSQL descartável; `certification:verify` conferiu 38 hashes e decidiu `CONDITIONAL_GO / AAA_CONTROLLED`. Produção permanece `NO_GO`.
+- Unitários 320/320 arquivos e 2.322/2.322 testes, zero skips; E2E 12/12 com JSON/JUnit do mesmo runId. Cobertura web e PostgreSQL passou localmente com margens ≥3 pp sobre thresholds próprios. A margem de branches do núcleo permanece em 2,59 pp.
+- Verify `36303152180` falhou em um timeout no teste de recuperação após `SIGKILL` sob `coverage:postgres`. A janela diagnóstica da [SPEC 0145](02_spec/0145_web_postgres_coverage_and_typed_lint.md) passou 258/258 localmente e o mesmo gate passou no Verify seguinte `36304255931` antes do cancelamento por novo push. A certificação local do SHA `8779437` rejeitou hash obsoleto de `SKIP-PG-014`; o vínculo foi atualizado sem alterar as 35 entradas nem permitir skips.
+- Security [36305438972](https://github.com/ricardoakinaga-dev/cvg-operational-harness/actions/runs/36305438972) passou no SHA `2154f85`; Verify [36305438970](https://github.com/ricardoakinaga-dev/cvg-operational-harness/actions/runs/36305438970) ainda em execução. A [SPEC 0146](02_spec/0146_pinned_ssrf_lookup_node22.md) continua T3 em revisão, sem mudança no código de segurança.
+
 ## AUD-0578 R1 — candidato certificado localmente
 
 - Commits de remediação: `a67726b` (fonte visual e prontidão do worker), `dccc17c` (lockfile), `81bb91f` (build limpo) e `5ee02e8` (hash do catálogo de skips). As [SPECs 0139–0144](02_spec/0190_spec_validation.md) registram recon, regra e evidência.
