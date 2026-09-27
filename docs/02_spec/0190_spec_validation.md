@@ -1,5 +1,13 @@
 # 0190 — SPEC Validation
 
+## AUD-0578 / PR-009 — JUnit e JSON E2E no mesmo runId
+
+- [SPEC 0148](0148_e2e_junit_json_run_binding.md) está
+  `BUILD_LOCAL_AUTHORIZED` em T2: o modo de certificação hoje seleciona só
+  JSON, deixando o JUnit sem vínculo de execução. A mudança produz os dois
+  artefatos na mesma invocação e verifica `runId`/hash sem alterar fluxo de
+  produto ou autorização de produção.
+
 ## AUD-0578 / PR-010 — métricas do certificado no CI
 
 - [SPEC 0147](0147_certification_vitest_json_metrics.md) está
