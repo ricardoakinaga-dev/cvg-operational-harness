@@ -1,6 +1,6 @@
 # SPEC-PR009-003 — vínculo da execução E2E entre JSON e JUnit
 
-- Estado: `BUILD_VERIFIED_LOCAL_R2 / CI_BAR_E2E_PENDING`. Task: PR-009, fatia 3, em
+- Estado: `E2E_CI_BAR_VERIFIED_ISOLATED / I2_RECHECK_PENDING`. Task: PR-009, fatia 3, em
   [0356](../03_build/0356_production_backlog_2026-09-26.md). Sem mudança de API,
   schema, identidade ou efeito externo. Gate T2 em
   [AGENTS](../07_agents/AGENTS.md).
@@ -102,5 +102,27 @@
   12/12 PASS. Node 22.23.2: `typecheck`, `lint`, `format:check`,
   `npm test` 299 arquivos/2.178 PASS (20 arquivos/146 testes pulados sem
   banco) e `test:postgres` 35/258 PASS em banco próprio descartável.
-  Pendente nova prova E2E/ci-bar no código corrigido e reavaliação I2;
-  certificação integrada continua pendente após PR-L04.
+  Nova prova E2E/ci-bar no código corrigido concluída abaixo; reavaliação I2
+  e certificação integrada continuam pendentes após PR-L04.
+
+## Prova I2 do ci-bar em worktree isolado
+
+- Commit `1413809`, Node 22.23.2, `npm ci`, `build:runtime`, portas
+  3209/4183, `CI_RUN_ID=run-pr009-i2-isolated-20260927`, candidato
+  `16136c5552f02b072c7de56ff68faaac785cc4f014af7537950f6b8a5397d036`.
+  `ci-bar init` e `ci-bar gate e2e` executados: 12/12 Chromium PASS, 0
+  skipped/unexpected/flaky, `executionId=2309ccef-a58c-4dbd-b590-1ac47ea6c00d`,
+  `outputFailures=[]`. O estado do gate guardou os dois hashes dos snapshots
+  e o UUID. [Prova/hash](../04_audit/evidence/PR009-20260927-r2/proof.json),
+  [registro do gate](../04_audit/evidence/PR009-20260927-r2/e2e-gate-entry.json),
+  [log bruto comprimido](../04_audit/evidence/PR009-20260927-r2/e2e.log.gz),
+  [JSON](../04_audit/evidence/PR009-20260927-r2/e2e-test-report.json) e
+  [JUnit](../04_audit/evidence/PR009-20260927-r2/playwright-results.xml).
+- Negativo da finalização: um newline foi acrescentado somente ao snapshot
+  XML de uma cópia do diretório de artefatos; `ci-bar finalize` saiu com 1
+  e registrou `e2e_snapshot_hash_mismatch:playwright-results.xml`. As outras
+  falhas nessa execução são esperadas, porque os demais gates do ci-bar não
+  foram executados no isolamento. O par arquivado foi revalidado após a
+  cópia: hashes, log, gate e relatórios apontam o mesmo UUID/12 testes.
+- Limite: esta prova cobre o gate E2E e o caso negativo da finalização,
+  ainda não é o certificado completo nem a aprovação I2 da correção.

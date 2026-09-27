@@ -1,3 +1,8 @@
+# PR-009 I2 — gate E2E do ci-bar e negativo de snapshot — 27/09/2026
+
+- Worktree detached `1413809`, Node 22.23.2, `npm ci --ignore-scripts`, `build:runtime`, portas próprias 3209/4183. `ci-bar init` gerou candidato `16136c55…`; `ci-bar gate e2e` PASS, Chromium 12/12, UUID `2309ccef-a58c-4dbd-b590-1ac47ea6c00d`, `outputFailures=[]`. Log e snapshots arquivados em [prova I2](04_audit/evidence/PR009-20260927-r2/proof.json), hashes revalidados após cópia.
+- Negativo: XML snapshot adulterado apenas em cópia do diretório do ci-bar; `finalize` exit 1 com `e2e_snapshot_hash_mismatch:playwright-results.xml`. Os demais gates foram intencionalmente omitidos na prova isolada, logo o manifesto completo não qualifica produção. E2E compartilhado da PR-L04 não foi tocado.
+
 # PR-009 fatia 3 — correção da crítica I2 — 27/09/2026
 
 - I2 read-only: `REJECT` para o vínculo de `executionId` no certificado, captura de bytes do `certify` e validação dos snapshots do ci-bar. A troca conjunta de UUID em JSON/JUnit era aceita pela verificação anterior.

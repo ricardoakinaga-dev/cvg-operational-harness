@@ -1,3 +1,12 @@
+# PR-009 I2 — E2E/ci-bar isolado verificado — 27/09/2026
+
+- status: `E2E_CI_BAR_VERIFIED_ISOLATED / I2_RECHECK_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: gate E2E do ci-bar passou 12/12 no commit `1413809`, com log/JSON/JUnit da mesma tentativa e hashes dos snapshots guardados no estado; finalizador rejeitou XML adulterado em cópia isolada.
+- current_evidence: [prova I2/hash](04_audit/evidence/PR009-20260927-r2/proof.json), [SPEC-PR009-003](02_spec/0145_e2e_junit_json_run_binding.md), [backlog 0356](03_build/0356_production_backlog_2026-09-26.md).
+- verification_state: `runId=run-pr009-i2-isolated-20260927`, `executionId=2309ccef-a58c-4dbd-b590-1ac47ea6c00d`, 12 PASS/0 skipped/0 unexpected/0 flaky; JSON snapshot SHA-256 `ca19d117…`, XML `9daf3c88…`, log `06db25fd…`; `outputFailures=[]`. Gates Node 22, suíte geral e PostgreSQL na entrada anterior.
+- blocking_state: reavaliação I2 e certificado/CI do SHA integrado pendentes; PR-L04 mantém catálogo/artefatos no diretório compartilhado; PR-301/302 e 13 condições de GO abertas.
+- next_action: crítica I2 em contexto fresco sobre `1413809` e prova nova; após PR-L04, reconciliar SKIP-PG-014 e certificar candidato integrado.
+
 # PR-009 fatia 3 — crítica I2 corrigida localmente — 27/09/2026
 
 - status: `BUILD_VERIFIED_LOCAL_R2 / CI_BAR_E2E_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
