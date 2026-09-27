@@ -59,7 +59,7 @@ com ocorrência. Cada ocorrência foi agrupada por domínio abaixo.
 | `apps/api/src/__tests__/secretary-bootstrap.test.ts`         | Bootstrap da secretária na API                                    |
 | `apps/worker/src/kernel-composition.ts`                      | Capacidade sintética de rascunho de consulta no kernel controlado |
 
-### `LEGACY_ISOLATE` — evals (PR-L06)
+### `LEGACY_ISOLATE` — evals (PR-L06, isolado em 27/09/2026)
 
 | Onde                                        | O quê                                             |
 | ------------------------------------------- | ------------------------------------------------- |
@@ -120,10 +120,11 @@ arquitetura já proíbe `secretary`), `apps/worker/src/operational-harness-worke
 
 ## Andamento
 
-| Task                    | Estado      | Evidência                                                                                                               |
-| ----------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------- |
-| PR-L01                  | `COMPLETED` | Este inventário                                                                                                         |
-| PR-L02                  | `COMPLETED` | `workflows`, `tools` e `memory` removidos; [SPEC-LEGACY-001](../docs/02_spec/0135_legacy_dead_packages_and_boundary.md) |
-| PR-L03                  | `COMPLETED` | `legacy/README.md`, `legacy/packages/`, `tests/architecture/legacy-boundary.test.ts`                                    |
-| PR-L05                  | `COMPLETED` | `legacy/packages/secretary-profile`; [SPEC-LEGACY-002](../docs/02_spec/0136_legacy_secretary_profile_isolation.md)      |
-| PR-L04, PR-L06 a PR-L12 | `PROPOSED`  | —                                                                                                                       |
+| Task                    | Estado      | Evidência                                                                                                                  |
+| ----------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------- |
+| PR-L01                  | `COMPLETED` | Este inventário                                                                                                            |
+| PR-L02                  | `COMPLETED` | `workflows`, `tools` e `memory` removidos; [SPEC-LEGACY-001](../docs/02_spec/0135_legacy_dead_packages_and_boundary.md)    |
+| PR-L03                  | `COMPLETED` | `legacy/README.md`, `legacy/packages/`, `tests/architecture/legacy-boundary.test.ts`                                       |
+| PR-L05                  | `COMPLETED` | `legacy/packages/secretary-profile`; [SPEC-LEGACY-002](../docs/02_spec/0136_legacy_secretary_profile_isolation.md)         |
+| PR-L06                  | `COMPLETED` | `legacy/packages/secretary-profile/src/evals`; [SPEC-LEGACY-003](../docs/02_spec/0140_legacy_secretary_evals_isolation.md) |
+| PR-L04, PR-L07 a PR-L12 | `PROPOSED`  | —                                                                                                                          |

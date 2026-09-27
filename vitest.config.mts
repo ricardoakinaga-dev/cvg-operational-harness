@@ -92,6 +92,10 @@ export default defineConfig({
         workspaceRoot,
         'packages/agent-core/src/index.ts'
       ),
+      '@cvg/legacy-secretary-evals': resolve(
+        workspaceRoot,
+        'legacy/packages/secretary-evals/src/index.ts'
+      ),
       '@cvg/legacy-secretary-profile': resolve(
         workspaceRoot,
         'legacy/packages/secretary-profile/src/index.ts'

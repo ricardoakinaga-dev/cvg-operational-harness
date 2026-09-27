@@ -1,27 +1,14 @@
 import { z } from 'zod'
-import { DataClassificationSchema, IntentSchema } from '@cvg/shared'
+import { DataClassificationSchema } from '@cvg/shared'
 import { CapabilityNameSchema } from '@cvg/policy-engine'
 
-export const EvalCategorySchema = z.enum([
-  'agendamento',
-  'cancelamento',
-  'remarcacao',
-  'horarios',
-  'valores',
-  'convenio',
-  'retorno',
-  'exames',
-  'resultado_exame',
-  'internacao',
-  'alta',
-  'emergencia',
-  'handoff',
-  'cliente_agressivo',
-  'mensagem_ambigua',
-  'multi_turn',
-  'informacao_incompleta',
-  'adversarial'
-])
+/**
+ * SPEC-LEGACY-003: categories and intents are identifiers declared by each
+ * evaluation corpus; the harness does not own a product taxonomy.
+ */
+export const EvalIdentifierSchema = z.string().regex(/^[a-z][a-z0-9_]*$/)
+
+export const EvalCategorySchema = EvalIdentifierSchema
 
 export type EvalCategory = z.infer<typeof EvalCategorySchema>
 
@@ -30,7 +17,7 @@ export type EvalEscalation = z.infer<typeof EvalEscalationSchema>
 
 export const EvalExpectationSchema = z
   .object({
-    intent: IntentSchema.optional(),
+    intent: EvalIdentifierSchema.optional(),
     escalation: EvalEscalationSchema.default('none'),
     requiredCapabilities: z.array(CapabilityNameSchema).default([]),
     forbiddenCapabilities: z.array(CapabilityNameSchema).default([]),
