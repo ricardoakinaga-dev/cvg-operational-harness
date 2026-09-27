@@ -1,3 +1,11 @@
+# PR-302-WEB-OIDC — console confiável local isolado — 27/09/2026
+
+- status: `BUILD_VERIFIED_LOCAL / REVIEW_AND_E2E_PENDING / ROOT_INTEGRATION_PENDING`; produção `NO_GO`.
+- last_completed_action: branch `codex/pr301-oidc-client`, commits `531ef2a` e `1c1ae32`, liga o console web a `POST /v1/auth/oidc/start` e restaura a identidade por `GET /v1/session` apenas com cookie. Diferencia 401 inicial de 503, preserva sessão local em falha de logout, bloqueia ações enquanto a recarga está indisponível e recupera retry do início OIDC após 503.
+- verification_state: prova e hashes em `docs/04_audit/evidence/PR302-OIDC-WEB-20260927/proof.json` **no branch isolado**: suíte web 26 arquivos/96 testes, typecheck, lint, build web, links e higiene PASS. Uma primeira leitura concorrente de logs vazios falhou em higiene; repetição serial final PASS.
+- blocking_state: revisão adversarial independente e E2E confiável com API/PostgreSQL/Keycloak na mesma execução pendentes. PR-L04 mantém web/API no checkout compartilhado; IdP corporativo, retenção/purge, rollout, preflight de produção e certificação remota no SHA integrado seguem abertos.
+- next_action: executar E2E sintético, integrar após liberação da PR-L04 e recertificar; manter `NO_GO`.
+
 # PR-301-OIDC-ROUTES — composição HTTP local isolada — 27/09/2026
 
 - status: `ACCEPT_LOCAL / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

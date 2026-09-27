@@ -1,3 +1,7 @@
+# PR-302-WEB-OIDC — console local com login MFA — 27/09/2026
+
+- `BUILD_VERIFIED_LOCAL / REVIEW_AND_E2E_PENDING / NO_GO`: branch isolado `codex/pr301-oidc-client` commits `531ef2a` e `1c1ae32` liga início OIDC, recarga por cookie, 401/503 distintos e logout seguro; suíte web 26/96, tipos/lint/build/links PASS. Prova no branch: `docs/04_audit/evidence/PR302-OIDC-WEB-20260927/proof.json`. Faltam crítica independente, E2E web/API/PostgreSQL/Keycloak, integração após PR-L04 e certificação do SHA integrado.
+
 # PR-301-OIDC-ROUTES — rotas locais com sessão confiável — 27/09/2026
 
 - `ACCEPT_LOCAL / ROOT_INTEGRATION_PENDING / NO_GO`: branch isolado `codex/pr301-oidc-client` commit `b41cff2` contém rotas de login/callback OIDC, preflight PostgreSQL, sessão opaca por cookie, replace atômico e logout revogado. I19/I20 aceitaram após correções; suíte com banco 330/2.428, `test:postgres` 35/258, Keycloak MFA e gates de tipos/lint/links/audit PASS. Prova no próprio branch: `docs/04_audit/evidence/PR301-OIDC-ROUTES-20260927/proof.json`. Integrar após PR-L04; implementar PR-302 web, IdP corporativo, retenção/purge, rollout e certificação/CI no mesmo SHA antes de considerar produção.

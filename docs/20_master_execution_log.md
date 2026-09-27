@@ -1,3 +1,9 @@
+# PR-302-WEB-OIDC — BUILD web isolado e regressões — 27/09/2026
+
+- Sob SPEC 0144 aprovada, commits isolados `531ef2a` e `1c1ae32`: cliente web inicia OIDC por POST com cookie, valida esquema da URL de navegação, recarrega sessão por cookie sem token, trata 401 inicial sem callback global de expiração, trata 503 com retry e mantém a identidade local se o logout falha. Revisão interna corrigiu o retry do início após 503; não equivale a crítica independente.
+- Suíte web final 26 arquivos/96 testes PASS; `typecheck`, `lint`, `build:web`, `docs:check-links`, formato e hashes PASS. A primeira execução de links coincidiu com logs ainda vazios e falhou em higiene; a execução final após conclusão de todos os comandos passou. Prova em `docs/04_audit/evidence/PR302-OIDC-WEB-20260927/proof.json` no branch isolado.
+- E2E confiável integrado, crítica adversarial independente, integração no checkout compartilhado, IdP corporativo, política de dados e certificado do mesmo SHA pendentes. Produção `NO_GO`.
+
 # PR-301-OIDC-ROUTES — BUILD/AUDIT HTTP local isolado — 27/09/2026
 
 - SPEC 0144/D-09 aprovadas e usuário escolheu IdP OIDC local com MFA. Branch `codex/pr301-oidc-client`, commit `b41cff2`: composição em `buildServerFromEnv` com preflight read-only de roles/schema/RLS e stores PostgreSQL; rotas `POST /v1/auth/oidc/start` e `GET /v1/auth/oidc/callback`; sessão operacional opaca, reload somente por cookie, replace atômico e logout com revogação confirmada. Sem dado real nem deploy.
