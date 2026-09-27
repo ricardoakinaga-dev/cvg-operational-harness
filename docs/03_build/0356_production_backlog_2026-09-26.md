@@ -93,6 +93,7 @@
 ### PR-007 — Cobertura com denominador completo e lint type-aware (RA26-15) · P1 · SPEC+BUILD
 
 - Fatia R2 de 27/09/2026: [SPEC 0145](../02_spec/0145_web_postgres_coverage_and_typed_lint.md) define dois relatórios adicionais e dois gates CI. Web: 13 arquivos, 25 suites/87 testes, 78,39/75,51/75,97/81,34% (S/B/F/L). PostgreSQL: 13 arquivos, 35 suites/258 testes, 79,92/69,33/85,52/80,76%. Todas as métricas têm margem acima de 3 pp sobre limites próprios. `no-floating-promises` e `no-misused-promises` estão ativas para TS com programa explícito; oito violações em testes corrigidas. Certificação/Verify do candidato R2 ainda pendentes.
+- Verify `36303152180` passou cobertura principal, web e PostgreSQL sem instrumentação, mas falhou em um timeout de recuperação após `SIGKILL` dentro de `coverage:postgres` (257/258 testes). A SPEC 0145 registra a janela e o diagnóstico ampliados; o gate completo local voltou a passar 258/258, com as mesmas quatro métricas. Novo Verify no SHA corrigido pendente.
 - O que/onde: `vitest.config.mts` exclui `apps/web/src/**` e `*postgres*.ts`
   (~23% do código); branches com margem de 0,88 pp; `eslint.config.js` só com
   `recommended`.

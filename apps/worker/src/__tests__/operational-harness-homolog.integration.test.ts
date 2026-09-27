@@ -271,14 +271,29 @@ describeWithPostgres('homologation durable worker smoke (AUD19-008)', () => {
         interruptedExit.signal === 'SIGKILL' || interruptedExit.code === 137
       ).toBe(true)
 
-      await waitFor(async () => {
+      try {
+        await waitFor(async () => {
+          const snapshot = await admin.query(
+            `SELECT state FROM ${schema}.operational_executions
+              WHERE tenant_id = $1 AND id = $2`,
+            [tenantIdRaw, submitted.record.id]
+          )
+          return snapshot.rows[0]?.state === 'SUCCEEDED'
+        }, 30_000)
+      } catch (error) {
         const snapshot = await admin.query(
-          `SELECT state FROM ${schema}.operational_executions
+          `SELECT state, attempt FROM ${schema}.operational_executions
             WHERE tenant_id = $1 AND id = $2`,
           [tenantIdRaw, submitted.record.id]
         )
-        return snapshot.rows[0]?.state === 'SUCCEEDED'
-      })
+        const recentEvents = parseJsonLines(recovery.output())
+          .slice(-12)
+          .map((line) => String(line.event ?? 'unknown'))
+        throw new Error(
+          `homolog recovery timeout: state=${String(snapshot.rows[0]?.state)} attempt=${String(snapshot.rows[0]?.attempt)} childExit=${String(recovery.child.exitCode)} signal=${String(recovery.child.signalCode)} events=${recentEvents.join(',')}`,
+          { cause: error }
+        )
+      }
       const recoveryExit = await waitForExit(recovery)
       expect(recoveryExit).toEqual({ code: 0, signal: null })
 

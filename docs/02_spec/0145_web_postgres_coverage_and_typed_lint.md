@@ -47,6 +47,24 @@ efeitos assíncronos e propagação dos erros do servidor HTTP local. `lint`,
 passaram. Os dois relatórios são gates bloqueantes do Verify remoto.
 
 `homolog-worker.ts` mede 29,28% de statements no relatório unitário R1.
+
+## Gate remoto de cobertura PostgreSQL — recuperação após SIGKILL
+
+O Verify `36303152180` passou 257/258 testes do gate `coverage:postgres`;
+o único erro foi o limite de 20 s da espera por `SUCCEEDED` no teste de
+recuperação do worker homolog. O gate PostgreSQL sem instrumentação passou
+no mesmo run, e uma reprodução isolada com cobertura passou 3/3 em 8,63 s.
+Isto caracteriza instabilidade observada sob a carga do gate completo, sem
+provar que o worker falhou. A fatia T2 mantém a asserção de sucesso e outcome
+único, aumenta apenas a janela da segunda espera para 30 s e, se expirar,
+registra estado/attempt do banco, saída resumida de eventos sintéticos e
+estado do processo de recuperação. O timeout do teste continua em 60 s.
+Aceite: gate completo `coverage:postgres` e Verify remoto verdes, sem retry
+automático, skip ou redução de threshold.
+
+Validação local após a mudança: 35/35 arquivos e 258/258 testes PASS; cobertura
+79,92/69,33/85,52/80,76% (statements/branches/functions/lines). O Verify
+remoto do novo SHA permanece pendente.
 Os testes unitários importam validação de configuração e preflight, enquanto
 as jornadas do processo real usam `spawn`; é inferência que a cobertura V8 do
 processo Vitest não contabilize as linhas executadas no processo filho. O
