@@ -1,3 +1,8 @@
+# PR-009 fatia 3 — recon e SPEC — 27/09/2026
+
+- Recon read-only: JSON E2E gerado às 02:51:05Z e JUnit às 03:57:02Z; 12 testes em ambos, sem identificadores internos. `PLAYWRIGHT_JSON_OUTPUT_NAME` seleciona JSON e omite JUnit; o verificador atual aceita fixture `{}` e infere E2E do log.
+- [SPEC-PR009-003](02_spec/0145_e2e_junit_json_run_binding.md) fixa `executionId` único, `runId`/`candidateId` internos, par da mesma tentativa, inventário/totais e regressões negativas. BUILD T2 ainda não executado; sem alteração de artefatos E2E neste registro.
+
 # Log de execução vigente — PROD-20260926
 
 ## 27/09/2026 — PR-005: rotação íntegra dos ledgers

@@ -1,3 +1,12 @@
+# PR-009 fatia 3 — SPEC de evidência JSON/JUnit — 27/09/2026
+
+- status: `SPEC_READY / BUILD_T2`; produção `NO_GO`.
+- last_completed_action: recon estático confirmou que o JSON e o JUnit atuais são de invocações diferentes e não contêm `runId`/`candidateId`; registrei a [SPEC-PR009-003](02_spec/0145_e2e_junit_json_run_binding.md).
+- current_evidence: [backlog 0356](03_build/0356_production_backlog_2026-09-26.md) e [quadro de coordenação](08_runtime/agent_coordination.md).
+- verification_state: sem novo E2E ou certificação nesta fatia; artefatos E2E permanecem liberados para a PR-L04. A SPEC exige par da mesma tentativa, IDs internos e inventário/totais coerentes.
+- blocking_state: PR-L04 ainda detém E2E/artefatos e código de jornadas; PR-003, PR-301/302 e as condições de GO permanecem como no estado abaixo.
+- next_action: implementar T2 nos scripts sem disputar os artefatos; executar E2E/certificação apenas com claim próprio após integração.
+
 # Estado operacional vigente — PROD-20260926 — 27/09/2026
 
 - status: programa `IN_PROGRESS`; produção `NO_GO`; PR-005 `COMPLETED`; PR-003 `IN_PROGRESS / WAITING_FOR_PATH_CLAIM`; PR-301/302 `WAITING_HUMAN_SPEC_REVIEW`.
