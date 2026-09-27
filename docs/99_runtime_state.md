@@ -1,3 +1,12 @@
+# PROD-20260926 — PR-L05 concluída; PR-010 e PR-011 corrigidas localmente — 2026-09-27
+
+- status: `IN_PROGRESS`. PR-L05 `COMPLETED` (SPEC-LEGACY-002, três fatias). PR-010 e PR-011 `COMPLETED_LOCAL / WAITING_PUSH`. Produção `NO_GO`.
+- last_completed_action: isolei o perfil e o preset da secretária em `legacy/packages/secretary-profile` com ponto de composição único na API (`761307b`, `cb6ede4`); corrigi o `verify.yml` rejeitado pelo GitHub (`3382286`); escopei o Gitleaks aos falsos positivos revisados (`503ded7`).
+- current_evidence: [SPEC-LEGACY-002](02_spec/0136_legacy_secretary_profile_isolation.md), [backlog 0356](03_build/0356_production_backlog_2026-09-26.md), [inventário](../legacy/LEGACY_INVENTORY.md).
+- verification_state: Node 22.23.2 com PostgreSQL descartável: 316 arquivos / 2 304 testes PASS, cobertura 92,61/87,61/94,97/93,60, `coverage:critical` e `mutation:guard` PASS, `test:postgres` 35/258, E2E 12/12, imagem de runtime construída com smoke PASS; `actionlint` sem erros; Gitleaks no histórico sem vazamentos com a nova configuração.
+- blocking_state: o resultado real do CI remoto depende de push, que exige autorização do usuário.
+- next_action: reemitir o certificado sobre o HEAD; push com autorização; depois PR-L06, PR-L04 e PR-L07.
+
 # AUD-0578 — roadmap/backlog, primeira fatia e certificado local — 2026-09-26
 
 - status: `READY_FOR_NEXT_STEP` para a fatia local; programa PROD-20260926 `IN_PROGRESS`; produção `NO_GO`. PR-009 fatia 1 `VERIFIED_LOCAL`; PR-003 rebind `VERIFIED_LOCAL`; PR-010/011 aguardam prova remota.

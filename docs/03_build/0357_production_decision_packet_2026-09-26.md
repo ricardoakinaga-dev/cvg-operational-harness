@@ -1,8 +1,9 @@
 # Pacote de decisões — programa PROD-20260926
 
-- Status: DL-01 a DL-04, D-02, D-12 e D-13 `DECIDED` pelo usuário em
-  26/09/2026; demais `WAITING_HUMAN_APPROVAL`. As recomendações são do agente e não valem como
-  decisão.
+- Status: DL-01 a DL-04, D-02, D-03, D-12 e D-13 `DECIDED` pelo usuário;
+  D-04 teve o encaminhamento para discovery decidido, mas o consumidor e o
+  contexto do piloto seguem `WAITING_HUMAN_APPROVAL`. As demais decisões
+  permanecem pendentes. As recomendações são do agente e não valem como decisão.
 - Plano: [0354](0354_production_executive_plan_2026-09-26.md). Backlog:
   [0356](0356_production_backlog_2026-09-26.md).
 - Como decidir: responder por ID com a opção escolhida (ou texto livre). O
@@ -35,6 +36,14 @@ Respostas do usuário em 26/09/2026 sobre a versão deste pacote com SHA-256
 | D-12 | Opção A: governança proporcional, incorporada à constituição em [`07_agents/AGENTS.md`](../07_agents/AGENTS.md) (PR-108)                                                                 |
 | D-13 | Opção B: M07-S1 reclassificada `ACCEPTED_WITH_RISK`; os 11 findings de dependência viram a PR-208; a política de workspaces pode aceitar `legacy/packages/*` em versão revisada (PR-109) |
 
+Respostas do usuário em 27/09/2026 sobre a versão deste pacote com SHA-256
+`2fa24de3c115b32dba39c19740fe93212d135139276b88d304ae2ddc816aacf1`:
+
+| ID   | Decisão                                                                                                                                                       |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D-03 | Opção A: núcleo governado completo para o primeiro piloto; provider e canal continuam atrás de flags, sujeitos a seus próprios gates.                         |
+| D-04 | Definir o primeiro produto consumidor e o contexto do piloto no discovery de plataforma (PR-101). Nenhum produto, tenant ou SLA foi escolhido nesta resposta. |
+
 ### DL-05 — Quando apagar o legado isolado
 
 - Pendente. Opções:
@@ -49,8 +58,8 @@ Respostas do usuário em 26/09/2026 sobre a versão deste pacote com SHA-256
 | ---- | ------------------------------------------------- | -------------------------------------------------------- | -------- |
 | D-01 | Worktree sujo                                     | Encerrada por `f9f84c9`; só confirmar gates              | F0       |
 | D-02 | Estado Gauntlet no git                            | A — parar de versionar, sem reescrever histórico         | F0       |
-| D-03 | Capacidades de plataforma em produção             | A — núcleo governado completo                            | F1       |
-| D-04 | Primeiro consumidor e piloto                      | Definir em discovery de plataforma (PR-101)              | F1, F7   |
+| D-03 | Capacidades de plataforma em produção             | A — decidido em 27/09/2026                               | F1       |
+| D-04 | Primeiro consumidor e piloto                      | Discovery decidido; identificação ainda pendente         | F1, F7   |
 | D-05 | Provider de LLM                                   | A — provider comercial com DPA e retenção zero           | F5       |
 | D-06 | Canal                                             | Depende do primeiro consumidor; preferir canal oficial   | F5       |
 | D-07 | Fontes de conhecimento                            | Dono no produto consumidor; publicação com dupla revisão | F5       |
@@ -91,6 +100,10 @@ Respostas do usuário em 26/09/2026 sobre a versão deste pacote com SHA-256
 
 ## D-03 — Capacidades de plataforma em produção
 
+- Decisão do usuário: **A — núcleo governado completo** para o primeiro
+  piloto. A escolha define o escopo pretendido, sem liberar provider, canal,
+  conhecimento, dados reais, efeito externo ou produção. Cada capacidade
+  sensível mantém seu gate T4; o PRD e a SPEC ainda precisam ser validados.
 - Opções:
   - **A (recomendada):** núcleo governado completo — runtime single-pass e
     iterativo, orquestrador, approvals, policy, handoff, auditoria, outbox
@@ -100,6 +113,9 @@ Respostas do usuário em 26/09/2026 sobre a versão deste pacote com SHA-256
 
 ## D-04 — Primeiro produto consumidor e piloto
 
+- Encaminhamento do usuário: **definir em discovery** (PR-101). O produto,
+  tenant, volumes, horário com humano e SLA de handoff seguem pendentes. Em
+  27/09/2026, o usuário informou que ainda está **sem candidatos definidos**.
 - O plano não escolhe produto. O discovery de plataforma (PR-101) deve
   indicar o primeiro consumidor, o tenant piloto, o horário de operação com
   humano, o SLA de handoff e o volume esperado.

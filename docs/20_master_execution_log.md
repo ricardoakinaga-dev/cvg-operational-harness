@@ -1,3 +1,10 @@
+# PROD-20260926 — PR-L05 fatia 2, PR-010 e PR-011 — 26–27/09/2026
+
+- PR-L05 fatia 2 (`761307b`): workspace `legacy/packages/*`; `@cvg/legacy-secretary-profile` com perfil de policy e preset da secretária byte a byte; mecanismo neutro de preset no `platform` (`controlled-preset.ts`); compatibilidade removida do `policy-engine`; ponto de composição `apps/api/src/legacy-composition.ts`; política de dependências `PROD26-L05-1` (mesmos 11 findings aceitos). Gates: 316/2 304 PASS, cobertura 92,61/87,61/94,97/93,60, PostgreSQL 258, E2E 12/12, imagem com smoke PASS.
+- PR-010 (`3382286`): `runner.temp` no `env` do job invalidava o `verify.yml`; corrigido e travado por teste de contrato; `actionlint` limpo.
+- PR-011 (`503ded7`): allowlists da regra `generic-api-key` restritas a SHA-256 em evidência e a arquivos de teste; regras específicas continuam valendo dentro dos testes (caso negativo provado); 6 fingerprints; versão fixada; histórico sem vazamentos.
+- Nenhum push foi feito. Produção `NO_GO`.
+
 # AUD-0578 — primeira execução do roadmap e backlog — 26/09/2026
 
 - Plano: [0358](03_build/0358_aud0578_execution_roadmap.md) e [0359](03_build/0359_aud0578_execution_backlog.md) derivados da [AUD-0578](04_audit/0578_program_comprehensive_audit_2026-09-26.md), vinculados às 79 tasks de [0356](03_build/0356_production_backlog_2026-09-26.md).

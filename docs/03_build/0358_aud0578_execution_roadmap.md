@@ -28,4 +28,10 @@
 2. **Em curso:** [SPEC-PR003-002](../02_spec/0138_skip_catalog_rebind.md) reconciliou dois hashes do catálogo de skips; repetir `npm run certify` e `certification:verify` no candidato atualizado.
 3. Validar PR-010/011 no remoto sobre o mesmo SHA. Falha remota não vira PASS local.
 
-Próximo limite humano material: D-03/D-04/D-05/D-06/D-08/D-09/D-10/D-11 e DL-05 em [0357](0357_production_decision_packet_2026-09-26.md), além das revisões de SPEC T3/T4. A documentação e as correções locais reversíveis podem avançar sem inferir essas decisões.
+Decisões de 27/09/2026: D-03 = A, núcleo governado completo para o primeiro
+piloto; D-04 = primeiro consumidor e contexto a definir no discovery PR-101.
+O próximo limite humano material inclui a validação do discovery/PRD, a
+identificação do piloto, D-05/D-06/D-08/D-09/D-10/D-11 e DL-05 em
+[0357](0357_production_decision_packet_2026-09-26.md), além das revisões de
+SPEC T3/T4. A documentação e as correções locais reversíveis podem avançar
+sem inferir essas decisões.

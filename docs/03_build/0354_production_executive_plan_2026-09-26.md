@@ -2,6 +2,10 @@
 
 - Status: `PROPOSED / WAITING_HUMAN_APPROVAL`. Este documento é planejamento;
   não autoriza BUILD, deploy, dado real, provider, canal ou ação sensível.
+- Atualização de 27/09/2026: D-03 opção A decidida para o escopo do primeiro
+  piloto; D-04 encaminhada para [discovery PR-101](../00_discovery/0019_platform_first_consumer_pilot.md),
+  sem consumidor, tenant ou SLA definidos. As 13 condições de GO continuam
+  vigentes e a produção permanece `NO_GO`.
 - Data: 26/09/2026. Programa: `PROD-20260926`.
 - Baseline: [AUD-0577](../04_audit/0577_production_readiness_score_audit_2026-09-26.md)
   (67/100; prontidão para produção 25/100; isolamento do legado 30/100) e

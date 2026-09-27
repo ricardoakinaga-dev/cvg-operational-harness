@@ -26,4 +26,6 @@ Os achados F01–F09 permanecem abertos até os critérios acima serem observado
 ## Progresso local desta rodada
 
 - F05 / PR-009 fatia 1 `VERIFIED_LOCAL`: E2E 12/12, quatro PNGs novos em `test-results/`, quatro hashes históricos imutáveis. JUnit/runId, jornadas e flake visual continuam abertos.
+- F05 / PR-009 fatia 2 `VERIFIED_LOCAL`: [SPEC 0139](../02_spec/0139_visual_font_fallback.md), fonte Inter local e snapshots mobile/tablet revisados; visual Ubuntu 2/2 e E2E host 12/12. A estabilidade no Verify do novo SHA ainda será observada.
+- F03 / F07: D-03 = opção A decidida em 27/09/2026; D-04 encaminhada para discovery, sem produto ou tenant escolhido. PR-101/102/103 continuam sem aceite de fase.
 - F02 / PR-003 `IN_PROGRESS`: primeira certificação teve 16 comandos exit 0, mas `NO_GO` por dois hashes obsoletos no catálogo de skips. [SPEC-PR003-002](../02_spec/0138_skip_catalog_rebind.md) corrigiu os dois vínculos; `skip:governance` PASS. Nova certificação pendente.

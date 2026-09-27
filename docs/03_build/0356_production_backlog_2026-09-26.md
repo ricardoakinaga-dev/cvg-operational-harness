@@ -109,6 +109,7 @@
 ### PR-009 — Coerência do E2E e JUnit (RA26-16) · P2 · SPEC+BUILD
 
 - Fatia 1 `VERIFIED_LOCAL` em 26/09/2026: [SPEC-PR009-001](../02_spec/0137_e2e_artifact_isolation.md); quatro screenshots agora em `test-results/`, hashes históricos iguais, E2E 12/12. A task inteira continua aberta para JUnit/runId, jornadas de aprovação e estabilidade visual.
+- Fatia 2 `VERIFIED_LOCAL` em 27/09/2026: [SPEC 0139](../02_spec/0139_visual_font_fallback.md); fonte Inter variável local, snapshots mobile/tablet inspecionados, visual 2/2 no Ubuntu isolado e E2E 12/12 no host. A prova remota do novo SHA ainda é necessária.
 - Pronto: `playwright-results.xml` e o relatório E2E da certificação com o
   mesmo `runId`; specs para aprovações e jornada completa.
 - Achado de 26/09: `tests/e2e/ux-accessibility.spec.ts` grava screenshots em
@@ -121,6 +122,8 @@
   tratar a instabilidade visual antes de usar o E2E como gate de release.
 
 ### PR-010 — Fazer o CI rodar no GitHub · P0 · SPEC+BUILD
+
+- Estado: `COMPLETED_LOCAL / WAITING_PUSH` em 27/09/2026 (`3382286`). Causa: `runner.temp` no `env` do job (contexto indisponível ali), que fazia o GitHub rejeitar o arquivo inteiro. `CI_ARTIFACT_DIR` agora vem de `RUNNER_TEMP` num passo; `actionlint` 1.7.7 sem erros; `tests/ci-workflow-contract.test.js` rejeita a forma antiga. Falta o push para ver a barra rodar no GitHub.
 
 - Estado em 26/09/2026: `IN_PROGRESS`; implementação local no commit
   `3382286`; o último run remoto ainda é de `02f586b…` e falhou sem jobs.
@@ -135,6 +138,8 @@
 - Pronto: `verify.yml` verde em `main` no GitHub.
 
 ### PR-011 — Triagem do Gitleaks · P0 · SPEC+BUILD
+
+- Estado: `COMPLETED_LOCAL / WAITING_PUSH` em 27/09/2026 (`503ded7`). `.gitleaks.toml` mantém todas as regras padrão e só acrescenta allowlists à regra `generic-api-key` (SHA-256 em `docs/04_audit/evidence/` e arquivos de teste); caso negativo provado (chave com formato AWS em teste continua detectada); 6 achados isolados por fingerprint em `.gitleaksignore`; `GITLEAKS_VERSION: 8.28.0` no `security.yml`; varredura do histórico: sem vazamentos; contrato em `tests/security-scan-config.test.js`.
 
 - Estado em 26/09/2026: `IN_PROGRESS`; implementação local no commit
   `503ded7`; teste local de configuração passa, mas o scan real ainda não
@@ -310,6 +315,10 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-101 — Discovery de plataforma · P0 · DISC
 
+- `IN_PROGRESS / NOT_VALIDATED` em 27/09/2026: [discovery 0019](../00_discovery/0019_platform_first_consumer_pilot.md)
+  registra a hipótese, critérios e dados ainda necessários. D-04 determina
+  que o primeiro consumidor seja definido nesta etapa; o usuário informou
+  que ainda não há candidatos a produto.
 - O que: quais produtos vão consumir o harness, qual é o primeiro, que
   capacidades eles precisam (runtime, approvals, handoff, canal, conhecimento,
   efeito externo), volumes, operadores e restrições legais. O legado
@@ -318,6 +327,9 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-102 — PRD adendo de plataforma (D-03) · P0 · PRD
 
+- D-03 foi decidida pelo usuário em 27/09/2026: opção A, núcleo governado
+  completo. A decisão fixa o escopo pretendido; não substitui o PRD validado
+  nem autoriza capacidades sensíveis ou produção.
 - O que: capacidades da plataforma liberadas para produção, contrato público
   que os produtos consomem, SLOs da plataforma, métricas de sucesso e
   não-objetivos permanentes do plano 0354. Substitui, para o harness, o PRD
@@ -326,6 +338,9 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-103 — Primeiro consumidor, tenant piloto e níveis de serviço (D-04) · P0 · HUMAN
 
+- O usuário determinou em 27/09/2026 que o primeiro consumidor e o contexto
+  do piloto sejam definidos no discovery PR-101. Produto, tenant, volumes,
+  horário humano e SLA ainda não estão decididos.
 - Pronto: produto consumidor do piloto, tenant, volume, horário de cobertura
   humana, SLA de handoff e metas numéricas de sucesso registrados.
 

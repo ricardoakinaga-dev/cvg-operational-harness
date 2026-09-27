@@ -1,5 +1,9 @@
 # 0190 — SPEC Validation
 
+## AUD-0578 / PR-009 — fatia 2, peso tipográfico de fallback
+
+- [SPEC-PR009-002](0139_visual_font_fallback.md) está `BUILD_LOCAL_AUTHORIZED` em T2: falha visual observada no Verify remoto, reprodução em Ubuntu e regra de correção registrados antes do código. Não altera contrato público nem autoriza produção.
+
 ## AUD-0578 / PR-003 — rebind do catálogo de skips
 
 - [SPEC-PR003-002](0138_skip_catalog_rebind.md) está `BUILD_LOCAL_AUTHORIZED` em T2 para reconciliar somente dois hashes de testes alterados na PR-L05. A task PR-003 está registrada em 0356; recon, regras e aceite precedem a edição do catálogo. Não altera autorização de produção nem suprime o gate de skips.

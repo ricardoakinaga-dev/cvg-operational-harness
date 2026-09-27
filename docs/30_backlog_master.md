@@ -1,3 +1,9 @@
+# PROD-20260926 — PR-L05 concluída; PR-010 e PR-011 aguardando push — 27/09/2026
+
+- `COMPLETED`: PR-L05 ([SPEC-LEGACY-002](02_spec/0136_legacy_secretary_profile_isolation.md)).
+- `COMPLETED_LOCAL / WAITING_PUSH`: PR-010 (`verify.yml`) e PR-011 (Gitleaks). O CI remoto só pode ser confirmado depois do push.
+- Próximas: reemitir o certificado; PR-L06, PR-L04 e PR-L07. Produção `NO_GO`.
+
 # AUD-0578 — execução de R0/R1 local — 26/09/2026
 
 - [Roadmap 0358](03_build/0358_aud0578_execution_roadmap.md) e [backlog 0359](03_build/0359_aud0578_execution_backlog.md) indexam F01–F09 sem duplicar as 79 tasks de [0356](03_build/0356_production_backlog_2026-09-26.md).
