@@ -162,6 +162,8 @@
 
 ### PR-009-PROV — Âncora externa da prova do ci-bar · P0 para promoção · SPEC T3
 
+- 27/09/2026, commit `cae1c2a` corrigiu `GH_TOKEN` ausente no passo independente de `gh attestation verify` sob SPEC 0147 aprovada. [Prova local](../04_audit/evidence/PR009-GH-TOKEN-20260927/proof.json): negativo sem token falha, 16 testes focados, suíte Node 22 305/2.229 PASS (20/162 skipped sem banco), PostgreSQL 35/258 e E2E 12/12 PASS, tipo/lint/actionlint/formato PASS. Run remoto do SHA integrado, bundle/digest OCI, proteção de `main` e certificação ainda `PENDENTE / NO_GO`.
+
 - 27/09/2026, [auditoria remota](../04_audit/evidence/PR009-REMOTE-AUDIT-20260927/proof.json): Verify `36309111340` e Security `36309111343` passaram no SHA `8ee6fa2`, com manifesto de 37 gates PASS e 60 arquivos presentes. Esse run é anterior aos jobs da SPEC 0147, não contém bundle de atestação, tem SHA divergente do checkout atual e `main` continua sem branch protection/rulesets. É evidência histórica de CI, não selo do candidato integrado. `REMOTE_PROOF_PENDING / NO_GO`.
 
 - Estado: `SPEC_APPROVED / BUILD_T3_IN_PROGRESS` em 27/09/2026, após

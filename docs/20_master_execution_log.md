@@ -1,3 +1,8 @@
+# PR-009-PROV — GH_TOKEN no verificador independente — 27/09/2026
+
+- A [documentação oficial do GitHub](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-github-cli) exige `GH_TOKEN` no passo Actions que invoca `gh`. O job `provenance-verify` chamava `gh attestation verify` sem essa variável; commit `cae1c2a` a fornece somente nesse passo e o teste de contrato passa a exigir o vínculo. Negativo retirou a linha em cópia descartável, obteve falha do teste e restaurou o workflow byte a byte.
+- [Evidência](04_audit/evidence/PR009-GH-TOKEN-20260927/proof.json): Node 22, 16 focados, typecheck/lint/actionlint/formato PASS; suíte 305 arquivos/2.229 testes PASS, 20/162 skipped sem banco; PostgreSQL 35/258 PASS; E2E Chromium 12/12 PASS após compilar runtime no worktree isolado. A primeira tentativa E2E foi interrompida por dist ausente de `@cvg/shared`, sem mudança de produto. Prova local, sem run remoto, atestação, push ou deploy; `NO_GO`.
+
 # PR-009-PROV — recon da prova CI remota — 27/09/2026
 
 - Consulta read-only ao GitHub confirmou Verify [run 36309111340](https://github.com/ricardoakinaga-dev/cvg-operational-harness/actions/runs/36309111340) e Security [run 36309111343](https://github.com/ricardoakinaga-dev/cvg-operational-harness/actions/runs/36309111343) verdes no mesmo SHA `8ee6fa2`. O download do único artefato Verify trouxe manifesto `aud0578-pr007-v1` com 37/37 gates PASS, 60/60 arquivos listados presentes e hash `51bdfe6d6aa4cd3591978b49c273a9e03814a09e402c59cf50251ea247fdb923`.

@@ -1,3 +1,7 @@
+# PR-009-PROV — autenticação da CLI no job independente — 27/09/2026
+
+- `LOCAL_VALIDATION_PASS / REMOTE_PROVENANCE_PENDING / NO_GO`: commit `cae1c2a` fornece `GH_TOKEN` ao `gh attestation verify` e [prova](04_audit/evidence/PR009-GH-TOKEN-20260927/proof.json) inclui negativo, 16 testes focados, suíte Node 22 305/2.229, PostgreSQL 35/258, Chromium 12/12, tipo/lint/actionlint. Ainda exigir execução remota no SHA integrado, atestação/digest OCI, check obrigatório e certificação.
+
 # PR-009-PROV — CI remoto histórico não sela o candidato atual — 27/09/2026
 
 - `HISTORICAL_REMOTE_VERIFY_PASS / CURRENT_PROVENANCE_UNPROVEN / NO_GO`: [prova remota](04_audit/evidence/PR009-REMOTE-AUDIT-20260927/proof.json) confirmou Verify/Security verdes em `8ee6fa2` e 37/37 gates no manifesto antigo, mas sem jobs/bundle de atestação, SHA divergente do checkout e `main` sem proteção/rulesets. Exigir CI da SPEC 0147 no SHA integrado, verificação independente da atestação e digest OCI, retenção/exportação e check obrigatório antes de promoção.

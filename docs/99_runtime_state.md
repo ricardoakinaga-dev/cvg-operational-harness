@@ -1,3 +1,11 @@
+# PR-009-PROV — verificador de atestação autenticado localmente — 27/09/2026
+
+- status: `LOCAL_VALIDATION_PASS / REMOTE_PROVENANCE_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: sob SPEC 0147 aprovada, commit `cae1c2a` forneceu `GH_TOKEN: ${{ github.token }}` ao passo `gh attestation verify` do job independente e acrescentou regressão no contrato. [Prova](04_audit/evidence/PR009-GH-TOKEN-20260927/proof.json) inclui negativo que falha sem o token e JUnit E2E.
+- verification_state: Node 22.23.2, worktree isolado: 16 testes focados, suíte sem banco 305/2.229 PASS (20 arquivos/162 testes skipped), PostgreSQL 16 35/258 PASS, Chromium 12/12 PASS, typecheck/lint/actionlint 1.7.12/formato PASS. Primeira tentativa E2E parou por `@cvg/shared` sem dist; compilação isolada resolveu a precondição. Nenhum run remoto novo.
+- blocking_state: push não autorizado; atestação real do SHA integrado, digest OCI, proteção de `main` e certificação final pendentes. Produção `NO_GO`.
+- next_action: integrar candidato quando PR-L04 liberar; executar Verify/Security e verificação independente no mesmo SHA após autorização de push, então avaliar o resultado para promoção.
+
 # PR-009-PROV — auditoria remota da proveniência do CI — 27/09/2026
 
 - status: `HISTORICAL_REMOTE_VERIFY_PASS / CURRENT_PROVENANCE_UNPROVEN`; programa `IN_PROGRESS`; produção `NO_GO`.
