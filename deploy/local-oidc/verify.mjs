@@ -242,7 +242,14 @@ async function main() {
     const claims = await exchangeCode(code, verifier)
     assert.equal(claims.iss, issuer)
     assert.equal(claims.aud, clientId)
+    assert.ok(claims.amr?.includes('pwd'), 'ID token lacks password AMR')
     assert.ok(claims.amr?.includes('otp'), 'ID token lacks verified OTP AMR')
+    assert.ok(
+      Number.isSafeInteger(claims.auth_time) &&
+        claims.auth_time <= Math.floor(Date.now() / 1000) &&
+        claims.auth_time >= Math.floor(Date.now() / 1000) - 300,
+      'ID token lacks fresh authentication time'
+    )
     assert.ok(
       claims.groups?.includes(groupPath),
       'ID token lacks synthetic tenant group'
@@ -256,7 +263,9 @@ async function main() {
         badRedirectRejected: true,
         otpEnrollmentRequired: true,
         wrongOtpRejected: true,
+        verifiedPasswordAmr: true,
         verifiedOtpAmr: true,
+        freshAuthTime: true,
         syntheticGroup: groupPath
       }) + '\n'
     )

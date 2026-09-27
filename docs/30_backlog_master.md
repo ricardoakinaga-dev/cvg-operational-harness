@@ -1,3 +1,7 @@
+# PR-301-OIDC-MAP — identidade OIDC verificada — 27/09/2026
+
+- `MAPPING_ACCEPTED_LOCAL / API_INTEGRATION_PENDING / NO_GO`: [mapeador](../apps/api/src/oidc-identity.ts) e [prova](04_audit/evidence/PR301-OIDC-MAP-20260927/proof.json) exigem MFA, autenticação recente e grupo único após verificação de ID token. Keycloak real confirmou `pwd`/`otp`/`auth_time`; Node 22: 22 testes focados, suíte geral 304/2.220 e PostgreSQL 35/258 PASS; I12 `ACCEPT_LOCAL`. PR-301 ainda precisa validar assinatura/JWKS/nonce/state/PKCE na API, compor sessão PostgreSQL, integrar web, E2E e certificar o candidato; produção não autorizada.
+
 # PR-301-OIDC-LOCAL — IdP de homologação — 27/09/2026
 
 - `BUILD_ACCEPTED_LOCAL / API_INTEGRATION_PENDING / NO_GO`: [D-09](03_build/0357_production_decision_packet_2026-09-26.md) aplica IdP OIDC local com MFA e identidades sintéticas. [Keycloak local](../deploy/local-oidc/README.md) importou realm e passou prova real de PKCE S256 obrigatório, redirect exato, setup e validação OTP, `amr: otp` e grupo sintético no ID token ([prova](04_audit/evidence/PR301-OIDC-LOCAL-20260927/proof.json)); I11 `ACCEPT_LOCAL`. Sem composição de API/web, validação de assinatura/nonce, E2E confiável ou IdP corporativo; nenhum GO.

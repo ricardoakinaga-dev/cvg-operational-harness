@@ -1,3 +1,11 @@
+# PR-301-OIDC-MAP — vínculo de identidade — 27/09/2026
+
+- status: `OIDC_MAPPING_ACCEPTED_LOCAL / API_INTEGRATION_PENDING`; produção `NO_GO`.
+- last_completed_action: implementei o mapeamento estrito de ID token OIDC previamente verificado para identidade de operador, com MFA `pwd`+`otp`, autenticação recente, um grupo de tenant/papel, subject ligado ao issuer e sessão limitada a 15 minutos/`exp`. O verificador local do Keycloak passou novamente com claims reais e removeu o usuário sintético.
+- verification_state: [prova](04_audit/evidence/PR301-OIDC-MAP-20260927/proof.json); Node 22: 22 testes focados, suíte geral 304 arquivos/2.220 testes PASS (20/153 skipped sem banco), PostgreSQL descartável 35 arquivos/258 testes PASS; typecheck/lint/formato PASS. Crítica I12 `ACCEPT_LOCAL` e compatibilidade de audience unitária corrigida e aceita na rechecagem. IdP local/usuário de teste e banco descartável removidos.
+- blocking_state: o mapeador pressupõe validação criptográfica anterior de assinatura/JWKS, nonce, issuer, audience e resposta do code exchange; callback, store composto e web ainda faltam, assim como IdP corporativo e certificação integrada.
+- next_action: integrar cliente OIDC e rotas API/web após liberação dos caminhos PR-L04, executar E2E confiável e certificar o SHA integrado; manter `NO_GO`.
+
 # PR-301-OIDC-LOCAL — IdP local com MFA — 27/09/2026
 
 - status: `OIDC_LOCAL_ACCEPTED / API_INTEGRATION_PENDING`; produção `NO_GO`.
