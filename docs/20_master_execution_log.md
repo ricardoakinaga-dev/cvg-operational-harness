@@ -1,3 +1,7 @@
+# PR-003-INTERIM — certificação isolada — 27/09/2026
+
+- Claim próprio e worktree detached limpo `c634fcd`; PostgreSQL 16 descartável, Node 22, API/web em portas exclusivas. `npm run certify` executou 16 comandos exit 0, mas adjudicou 15 PASS/1 FAIL: unit tinha 2.373 testes PASS e um Phase 4A skip por ambiente diagnóstico sem `PHASE4A_DISPOSABLE_PG=1`; o inventário rejeitou `SKIP-PG-014` por `sourceSha256` vencido. `certification:verify` exit 1 com 38 hashes PASS e decisão `NO_GO` coerente. E2E em simulação 12/12 e PostgreSQL 35/258 PASS. Repetição focada do Phase 4A e suíte unitária inteira com banco habilitado passaram 1/1 e 324/2.374, zero skips, sem alterar o certificado. [Prova](04_audit/evidence/PR003-INTERIM-20260927/proof.json): bundle comprimido íntegro 38/38, I14 `ACCEPT_FACTS` após encontrar e corrigir regeneração posterior do inventário no worktree. Catálogo segue no claim PR-L04; nenhum GO.
+
 # PR-301-PG-INDEX — preflight de índices de autenticação — 27/09/2026
 
 - Sob [SPEC 0144](02_spec/0144_trusted_operator_session_production.md) aprovada e claim próprio, acrescentei inventário exato dos cinco índices de autenticação ao preflight. Negativos reais no PostgreSQL 16 para índice ausente, chave trocada, predicado parcial e índice extra foram rejeitados; Node 22: 9/9 focados, suíte geral 304 arquivos/2.220 testes e PostgreSQL completo 35 arquivos/258 testes PASS. Crítica I13 `ACCEPT_LOCAL`; [prova](04_audit/evidence/PR301-PG-INDEX-20260927/proof.json). API/OIDC/web e produção seguem `NO_GO`.

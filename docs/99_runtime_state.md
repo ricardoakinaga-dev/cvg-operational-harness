@@ -1,3 +1,11 @@
+# PR-003-INTERIM — certificação isolada do SHA corrente — 27/09/2026
+
+- status: `INTERIM_CERTIFICATION_NO_GO / PR-L04_CLAIM_PENDING`; produção `NO_GO`.
+- last_completed_action: executei `npm run certify` em worktree detached limpo no commit `c634fcd`, com Node 22, PostgreSQL 16 descartável e portas próprias. Os 16 comandos saíram com 0; a adjudicação ficou 15 PASS/1 FAIL por um skip unitário Phase 4A e pelo vínculo obsoleto de `SKIP-PG-014`. O certificado declarou `NO_GO`.
+- verification_state: [prova e bundle](04_audit/evidence/PR003-INTERIM-20260927/proof.json), candidato `2025654942d24e306c849e79d858afad52e8f8438e7aa2dfb188dd6945267a1c`; manifesto 38/38 hashes, E2E em simulação 12/12, PostgreSQL 35/258 PASS. O teste Phase 4A passou isolado com `PHASE4A_DISPOSABLE_PG=1`; suíte unitária completa repetida com banco 324 arquivos/2.374 testes, zero skips, sem reemitir certificado. `certification:verify` preservou 38 hashes e recusou unit/skip; I14 `ACCEPT_FACTS` do arquivo completo após corrigir uma alteração posterior do inventário no worktree temporário.
+- blocking_state: `scripts/skip-catalog.json` permanece no claim PR-L04 e guarda hash `207335…` contra `a27d2f…` do teste atual. O E2E usa simulação; OIDC confiável, store composto, CI remoto no mesmo SHA, IdP corporativo e as 13 condições de GO continuam abertos.
+- next_action: após liberação da PR-L04, reconciliar `SKIP-PG-014` conforme SPEC 0143, compor API/web confiáveis e reemitir certificação do SHA integrado com `PHASE4A_DISPOSABLE_PG=1`; manter `NO_GO`.
+
 # PR-301-PG-INDEX — inventário de índices no preflight — 27/09/2026
 
 - status: `PG_INDEX_BOUNDARY_ACCEPTED_LOCAL / INTEGRATION_PENDING`; produção `NO_GO`.
