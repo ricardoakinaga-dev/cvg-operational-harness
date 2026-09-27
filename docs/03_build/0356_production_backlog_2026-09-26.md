@@ -527,6 +527,8 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-301 — Autenticação de operador por OIDC com MFA na API (D-09) · P0 · SPEC+BUILD
 
+- 27/09/2026, purge da autenticação: [SPEC-PR301/402-001](../02_spec/0149_operator_auth_purge.md) recebeu I24 `ACCEPT_SPEC_REVIEW_READY` para revisão T3, sem autorização de BUILD. Ela cobre state expirado, sessões e famílias, role/job separados, ausência de DML da API, lote limitado, concorrência com replace/logout, alerta e rollout compatível com o preflight exato. O [inventário DB-09](../platform/09-personal-data-inventory.md) registra as categorias e a lacuna de retenção. Decisões DP-01 a DP-06 do controlador/DPO, inclusive idade máxima da família, backup/PITR e prova de staging seguem `PENDENTE / NO_GO`.
+
 - 27/09/2026, startup de produção sem DDL no branch isolado `codex/pr301-oidc-client` (`85c2c7d`): API rejeita `DATABASE_MIGRATION_URL`/auto-migration; job externo aplica migrations e serving verifica catálogos com URL runtime, owner distinto, login direto, ownership/ACL e nenhum `CREATE` efetivo para runtime em banco ou schemas persistentes. I23 `ACCEPT_LOCAL` após negativo de `CREATE` em `public`. Node 22: suíte 331/2.437 sem skips, `test:postgres` 35/258, E2E Keycloak/Chromium entre sites PASS, tipo/lint/formato/links/higiene PASS. Prova no branch `docs/04_audit/evidence/PR301-PROD-STARTUP-20260927/proof.json`. Ainda fora do checkout compartilhado por PR-L04; IdP corporativo, dados/rollout e certificado/CI do SHA integrado pendentes. `BUILD_LOCAL_ACCEPTED / NO_GO`.
 
 - 27/09/2026, rotas e composição local no branch isolado `codex/pr301-oidc-client` (`b41cff2`): startup com preflight read-only de role/schema/RLS e stores PostgreSQL, `POST /v1/auth/oidc/start`, callback com assinatura/nonce/MFA, replace transacional, reload apenas por cookie e logout revogado. I19/I20 `ACCEPT_LOCAL` após correções de cookie Strict entre sites e cookie duplicado no logout. Suíte PG 330/2.428, `test:postgres` 35/258, Keycloak OTP real, tipos/lint/links/audit PASS. Prova no branch isolado `docs/04_audit/evidence/PR301-OIDC-ROUTES-20260927/proof.json`. PR-L04 detém API/web no checkout compartilhado; integrar branch após liberação, ligar PR-302, retenção/purge, IdP corporativo, E2E confiável e recertificar SHA integrado. `BUILD_LOCAL_ACCEPTED / NO_GO`.
@@ -627,6 +629,7 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-402 — Retenção e descarte aplicados · P0 · SPEC+BUILD
 
+- Subfatia de autenticação PR-301/402: [SPEC 0149](../02_spec/0149_operator_auth_purge.md) pronta para revisão humana (`I24 ACCEPT_SPEC_REVIEW_READY`). Após decisões DP-01 a DP-06 e aprovação T3, fechar o contrato de idade da família, implementar migration incremental, função com privilégio mínimo, job isolado, telemetria, teste de concorrência/retorno de backup e E2E. A migration atual não apaga states não consumidos nem sessões expiradas; não confundir expiração lógica com descarte físico.
 - O que: POL-EVIDENCE-001 registrada e não aplicada; não há retenção de
   dados operacionais.
 - Pronto: jobs de expurgo com teste; retenção por categoria configurada;

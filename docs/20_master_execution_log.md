@@ -1,3 +1,9 @@
+# PR-301/402 — recon de retenção e SPEC 0149 — 27/09/2026
+
+- Leitura estática das migrations de autenticação confirmou `oidc_login_states` sem purge de reservas expiradas e `operator_sessions`/`operator_session_families` sem descarte físico. O lookup ignora expirados, mas o digest antigo deve sobreviver enquanto houver sucessora ativa para que logout revogue a família. [DB-09](platform/09-personal-data-inventory.md) foi acrescentada ao inventário; nenhum banco ou dado real foi consultado.
+- [SPEC 0149](02_spec/0149_operator_auth_purge.md) propõe policy singleton sem default, função `SECURITY DEFINER` acessível só à role de purge, 1.000 exclusões por chamada, job a cada dez minutos, métricas agregadas, rollout em duas versões de preflight e teste PITR. I24 inicialmente rejeitou domínio/cardinalidade insuficientes e retenção indefinida por `replace` repetido; a revisão adicionou `CHECK`s, falha antes de `DELETE`, DP-06 para idade da família e alerta de linhas antigas bloqueadas. Rechecagem `ACCEPT_SPEC_REVIEW_READY`, somente leitura e sem aprovação de BUILD.
+- Faltam decisão DP-01 a DP-06 do controlador/DPO, contrato de troca de família, revisão humana T3, implementação, testes e staging. A proposta não altera o candidato nem autoriza purge ou produção. Programa `IN_PROGRESS`, produção `NO_GO`.
+
 # PR-301 — serving sem credencial DDL, I23 ACCEPT_LOCAL — 27/09/2026
 
 - Sob SPEC 0144 aprovada e claim isolado, commit `85c2c7d` separou job de migração do processo API: produção recusa URL DDL/auto-migration; preflight de produto só lê catálogos, exige login direto, owner separado e sem privilégios amplos, inventário de ownership, `CREATE ON DATABASE` ausente nas duas roles e nenhum schema persistente criável pela runtime. O negativo de `CREATE` em `public` veio da crítica I23; rechecagem `ACCEPT_LOCAL` sem rerodar testes pelo crítico.

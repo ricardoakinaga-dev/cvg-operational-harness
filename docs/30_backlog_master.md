@@ -1,3 +1,7 @@
+# PR-301/402 — retenção OIDC, SPEC 0149 pronta para revisão — 27/09/2026
+
+- `SPEC_REVIEW_READY / DPO_POLICY_PENDING / NO_GO`: [SPEC 0149](02_spec/0149_operator_auth_purge.md) e inventário DB-09 registram purge de state/sessões/famílias, isolamento do job e rollout. I24 `ACCEPT_SPEC_REVIEW_READY` após corrigir policy sem domínio e risco de família ativa sem limite. DP-01 a DP-06 e revisão T3 explícita são gates antes de BUILD; nenhum purge foi executado. PR-301/402 permanecem P0 para GO.
+
 # PR-301 — serving sem DDL validado isoladamente — 27/09/2026
 
 - `I23_ACCEPT_LOCAL / ROOT_INTEGRATION_PENDING / NO_GO`: commit isolado `85c2c7d` rejeita credencial DDL e migração automática na API de produção e executa preflight somente leitura para owner, runtime, grants e schemas. Node 22: 331/2.437 sem skips, PostgreSQL 35/258, E2E Keycloak/Chromium entre sites PASS, I23 `ACCEPT_LOCAL`, 18 hashes em `docs/04_audit/evidence/PR301-PROD-STARTUP-20260927/proof.json` no branch; inventário sintético zero e contêineres encerrados. Integrar após PR-L04; IdP corporativo, retenção/purga, rollout e certificação/CI no SHA integrado permanecem P0 de GO.

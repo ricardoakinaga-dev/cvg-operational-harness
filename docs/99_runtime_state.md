@@ -1,3 +1,11 @@
+# PR-301/402 — SPEC de purge OIDC pronta para revisão — 27/09/2026
+
+- status: `SPEC_REVIEW_READY / DPO_POLICY_PENDING / FAMILY_CONTRACT_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: inspeção das migrations `0000_auth` e `0001_oidc_state` mostrou que expiração lógica não elimina states não consumidos nem sessões; o inventário ganhou DB-09. A [SPEC 0149](02_spec/0149_operator_auth_purge.md) define job/role separados, limite por lote, lock por família, política única com domínio validado, rollout compatível e prova de backup/PITR. I24 rejeitou a primeira proposta por domínio incompleto e possibilidade de família indefinida; após correção, `ACCEPT_SPEC_REVIEW_READY` somente para revisão humana, sem BUILD.
+- verification_state: revisão estática independente I24, sem banco ou dados reais; links, higiene e formatação documental em validação final. Nenhuma migration, role de purge ou job foi executado.
+- blocking_state: decisões DP-01 a DP-06 do controlador/DPO (prazos após expiração, política global ou por tenant, backups/PITR, finalidade e idade máxima da família) e revisão T3 explícita pendentes. O contrato de troca de família para um limite finito requer definição adicional; produção `NO_GO`.
+- next_action: apresentar a SPEC 0149 e as decisões ao usuário/controlador/DPO; só iniciar BUILD de purge após revisão T3 e política aprovada. Prosseguir nos demais gates independentes.
+
 # PR-301 — startup de produção sem DDL, validado no branch isolado — 27/09/2026
 
 - status: `I23_ACCEPT_LOCAL / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
