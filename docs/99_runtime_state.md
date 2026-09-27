@@ -1,3 +1,12 @@
+# AUD-0579 — auditoria do candidato local; produção NO_GO — 2026-09-27
+
+- status: `WAITING_HUMAN_APPROVAL` para BUILD T3 de PR-301/302 e D-09; PR-003 `IN_PROGRESS / WAITING_FOR_PATH_CLAIM`; programa PROD-20260926 `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: auditei `5c0b791` em Node 22 com PostgreSQL descartável e Chromium; corrigi o topo do README; registrei [AUD-0579](04_audit/0579_current_candidate_deep_audit_2026-09-27.md), [SPEC-PR003-003](02_spec/0143_skip_pg014_source_rebind.md) para `SKIP-PG-014` e [SPEC-PR301/302-001](02_spec/0144_trusted_operator_session_production.md) para identidade T3; liberei os caminhos de web/E2E no [quadro de coordenação](08_runtime/agent_coordination.md).
+- current_evidence: [relatório AUD-0579](04_audit/0579_current_candidate_deep_audit_2026-09-27.md), [backlog 0356](03_build/0356_production_backlog_2026-09-26.md), [log](20_master_execution_log.md). Verify e Security remotos PASS apenas no SHA anterior `8ee6fa2`.
+- verification_state: `typecheck`, `lint`, build, links, `audit:security`, PostgreSQL 35/258, E2E 12/12, worker smoke e `coverage:critical` PASS; `npm test` 2.170 PASS/146 skipped sem banco; cobertura com banco 2.315 PASS/1 skipped (Phase 4A separadamente 1/1), 92,41/87,37/94,84/93,40. `GET /v1/session` sem store em modo confiável devolveu 503; crítico I1 `REJECT`. `certification:verify` e `skip:governance` FAIL para o candidato atual.
+- blocking_state: `SKIP-PG-014` guarda SHA anterior; `scripts/skip-catalog.json` está no claim ativo da PR-L04. O entrypoint publicado não compõe store de sessão e a web não tenta retomar cookie sem token. A correção é T3 e aguarda revisão humana da SPEC e D-09. Certificado desatualizado, CI remoto de SHA anterior, 13 condições de GO e primeiro consumidor ainda abertos. Não houve dado real nem ação externa.
+- next_action: revisão humana da SPEC-PR301/302-001 e D-09 para liberar BUILD T3; em paralelo, após PR-L04 liberar o catálogo, reconciliar `SKIP-PG-014` conforme SPEC-PR003-003 e executar os gates no SHA integrado. Produção continua `NO_GO` até 0354 e decisão humana comprovadas.
+
 # PROD-20260926 — PR-L06 concluída; coordenação com o Codex ativa — 2026-09-27
 
 - status: `IN_PROGRESS`. Frente FL (Claude Code): PR-L01, L02, L03, L05 e L06 `COMPLETED`; L04, L07–L12 `PROPOSED`. Frente AUD-0578 (Codex) em andamento conforme [quadro de coordenação](08_runtime/agent_coordination.md). Produção `NO_GO`.

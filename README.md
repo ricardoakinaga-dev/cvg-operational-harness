@@ -2,17 +2,26 @@
 
 CVG Operational Harness is a governed runtime foundation for reusable operational AI agents across the CVG ecosystem.
 
-## Estado atual — 2026-09-26 — PROD-20260926
+## Estado atual — 2026-09-27 — PROD-20260926
 
-- Programa de produção controlada proposto: [plano executivo](docs/03_build/0354_production_executive_plan_2026-09-26.md),
+- O harness é uma fundação controlada, ainda sem autorização de produção.
+  O [plano executivo](docs/03_build/0354_production_executive_plan_2026-09-26.md),
   [roadmap](docs/03_build/0355_production_roadmap_2026-09-26.md) e
-  [backlog PR-001–PR-709](docs/03_build/0356_production_backlog_2026-09-26.md),
-  a partir da [auditoria AUD-0577](docs/04_audit/0577_production_readiness_score_audit_2026-09-26.md)
-  (nota geral 67/100; prontidão para produção 25/100; isolamento do legado 30/100).
+  [backlog PR-001–PR-709](docs/03_build/0356_production_backlog_2026-09-26.md)
+  definem as fases e as 13 condições de GO. A [AUD-0578](docs/04_audit/0578_program_comprehensive_audit_2026-09-26.md)
+  avaliou a revisão anterior em 67/100 no geral e 25/100 em prontidão para
+  produção; essas notas não certificam a revisão atual.
 - O alvo é o harness como plataforma. A Esmeralda V2 (`cvg-agent-secretary-v2`)
-  é o programa legado: a frente FL (PR-L01–PR-L12) isola em `legacy/` ou apaga
-  o que restar dele.
-- Todas as tasks estão `PROPOSED` e aguardam decisão humana. Produção `NO_GO`.
+  é o programa legado. PR-L01–L03, L05 e L06 foram concluídas; PR-L04 tem duas
+  fatias concluídas e segue em execução. O isolamento restante está na
+  [frente FL](docs/03_build/0356_production_backlog_2026-09-26.md).
+- Verify e Security passaram no GitHub para `8ee6fa2`; commits posteriores
+  exigem nova validação no mesmo SHA. A certificação versionada não corresponde
+  ao código corrente. Consulte o [estado operacional](docs/99_runtime_state.md)
+  e a [coordenação entre agentes](docs/08_runtime/agent_coordination.md).
+- Produção `NO_GO`: sem dados reais, provider ou canal externo, ação sensível
+  automática ou liberação irrestrita. Decisões de produto, ambiente e release
+  continuam sujeitas aos gates documentados.
 
 ## Estado anterior — 2026-09-26 — AUD-0576
 

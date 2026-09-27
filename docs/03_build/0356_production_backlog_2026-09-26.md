@@ -39,6 +39,7 @@
 
 ### PR-003 — Certificado reproduzível (RA26-02) · P0 · SPEC+BUILD
 
+- AUD-0579 / fatia `AUD-0579-SKIP-014` `SPEC_READY / BUILD_WAITING_FOR_PATH_CLAIM`: `skip:governance` falhou no HEAD `5c0b791` porque `SKIP-PG-014` ainda guarda o SHA-256 anterior do teste de homologação do worker. [SPEC-PR003-003](../02_spec/0143_skip_pg014_source_rebind.md) define recon, regra e pronto. `scripts/skip-catalog.json` está no claim ativo PR-L04; atualizar só após a liberação do caminho. O certificado também está desatualizado (`certification:verify` exit 1), portanto PR-003 permanece aberta para o candidato integrado.
 - Estado corrente da nova fatia: `IN_PROGRESS` após a certificação AUD-0578, que teve 16 comandos exit 0 e adjudicação `NO_GO` por dois hashes obsoletos no catálogo de skips. [SPEC-PR003-002](../02_spec/0138_skip_catalog_rebind.md) limita a reconciliação a esses dois contratos e exige nova certificação e verificador.
 - Estado: `COMPLETED` em 26/09/2026, com uma ressalva registrada.
 - Causa da divergência da AUD-0577: ambiente, não regressão. Sem PostgreSQL
@@ -467,6 +468,7 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-301 — Autenticação de operador por OIDC com MFA na API (D-09) · P0 · SPEC+BUILD
 
+- AUD-0579: [SPEC-PR301/302-001](../02_spec/0144_trusted_operator_session_production.md) `PROPOSED / WAITING_HUMAN_SPEC_REVIEW`. O entrypoint publicado não compõe `operatorSessionStore` fora dos testes; `/v1/session` responde 503. Definir D-09, store durável e fronteira de lookup/tenant antes do BUILD T3.
 - O que/onde: hoje a identidade é token HMAC por keyring
   (`apps/api/src/operator-identity.ts`).
 - Como: validar tokens OIDC (issuer, audience, JWKS com cache e rotação);
@@ -477,6 +479,7 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-302 — Login web por OIDC · P0 · SPEC+BUILD
 
+- AUD-0579: a web exige token antes de tentar restaurar cookie válido. A mesma [SPEC T3](../02_spec/0144_trusted_operator_session_production.md) define recarga por cookie, expiração, logout e E2E em modo confiável; implementação aguarda revisão humana e D-09.
 - O que/onde: `apps/web/src/auth/session.ts` depende de
   `__CVG_OPERATOR_BOOTSTRAP_TOKEN__` injetado.
 - Como: Authorization Code + PKCE, sessão com cookie `HttpOnly`/`Secure`/

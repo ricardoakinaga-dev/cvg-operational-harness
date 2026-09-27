@@ -1,3 +1,10 @@
+# AUD-0579 — candidato local auditado; PR-003 e produção abertas — 27/09/2026
+
+- [AUD-0579](04_audit/0579_current_candidate_deep_audit_2026-09-27.md) no `5c0b791`: API/web E2E 12/12, PostgreSQL 35/258, suíte geral 2.170 PASS com 146 skips sem banco; cobertura com banco 2.315 PASS e 1 skip Phase 4A, executado separadamente 1/1. `typecheck`, `lint`, build, links, audit de dependências, worker smoke e cobertura crítica PASS.
+- PR-003 `IN_PROGRESS / BLOCKED_BY_PATH_CLAIM`: `certification:verify` e `skip:governance` falharam. `SKIP-PG-014` será reconciliado conforme [SPEC-PR003-003](02_spec/0143_skip_pg014_source_rebind.md) depois que a PR-L04 liberar `scripts/skip-catalog.json`. Verify/Security remotos verdes só no antecessor `8ee6fa2`; revalidar no SHA integrado. Produção `NO_GO`.
+- PR-005 parcial: topo do README atualizado. PR-L04 prossegue com a web/E2E liberados no [quadro de coordenação](08_runtime/agent_coordination.md). F1–F7, D-04 e demais gates de produção seguem abertos.
+- PR-301/302 `P0 / WAITING_HUMAN_SPEC_REVIEW`: crítica independente I1 revelou `/v1/session` sem store no entrypoint e recarga web sem retomada de cookie; 503 reproduzido por `app.inject`. [SPEC-PR301/302-001](02_spec/0144_trusted_operator_session_production.md) preparada; D-09 e revisão T3 são pré-requisitos do BUILD.
+
 # PROD-20260926 — PR-L06 concluída — 27/09/2026
 
 - `COMPLETED`: PR-L06 ([SPEC-LEGACY-003](02_spec/0140_legacy_secretary_evals_isolation.md)). Frente FL: L01, L02, L03, L05 e L06 concluídas; próxima PR-L04.
