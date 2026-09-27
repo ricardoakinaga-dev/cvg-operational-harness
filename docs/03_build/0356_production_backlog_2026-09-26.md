@@ -526,6 +526,7 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-301 — Autenticação de operador por OIDC com MFA na API (D-09) · P0 · SPEC+BUILD
 
+- 27/09/2026: usuário aprovou explicitamente [SPEC 0144](../02_spec/0144_trusted_operator_session_production.md) e D-09 (IdP corporativo OIDC com MFA obrigatório). BUILD T3 iniciado em claim próprio: falha temporária do store preserva cookie para retomada. [Prova local](../04_audit/evidence/PR301-20260927/proof.json) e revisão I2: a tentativa isolada de recarga web foi retirada após revelar estados 401/503 incorretos no `App.tsx`; exige mudança integrada após liberação do claim PR-L04. Revisão de segurança I1 exige owner/schema/preflight e troca transacional antes da migration; composição do entrypoint também aguarda `apps/api/src/server.ts`. Issuer, client, claims MFA e mapeamento de grupos ainda não informados. `IN_PROGRESS / NO_GO`.
 - AUD-0579: [SPEC-PR301/302-001](../02_spec/0144_trusted_operator_session_production.md) `PROPOSED / WAITING_HUMAN_SPEC_REVIEW`. O entrypoint publicado não compõe `operatorSessionStore` fora dos testes; `/v1/session` responde 503. Definir D-09, store durável e fronteira de lookup/tenant antes do BUILD T3.
 - O que/onde: hoje a identidade é token HMAC por keyring
   (`apps/api/src/operator-identity.ts`).
@@ -537,6 +538,7 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-302 — Login web por OIDC · P0 · SPEC+BUILD
 
+- 27/09/2026: SPEC 0144 e D-09 aprovadas. Tentativa de recarga por cookie rejeitada na crítica I2: `App.tsx` trata 503 como autenticação necessária e a primeira visita 401 pode aparecer como sessão expirada. Código web da tentativa retirado. Implementar recarga, estados da UI e callback 401 juntos quando PR-L04 liberar `App.tsx`/`client.ts`; depois E2E confiável e IdP. `OPEN / NO_GO`.
 - AUD-0579: a web exige token antes de tentar restaurar cookie válido. A mesma [SPEC T3](../02_spec/0144_trusted_operator_session_production.md) define recarga por cookie, expiração, logout e E2E em modo confiável; implementação aguarda revisão humana e D-09.
 - O que/onde: `apps/web/src/auth/session.ts` depende de
   `__CVG_OPERATOR_BOOTSTRAP_TOKEN__` injetado.

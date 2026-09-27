@@ -44,10 +44,7 @@ export function installOperatorSessionHook(
     } catch {
       sessionStoreFailureByHeaders.add(request.headers)
       if (rawPath === '/v1/session' || rawPath === '/v1/session/logout') return
-      reply
-        .code(503)
-        .header('cache-control', 'no-store')
-        .header('set-cookie', clearOperatorSessionCookie(enforceHttps))
+      reply.code(503).header('cache-control', 'no-store')
       return reply.send(
         fail(
           'configuration_error',

@@ -1,3 +1,11 @@
+# PR-301/302 — BUILD T3 da sessão confiável, falha do store — 27/09/2026
+
+- status: `SPEC_APPROVED / API_HOOK_PARTIAL_BUILD / WEB_REJECTED_I2`; produção `NO_GO`.
+- last_completed_action: usuário aprovou explicitamente [SPEC 0144](02_spec/0144_trusted_operator_session_production.md) e D-09 (IdP corporativo OIDC com MFA). O hook da API mantém cookie durante indisponibilidade do store. A tentativa de recarga web foi retirada após crítica I2 rejeitar os estados 401/503 no `App.tsx`; claim PR-L04 respeitado.
+- verification_state: [prova local](04_audit/evidence/PR301-20260927/proof.json): teste focado final do hook e `typecheck`/ESLint. A suíte intermediária com a tentativa web passou 303 arquivos/2.199 testes (20/146 skipped sem PostgreSQL), mas não certifica o diff final. Revisão de segurança I1 identificou owner/schema/preflight e substituição transacional ainda sem desenho fechado. Apenas dados sintéticos.
+- blocking_state: issuer/client/claims MFA/grupos não informados, store durável e composição do entrypoint pendentes; `server.ts`, `App.tsx` e `client.ts` pertencem à PR-L04; E2E confiável, PostgreSQL e CI integrado ainda sem prova. Sem produção irrestrita.
+- next_action: desenhar migration/adapter e corrigir recarga/UI/logout/entrypoint após liberação do claim; validar com IdP sintético e obter parâmetros não secretos do IdP para integração real.
+
 # PR-009-PROV — BUILD T3 da proveniência selada — 27/09/2026
 
 - status: `SPEC_APPROVED / BUILD_ACCEPTED_LOCAL / REMOTE_PROVENANCE_PENDING`; produção `NO_GO`.

@@ -1,3 +1,7 @@
+# PR-301/302 — falha do store e crítica da recarga — 27/09/2026
+
+- Usuário aprovou [SPEC 0144](02_spec/0144_trusted_operator_session_production.md) e D-09. Claim antes da edição, sem tocar `server.ts`/`client.ts`/`App.tsx` do outro agente. `apps/api/src/operator-session-hook.ts` responde 503 sem enviar `Set-Cookie` ao falhar o store. A tentativa web de chamar `getSession(null)` foi testada, mas a crítica I2 `REJECT` mostrou que o `App.tsx` apresenta estados incorretos para 401/503; o código web e seu teste foram retirados. Suíte intermediária 303 arquivos/2.199 PASS, 20/146 skipped sem banco; não certifica o diff final. [Prova local](04_audit/evidence/PR301-20260927/proof.json) registra teste final do hook. Revisão de segurança I1 encontrou owner/schema/preflight pendentes, troca não atômica e logout que limpa cookie antes de revogar; registrados na SPEC. IdP sem parâmetros; `NO_GO`.
+
 # PR-009-PROV — início do BUILD T3 aprovado — 27/09/2026
 
 - Usuário aprovou a [SPEC 0147](02_spec/0147_ci_bar_external_provenance.md) para BUILD. Claim `77397a1` cobre script, workflow, testes e ledgers. `ci-bar` emite selo fora do diretório mutável para 34 gates; finalizador compara bytes de log/snapshots e entry/state ao output do runner, distingue `LOCAL_UNSEALED` de `GITHUB_STEP_OUTPUT_SEALED` e publica hash do manifesto em output.
