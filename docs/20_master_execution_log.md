@@ -1,3 +1,9 @@
+# PR-301 — serving sem credencial DDL, I23 ACCEPT_LOCAL — 27/09/2026
+
+- Sob SPEC 0144 aprovada e claim isolado, commit `85c2c7d` separou job de migração do processo API: produção recusa URL DDL/auto-migration; preflight de produto só lê catálogos, exige login direto, owner separado e sem privilégios amplos, inventário de ownership, `CREATE ON DATABASE` ausente nas duas roles e nenhum schema persistente criável pela runtime. O negativo de `CREATE` em `public` veio da crítica I23; rechecagem `ACCEPT_LOCAL` sem rerodar testes pelo crítico.
+- Node 22/PostgreSQL 16 descartável: suíte 331/2.437 sem skips, `test:postgres` 35/258, foco e Phase 4A PASS, tipo/lint/formato/links/higiene PASS. E2E Chromium/Keycloak MFA entre sites PASS na porta web 4187; 4173 pertencia a outro agente e a tentativa inicial não iniciou Vite. Verificador confirmou zero roles/schemas sintéticos e serviços/contêineres removidos. [Prova no branch isolado: `docs/04_audit/evidence/PR301-PROD-STARTUP-20260927/proof.json`].
+- `git merge-tree --write-tree HEAD codex/pr301-oidc-client` retornou sem conflito no HEAD consultado; não houve merge, push ou deploy. Teste de startup usa store de sessão sintético e não prova entrypoint corporativo. Integração após PR-L04, IdP corporativo, retenção/purga, rollout compatível e certificado/CI do SHA integrado seguem abertos; produção `NO_GO`.
+
 # PR-301/302 — I22 ACCEPT_LOCAL_PROOF e gate de limpeza — 27/09/2026
 
 - I22 rechecagem independente somente leitura aceitou o commit `8b0f92d`: o verificador retorna 401 ao reapresentar o cookie salvo após logout; no callback entre Keycloak `localhost` e API `127.0.0.1`, observa pending Lax presente e cookie operacional Strict ausente, cria nova sessão e rejeita o cookie anterior. O crítico não rerodou o browser; sua observação restante era apenas a expressão “família antiga”, alterada para “sessão antiga”.

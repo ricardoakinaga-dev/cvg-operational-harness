@@ -1,3 +1,7 @@
+# PR-301 — serving sem DDL validado isoladamente — 27/09/2026
+
+- `I23_ACCEPT_LOCAL / ROOT_INTEGRATION_PENDING / NO_GO`: commit isolado `85c2c7d` rejeita credencial DDL e migração automática na API de produção e executa preflight somente leitura para owner, runtime, grants e schemas. Node 22: 331/2.437 sem skips, PostgreSQL 35/258, E2E Keycloak/Chromium entre sites PASS, I23 `ACCEPT_LOCAL`, 18 hashes em `docs/04_audit/evidence/PR301-PROD-STARTUP-20260927/proof.json` no branch; inventário sintético zero e contêineres encerrados. Integrar após PR-L04; IdP corporativo, retenção/purga, rollout e certificação/CI no SHA integrado permanecem P0 de GO.
+
 # PR-301/302 — prova local I22 aceita; produção ainda bloqueada — 27/09/2026
 
 - `I22_ACCEPT_LOCAL_PROOF / ROOT_INTEGRATION_PENDING / NO_GO`: rechecagem independente aceitou a prova entre sites e replay de cookie salvo (`8b0f92d`). Commit isolado `0b57416` corrige a descrição da sessão antiga e exige limpeza verificável antes de emitir PASS; Node 22 E2E final, tipos/lint/links/higiene PASS. Tentativa com timeout deixou objetos sintéticos descartáveis, removidos manualmente; execução final zerou inventário. Prova no branch: `docs/04_audit/evidence/PR301-302-TRUSTED-E2E-20260927/proof.json`. Integração após PR-L04 e demais gates de produção abertos.

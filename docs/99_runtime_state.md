@@ -1,3 +1,11 @@
+# PR-301 — startup de produção sem DDL, validado no branch isolado — 27/09/2026
+
+- status: `I23_ACCEPT_LOCAL / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: commit isolado `85c2c7d` corrigiu a contradição da SPEC 0144: serving em produção rejeita `DATABASE_MIGRATION_URL` e auto-migration, verifica owner e grants por catálogo somente leitura, login direto como runtime e ausência de `CREATE` no banco e em schemas persistentes. I23 rechecou o diff e deu `ACCEPT_LOCAL`; `.env.example` não injeta DDL por padrão. O navegador usa porta web configurável quando 4173 pertence a outro agente.
+- verification_state: Node 22.23.2, PostgreSQL 16 descartável: suíte 331 arquivos/2.437 testes sem skips, `test:postgres` 35/258, foco de startup e Phase 4A PASS; typecheck, lint, formato, links/higiene PASS. Chromium/Keycloak/API/web entre sites com OTP real PASS; roles/schemas sintéticos zerados, serviços e contêineres removidos. Manifesto com 18 hashes em `docs/04_audit/evidence/PR301-PROD-STARTUP-20260927/proof.json` **no branch isolado**.
+- blocking_state: código ainda fora do checkout compartilhado por claim PR-L04; IdP corporativo, retenção/purga, rollout compatível, certificação/CI no mesmo SHA integrado e decisão humana de release pendentes. O teste de startup usa store de sessão sintético; prova de identidade durável é o E2E local separado.
+- next_action: integrar `codex/pr301-oidc-client` após liberação PR-L04, revisar o candidato integrado e certificar o SHA; manter `NO_GO`.
+
 # PR-301/302 — I22 rechecagem aceita e cleanup verificado — 27/09/2026
 
 - status: `I22_ACCEPT_LOCAL_PROOF / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
