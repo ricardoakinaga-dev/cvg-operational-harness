@@ -1,5 +1,13 @@
 # 0190 — SPEC Validation
 
+## AUD-0578 / PR-010 — prontidão do worker homolog
+
+- [SPEC 0141](0141_homolog_worker_shutdown_readiness.md) está
+  `BUILD_LOCAL_AUTHORIZED` em T2: duas execuções da suíte revelaram um
+  timeout fixo antes de SIGTERM; o teste passará a aguardar o evento de saúde
+  do processo. Não modifica runtime, contrato público nem autorização de
+  produção.
+
 ## AUD-0578 / PR-009 — fatia 2, peso tipográfico de fallback
 
 - [SPEC-PR009-002](0139_visual_font_fallback.md) está `BUILD_LOCAL_AUTHORIZED` em T2: falha visual observada no Verify remoto, reprodução em Ubuntu e regra de correção registrados antes do código. Não altera contrato público nem autoriza produção.

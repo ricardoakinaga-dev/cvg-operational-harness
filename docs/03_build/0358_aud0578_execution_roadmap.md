@@ -25,8 +25,9 @@
 ## Próximo incremento executável
 
 1. **Verificado localmente:** [SPEC curta PR-009](../02_spec/0137_e2e_artifact_isolation.md), E2E 12/12 em `test-results/`, quatro hashes históricos preservados, gates T2 verdes. A PR-009 permanece aberta para JUnit/runId, jornadas e flake visual.
-2. **Em curso:** [SPEC-PR003-002](../02_spec/0138_skip_catalog_rebind.md) reconciliou dois hashes do catálogo de skips; repetir `npm run certify` e `certification:verify` no candidato atualizado.
-3. Validar PR-010/011 no remoto sobre o mesmo SHA. Falha remota não vira PASS local.
+2. **Verificado localmente no candidato anterior:** [SPEC-PR003-002](../02_spec/0138_skip_catalog_rebind.md) reconciliou dois hashes do catálogo de skips; `certify` 16/16 PASS e `certification:verify` exit 0 no candidato `b41f1e2e…`. O candidato com a fonte da [SPEC 0139](../02_spec/0139_visual_font_fallback.md) precisa de nova emissão.
+3. **CI remoto:** Security passou no SHA `996233e`; Verify passou documentação e falhou no screenshot mobile. A SPEC 0139 corrigiu a fonte de fallback e passou no Ubuntu isolado e no host; repetir Verify e Security no mesmo SHA novo antes de fechar PR-010/011.
+4. **F1:** [discovery PR-101](../00_discovery/0019_platform_first_consumer_pilot.md) aberto, sem candidatos a produto definidos; seu gate segue `NOT_VALIDATED`.
 
 Decisões de 27/09/2026: D-03 = A, núcleo governado completo para o primeiro
 piloto; D-04 = primeiro consumidor e contexto a definir no discovery PR-101.

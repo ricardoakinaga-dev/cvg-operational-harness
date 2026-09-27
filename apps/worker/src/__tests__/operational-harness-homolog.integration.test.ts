@@ -385,7 +385,7 @@ describeWithPostgres('homologation durable worker smoke (AUD19-008)', () => {
         `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO ${role}`
       )
       await admin.query(`ALTER ROLE ${role} SET search_path TO ${schema}`)
-      idle = spawnWorker(
+      const activeIdle = spawnWorker(
         homologEnv(role, schema, `homolog-drain-${suffix}`, {
           maxEvents: '10',
           idleWaitMs: 60_000,
@@ -393,9 +393,15 @@ describeWithPostgres('homologation durable worker smoke (AUD19-008)', () => {
           healthIntervalMs: 25
         })
       )
-      await delay(1_500)
-      idle.child.kill('SIGTERM')
-      const exit = await waitForExit(idle, 20_000)
+      idle = activeIdle
+      await waitFor(() =>
+        parseJsonLines(activeIdle.output()).some(
+          (line) =>
+            line.event === 'worker.homolog_health' && line.healthy === true
+        )
+      )
+      activeIdle.child.kill('SIGTERM')
+      const exit = await waitForExit(activeIdle, 20_000)
       expect(exit).toEqual({ code: 0, signal: null })
       const lines = parseJsonLines(idle.output())
       const notReadyIndex = lines.findIndex(

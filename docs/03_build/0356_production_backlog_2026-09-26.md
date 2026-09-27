@@ -123,7 +123,11 @@
 
 ### PR-010 — Fazer o CI rodar no GitHub · P0 · SPEC+BUILD
 
-- Estado: `COMPLETED_LOCAL / WAITING_PUSH` em 27/09/2026 (`3382286`). Causa: `runner.temp` no `env` do job (contexto indisponível ali), que fazia o GitHub rejeitar o arquivo inteiro. `CI_ARTIFACT_DIR` agora vem de `RUNNER_TEMP` num passo; `actionlint` 1.7.7 sem erros; `tests/ci-workflow-contract.test.js` rejeita a forma antiga. Falta o push para ver a barra rodar no GitHub.
+- Atualização de 27/09/2026: o Verify do SHA `996233e` executou os jobs;
+  documentação passou, mas E2E falhou no screenshot mobile por fallback de
+  fonte (SPEC 0139). O novo candidato ainda exige Verify verde; o critério de
+  aceite em `main` permanece pendente.
+- Estado local anterior: `COMPLETED_LOCAL / WAITING_PUSH` (`3382286`). Causa: `runner.temp` no `env` do job (contexto indisponível ali), que fazia o GitHub rejeitar o arquivo inteiro. `CI_ARTIFACT_DIR` agora vem de `RUNNER_TEMP` num passo; `actionlint` 1.7.7 sem erros; `tests/ci-workflow-contract.test.js` rejeita a forma antiga. O push posterior permitiu que a barra rodasse no GitHub.
 
 - Estado em 26/09/2026: `IN_PROGRESS`; implementação local no commit
   `3382286`; o último run remoto ainda é de `02f586b…` e falhou sem jobs.
@@ -139,7 +143,10 @@
 
 ### PR-011 — Triagem do Gitleaks · P0 · SPEC+BUILD
 
-- Estado: `COMPLETED_LOCAL / WAITING_PUSH` em 27/09/2026 (`503ded7`). `.gitleaks.toml` mantém todas as regras padrão e só acrescenta allowlists à regra `generic-api-key` (SHA-256 em `docs/04_audit/evidence/` e arquivos de teste); caso negativo provado (chave com formato AWS em teste continua detectada); 6 achados isolados por fingerprint em `.gitleaksignore`; `GITLEAKS_VERSION: 8.28.0` no `security.yml`; varredura do histórico: sem vazamentos; contrato em `tests/security-scan-config.test.js`.
+- Atualização de 27/09/2026: Security (secret-scan, supply-chain e CodeQL)
+  passou no SHA `996233e` do PR #1. Repetir no mesmo SHA do Verify corrigido;
+  o aceite final em `main` ainda está pendente.
+- Estado local anterior: `COMPLETED_LOCAL / WAITING_PUSH` (`503ded7`). `.gitleaks.toml` mantém todas as regras padrão e só acrescenta allowlists à regra `generic-api-key` (SHA-256 em `docs/04_audit/evidence/` e arquivos de teste); caso negativo provado (chave com formato AWS em teste continua detectada); 6 achados isolados por fingerprint em `.gitleaksignore`; `GITLEAKS_VERSION: 8.28.0` no `security.yml`; varredura do histórico: sem vazamentos; contrato em `tests/security-scan-config.test.js`.
 
 - Estado em 26/09/2026: `IN_PROGRESS`; implementação local no commit
   `503ded7`; teste local de configuração passa, mas o scan real ainda não

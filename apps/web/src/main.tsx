@@ -6,6 +6,7 @@ import {
   createTrustedSessionBootstrap,
   getDefaultWebIdentityMode
 } from './auth/session.ts'
+import '@fontsource-variable/inter/wght.css'
 import './styles.css'
 
 const container = document.getElementById('root')
