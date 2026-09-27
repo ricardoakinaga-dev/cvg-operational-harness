@@ -4,9 +4,14 @@ import { resolve } from 'node:path'
 import { Client } from 'pg'
 
 const version = '0000_operator_session_auth'
+const oidcStateVersion = '0001_oidc_login_state'
 const migrationPath = resolve(
   process.cwd(),
   'packages/persistence/migrations/operator-session/0000_auth.sql'
+)
+const oidcStateMigrationPath = resolve(
+  process.cwd(),
+  'packages/persistence/migrations/operator-session/0001_oidc_state.sql'
 )
 const functionNames = [
   'operator_session_create',
@@ -100,6 +105,10 @@ export async function runOperatorSessionMigrations(
   const quotedSchema = quoteIdentifier(schemaName)
   const template = await readOperatorSessionMigrationTemplate()
   const checksum = createHash('sha256').update(template).digest('hex')
+  const oidcStateTemplate = await readFile(oidcStateMigrationPath, 'utf8')
+  const oidcStateChecksum = createHash('sha256')
+    .update(oidcStateTemplate)
+    .digest('hex')
 
   await client.query('BEGIN')
   try {
@@ -160,6 +169,28 @@ export async function runOperatorSessionMigrations(
         [version, checksum]
       )
     }
+    const oidcStateApplied = await client.query<{ checksum: string }>(
+      `SELECT checksum FROM ${quotedSchema}.schema_migrations
+       WHERE version = $1 FOR UPDATE`,
+      [oidcStateVersion]
+    )
+    if (oidcStateApplied.rows.length > 0) {
+      if (oidcStateApplied.rows[0]?.checksum !== oidcStateChecksum) {
+        throw new Error('OIDC state migration checksum mismatch')
+      }
+    } else {
+      const rendered = renderOperatorSessionMigration(
+        oidcStateTemplate,
+        schemaName,
+        ownerName
+      )
+      await client.query(rendered)
+      await client.query(
+        `INSERT INTO ${quotedSchema}.schema_migrations (version, checksum)
+         VALUES ($1, $2)`,
+        [oidcStateVersion, oidcStateChecksum]
+      )
+    }
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK')
@@ -167,7 +198,7 @@ export async function runOperatorSessionMigrations(
   }
 }
 
-/** Grant only the four entry points, after provisioning a separate API role. */
+/** Grant only the six entry points, after provisioning a separate API role. */
 export async function grantOperatorSessionFunctions(
   client: Client,
   authSchemaName: string,
@@ -194,6 +225,12 @@ export async function grantOperatorSessionFunctions(
     )
     await client.query(
       `GRANT EXECUTE ON FUNCTION ${schema}.operator_session_revoke(bytea) TO ${role}`
+    )
+    await client.query(
+      `GRANT EXECUTE ON FUNCTION ${schema}.oidc_state_reserve(bytea,timestamptz) TO ${role}`
+    )
+    await client.query(
+      `GRANT EXECUTE ON FUNCTION ${schema}.oidc_state_consume(bytea) TO ${role}`
     )
     await client.query('COMMIT')
   } catch (error) {

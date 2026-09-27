@@ -1,3 +1,7 @@
+# PR-301-OIDC-STATE-PG — state OIDC compartilhado — 27/09/2026
+
+- `ACCEPT_LOCAL / INTEGRATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-OIDC-STATE-PG-20260927/proof.json) da migration incremental e consumo único em PostgreSQL 16; I16 aceitou desenho local, I17 aceitou BUILD após negativos de FK extra e timeout. Node 22: 26/26 focados, suíte 325/2.391 sem skips, PostgreSQL 35/258 PASS. PR-301 ainda P0: compor API, completar cliente OIDC/discovery/JWKS, ligar web/Keycloak, executar purge/rollback, E2E confiável e certificado no mesmo SHA.
+
 # PR-301-OIDC-TRANSACTION — contrato de início/callback — 27/09/2026
 
 - `ACCEPT_LOCAL / INTEGRATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-OIDC-TRANSACTION-20260927/proof.json) de state/nonce/PKCE S256 e cookie temporário autenticado; I15 rechecagem aceitou após corrigir replay e callback exato do Keycloak. Node 22: 6/6 focados, suíte geral 305/2.226 PASS (20/154 skipped sem banco), PostgreSQL 35/258 PASS. PR-301 permanece P0: implementar state store durável e atômico, cliente OIDC/discovery/JWKS, rotas e sessão/web confiáveis, E2E e certificação no mesmo SHA.

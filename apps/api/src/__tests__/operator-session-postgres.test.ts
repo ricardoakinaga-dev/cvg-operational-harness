@@ -5,7 +5,15 @@ import {
   createOpaqueOperatorSessionId,
   parseOperatorSessionCookie
 } from '../operator-session.ts'
-import { PostgresOperatorSessionStore } from '../operator-session-postgres.ts'
+import {
+  createPostgresOperatorSessionPool,
+  PostgresOperatorSessionStore
+} from '../operator-session-postgres.ts'
+import { PostgresOidcLoginStateStore } from '../oidc-state-postgres.ts'
+import {
+  readOidcLoginCallback,
+  startOidcLogin
+} from '../oidc-login-transaction.ts'
 import { assertPostgresOperatorSessionBoundary } from '../operator-session-preflight.ts'
 import {
   grantOperatorSessionFunctions,
@@ -75,8 +83,8 @@ async function withAuthDatabase(
     const sessionUrl = new URL(testDatabaseUrl as string)
     sessionUrl.username = sessionRole
     sessionUrl.password = 'synthetic_session'
-    pool = new Pool({ connectionString: sessionUrl.toString() })
-    otherPool = new Pool({ connectionString: sessionUrl.toString() })
+    pool = createPostgresOperatorSessionPool(sessionUrl.toString())
+    otherPool = createPostgresOperatorSessionPool(sessionUrl.toString())
     await callback({
       schema,
       productSchema,
@@ -469,6 +477,288 @@ describe('PostgreSQL operator session boundary', () => {
               expectedSessionRole: sessionRole
             })
           ).rejects.toThrow('auth table triggers or rules')
+        }
+      )
+    }
+  )
+})
+
+describe('PostgreSQL OIDC login state boundary', () => {
+  it('rejects pools with no connection or query time bound', async () => {
+    const unbounded = new Pool({
+      connectionString: testDatabaseUrl ?? 'postgresql://127.0.0.1/unused'
+    })
+    try {
+      expect(
+        () => new PostgresOidcLoginStateStore(unbounded, 'cvg_auth_test')
+      ).toThrow('bounded auth pool')
+    } finally {
+      await unbounded.end()
+    }
+  })
+
+  itWithPostgres(
+    'consumes a browser transaction only once across two pools',
+    async () => {
+      await withAuthDatabase(async ({ schema, pool, otherPool }) => {
+        const stateA = new PostgresOidcLoginStateStore(pool, schema)
+        const stateB = new PostgresOidcLoginStateStore(otherPool, schema)
+        const options = {
+          issuer: 'http://127.0.0.1:8087/realms/cvg-local',
+          authorizationEndpoint:
+            'http://127.0.0.1:8087/realms/cvg-local/protocol/openid-connect/auth',
+          clientId: 'cvg-local-operator',
+          redirectUri: 'http://127.0.0.1:3000/v1/auth/oidc/callback',
+          cookieKey: Buffer.alloc(32, 21),
+          stateStore: stateA
+        }
+        const started = await startOidcLogin(options)
+        const state = new URL(started.authorizationUrl).searchParams.get(
+          'state'
+        )!
+        const cookie = started.setCookie.split(';')[0]!
+        const attempts = await Promise.allSettled([
+          readOidcLoginCallback(cookie, state, {
+            ...options,
+            stateStore: stateA
+          }),
+          readOidcLoginCallback(cookie, state, {
+            ...options,
+            stateStore: stateB
+          })
+        ])
+        expect(attempts.map((item) => item.status).sort()).toEqual([
+          'fulfilled',
+          'rejected'
+        ])
+        const accepted = attempts.find((item) => item.status === 'fulfilled')
+        expect(accepted).toMatchObject({
+          value: { nonce: expect.any(String), codeVerifier: expect.any(String) }
+        })
+        await expect(
+          readOidcLoginCallback(cookie, state, {
+            ...options,
+            stateStore: stateB
+          })
+        ).rejects.toThrow('OIDC login transaction is invalid')
+      })
+    }
+  )
+
+  itWithPostgres(
+    'rejects direct DML, malformed digests and excessive expiry',
+    async () => {
+      await withAuthDatabase(async ({ schema, pool }) => {
+        const store = new PostgresOidcLoginStateStore(pool, schema)
+        const stateDigest = digest().toString('hex')
+        expect(await store.reserve(stateDigest, Date.now() + 60_000)).toBe(true)
+        expect(await store.reserve(stateDigest, Date.now() + 60_000)).toBe(
+          false
+        )
+        expect(await store.consume(stateDigest)).toBe(true)
+        expect(await store.consume(stateDigest)).toBe(false)
+        await expect(
+          store.reserve('not-hex', Date.now() + 60_000)
+        ).rejects.toThrow()
+        expect(await store.consume('not-hex')).toBe(false)
+        await expect(
+          store.reserve(digest().toString('hex'), Date.now() + 310_000)
+        ).rejects.toThrow()
+        await expect(
+          pool.query(`SELECT * FROM ${schema}.oidc_login_states`)
+        ).rejects.toMatchObject({ code: '42501' })
+        await expect(
+          pool.query(`SELECT ${schema}.oidc_state_reserve($1,$2)`, [
+            Buffer.alloc(31),
+            new Date(Date.now() + 60_000)
+          ])
+        ).rejects.toMatchObject({ code: '22023' })
+      })
+    }
+  )
+
+  itWithPostgres(
+    'keeps a reserved state after the first API pool closes',
+    async () => {
+      await withAuthDatabase(async ({ schema, pool, otherPool }) => {
+        const first = new PostgresOidcLoginStateStore(pool, schema)
+        const restarted = new PostgresOidcLoginStateStore(otherPool, schema)
+        const stateDigest = digest().toString('hex')
+        expect(await first.reserve(stateDigest, Date.now() + 60_000)).toBe(true)
+        await pool.end()
+        expect(await restarted.consume(stateDigest)).toBe(true)
+        expect(await restarted.consume(stateDigest)).toBe(false)
+      })
+    }
+  )
+
+  itWithPostgres(
+    'fails closed when the dedicated state pool is unavailable',
+    async () => {
+      await withAuthDatabase(async ({ schema, pool }) => {
+        const store = new PostgresOidcLoginStateStore(pool, schema)
+        await pool.end()
+        await expect(
+          store.reserve(digest().toString('hex'), Date.now() + 60_000)
+        ).rejects.toThrow()
+        await expect(store.consume(digest().toString('hex'))).rejects.toThrow()
+      })
+    }
+  )
+
+  itWithPostgres(
+    'enforces the two-second database operation bound',
+    async () => {
+      await withAuthDatabase(async ({ schema, pool }) => {
+        new PostgresOidcLoginStateStore(pool, schema)
+        const start = Date.now()
+        await expect(pool.query('SELECT pg_sleep(3)')).rejects.toThrow()
+        expect(Date.now() - start).toBeLessThan(2_900)
+      })
+    }
+  )
+
+  itWithPostgres(
+    'denies consumption after expiry while waiting on a row lock',
+    async () => {
+      await withAuthDatabase(async ({ schema, otherPool, migrator }) => {
+        const store = new PostgresOidcLoginStateStore(otherPool, schema)
+        const stateDigest = digest().toString('hex')
+        expect(await store.reserve(stateDigest, Date.now() + 1_200)).toBe(true)
+        await migrator.query('BEGIN')
+        try {
+          await migrator.query(
+            `UPDATE ${schema}.oidc_login_states SET expires_at = expires_at WHERE state_digest = $1`,
+            [Buffer.from(stateDigest, 'hex')]
+          )
+          const waiting = store.consume(stateDigest)
+          await new Promise((resolve) => setTimeout(resolve, 1_400))
+          await migrator.query('COMMIT')
+          expect(await waiting).toBe(false)
+        } catch (error) {
+          await migrator.query('ROLLBACK').catch(() => undefined)
+          throw error
+        }
+      })
+    }
+  )
+
+  itWithPostgres(
+    'applies 0001 after an existing 0000 marker and rejects checksum drift',
+    async () => {
+      await withAuthDatabase(
+        async ({ schema, productSchema, pool, migrator, sessionRole }) => {
+          await migrator.query(
+            `DROP FUNCTION ${schema}.oidc_state_consume(bytea)`
+          )
+          await migrator.query(
+            `DROP FUNCTION ${schema}.oidc_state_reserve(bytea,timestamptz)`
+          )
+          await migrator.query(`DROP TABLE ${schema}.oidc_login_states`)
+          await migrator.query(
+            `DELETE FROM ${schema}.schema_migrations WHERE version = '0001_oidc_login_state'`
+          )
+          await runOperatorSessionMigrations(migrator, schema, productSchema)
+          await grantOperatorSessionFunctions(migrator, schema, sessionRole)
+          await assertPostgresOperatorSessionBoundary(pool, {
+            authSchemaName: schema,
+            productSchemaName: productSchema,
+            expectedSessionRole: sessionRole
+          })
+          await migrator.query(
+            `UPDATE ${schema}.schema_migrations SET checksum = 'wrong' WHERE version = '0001_oidc_login_state'`
+          )
+          await expect(
+            runOperatorSessionMigrations(migrator, schema, productSchema)
+          ).rejects.toThrow('OIDC state migration checksum mismatch')
+        }
+      )
+    }
+  )
+
+  itWithPostgres(
+    'detects OIDC state schema and privilege drift before serving',
+    async () => {
+      await withAuthDatabase(
+        async ({ schema, productSchema, pool, admin, sessionRole }) => {
+          const verify = () =>
+            assertPostgresOperatorSessionBoundary(pool, {
+              authSchemaName: schema,
+              productSchemaName: productSchema,
+              expectedSessionRole: sessionRole
+            })
+          await verify()
+          await admin.query(
+            `ALTER TABLE ${schema}.oidc_login_states
+             ADD CONSTRAINT oidc_state_family_fk FOREIGN KEY (state_digest)
+             REFERENCES ${schema}.operator_session_families(family_id)`
+          )
+          await expect(verify()).rejects.toThrow('primary or foreign keys')
+          await admin.query(
+            `ALTER TABLE ${schema}.oidc_login_states DROP CONSTRAINT oidc_state_family_fk`
+          )
+          await verify()
+          await admin.query(
+            `ALTER TABLE ${schema}.oidc_login_states ALTER COLUMN expires_at SET DEFAULT clock_timestamp()`
+          )
+          await expect(verify()).rejects.toThrow('auth column inventory')
+          await admin.query(
+            `ALTER TABLE ${schema}.oidc_login_states ALTER COLUMN expires_at DROP DEFAULT`
+          )
+          await verify()
+
+          await admin.query(
+            `GRANT SELECT ON ${schema}.oidc_login_states TO ${sessionRole}`
+          )
+          await expect(verify()).rejects.toThrow('auth tables or privileges')
+          await admin.query(
+            `REVOKE SELECT ON ${schema}.oidc_login_states FROM ${sessionRole}`
+          )
+          await verify()
+
+          await admin.query(
+            `DROP INDEX ${schema}.oidc_login_states_expires_at_idx`
+          )
+          await expect(verify()).rejects.toThrow('session index inventory')
+          await admin.query(
+            `CREATE INDEX oidc_login_states_expires_at_idx ON ${schema}.oidc_login_states (expires_at)`
+          )
+          await verify()
+
+          await admin.query(
+            `ALTER TABLE ${schema}.oidc_login_states NO FORCE ROW LEVEL SECURITY`
+          )
+          await expect(verify()).rejects.toThrow('auth tables or privileges')
+          await admin.query(
+            `ALTER TABLE ${schema}.oidc_login_states FORCE ROW LEVEL SECURITY`
+          )
+          await verify()
+
+          await admin.query(
+            `ALTER TABLE ${schema}.oidc_login_states DROP CONSTRAINT oidc_login_states_expiry_check`
+          )
+          await expect(verify()).rejects.toThrow('session check constraints')
+          await admin.query(
+            `ALTER TABLE ${schema}.oidc_login_states ADD CONSTRAINT oidc_login_states_expiry_check
+             CHECK (expires_at > created_at AND expires_at <= created_at + interval '5 minutes')`
+          )
+          await verify()
+
+          await admin.query(
+            `GRANT EXECUTE ON FUNCTION ${schema}.oidc_state_consume(bytea) TO PUBLIC`
+          )
+          await expect(verify()).rejects.toThrow('function oidc_state_consume')
+          await admin.query(
+            `REVOKE EXECUTE ON FUNCTION ${schema}.oidc_state_consume(bytea) FROM PUBLIC`
+          )
+          await verify()
+
+          await admin.query(
+            `CREATE OR REPLACE FUNCTION ${schema}.oidc_state_consume(p_digest bytea)
+             RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+             SET search_path = pg_catalog, pg_temp AS 'BEGIN RETURN true; END;'`
+          )
+          await expect(verify()).rejects.toThrow('function oidc_state_consume')
         }
       )
     }

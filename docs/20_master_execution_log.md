@@ -1,3 +1,7 @@
+# PR-301-OIDC-STATE-PG — BUILD local e críticas I16/I17 — 27/09/2026
+
+- Sob [SPEC 0144](02_spec/0144_trusted_operator_session_production.md) aprovada e claim próprio, executei migration incremental `0001`, reserve/consume atomicamente no PostgreSQL e endureci preflight e limite de pool. I16 rejeitou rollback/relógio e aceitou o desenho revisado; I17 rejeitou FK extra e pool sem timeout, corrigidos e aceitos. [Prova](04_audit/evidence/PR301-OIDC-STATE-PG-20260927/proof.json): Node 22, PostgreSQL focado 26/26, suíte geral com banco 325/2.391 sem skips, `test:postgres` 35/258, typecheck/lint PASS. Banco sintético removido. Composição/API/web, cliente OIDC, purge, migração real e certificação permanecem abertos; produção `NO_GO`.
+
 # PR-301-OIDC-TRANSACTION — BUILD local e crítica I15 — 27/09/2026
 
 - Sob SPEC 0144 aprovada e claim próprio, implementei o início do login OIDC com PKCE S256, state e nonce ligados a cookie temporário autenticado, e callback com consumo atômico obrigatório de digest de state. I15 rejeitou replay e redirect divergente; corrigi, e a rechecagem aceitou a fatia local. [Prova](04_audit/evidence/PR301-OIDC-TRANSACTION-20260927/proof.json): Node 22, 6/6 focados, 305 arquivos/2.226 testes unitários PASS (20/154 skipped sem banco), PostgreSQL descartável 35/258 PASS, typecheck/lint PASS. Container removido. Store distribuído real, discovery/JWKS, token exchange, rotas/web e E2E seguem abertos; produção `NO_GO`.

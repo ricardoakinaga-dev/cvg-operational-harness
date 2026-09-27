@@ -7,6 +7,8 @@ type OperatorSessionFunctionName =
   | 'operator_session_get'
   | 'operator_session_replace'
   | 'operator_session_revoke'
+  | 'oidc_state_reserve'
+  | 'oidc_state_consume'
 
 function assertOperatorAuthSchemaName(value: string): string {
   if (
@@ -30,14 +32,23 @@ async function expectedFunctionBodies(
     ),
     'utf8'
   )
-  const rendered = template
+  const oidcStateTemplate = await readFile(
+    resolve(
+      process.cwd(),
+      'packages/persistence/migrations/operator-session/0001_oidc_state.sql'
+    ),
+    'utf8'
+  )
+  const rendered = `${template}\n${oidcStateTemplate}`
     .replaceAll('__AUTH_SCHEMA__', `"${schema}"`)
     .replaceAll('__OWNER_ROLE__', `"${owner.replaceAll('"', '""')}"`)
   const bodies = {} as Record<OperatorSessionFunctionName, string>
   for (const name of Object.keys(
     functionContracts
   ) as OperatorSessionFunctionName[]) {
-    const delimiter = `$cvg_${name.replace('operator_session_', '')}$`
+    const delimiter = name.startsWith('operator_session_')
+      ? `$cvg_${name.replace('operator_session_', '')}$`
+      : `$cvg_${name}$`
     const start = rendered.indexOf(`AS ${delimiter}`)
     const end = rendered.indexOf(delimiter, start + `AS ${delimiter}`.length)
     if (start < 0 || end < 0) invalid(`missing canonical body for ${name}`)
@@ -69,6 +80,14 @@ const functionContracts: Record<
   operator_session_revoke: {
     arguments: 'bytea',
     result: 'void'
+  },
+  oidc_state_reserve: {
+    arguments: 'bytea,timestamptz',
+    result: 'boolean'
+  },
+  oidc_state_consume: {
+    arguments: 'bytea',
+    result: 'boolean'
   }
 }
 
@@ -261,7 +280,8 @@ export async function assertPostgresOperatorSessionBoundary(
   const expectedRelations = new Set([
     'schema_migrations',
     'operator_session_families',
-    'operator_sessions'
+    'operator_sessions',
+    'oidc_login_states'
   ])
   if (
     relations.rows.length !== expectedRelations.size ||
@@ -279,6 +299,73 @@ export async function assertPostgresOperatorSessionBoundary(
     )
   ) {
     invalid('auth tables or privileges')
+  }
+
+  const columns = await pool.query<{
+    table_name: string
+    name: string
+    data_type: string
+    not_null: boolean
+    default_expression: string | null
+    identity: string
+    generated: string
+  }>(
+    `SELECT c.relname AS table_name, a.attname AS name,
+            format_type(a.atttypid, a.atttypmod) AS data_type,
+            a.attnotnull AS not_null,
+            pg_get_expr(d.adbin, d.adrelid) AS default_expression,
+            a.attidentity AS identity, a.attgenerated AS generated
+     FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+     WHERE n.nspname = $1 AND c.relkind = 'r'
+       AND a.attnum > 0 AND NOT a.attisdropped`,
+    [schemaName]
+  )
+  const expectedColumns = new Map<
+    string,
+    readonly [string, boolean, string | null]
+  >([
+    ['schema_migrations.version', ['text', true, null]],
+    ['schema_migrations.checksum', ['text', true, null]],
+    [
+      'schema_migrations.applied_at',
+      ['timestamp with time zone', true, 'clock_timestamp()']
+    ],
+    ['operator_session_families.family_id', ['bytea', true, null]],
+    [
+      'operator_session_families.revoked_at',
+      ['timestamp with time zone', false, null]
+    ],
+    ['operator_sessions.token_digest', ['bytea', true, null]],
+    ['operator_sessions.family_id', ['bytea', true, null]],
+    ['operator_sessions.tenant_id', ['text', true, null]],
+    ['operator_sessions.operator_id', ['text', true, null]],
+    ['operator_sessions.role', ['text', true, null]],
+    ['operator_sessions.created_at', ['timestamp with time zone', true, null]],
+    ['operator_sessions.expires_at', ['timestamp with time zone', true, null]],
+    ['operator_sessions.revoked_at', ['timestamp with time zone', false, null]],
+    ['oidc_login_states.state_digest', ['bytea', true, null]],
+    ['oidc_login_states.created_at', ['timestamp with time zone', true, null]],
+    ['oidc_login_states.expires_at', ['timestamp with time zone', true, null]]
+  ])
+  if (
+    columns.rows.length !== expectedColumns.size ||
+    columns.rows.some((column) => {
+      const expected = expectedColumns.get(
+        `${column.table_name}.${column.name}`
+      )
+      return (
+        !expected ||
+        column.data_type !== expected[0] ||
+        column.not_null !== expected[1] ||
+        column.default_expression !== expected[2] ||
+        column.identity !== '' ||
+        column.generated !== ''
+      )
+    })
+  ) {
+    invalid('auth column inventory')
   }
 
   const rewrites = await pool.query<{ triggers: number; rules: number }>(
@@ -317,12 +404,13 @@ export async function assertPostgresOperatorSessionBoundary(
     [schemaName]
   )
   if (
-    policies.rows.length !== 2 ||
+    policies.rows.length !== 3 ||
     policies.rows.some(
       (policy) =>
         ![
           ['operator_session_families', 'operator_session_families_owner_only'],
-          ['operator_sessions', 'operator_sessions_owner_only']
+          ['operator_sessions', 'operator_sessions_owner_only'],
+          ['oidc_login_states', 'oidc_login_states_owner_only']
         ].some(
           ([table, name]) => policy.table_name === table && policy.name === name
         ) ||
@@ -354,11 +442,14 @@ export async function assertPostgresOperatorSessionBoundary(
     [schemaName]
   )
   const requiredConstraints = [
+    ['schema_migrations', 'p', 'version', null],
     ['operator_session_families', 'p', 'family_id', null],
     ['operator_sessions', 'p', 'token_digest', null],
-    ['operator_sessions', 'f', 'family_id', 'operator_session_families']
+    ['operator_sessions', 'f', 'family_id', 'operator_session_families'],
+    ['oidc_login_states', 'p', 'state_digest', null]
   ] as const
   if (
+    constraints.rows.length !== requiredConstraints.length ||
     requiredConstraints.some(
       ([table, kind, column, referenced]) =>
         !constraints.rows.some(
@@ -404,7 +495,12 @@ export async function assertPostgresOperatorSessionBoundary(
       'operator_sessions_expires_at_idx',
       ['operator_sessions', 'expires_at', false]
     ],
-    ['operator_sessions_family_idx', ['operator_sessions', 'family_id', false]]
+    ['operator_sessions_family_idx', ['operator_sessions', 'family_id', false]],
+    ['oidc_login_states_pkey', ['oidc_login_states', 'state_digest', true]],
+    [
+      'oidc_login_states_expires_at_idx',
+      ['oidc_login_states', 'expires_at', false]
+    ]
   ])
   if (
     indexes.rows.length !== expectedIndexes.size ||
@@ -485,6 +581,17 @@ export async function assertPostgresOperatorSessionBoundary(
         'operator_sessions',
         "CHECK (((expires_at > created_at) AND (expires_at <= (created_at + '00:15:00'::interval))))"
       ]
+    ],
+    [
+      'oidc_login_states_state_digest_check',
+      ['oidc_login_states', 'CHECK ((octet_length(state_digest) = 32))']
+    ],
+    [
+      'oidc_login_states_expiry_check',
+      [
+        'oidc_login_states',
+        "CHECK (((expires_at > created_at) AND (expires_at <= (created_at + '00:05:00'::interval))))"
+      ]
     ]
   ])
   if (
@@ -521,7 +628,7 @@ export async function assertPostgresOperatorSessionBoundary(
      WHERE n.nspname = $1`,
     [schemaName]
   )
-  if (functions.rows.length !== 4) invalid('function inventory')
+  if (functions.rows.length !== 6) invalid('function inventory')
   for (const [name, contract] of Object.entries(functionContracts) as Array<
     [
       OperatorSessionFunctionName,

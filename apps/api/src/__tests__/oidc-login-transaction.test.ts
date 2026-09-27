@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   clearOidcLoginCookie,
+  OidcLoginStateUnavailableError,
   readOidcLoginCallback,
   startOidcLogin,
   type OidcLoginTransactionOptions
@@ -120,8 +121,49 @@ describe('OIDC browser login transaction', () => {
       })
     ).rejects.toThrow()
     await expect(
-      readOidcLoginCallback(cookie, state, { ...options, now: () => now - 1 })
+      readOidcLoginCallback(cookie, state, {
+        ...options,
+        now: () => now - 30_001
+      })
     ).rejects.toThrow()
+  })
+
+  it('accepts bounded replica clock skew while retaining the shared state check', async () => {
+    const started = await startOidcLogin(options)
+    const state = new URL(started.authorizationUrl).searchParams.get('state')!
+    await expect(
+      readOidcLoginCallback(cookieValue(started.setCookie), state, {
+        ...options,
+        now: () => now - 30_000
+      })
+    ).resolves.toMatchObject({ nonce: expect.any(String) })
+  })
+
+  it('reports state-store outage without exposing its error or consuming the state', async () => {
+    const unavailable = {
+      async reserve(): Promise<boolean> {
+        throw new Error('synthetic confidential connection detail')
+      },
+      async consume(): Promise<boolean> {
+        throw new Error('synthetic confidential connection detail')
+      }
+    }
+    await expect(
+      startOidcLogin({ ...options, stateStore: unavailable })
+    ).rejects.toBeInstanceOf(OidcLoginStateUnavailableError)
+
+    const started = await startOidcLogin(options)
+    const state = new URL(started.authorizationUrl).searchParams.get('state')!
+    const cookie = cookieValue(started.setCookie)
+    await expect(
+      readOidcLoginCallback(cookie, state, {
+        ...options,
+        stateStore: unavailable
+      })
+    ).rejects.toThrow('OIDC login state store is unavailable')
+    expect(await readOidcLoginCallback(cookie, state, options)).toMatchObject({
+      nonce: expect.any(String)
+    })
   })
 
   it('rejects an unsafe authorization endpoint and a weak cookie key', async () => {

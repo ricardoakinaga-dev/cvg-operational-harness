@@ -1,3 +1,11 @@
+# PR-301-OIDC-STATE-PG — persistência compartilhada do state — 27/09/2026
+
+- status: `OIDC_STATE_STORE_ACCEPTED_LOCAL / API_OIDC_INTEGRATION_PENDING`; produção `NO_GO`.
+- last_completed_action: implementei migration incremental `0001` de state OIDC, duas funções `SECURITY DEFINER` de reserva e consumo atômico, adapter PostgreSQL com pool limitado e preflight fechado de tabelas, colunas, ACL/RLS, constraints, índices e corpos das seis funções. O callback diferencia indisponibilidade do store de state inválido e tolera até 30 segundos de diferença positiva de relógio.
+- verification_state: [prova](04_audit/evidence/PR301-OIDC-STATE-PG-20260927/proof.json): Node 22, PostgreSQL 16 focado 26/26, suíte geral com banco 325 arquivos/2.391 testes PASS sem skips, `test:postgres` 35/258 PASS, typecheck/lint PASS. I16 `ACCEPT_LOCAL_DESIGN` e I17 `ACCEPT_LOCAL` após correções; banco descartável removido.
+- blocking_state: faltam composição de serving e rotas/web sob claim PR-L04, cliente OIDC com discovery/JWKS/token, E2E confiável, purge/retensão aprovada, migração de ambiente com compatibilidade/rollback e certificação do candidato. Sem produção.
+- next_action: quando PR-L04 liberar caminhos, integrar store, IdP local e sessão confiável, testar HTTP/navegador e reemitir certificação; em paralelo fechar cliente OIDC e purge em claims próprios.
+
 # PR-301-OIDC-TRANSACTION — transação PKCE isolada — 27/09/2026
 
 - status: `OIDC_TRANSACTION_ACCEPTED_LOCAL / DISTRIBUTED_STORE_AND_API_INTEGRATION_PENDING`; produção `NO_GO`.

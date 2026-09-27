@@ -8,6 +8,7 @@ import {
 
 const COOKIE_NAME = 'cvg_oidc_pending'
 const LOGIN_AGE_MS = 5 * 60 * 1_000
+const MAX_REPLICA_CLOCK_SKEW_MS = 30_000
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
 const SEALED_PATTERN = /^[A-Za-z0-9_-]{100,2048}$/
 
@@ -26,6 +27,13 @@ export interface OidcLoginTransactionOptions {
 export interface OidcLoginStateStore {
   reserve(stateDigest: string, expiresAt: number): Promise<boolean>
   consume(stateDigest: string): Promise<boolean>
+}
+
+export class OidcLoginStateUnavailableError extends Error {
+  constructor() {
+    super('OIDC login state store is unavailable')
+    this.name = 'OidcLoginStateUnavailableError'
+  }
 }
 
 export interface StartedOidcLogin {
@@ -86,12 +94,16 @@ export async function startOidcLogin(
   const sealed = Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString(
     'base64url'
   )
-  if (
-    !(await options.stateStore.reserve(
+  let reserved: boolean
+  try {
+    reserved = await options.stateStore.reserve(
       stateDigest(payload.state),
       payload.issuedAt + LOGIN_AGE_MS
-    ))
-  ) {
+    )
+  } catch {
+    throw new OidcLoginStateUnavailableError()
+  }
+  if (!reserved) {
     throw new Error('OIDC login state could not be reserved')
   }
   return {
@@ -115,6 +127,7 @@ export async function readOidcLoginCallback(
   ) {
     throw new Error('OIDC login transaction is invalid')
   }
+  let pending: PendingOidcLogin
   try {
     const bytes = Buffer.from(sealed, 'base64url')
     if (bytes.length < 12 + 16 + 1 || bytes.toString('base64url') !== sealed) {
@@ -140,7 +153,7 @@ export async function readOidcLoginCallback(
       !TOKEN_PATTERN.test(payload.codeVerifier ?? '') ||
       !Number.isSafeInteger(payload.issuedAt) ||
       !Number.isSafeInteger(now) ||
-      (payload.issuedAt ?? 0) > now ||
+      (payload.issuedAt ?? 0) > now + MAX_REPLICA_CLOCK_SKEW_MS ||
       now - (payload.issuedAt ?? 0) >= LOGIN_AGE_MS ||
       !timingSafeEqual(
         Buffer.from(payload.state ?? '', 'ascii'),
@@ -149,13 +162,18 @@ export async function readOidcLoginCallback(
     ) {
       throw new Error('invalid payload')
     }
-    if (!(await options.stateStore.consume(stateDigest(returnedState)))) {
-      throw new Error('state already consumed')
-    }
-    return { nonce: payload.nonce!, codeVerifier: payload.codeVerifier! }
+    pending = { nonce: payload.nonce!, codeVerifier: payload.codeVerifier! }
   } catch {
     throw new Error('OIDC login transaction is invalid')
   }
+  let consumed: boolean
+  try {
+    consumed = await options.stateStore.consume(stateDigest(returnedState))
+  } catch {
+    throw new OidcLoginStateUnavailableError()
+  }
+  if (!consumed) throw new Error('OIDC login transaction is invalid')
+  return pending
 }
 
 export function clearOidcLoginCookie(
