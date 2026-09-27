@@ -1,3 +1,11 @@
+# PR-306 — modelo de ameaças de integrações — 27/09/2026
+
+- status: `DOCUMENTED_LOCAL / FACT_CHECK_ACCEPTED`; produção `NO_GO`.
+- last_completed_action: atualizei [PHASE10_THREAT_MODEL](10_phase10/PHASE10_THREAT_MODEL.md) com fronteiras de canal, provider, RAG, agenda, identidade, ferramentas e CI; cada ameaça registra controle local, teste existente e lacuna para staging. I1 rejeitou quatro afirmações/omissões, corrigi o texto e I2 aceitou o inventário local.
+- verification_state: `docs:check-links` PASS, crítica I2 read-only ACCEPT; sem teste amplo por ser mudança documental; dados sintéticos e integrações reais não ativadas.
+- blocking_state: D-05/06/07/09, PR-301/302, PR-501–505, provenance T3 e as condições de GO seguem abertos. Modelo não substitui testes remotos, pentest ou decisões humanas.
+- next_action: fechar claim documental e continuar a remediação independente; PR-504/505 guardam os testes faltantes de handoff e egress de tool.
+
 # PR-009-PROV — SPEC T3 da âncora externa — 27/09/2026
 
 - status: `SPEC_PROPOSED / WAITING_HUMAN_REVIEW`; produção `NO_GO`.

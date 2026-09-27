@@ -552,6 +552,13 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-306 — Threat model para integrações reais · P1 · DOC
 
+- Estado: `DOCUMENTED_LOCAL / FACT_CHECK_ACCEPTED` em 27/09/2026.
+  O [modelo de ameaças](../10_phase10/PHASE10_THREAT_MODEL.md) agora vincula
+  canal, provider, RAG, agenda, IdP/sessão e evidência de CI a controle,
+  teste negativo existente e prova ainda necessária em staging. Ele
+  diferencia explicitamente testes sintéticos de integração real e remove
+  a aparência de risco P2 aceito. A crítica I1 encontrou quatro lacunas
+  factuais corrigidas; I2 aceitou o inventário local. Produção `NO_GO`.
 - O que/onde: atualizar `docs/10_phase10/PHASE10_THREAT_MODEL.md` com canal,
   provider, RAG, agenda e IdP (prompt injection, exfiltração por ferramenta,
   spoofing de webhook, abuso de custo).
@@ -645,11 +652,18 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-504 — Conhecimento com fonte aprovada (RA26-10) · P1 · PRD + SPEC+BUILD
 
+- Achado PR-306: sem evidência aprovada, a conversa atual emite texto de
+  indisponibilidade e permanece `ACTIVE`; o handoff exigido abaixo ainda
+  precisa de teste e implementação no caminho publicado. O catálogo local
+  não vincula conteúdo a aprovador/hash institucional.
 - Pronto: resposta só com fonte publicada e citada; fonte revogada bloqueia;
   ausência de fonte gera handoff.
 
 ### PR-505 — Efeito externo genérico com rascunho e approval · P1 · PRD + SPEC+BUILD
 
+- Achado PR-306: validação e tamanho do input de tool não restringem destino
+  externo. A SPEC deve incluir allowlist de egress por capability/tenant e
+  teste negativo de tool que tenta enviar segredo a domínio não permitido.
 - O que: a plataforma oferece aos produtos um padrão único para efeitos em
   sistemas externos (leitura livre; escrita sempre como rascunho com approval
   humano, idempotência e effect journal). Substitui o fluxo de agenda da

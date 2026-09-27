@@ -1,3 +1,8 @@
+# PR-306 — revisão documental das ameaças de integração — 27/09/2026
+
+- [Modelo de ameaças](10_phase10/PHASE10_THREAT_MODEL.md) reescrito para ligar canal, provider, RAG, agenda, identidade, ferramentas e CI a controles, testes negativos e prova faltante. Um inventário independente de código/testes confirmou os caminhos citados.
+- Crítica factual I1 retornou `REJECT`: handoff sem fonte superestimado no fluxo de conversa, teste SSRF interpretado como minimização de payload, teste de reagendamento superestimado e exfiltração por tool ausente. O documento foi corrigido: conversa sem fonte fica `ACTIVE` com texto de indisponibilidade; classificação declarada e SSRF não provam segredo mal classificado; reagendamento com capability correspondente e política de destino de tool constam como testes pendentes. `docs:check-links` PASS após correção. I2 somente leitura retornou `ACCEPT` para o inventário local, sem aprovar integração real. PR-504/505 receberam as lacunas executáveis; nenhuma integração foi ativada.
+
 # PR-009-PROV — recon da fronteira de CI e SPEC T3 — 27/09/2026
 
 - `verify.yml` usa `CI_RUN_ID` derivado do contexto GitHub, executa os gates num job e envia o diretório mutável depois da finalização. O repositório remoto está público; a documentação oficial do GitHub descreve outputs de passos e atestações. A [SPEC 0147](02_spec/0147_ci_bar_external_provenance.md) propõe selo externo dos hashes/IDs por gate, finalização vinculada ao runner e atestação do manifesto/digest, com limites da ameaça declarados.
