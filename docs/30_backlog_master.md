@@ -1,3 +1,8 @@
+# PR-301/402 — rollout de purge e topologia de cookie — 27/09/2026
+
+- `SPEC_REVIEW_READY / DPO_POLICY_PENDING / NO_GO`: [SPEC 0149](02_spec/0149_operator_auth_purge.md) inclui matriz A0–A4, runner versionado, attest da policy, comparação/lock antes de purge e isolamento `READ COMMITTED`; I25 `ACCEPT_SPEC_REVIEW_READY` após dois P1 corrigidos. DP-01 a DP-06, revisão T3 humana, código, PostgreSQL, staging e certificado do candidato integrado pendentes.
+- I26 `ACCEPT_LOCAL` no branch OIDC `85c2c7d`: logout por digest antigo é contrato aprovado de revogação da família; P3 local de cookie visível ao servidor Vite no mesmo hostname. Para GO, provar host-only `Secure; HttpOnly; SameSite=Strict` com console/API em hosts HTTPS distintos do mesmo site, cookie pendente Lax no callback e cookie operacional ausente nele. PR-L04 ainda mantém integração root pendente.
+
 # PR-301/402 — retenção OIDC, SPEC 0149 pronta para revisão — 27/09/2026
 
 - `SPEC_REVIEW_READY / DPO_POLICY_PENDING / NO_GO`: [SPEC 0149](02_spec/0149_operator_auth_purge.md) e inventário DB-09 registram purge de state/sessões/famílias, isolamento do job e rollout. I24 `ACCEPT_SPEC_REVIEW_READY` após corrigir policy sem domínio e risco de família ativa sem limite. DP-01 a DP-06 e revisão T3 explícita são gates antes de BUILD; nenhum purge foi executado. PR-301/402 permanecem P0 para GO.

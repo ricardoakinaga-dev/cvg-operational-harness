@@ -1,3 +1,11 @@
+# PR-301/402 — rollout de purge especificado e I25 aceito — 27/09/2026
+
+- status: `SPEC_REVIEW_READY / DPO_POLICY_PENDING / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [SPEC 0149](02_spec/0149_operator_auth_purge.md) ganhou matriz A0–A4 para preflight compatível, drenagem de todas as réplicas antigas, runner com alvo explícito, nova checagem após migration e limite de rollback. I25 rejeitou duas versões por falta de leitura autorizada da policy e risco de snapshot antigo; a revisão incluiu `operator_auth_policy_attest()`, comparação da tupla dentro da purge antes de `DELETE`, `READ COMMITTED`, `VOLATILE` e lock da tabela. Rechecagem I25 `ACCEPT_SPEC_REVIEW_READY`, somente para revisão humana. I26 reavaliou as rotas OIDC isoladas: `ACCEPT_LOCAL`, revogação por digest antigo conforme SPEC 0144 e P3 de cookie visível ao servidor Vite sintético no mesmo hostname.
+- verification_state: revisão estática I25/I26; links, higiene e formatação documental em fechamento. Nenhuma migration `0002`, role/job de purge, banco real ou deploy foi executado. Testes do branch isolado continuam no SHA `85c2c7d`, sem alteração de código nesta rodada.
+- blocking_state: DP-01 a DP-06 e revisão humana T3 antes de BUILD de purge; topologia HTTPS corporativa com cookie host-only e prova de navegador antes de produção; claim PR-L04 ativo impede integração do branch de autenticação no checkout compartilhado. Certificação e gates remotos do SHA integrado pendentes; `NO_GO`.
+- next_action: obter revisão/decisões da SPEC 0149, depois implementar/testar o rollout e purge em branch isolado; integrar PR-301/302 após liberação PR-L04 e certificar o candidato inteiro. Prosseguir nos gates independentes.
+
 # PR-301/402 — SPEC de purge OIDC pronta para revisão — 27/09/2026
 
 - status: `SPEC_REVIEW_READY / DPO_POLICY_PENDING / FAMILY_CONTRACT_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
