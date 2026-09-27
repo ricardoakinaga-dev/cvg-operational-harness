@@ -24,7 +24,7 @@ describe('workspace quality scripts', () => {
     )
     expect(packageJson.scripts['dev:api']).toBe('tsx apps/api/src/main.ts')
     expect(packageJson.scripts.build).toBe(
-      'npm run typecheck && npm run build:web'
+      'npm run typecheck && npm run build:harness -- --force && npm run build:web'
     )
     expect(packageJson.scripts['build:web']).toBe(
       'vite --config vite.config.mts build apps/web'

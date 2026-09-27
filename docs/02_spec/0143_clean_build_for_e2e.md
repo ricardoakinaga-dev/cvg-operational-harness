@@ -30,6 +30,8 @@ remoto executa `npm run build` no gate build, e a certificação também.
    Reexecutar certificação completa e `certification:verify` sobre candidato
    commitado, além de Verify/Security remotos no mesmo SHA.
 3. Conferir que os quatro PNGs históricos AUD19-013 permanecem idênticos.
+4. Ajustar o contrato `tests/workspace-scripts.test.js` para exigir a nova
+   sequência do script `build`; a asserção antiga deve falhar antes do ajuste.
 
 ## Execução e provas
 
@@ -39,6 +41,9 @@ remoto executa `npm run build` no gate build, e a certificação também.
   de build foi ajustado para forçar a emissão dos pacotes do harness.
 - Segundo ensaio: `npm run build` com `--force` recriou
   `packages/shared/dist/index.js` e concluiu o bundle web com exit 0.
+- O teste `tests/workspace-scripts.test.js` falhou na suíte local e no Verify
+  remoto porque exigia o comando `build` antigo. A asserção foi atualizada
+  para a sequência nova e o teste focado passou 2/2.
 - No checkout limpo, `npm run build:harness` seguido de `npm run test:e2e`
   passou 12/12. A falha anterior do E2E era o overlay Vite para
   `@cvg/shared`, e não um defeito visual dos snapshots.
