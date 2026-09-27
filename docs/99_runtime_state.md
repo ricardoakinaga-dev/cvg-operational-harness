@@ -1,3 +1,11 @@
+# PR-401 — inventário técnico e modelo RIPD — 27/09/2026
+
+- status: `INVENTORY_DRAFT / DPO_APPROVAL_PENDING`; produção `NO_GO`.
+- last_completed_action: leitura estática de migrations e fluxos gerou [inventário](platform/09-personal-data-inventory.md) DB-01–08, LEG-01–02 e FLOW-01–07 e [modelo RIPD](platform/10-ripd-template.md). Separados plataforma, infraestrutura compartilhada e legado Secretary, com exposição externa condicional.
+- verification_state: sem consulta a banco ou dado real; críticas I1–I3 `REJECT` corrigidas e I4 `ACCEPT` para exatidão documental; `docs:check-links`, higiene, `format:check` e `git diff --check` PASS. Controles de código não provam configuração, retenção nem aprovação de ambiente.
+- blocking_state: DPO/controlador deve aprovar modelo e completar RIPD por produto; PR-402/403/405, D-09, certificação integrada e demais gates de GO abertos.
+- next_action: revisão e aprovação do controlador/DPO por produto; manter `NO_GO`. BUILD T3 de identidade e proveniência do CI agora autorizado pelo usuário em 27/09/2026, com issuer IdP ainda a informar.
+
 # PR-007 — SPEC de cobertura e lint tipado — 27/09/2026
 
 - status: `SPEC_READY / BUILD_WAITING_PR003_AND_PATH_CLAIM`; produção `NO_GO`.

@@ -1,3 +1,7 @@
+# PR-401 — inventário de dados pessoais — 27/09/2026
+
+- `INVENTORY_DRAFT / DPO_APPROVAL_PENDING`: [inventário técnico](platform/09-personal-data-inventory.md) por schema, fluxo e legado, e [modelo RIPD](platform/10-ripd-template.md) sem valores reais. Críticas I1–I3 corrigidas; I4 `ACCEPT` factual; links, higiene e formato PASS. D-10 e [PR-401](03_build/0356_production_backlog_2026-09-26.md) só fecham após revisão/aprovação do controlador/DPO e preenchimento por produto. PR-402/403/405 e gates de produção permanecem abertos; `NO_GO`.
+
 # PR-007 — cobertura completa e lint tipado — 27/09/2026
 
 - `SPEC_READY / BUILD_WAITING_PR003_AND_PATH_CLAIM`: [SPEC 0148](02_spec/0148_coverage_denominator_and_typed_lint.md) e [task 0356](03_build/0356_production_backlog_2026-09-26.md). Falta liberar `vitest.config.mts` da PR-L04, estabelecer baseline certificada da PR-003 e então implementar dois relatórios/guard e lint type-aware sem reduzir pisos. Produção `NO_GO`.

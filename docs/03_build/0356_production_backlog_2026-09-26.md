@@ -579,6 +579,12 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-401 — Inventário de dados pessoais da plataforma (D-10) · P0 · DOC + HUMAN
 
+- Estado em 27/09/2026: `INVENTORY_DRAFT / DPO_APPROVAL_PENDING`.
+  [Inventário técnico](../platform/09-personal-data-inventory.md) e
+  [modelo de RIPD](../platform/10-ripd-template.md) versionados com categorias
+  de schema, fluxos e lacunas; crítica factual I4 `ACCEPT` após três correções
+  iterativas; links, higiene e formato PASS. Nenhum
+  dado real foi inspecionado, base legal decidida ou aprovação DPO presumida.
 - O que: mapear que dado pessoal a plataforma guarda por tabela, log,
   telemetria, provider e canal (remetente, texto de mensagem, identidade de
   operador), independentemente do produto; cada produto consumidor declara
