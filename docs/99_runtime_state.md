@@ -1,3 +1,11 @@
+# PR-301-OIDC-CLIENT — cliente OIDC local em branch isolado — 27/09/2026
+
+- status: `OIDC_CLIENT_ACCEPTED_LOCAL / ROOT_INTEGRATION_PENDING`; produção `NO_GO`.
+- last_completed_action: implementei e commitei no branch `codex/pr301-oidc-client` o cliente OIDC local `30d3ca4`, com discovery restrito a loopback, Authorization Code + PKCE, verificação de assinatura/JWKS e nonce, mapeamento MFA/tenant, e prova em navegador Keycloak com usuário sintético removido. I18 `ACCEPT_LOCAL`.
+- verification_state: prova em `docs/04_audit/evidence/PR301-OIDC-CLIENT-20260927/proof.json` **no branch isolado**: Node 22, 41/41 focados, suíte sem banco 306 arquivos/2.240 testes PASS com 20 arquivos/162 testes skipped, typecheck/lint/audit 0 vulnerabilidades, links/higiene e hashes PASS. O primeiro ciclo encontrou allowlist ausente para `openid-client`, corrigida e revalidada.
+- blocking_state: PR-L04 mantém `apps/api/package.json`, `package-lock.json`, `docs/03_build/0305_repository_target_structure.json`, `server.ts` e web no checkout compartilhado. Código/evidência ainda não integram o branch principal; faltam rotas, composição PostgreSQL, recarga web, purge, E2E confiável e certificação no SHA integrado. IdP corporativo e decisões de produção pendentes.
+- next_action: após liberação da PR-L04, integrar o commit isolado com lockfile/allowlist reconciliados, compor API/web e executar gates integrados; manter `NO_GO`.
+
 # PR-301-OIDC-STATE-PG — persistência compartilhada do state — 27/09/2026
 
 - status: `OIDC_STATE_STORE_ACCEPTED_LOCAL / API_OIDC_INTEGRATION_PENDING`; produção `NO_GO`.

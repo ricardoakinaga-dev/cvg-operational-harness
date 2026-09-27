@@ -1,3 +1,7 @@
+# PR-301-OIDC-CLIENT — cliente OIDC local isolado — 27/09/2026
+
+- `ACCEPT_LOCAL / ROOT_INTEGRATION_PENDING / NO_GO`: branch `codex/pr301-oidc-client` commit `30d3ca4` contém cliente OIDC com assinatura/JWKS, nonce, PKCE, MFA/tenant e prova real Keycloak. I18 aceitou; Node 22: 41/41 focados, suíte sem banco 306/2.240 PASS (20/162 skipped), tipo/lint/audit/links PASS. Prova no branch isolado `docs/04_audit/evidence/PR301-OIDC-CLIENT-20260927/proof.json`. Integrar depois que PR-L04 liberar package/lockfile/contrato, API e web; compor store PostgreSQL, testar E2E confiável e certificar mesmo SHA. Produção segue bloqueada.
+
 # PR-301-OIDC-STATE-PG — state OIDC compartilhado — 27/09/2026
 
 - `ACCEPT_LOCAL / INTEGRATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-OIDC-STATE-PG-20260927/proof.json) da migration incremental e consumo único em PostgreSQL 16; I16 aceitou desenho local, I17 aceitou BUILD após negativos de FK extra e timeout. Node 22: 26/26 focados, suíte 325/2.391 sem skips, PostgreSQL 35/258 PASS. PR-301 ainda P0: compor API, completar cliente OIDC/discovery/JWKS, ligar web/Keycloak, executar purge/rollback, E2E confiável e certificado no mesmo SHA.
