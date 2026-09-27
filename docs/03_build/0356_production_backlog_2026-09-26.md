@@ -89,6 +89,12 @@
 
 ### PR-007 — Cobertura com denominador completo e lint type-aware (RA26-15) · P1 · SPEC+BUILD
 
+- Estado: `SPEC_READY / BUILD_WAITING_PR003_AND_PATH_CLAIM` em 27/09/2026.
+  [SPEC-PR007-001](../02_spec/0148_coverage_denominator_and_typed_lint.md)
+  fixa inventário sem exclusão silenciosa, dois relatórios, margem de 3 pp,
+  investigação da variação e lint tipado em etapas. Nenhum BUILD foi
+  iniciado: `vitest.config.mts` pertence ao claim PR-L04 e a baseline
+  integrada da PR-003 ainda está pendente.
 - O que/onde: `vitest.config.mts` exclui `apps/web/src/**` e `*postgres*.ts`
   (~23% do código); branches com margem de 0,88 pp; `eslint.config.js` só com
   `recommended`.

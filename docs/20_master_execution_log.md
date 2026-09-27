@@ -1,3 +1,8 @@
+# PR-007 — recon e SPEC de cobertura/lint — 27/09/2026
+
+- `vitest.config.mts` exclui web e adapters PostgreSQL do denominador principal; `eslint.config.js` usa `recommended` sem tipos. A [SPEC 0148](02_spec/0148_coverage_denominator_and_typed_lint.md) separa inventário/relatórios, mantém pisos 90/85/90/90 e 95% crítico, exige margem de 3 pp e investiga a variação histórica antes de elevar thresholds. Fonte técnica: documentação oficial Vitest e typescript-eslint vinculada na SPEC.
+- Somente documentação: `vitest.config.mts` no claim PR-L04 e PR-003 sem candidato certificado impedem BUILD integrado. Sem alteração em `coverage/**`, `certification/**` ou código; produção `NO_GO`.
+
 # PR-306 — revisão documental das ameaças de integração — 27/09/2026
 
 - [Modelo de ameaças](10_phase10/PHASE10_THREAT_MODEL.md) reescrito para ligar canal, provider, RAG, agenda, identidade, ferramentas e CI a controles, testes negativos e prova faltante. Um inventário independente de código/testes confirmou os caminhos citados.

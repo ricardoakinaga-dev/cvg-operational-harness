@@ -1,3 +1,11 @@
+# PR-007 — SPEC de cobertura e lint tipado — 27/09/2026
+
+- status: `SPEC_READY / BUILD_WAITING_PR003_AND_PATH_CLAIM`; produção `NO_GO`.
+- last_completed_action: recon de `vitest.config.mts` e `eslint.config.js`; registrei [SPEC-PR007-001](02_spec/0148_coverage_denominator_and_typed_lint.md) com inventário de núcleo/web/PostgreSQL, margem de cobertura, variação entre runs e lint type-aware em etapas.
+- verification_state: documentação e configuração lidas; nenhum coverage, lint config, teste ou artefato de certificação alterado. O candidato antigo da AUD-0579 tinha branches 87,37% no denominador reduzido; não é baseline atual.
+- blocking_state: PR-003 ainda precisa de certificado integrado; `vitest.config.mts` permanece no claim ativo PR-L04. Após ambos, executar BUILD T2 e os gates completos.
+- next_action: continuar frentes independentes; reabrir PR-007 quando os caminhos e a baseline estiverem disponíveis.
+
 # PR-306 — modelo de ameaças de integrações — 27/09/2026
 
 - status: `DOCUMENTED_LOCAL / FACT_CHECK_ACCEPTED`; produção `NO_GO`.
