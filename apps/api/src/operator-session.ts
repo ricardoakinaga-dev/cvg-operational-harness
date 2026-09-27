@@ -1,8 +1,12 @@
-import { randomUUID } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { OperatorIdentitySchema, type OperatorIdentity } from '@cvg/shared'
 
 export const OPERATOR_SESSION_COOKIE = 'cvg_operator_session'
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{8,200}$/
+
+export function createOpaqueOperatorSessionId(): string {
+  return `opsess_${randomBytes(32).toString('base64url')}`
+}
 
 export interface OperatorSessionRecord {
   sessionId: string
@@ -17,6 +21,10 @@ export interface OperatorSessionStore {
   }): Promise<OperatorSessionRecord>
   get(sessionId: string): Promise<OperatorSessionRecord | null>
   revoke(sessionId: string): Promise<void>
+  replace?(
+    previousSessionId: string,
+    input: { identity: OperatorIdentity; expiresAt: number }
+  ): Promise<OperatorSessionRecord>
 }
 
 export interface InMemoryOperatorSessionStoreOptions {
@@ -52,7 +60,7 @@ export function createInMemoryOperatorSessionStore(
         throw new Error('Operator session store is full')
       }
       const record: OperatorSessionRecord = {
-        sessionId: `opsess_${randomUUID()}`,
+        sessionId: createOpaqueOperatorSessionId(),
         identity,
         expiresAt: input.expiresAt
       }

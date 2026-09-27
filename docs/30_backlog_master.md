@@ -1,3 +1,7 @@
+# PR-301 — store PostgreSQL em BUILD T3 — 27/09/2026
+
+- `PG_STORE_ACCEPTED_LOCAL / INTEGRATION_PENDING / NO_GO`: [SPEC 0144](02_spec/0144_trusted_operator_session_production.md) aprovada e D-09 esclarecida para IdP OIDC local com MFA em desenvolvimento/homologação ([pacote](03_build/0357_production_decision_packet_2026-09-26.md), SHA-256 `0309ca28394c2499f0a47b60b90281b8ceca214d27066be8fd420ab1bcb15460`). Migration isolada, adapter, preflight e negativos em PostgreSQL 16: 8/8 do store e 16/16 focados PASS; tipo/lint/formato/links PASS. I7–I9 rejeitaram sete lacunas corrigidas; I10 `ACCEPT_LOCAL`. A [task PR-301](03_build/0356_production_backlog_2026-09-26.md) mantém composição, OIDC/PKCE, IdP local, web, E2E e certificação abertos; nenhum GO.
+
 # PR-301/302 — SPEC 0144 e D-09 aprovadas — 27/09/2026
 
 - `API_HOOK_PARTIAL_BUILD / WEB_REJECTED_I2 / NO_GO`: hook preserva cookie em falha de store sob [SPEC 0144](02_spec/0144_trusted_operator_session_production.md), com [prova local](04_audit/evidence/PR301-20260927/proof.json). A tentativa de recarga web foi retirada após crítica I2 dos estados 401/503 em `App.tsx`. PostgreSQL/role/RLS, troca atômica, composição do entrypoint, OIDC + PKCE e E2E confiável seguem abertos na [task 0356](03_build/0356_production_backlog_2026-09-26.md). Issuer e parâmetros IdP ainda aguardados do usuário; produção não autorizada.

@@ -1,5 +1,11 @@
 # 0190 — SPEC Validation
 
+## PR-301/302 — sessão confiável e D-09 — 27/09/2026
+
+- O usuário aprovou explicitamente [SPEC 0144](0144_trusted_operator_session_production.md) para BUILD T3 e D-09: IdP corporativo OIDC com MFA obrigatório. A aprovação cobre a implementação controlada com dados sintéticos, não produção irrestrita, integração real sem parâmetros do issuer nem release.
+- A fatia independente do hook que preserva cookie em falha do store foi entregue em `4f30565`. A tentativa isolada de recarga web foi rejeitada na crítica I2 e retirada; PR-302 depende de `App.tsx`/`client.ts` no claim PR-L04.
+- O desenho da migration de autenticação teve versões rejeitadas nas revisões de segurança I3–I5. A versão revista com schema e runner separados, role exclusiva e revogação por linhagem recebeu `I6 ACCEPT` para iniciar BUILD controlado sob a SPEC T3 já aprovada pelo usuário. Esse aceite não certifica o SQL nem autoriza produção; exige testes de owner, RLS, grants, preflight, credencial DDL fora do processo servidor e concorrência de logout/troca.
+
 ## AUD-0578 / PR-010 — prontidão do worker homolog
 
 - [SPEC 0141](0141_homolog_worker_shutdown_readiness.md) está

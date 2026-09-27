@@ -1,6 +1,6 @@
 # Pacote de decisões — programa PROD-20260926
 
-- Status: DL-01 a DL-04, D-02, D-03, D-12 e D-13 `DECIDED` pelo usuário;
+- Status: DL-01 a DL-04, D-02, D-03, D-09, D-12 e D-13 `DECIDED` pelo usuário;
   D-04 teve o encaminhamento para discovery decidido, mas o consumidor e o
   contexto do piloto seguem `WAITING_HUMAN_APPROVAL`. As demais decisões
   permanecem pendentes. As recomendações são do agente e não valem como decisão.
@@ -150,9 +150,12 @@ Respostas do usuário em 27/09/2026 sobre a versão deste pacote com SHA-256
 
 ## D-09 — IdP e MFA
 
-- Proposta: IdP corporativo via OIDC; MFA obrigatório para operadores e
-  administradores; grupos do IdP mapeados para papéis e tenants; revogação em
-  até 15 minutos.
+- Decisão do usuário em 27/09/2026: IdP via OIDC com MFA obrigatório para
+  operadores e administradores; grupos do IdP mapeados para papéis e tenants;
+  revogação em até 15 minutos. Para desenvolvimento e homologação, usar **IdP
+  OIDC local com MFA** e identidades sintéticas. Não criar login local próprio
+  por usuário/senha. O issuer corporativo, client, redirects e claims serão
+  informados depois; a configuração local não autoriza produção irrestrita.
 
 ## D-10 — Encarregado de dados
 

@@ -1,3 +1,11 @@
+# PR-301 — sessão PostgreSQL isolada em BUILD T3 — 27/09/2026
+
+- status: `SPEC_APPROVED / PG_STORE_ACCEPTED_LOCAL / INTEGRATION_PENDING`; produção `NO_GO`.
+- last_completed_action: D-09 esclarecida: IdP OIDC local com MFA para desenvolvimento/homologação, identidades sintéticas; issuer corporativo para produção depois. Migration própria de autenticação, adapter com cookie opaco e digest, troca/revogação por família, e preflight de role/ACL/RLS/funções/constraints implementados sem tocar os caminhos PR-L04.
+- verification_state: [prova local](04_audit/evidence/PR301-PG-20260927/proof.json): PostgreSQL 16 descartável 8/8 testes do store e 16/16 focados com hook/sessão PASS; `typecheck`, lint, formato e links/higiene PASS. I7–I9 rejeitaram sete lacunas corrigidas com negativos; I10 `ACCEPT_LOCAL` para a fatia isolada. `npm test` intermediário 303 arquivos/2.198 PASS, 20/151 skipped sem banco, começou antes das últimas correções e não certifica o diff final. Sem prova de entrypoint, OIDC, E2E confiável ou build de imagem.
+- blocking_state: `server.ts`, `App.tsx`, `client.ts` e outros caminhos da PR-L04 ainda ativos; login OIDC/PKCE e IdP local com MFA ainda não implementados; credenciais e issuer corporativos, DPO/retenção, CI integrado e release T4 pendentes.
+- next_action: compor store no entrypoint e integrar OIDC local com MFA quando os claims de caminho liberarem; D-09 no pacote de decisões SHA-256 `0309ca28394c2499f0a47b60b90281b8ceca214d27066be8fd420ab1bcb15460`. Permanecer `NO_GO`.
+
 # PR-301/302 — BUILD T3 da sessão confiável, falha do store — 27/09/2026
 
 - status: `SPEC_APPROVED / API_HOOK_PARTIAL_BUILD / WEB_REJECTED_I2`; produção `NO_GO`.
