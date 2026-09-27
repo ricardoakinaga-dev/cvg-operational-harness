@@ -39,6 +39,11 @@
 
 ### PR-003 — Certificado reproduzível (RA26-02) · P0 · SPEC+BUILD
 
+- Nova reconciliação de 27/09/2026: [SPEC 0144](../02_spec/0144_homolog_skip_catalog_rebind.md)
+  atualiza somente o hash de source de `SKIP-PG-014` após a correção do teste
+  homolog. Verify remoto passou E2E/browser-proof e encontrou um único drift;
+  a certificação local executou os 16 comandos com exit 0 e adjudicou
+  `NO_GO` pelo mesmo drift. Zero testes pulados nos relatórios.
 - Estado corrente da nova fatia: `IN_PROGRESS` após a certificação AUD-0578, que teve 16 comandos exit 0 e adjudicação `NO_GO` por dois hashes obsoletos no catálogo de skips. [SPEC-PR003-002](../02_spec/0138_skip_catalog_rebind.md) limita a reconciliação a esses dois contratos e exige nova certificação e verificador.
 - Estado: `COMPLETED` em 26/09/2026, com uma ressalva registrada.
 - Causa da divergência da AUD-0577: ambiente, não regressão. Sem PostgreSQL

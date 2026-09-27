@@ -1,5 +1,13 @@
 # 0190 — SPEC Validation
 
+## AUD-0578 / PR-003 — rebind de skip do worker homolog
+
+- [SPEC 0144](0144_homolog_skip_catalog_rebind.md) está
+  `BUILD_LOCAL_AUTHORIZED` em T2: o hash do teste homolog mudou na SPEC 0141,
+  o catálogo bloqueou corretamente Verify e certificação, e todos os
+  relatórios registraram zero skips. A correção permitida altera apenas um
+  `sourceSha256`; não concede exceção de skip nem autorização de produção.
+
 ## AUD-0578 / PR-010 — build limpo para E2E
 
 - [SPEC 0143](0143_clean_build_for_e2e.md) está `BUILD_LOCAL_AUTHORIZED` em
