@@ -1,6 +1,6 @@
 # SPEC-PR009-003 — vínculo da execução E2E entre JSON e JUnit
 
-- Estado: `BUILD_VERIFIED_LOCAL / E2E_PENDING_ISOLATED`. Task: PR-009, fatia 3, em
+- Estado: `E2E_VERIFIED_ISOLATED / CERTIFICATION_PENDING_INTEGRATED`. Task: PR-009, fatia 3, em
   [0356](../03_build/0356_production_backlog_2026-09-26.md). Sem mudança de API,
   schema, identidade ou efeito externo. Gate T2 em
   [AGENTS](../07_agents/AGENTS.md).
@@ -66,7 +66,18 @@
   rotação PR-005; o teste foi reconciliado com o arquivo histórico, e a
   segunda suíte passou. O banco foi removido e o artefato de self-test foi
   restaurado aos bytes do HEAD.
-- Pendente: E2E real e certificação no candidato integrado. A PR-L04 tem
-  claim ativo de `test-results/**` e `playwright-results.xml` no diretório
-  compartilhado; esta fatia só pode executar E2E com claim próprio em
-  worktree isolado ou após liberação desses caminhos.
+- E2E real isolado no commit `6bc3bfc`: worktree detached, `npm ci`
+  (`--ignore-scripts`) e `build:runtime`, portas próprias 3209/4183, Node
+  22.23.2 e Playwright 1.59.1. Primeira tentativa falhou porque os pacotes
+  locais ainda não tinham `dist/`; o erro Vite de `@cvg/shared` foi
+  diagnosticado nos snapshots, os servidores próprios foram encerrados e o
+  runtime compilado antes da repetição. Segunda tentativa: 12/12 PASS,
+  zero skip/erro/flake, `runId=run-pr009-isolated-20260927`, candidato
+  `2acfa4cb36fb76a04a13cc5bed7c955bade1cf0e1e75fde66dc858d1f977db24`,
+  `executionId=f75f3b25-3545-413d-bb5a-6adb530dc095`. O wrapper validou
+  os IDs internos e o inventário/totais do par. [Prova integral e hashes](../04_audit/evidence/PR009-20260927/proof.json),
+  [JSON](../04_audit/evidence/PR009-20260927/e2e-test-report.json) e
+  [JUnit](../04_audit/evidence/PR009-20260927/playwright-results.xml).
+- Pendente: certificação no candidato integrado após a PR-L04 liberar o
+  catálogo de skips e os artefatos compartilhados. O E2E isolado prova esta
+  fatia, mas não substitui o certificado nem o CI remoto do SHA integrado.

@@ -1,3 +1,12 @@
+# PR-009 fatia 3 — E2E isolado verificado — 27/09/2026
+
+- status: `E2E_VERIFIED_ISOLATED / CERTIFICATION_PENDING_INTEGRATED`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: E2E real 12/12 PASS no commit `6bc3bfc` em worktree detached, Node 22, runtime compilado, portas próprias 3209/4183; JSON/JUnit da mesma tentativa validados por IDs internos, inventário e totais.
+- current_evidence: [prova e hashes PR009](04_audit/evidence/PR009-20260927/proof.json), [SPEC-PR009-003](02_spec/0145_e2e_junit_json_run_binding.md), [backlog 0356](03_build/0356_production_backlog_2026-09-26.md).
+- verification_state: `runId=run-pr009-isolated-20260927`, `executionId=f75f3b25-3545-413d-bb5a-6adb530dc095`, 12 PASS/0 skipped/0 unexpected/0 flaky; JSON SHA-256 `d2c6ff87…`, JUnit `b8937986…`. A primeira tentativa isolada falhou por `dist/` ausente após `npm ci`; `build:runtime` corrigiu a preparação e a repetição passou. Gates locais anteriores mantidos na entrada abaixo.
+- blocking_state: certificado e CI do SHA integrado pendentes; PR-L04 mantém claim de catálogo/artefatos no diretório compartilhado; PR-301/302 e 13 condições de GO continuam abertas.
+- next_action: certificar e revalidar o candidato integrado após PR-L04; seguir revisão humana T3 de identidade e decisões F1. Sem produção irrestrita.
+
 # PR-009 fatia 3 — BUILD verificado localmente — 27/09/2026
 
 - status: `BUILD_VERIFIED_LOCAL / E2E_PENDING_ISOLATED`; programa `IN_PROGRESS`; produção `NO_GO`.

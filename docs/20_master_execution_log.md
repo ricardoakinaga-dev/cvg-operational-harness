@@ -1,3 +1,8 @@
+# PR-009 fatia 3 — prova E2E isolada — 27/09/2026
+
+- Worktree detached no commit `6bc3bfc`, Node 22.23.2, dependências de lockfile. Tentativa 1 interrompida após falhas de Vite por `@cvg/shared` sem `dist/`; `npm run build:runtime` em seguida PASS, servidores próprios encerrados antes do retry.
+- Tentativa 2 em portas 3209/4183: Chromium 12/12 PASS, `runId=run-pr009-isolated-20260927`, `executionId=f75f3b25-3545-413d-bb5a-6adb530dc095`; wrapper validou JSON/JUnit internos. [Par bruto e manifesto hash](04_audit/evidence/PR009-20260927/proof.json). Fonte e artefatos do diretório compartilhado não foram tocados; certificado integrado ainda pendente.
+
 # PR-009 fatia 3 — BUILD e regressões locais — 27/09/2026
 
 - [SPEC-PR009-003](02_spec/0145_e2e_junit_json_run_binding.md): comando único de Playwright com JSON/JUnit, `executionId` por tentativa, validação interna do par no ci-bar/certificado/verificador. Casos negativos para JSON `{}` e XML de outra tentativa passaram no self-test.
