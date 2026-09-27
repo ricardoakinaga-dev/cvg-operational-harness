@@ -1,3 +1,8 @@
+# PROD-20260926 — coordenação com o Codex e PR-L06 — 27/09/2026
+
+- O usuário informou que o Codex trabalha no mesmo repositório. Criei [docs/08_runtime/agent_coordination.md](08_runtime/agent_coordination.md) com regras (claims, commit só de caminhos próprios, sem desfazer trabalho alheio, claims para certify/E2E/lockfile/push) e apontei o `AGENTS.md` da raiz para ele (`2b2b793`). Divisão confirmada pelo usuário: Codex com AUD-0578 R0–R2; Claude Code com a frente FL (`948a5af`).
+- PR-L06 (`2533153`, SPEC-LEGACY-003): `@cvg/agent-evals` neutro (identificadores de categoria/intenção, regras injetáveis, 48 cenários de referência); corpus da secretária em `@cvg/legacy-secretary-evals`. Uma primeira versão, com evals dentro do pacote composto pela API, quebrou o entrypoint real da API; corrigida separando o pacote. Lockfile commitado só com os trechos da PR-L06, preservando as mudanças do Codex no mesmo arquivo.
+
 # PROD-20260926 — PR-L05 fatia 2, PR-010 e PR-011 — 26–27/09/2026
 
 - PR-L05 fatia 2 (`761307b`): workspace `legacy/packages/*`; `@cvg/legacy-secretary-profile` com perfil de policy e preset da secretária byte a byte; mecanismo neutro de preset no `platform` (`controlled-preset.ts`); compatibilidade removida do `policy-engine`; ponto de composição `apps/api/src/legacy-composition.ts`; política de dependências `PROD26-L05-1` (mesmos 11 findings aceitos). Gates: 316/2 304 PASS, cobertura 92,61/87,61/94,97/93,60, PostgreSQL 258, E2E 12/12, imagem com smoke PASS.

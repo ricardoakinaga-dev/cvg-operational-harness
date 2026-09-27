@@ -1,3 +1,12 @@
+# PROD-20260926 — PR-L06 concluída; coordenação com o Codex ativa — 2026-09-27
+
+- status: `IN_PROGRESS`. Frente FL (Claude Code): PR-L01, L02, L03, L05 e L06 `COMPLETED`; L04, L07–L12 `PROPOSED`. Frente AUD-0578 (Codex) em andamento conforme [quadro de coordenação](08_runtime/agent_coordination.md). Produção `NO_GO`.
+- last_completed_action: protocolo de coordenação entre agentes (`2b2b793`, divisão confirmada pelo usuário em `948a5af`); PR-L06 (`2533153`): evals neutros no harness e corpus da secretária em `@cvg/legacy-secretary-evals`.
+- current_evidence: [SPEC-LEGACY-003](02_spec/0140_legacy_secretary_evals_isolation.md), [inventário](../legacy/LEGACY_INVENTORY.md), [coordenação](08_runtime/agent_coordination.md).
+- verification_state: `test:evals` 12 testes; corpora neutro e legado 19 testes nos mesmos thresholds; 15 arquivos / 107 testes afetados (incluindo o entrypoint real da API) PASS; auditor com os 11 findings aceitos; `build:runtime` sem código de avaliação. A primeira versão quebrou o entrypoint da API por reexportar evals no pacote composto pela API; corrigido antes do commit.
+- blocking_state: nenhum na frente FL. O lockfile ainda tem trechos da fonte Inter do Codex sem commit; certificação e push são da frente do Codex.
+- next_action: PR-L04 (jornadas tutor/pet/consulta) com SPEC própria; depois PR-L07 (fluxo neutro).
+
 # PROD-20260926 — PR-L05 concluída; PR-010 e PR-011 corrigidas localmente — 2026-09-27
 
 - status: `IN_PROGRESS`. PR-L05 `COMPLETED` (SPEC-LEGACY-002, três fatias). PR-010 e PR-011 `COMPLETED_LOCAL / WAITING_PUSH`. Produção `NO_GO`.

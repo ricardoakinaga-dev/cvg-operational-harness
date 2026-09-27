@@ -1,3 +1,8 @@
+# PROD-20260926 — PR-L06 concluída — 27/09/2026
+
+- `COMPLETED`: PR-L06 ([SPEC-LEGACY-003](02_spec/0140_legacy_secretary_evals_isolation.md)). Frente FL: L01, L02, L03, L05 e L06 concluídas; próxima PR-L04.
+- Trabalho paralelo do Codex registrado em [agent_coordination](08_runtime/agent_coordination.md). Produção `NO_GO`.
+
 # PROD-20260926 — PR-L05 concluída; PR-010 e PR-011 aguardando push — 27/09/2026
 
 - `COMPLETED`: PR-L05 ([SPEC-LEGACY-002](02_spec/0136_legacy_secretary_profile_isolation.md)).

@@ -250,6 +250,8 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-L06 — Isolar os datasets de evals da secretária (DL-01) · P1 · SPEC+BUILD
 
+- Estado: `COMPLETED` em 27/09/2026 (`2533153`) sob [SPEC-LEGACY-003](../02_spec/0140_legacy_secretary_evals_isolation.md).
+
 - O que/onde: `packages/agent-evals/src/datasets/core.ts` e cenários de
   evals do harness que usam tutor/pet/consulta.
 - Como: mover os cenários para `legacy/`; criar dataset neutro para o gate
