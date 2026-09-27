@@ -1,5 +1,13 @@
 # 0190 — SPEC Validation
 
+## AUD-0578 / PR-007 — cobertura adicional e lint tipado
+
+- [SPEC 0145](0145_web_postgres_coverage_and_typed_lint.md) está
+  `BUILD_LOCAL_AUTHORIZED` em T2: PR-007 já consta do backlog 0356; a
+  configuração ampliará a medição sem alterar o denominador principal, os
+  contratos públicos ou os gates de produção. Aceite exige dois relatórios
+  próprios, margem medida de ao menos 3 pp, lint tipado e gates T2.
+
 ## AUD-0578 / PR-003 — rebind de skip do worker homolog
 
 - [SPEC 0144](0144_homolog_skip_catalog_rebind.md) está
