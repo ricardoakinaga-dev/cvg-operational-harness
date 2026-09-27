@@ -104,12 +104,15 @@
 
 ### PR-008 — Imagem web fixada e nome de imagem corrente · P2 · SPEC+BUILD
 
-- Estado: `SPEC_READY / BUILD_T2` em 27/09/2026.
+- Estado: `BUILD_VERIFIED_LOCAL / CERTIFICATION_PENDING` em 27/09/2026.
   [SPEC-PR008-001](../02_spec/0146_web_image_digest_and_name.md) fixa o
-  índice OCI multiarch observado no registry e o gate de imagem/Node 22.
-- O que/onde: `Dockerfile` usa `nginxinc/nginx-unprivileged:1.27-alpine` sem
-  digest; comentário e tag ainda citam `cvg-agent-secretary`.
-- Pronto: digest fixado; gate `image` verde; nome coerente com o projeto.
+  índice OCI multiarch observado no registry. O Dockerfile foi corrigido;
+  build web, smoke estático HTTP 200 com alias sintético, gate `image`
+  runtime, Node 22, PostgreSQL e E2E passaram no candidato isolado
+  `2a11435` ([prova](../04_audit/evidence/PR008-20260927/proof.json)).
+  A configuração NGINX ainda exige o host `secretary-api` no arranque;
+  PR-L10 detém a nomenclatura de deploy. Certificado/CI remoto no SHA
+  integrado e produção permanecem pendentes.
 
 ### PR-009 — Coerência do E2E e JUnit (RA26-16) · P2 · SPEC+BUILD
 
@@ -128,6 +131,15 @@
   E2E/ci-bar no commit `1413809` passou 12/12 com
   [log, snapshots, hashes e caso negativo da finalização](../04_audit/evidence/PR009-20260927-r2/proof.json).
   Faltam reavaliação I2 e certificado do SHA integrado após PR-L04.
+- Rodada final local da fatia 3 `BUILD_VERIFIED_LOCAL / EXTERNAL_PROVENANCE_PENDING`:
+  I3/I4 fecharam lacunas do mapa de hashes e do log na finalização;
+  regressão de mistura entre gates de runs diferentes incluída. Candidato
+  `2a11435`: E2E 12/12 e gate `image` PASS, [prova r3](../04_audit/evidence/PR009-20260927-r3/proof.json);
+  Node 22 `npm test` 300/2.182 e PostgreSQL 35/258 PASS. I5 manteve
+  `REJECT` para substituição coerente do diretório de artefatos mutável:
+  falta âncora de proveniência externa ao workspace, sob revisão de
+  segurança própria. Certificado e CI remoto do SHA integrado seguem
+  pendentes; produção `NO_GO`.
 - Fatia 1 `VERIFIED_LOCAL` em 26/09/2026: [SPEC-PR009-001](../02_spec/0137_e2e_artifact_isolation.md); quatro screenshots agora em `test-results/`, hashes históricos iguais, E2E 12/12. A task inteira continua aberta para JUnit/runId, jornadas de aprovação e estabilidade visual.
 - Fatia 2 `VERIFIED_LOCAL` em 27/09/2026: [SPEC 0139](../02_spec/0139_visual_font_fallback.md); fonte Inter variável local, snapshots mobile/tablet inspecionados, visual 2/2 no Ubuntu isolado e E2E 12/12 no host. A prova remota do novo SHA ainda é necessária.
 - Pronto: `playwright-results.xml` e o relatório E2E da certificação com o

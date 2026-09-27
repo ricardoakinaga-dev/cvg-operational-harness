@@ -1,3 +1,12 @@
+# PR-008/009 — candidato T2 isolado verificado — 27/09/2026
+
+- status: `BUILD_VERIFIED_LOCAL / EXTERNAL_PROVENANCE_PENDING / CERTIFICATION_PENDING`; produção `NO_GO`.
+- last_completed_action: corrigi o finalizador E2E para exigir dois hashes, conferir log/UUID e rejeitar gates de runs diferentes; fixei o digest OCI da imagem web. Código `4b47d81`, claim do worktree `2a11435`.
+- current_evidence: [SPEC PR-009](02_spec/0145_e2e_junit_json_run_binding.md), [prova E2E r3](04_audit/evidence/PR009-20260927-r3/proof.json), [SPEC PR-008](02_spec/0146_web_image_digest_and_name.md), [prova de imagem](04_audit/evidence/PR008-20260927/proof.json), [backlog 0356](03_build/0356_production_backlog_2026-09-26.md).
+- verification_state: Node 22.23.2, `typecheck`, lint, formato, links, build, auditoria npm, `npm test` 300 arquivos/2.182 PASS (146 skipped sem banco), PostgreSQL 35/258 PASS, E2E Chromium 12/12 PASS, gate `image` PASS. Finalização parcial sem falhas E2E/imagem; 80 falhas esperadas por outros gates ausentes. Web HTTP 200 com alias sintético; sem alias, NGINX sai 1 por `secretary-api` não resolvido.
+- blocking_state: I5 manteve REJECT para proveniência adversarial de diretório mutável, pois estado/log/relatórios podem ser trocados juntos sem âncora externa. PR-L04 ainda detém catálogo de skips e artefatos compartilhados; certificado atual e CI remoto no SHA integrado não foram reemitidos. SPEC T3 de sessão/IdP [0144](02_spec/0144_trusted_operator_session_production.md) e D-09 aguardam revisão humana; 13 condições de GO continuam abertas.
+- next_action: após liberação da PR-L04, corrigir SKIP-PG-014, certificar candidato integrado e validar CI no mesmo SHA; desenhar âncora de proveniência externa sob gate de segurança T3; obter revisão da SPEC 0144/D-09 antes de BUILD de identidade. Sem dado real, deploy ou liberação irrestrita.
+
 # PR-008 — SPEC da imagem web — 27/09/2026
 
 - status: `SPEC_READY / BUILD_T2` para PR-008; produção `NO_GO`.

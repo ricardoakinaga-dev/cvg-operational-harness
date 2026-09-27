@@ -1,3 +1,10 @@
+# PR-008/009 — BUILD T2 e crítica I3–I5 — 27/09/2026
+
+- Código `4b47d81` sob SPEC 0145/0146: digest web pinado; finalizador exige dois hashes E2E, hash/comprovante do log e identidade de run/candidato/Node/exit em gates executados. Testes focados 16/16 PASS; I3/I4 detectaram lacunas corrigidas, I5 detectou mistura de runs corrigida e manteve REJECT para substituição coerente de todo o diretório mutável, que exige âncora externa sob gate de segurança.
+- Node 22.23.2 no candidato `2a11435`: `typecheck`, lint, formato, links, build, `audit:security` PASS (0 vulnerabilidades); `npm test` 300 arquivos/2.182 PASS, 20 arquivos/146 skipped sem banco; `test:postgres` em PostgreSQL 16 descartável próprio 35/258 PASS. Banco removido após a execução.
+- Worktree detached com `npm ci --ignore-scripts`, `build:runtime`, portas 3210/4184: `ci-bar gate e2e` PASS, Chromium 12/12, UUID `eb8a8c2c-a9ec-441f-a485-3d43157096a7`, sem `outputFailures`; `ci-bar gate image` PASS, runtime `/live` e `/ready` 200. [Par/log/hashes r3](04_audit/evidence/PR009-20260927-r3/proof.json), [imagem](04_audit/evidence/PR008-20260927/proof.json). `ci-bar finalize` parcial saiu 1 pelos 80 itens de outros gates ausentes, sem falha E2E/imagem.
+- Build web com digest OCI PASS; HTTP 200 para HTML estático sob opções endurecidas e alias sintético. Sem alias, NGINX saiu 1 por `secretary-api` não resolvido no arquivo de deploy, dependência PR-L10. Certificação completa/CI remoto no SHA integrado e decisão T3 de identidade pendentes; produção `NO_GO`.
+
 # PR-008 — recon e SPEC da imagem web — 27/09/2026
 
 - Dockerfile: estágio web com tag `nginxinc/nginx-unprivileged:1.27-alpine` sem digest e comentário `cvg-agent-secretary:local`. O registry retornou índice OCI multiarch `sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0`.

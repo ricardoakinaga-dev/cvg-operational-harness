@@ -1,6 +1,6 @@
 # SPEC-PR009-003 — vínculo da execução E2E entre JSON e JUnit
 
-- Estado: `E2E_CI_BAR_VERIFIED_ISOLATED / I2_RECHECK_PENDING`. Task: PR-009, fatia 3, em
+- Estado: `BUILD_VERIFIED_LOCAL / EXTERNAL_PROVENANCE_PENDING / CERTIFICATION_PENDING`. Task: PR-009, fatia 3, em
   [0356](../03_build/0356_production_backlog_2026-09-26.md). Sem mudança de API,
   schema, identidade ou efeito externo. Gate T2 em
   [AGENTS](../07_agents/AGENTS.md).
@@ -126,3 +126,35 @@
   cópia: hashes, log, gate e relatórios apontam o mesmo UUID/12 testes.
 - Limite: esta prova cobre o gate E2E e o caso negativo da finalização,
   ainda não é o certificado completo nem a aprovação I2 da correção.
+
+## Críticas I3–I5 e candidato final local
+
+- I3 rejeitou a finalização porque um mapa de hashes E2E vazio escapava do
+  loop. O finalizador agora exige exatamente os dois caminhos e hashes de
+  64 caracteres. A regressão executa o subprocesso com mapas vazio, parcial
+  e extra; todos falham.
+- I4 confirmou essa correção, mas rejeitou a troca coerente de JSON/JUnit e
+  do estado quando o log original não era relido. A finalização agora
+  confere o hash do log, lê seu comprovante e compara o UUID ao par e ao
+  estado. A regressão troca ambos os relatórios e seus hashes, conserva o
+  log e verifica a rejeição. Também rejeita adulteração isolada do log.
+- I5 encontrou mistura possível de gates de runs distintos. A finalização
+  exige `runId`, `candidateId`, Node, exit 0 e `outputFailures=[]` em cada
+  gate executado; há regressão com gate `typecheck` de outro run. I5
+  **manteve REJECT para proveniência adversarial**: um agente com escrita
+  sobre todo o diretório de artefatos pode trocar coerentemente estado, log
+  e relatórios e recalcular os hashes locais. Uma âncora fora desse
+  diretório, vinculada ao job de CI, requer desenho e revisão de segurança
+  próprios. Nenhum certificado ou status TripleAAA é inferido desta fatia.
+- Candidato isolado `2a11435`, Node 22.23.2, `runId=run-pr008-final-20260927`,
+  `candidateId=0706ee5be9efbf6c30a59bad8f4ce6b3caf75f777df4949d3179cad8c46e1f64`:
+  `ci-bar gate e2e` PASS, Chromium 12/12, 0 skip/unexpected/flaky,
+  `executionId=eb8a8c2c-a9ec-441f-a485-3d43157096a7`. O JSON, JUnit,
+  log e registro do gate estão em [prova r3](../04_audit/evidence/PR009-20260927-r3/proof.json)
+  com hashes revalidados após a cópia. O `ci-bar finalize` parcial retornou
+  FAIL pelos 80 itens de outros gates ausentes, sem falha E2E ou de imagem.
+- No código final: testes focados 16/16, `typecheck`, lint, formato, links,
+  build e auditoria npm PASS; `npm test` 300 arquivos/2.182 PASS e 146 skips
+  sem banco; `test:postgres` em banco descartável 35 arquivos/258 PASS.
+  Certificação completa e CI remoto no SHA integrado continuam pendentes,
+  além da âncora independente e das condições de produção.
