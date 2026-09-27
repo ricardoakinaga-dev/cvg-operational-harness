@@ -117,3 +117,21 @@ listados; testes, E2E, `test:postgres` e imagem verdes; inventário atualizado.
   para quando o claim de certificação do Codex (que cobre `test-results/**` e
   `playwright-results.xml`) for liberado; as rotas da API não mudaram nesta
   fatia.
+
+### Fatia 2 — rotas da API (27/09/2026)
+
+- As 11 rotas `/v1/journeys/*` (315 linhas) e `journeyAuditContext` (21
+  linhas) saíram de `apps/api/src/server.ts` para o plugin
+  `registerSecretaryJourneyRoutes(app, dependencies)` em
+  `legacy/packages/secretary-journeys/src/api-routes.ts`. A extração foi feita
+  por script, que conferiu que o bloco movido é idêntico ao original; a API
+  passa `requireIdentity`, `requireAuthenticatedMutations`,
+  `resolveDataPlaneTenant`, `resolveOptionalRequestTenant` e
+  `statusCodeForError` com os mesmos nomes. O registro acontece na mesma
+  posição, pelo ponto de composição. `server.ts`: de 5 857 para 5 532 linhas.
+- Nenhum arquivo de teste da API foi alterado: `apps/api` 70 arquivos / 422
+  testes PASS.
+- Gates: `format:check`, `lint`, `typecheck`, `build:runtime`,
+  `mutation:guard` exit 0; suíte com cobertura 318 / 2 316 PASS,
+  92,63/87,62/95,04/93,62; `test:postgres` 35/258; imagem de runtime com smoke
+  PASS. E2E pendente do claim de certificação do Codex.

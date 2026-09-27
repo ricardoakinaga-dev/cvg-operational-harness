@@ -9,5 +9,6 @@ export { ensureControlledSecretaryPreset } from '@cvg/legacy-secretary-profile'
 export {
   JourneyRepository,
   PostgresJourneyRepository,
+  registerSecretaryJourneyRoutes,
   type JourneyRepositoryPort
 } from '@cvg/legacy-secretary-journeys'
