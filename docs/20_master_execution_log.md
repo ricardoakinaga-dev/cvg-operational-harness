@@ -1,3 +1,8 @@
+# PR-009-PROV — recon da fronteira de CI e SPEC T3 — 27/09/2026
+
+- `verify.yml` usa `CI_RUN_ID` derivado do contexto GitHub, executa os gates num job e envia o diretório mutável depois da finalização. O repositório remoto está público; a documentação oficial do GitHub descreve outputs de passos e atestações. A [SPEC 0147](02_spec/0147_ci_bar_external_provenance.md) propõe selo externo dos hashes/IDs por gate, finalização vinculada ao runner e atestação do manifesto/digest, com limites da ameaça declarados.
+- Sem mudança em workflow ou código, sem push e sem certificação. A revisão T3 pelo usuário precede BUILD; produção `NO_GO`.
+
 # PR-008/009 — BUILD T2 e crítica I3–I5 — 27/09/2026
 
 - Código `4b47d81` sob SPEC 0145/0146: digest web pinado; finalizador exige dois hashes E2E, hash/comprovante do log e identidade de run/candidato/Node/exit em gates executados. Testes focados 16/16 PASS; I3/I4 detectaram lacunas corrigidas, I5 detectou mistura de runs corrigida e manteve REJECT para substituição coerente de todo o diretório mutável, que exige âncora externa sob gate de segurança.

@@ -1,3 +1,11 @@
+# PR-009-PROV — SPEC T3 da âncora externa — 27/09/2026
+
+- status: `SPEC_PROPOSED / WAITING_HUMAN_REVIEW`; produção `NO_GO`.
+- last_completed_action: após I5, examinei o `verify.yml`, a fronteira entre diretório mutável e outputs do runner e a disponibilidade de atestação no repositório público; registrei [SPEC-PR009-PROV-001](02_spec/0147_ci_bar_external_provenance.md) e a task no [backlog 0356](03_build/0356_production_backlog_2026-09-26.md).
+- verification_state: recon documental e fonte oficial GitHub; nenhum workflow ou código de segurança alterado. A prova r3 permanece local e não selada.
+- blocking_state: revisão explícita T3 da SPEC e da fronteira de confiança, seguida de implementação/teste remoto; PR-L04, certificado integrado, SPEC 0144/D-09 e 13 condições de GO ainda pendentes.
+- next_action: desenvolver o selo externo só após aprovação T3; continuar tarefas independentes e recertificação quando a PR-L04 liberar os caminhos.
+
 # PR-008/009 — candidato T2 isolado verificado — 27/09/2026
 
 - status: `BUILD_VERIFIED_LOCAL / EXTERNAL_PROVENANCE_PENDING / CERTIFICATION_PENDING`; produção `NO_GO`.

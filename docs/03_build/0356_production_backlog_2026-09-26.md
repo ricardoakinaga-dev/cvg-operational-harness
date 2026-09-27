@@ -130,7 +130,7 @@
   typecheck, lint e formato PASS. A prova 12/12 anterior vale para `6bc3bfc`;
   E2E/ci-bar no commit `1413809` passou 12/12 com
   [log, snapshots, hashes e caso negativo da finalização](../04_audit/evidence/PR009-20260927-r2/proof.json).
-  Faltam reavaliação I2 e certificado do SHA integrado após PR-L04.
+  Naquele ponto ainda faltavam crítica adicional e certificado do SHA integrado após PR-L04.
 - Rodada final local da fatia 3 `BUILD_VERIFIED_LOCAL / EXTERNAL_PROVENANCE_PENDING`:
   I3/I4 fecharam lacunas do mapa de hashes e do log na finalização;
   regressão de mistura entre gates de runs diferentes incluída. Candidato
@@ -152,6 +152,18 @@
 - Achado de 26/09 (SPEC-LEGACY-002): `tests/e2e/visual-shell.spec.ts` falhou
   uma vez na comparação de screenshot e passou nas duas repetições seguintes;
   tratar a instabilidade visual antes de usar o E2E como gate de release.
+
+### PR-009-PROV — Âncora externa da prova do ci-bar · P0 para promoção · SPEC T3
+
+- Estado: `SPEC_PROPOSED / WAITING_HUMAN_REVIEW` em 27/09/2026.
+  [SPEC-PR009-PROV-001](../02_spec/0147_ci_bar_external_provenance.md)
+  registra a ameaça de troca coerente de estado/log/relatórios após o gate,
+  o limite dos hashes no mesmo diretório e a proposta de selo via output do
+  runner com atestação do manifesto. Nenhum BUILD do workflow de segurança
+  está autorizado antes da revisão explícita T3.
+- Pronto: teste negativo troca todos os arquivos após selar e falha;
+  Verify/Security no mesmo SHA, manifesto e imagem com proveniência
+  verificável fora do job; política de retenção e revisão de segurança.
 
 ### PR-010 — Fazer o CI rodar no GitHub · P0 · SPEC+BUILD
 
