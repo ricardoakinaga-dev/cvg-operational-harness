@@ -1,3 +1,11 @@
+# PR-301-OIDC-ROUTES — composição HTTP local isolada — 27/09/2026
+
+- status: `ACCEPT_LOCAL / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: no branch isolado `codex/pr301-oidc-client`, commit `b41cff2`, compus IdP OIDC local, state e sessão PostgreSQL, início/callback HTTP, recarga por cookie e logout com revogação. I19/I20 aceitaram a fatia local após vínculo cifrado da sessão antiga ao state e rejeição de cookie de logout duplicado/malformado.
+- verification_state: prova e 28 hashes em `docs/04_audit/evidence/PR301-OIDC-ROUTES-20260927/proof.json` **no branch isolado**. Node 22: suíte com PostgreSQL 330 arquivos/2.428 testes, `test:postgres` 35/258, Keycloak/Chromium senha+OTP e replay rejeitado, tipos/lint/formato/links/audit PASS. Banco e Keycloak descartáveis removidos.
+- blocking_state: PR-L04 ainda detém `apps/api/src/server.ts` e web no checkout principal; a fatia não integra `main`. PR-302 web, IdP corporativo, retenção/purge, rollout, preflight de produção sem DDL e certificação/CI remoto no mesmo SHA seguem abertos.
+- next_action: integrar após liberação do claim PR-L04, ligar o console web, provar E2E confiável e recertificar candidato integrado. Sem liberação irrestrita.
+
 # PR-301-OIDC-CLIENT — cliente OIDC local em branch isolado — 27/09/2026
 
 - status: `OIDC_CLIENT_ACCEPTED_LOCAL / ROOT_INTEGRATION_PENDING`; produção `NO_GO`.
