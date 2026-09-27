@@ -1,3 +1,7 @@
+# PR-009-PROV — CI remoto histórico não sela o candidato atual — 27/09/2026
+
+- `HISTORICAL_REMOTE_VERIFY_PASS / CURRENT_PROVENANCE_UNPROVEN / NO_GO`: [prova remota](04_audit/evidence/PR009-REMOTE-AUDIT-20260927/proof.json) confirmou Verify/Security verdes em `8ee6fa2` e 37/37 gates no manifesto antigo, mas sem jobs/bundle de atestação, SHA divergente do checkout e `main` sem proteção/rulesets. Exigir CI da SPEC 0147 no SHA integrado, verificação independente da atestação e digest OCI, retenção/exportação e check obrigatório antes de promoção.
+
 # PR-301 — prova sintética de topologia HTTPS — 27/09/2026
 
 - `SYNTHETIC_BROWSER_SEMANTICS_PASS / NO_GO`: [prova Chromium](04_audit/evidence/PR301-CROSS-ORIGIN-PROBE-20260927/proof.json) em quatro hosts HTTPS sintéticos confirma isolamento de cookies da API em relação ao console e host irmão, envio do `Strict` por CORS com credenciais e retorno do `Lax` sem `Strict` por navegação iniciada no documento do IdP. É prova do navegador, não do produto. SPEC 0150 T3, BUILD, E2E integrado, issuer corporativo e certificação do SHA integrado continuam P0.

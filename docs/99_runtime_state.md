@@ -1,3 +1,11 @@
+# PR-009-PROV — auditoria remota da proveniência do CI — 27/09/2026
+
+- status: `HISTORICAL_REMOTE_VERIFY_PASS / CURRENT_PROVENANCE_UNPROVEN`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [prova remota](04_audit/evidence/PR009-REMOTE-AUDIT-20260927/proof.json) do GitHub: Verify `36309111340` e Security `36309111343` passaram no SHA `8ee6fa2`; o manifesto baixado lista 37 gates PASS e 60 arquivos presentes, SHA-256 `51bdfe6d6aa4cd3591978b49c273a9e03814a09e402c59cf50251ea247fdb923`.
+- verification_state: o run tem só o job Verify, sem jobs de atestação/verificação independente ou bundle; pertence a SHA divergente do checkout atual. API do GitHub retornou `main` sem branch protection (404) e sem rulesets. A CLI local 2.45.0 não oferece `gh attestation`; a contagem de arquivos não é prova criptográfica de integridade.
+- blocking_state: workflow SPEC 0147 ainda sem execução remota no SHA integrado; atestação de manifesto/digest OCI, retenção/exportação e proteção do check de proveniência pendentes. Sem push autorizado. Produção `NO_GO`.
+- next_action: após integração do candidato e autorização de push, executar Verify/Security no mesmo SHA, conferir o bundle em verificador independente e aplicar proteção de `main`; continuar os gates locais independentes.
+
 # PR-301 — prova sintética HTTPS de cookies — 27/09/2026
 
 - status: `SYNTHETIC_BROWSER_SEMANTICS_PASS / SPEC0150_T3_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

@@ -1,3 +1,8 @@
+# PR-009-PROV — recon da prova CI remota — 27/09/2026
+
+- Consulta read-only ao GitHub confirmou Verify [run 36309111340](https://github.com/ricardoakinaga-dev/cvg-operational-harness/actions/runs/36309111340) e Security [run 36309111343](https://github.com/ricardoakinaga-dev/cvg-operational-harness/actions/runs/36309111343) verdes no mesmo SHA `8ee6fa2`. O download do único artefato Verify trouxe manifesto `aud0578-pr007-v1` com 37/37 gates PASS, 60/60 arquivos listados presentes e hash `51bdfe6d6aa4cd3591978b49c273a9e03814a09e402c59cf50251ea247fdb923`.
+- [Prova](04_audit/evidence/PR009-REMOTE-AUDIT-20260927/proof.json): esse run não contém jobs `attest`/`provenance-verify` nem bundle; seu SHA diverge do checkout atual. `main` retornou proteção 404 e rulesets vazios. `gh` local 2.45.0 não tem subcomando `attestation`, portanto não houve verificação criptográfica por essa CLI. Não houve push, deploy nem alteração de configuração externa. SPEC 0147 continua sem prova remota do candidato integrado; `NO_GO`.
+
 # PR-301 — prova Chromium da semântica HTTPS de cookies — 27/09/2026
 
 - Claim próprio `PR-301-CROSS-ORIGIN-BROWSER-PROBE`. Em Node 22/Chromium 147, quatro servidores HTTPS descartáveis em `api.example.test`, `console.example.test`, `sibling.example.test` e `idp.other.test` verificaram escopo host-only, CORS com credenciais, `SameSite=Strict` operacional, cookie pendente `Lax` no callback e rejeição de injeção `__Host-` por host irmão. [Prova e resultado](04_audit/evidence/PR301-CROSS-ORIGIN-PROBE-20260927/proof.json), SHA-256 do resultado `7c1a30960d993590a6c9e443c96a008cc7d20053381055a9b8d59721f889a76f`.
