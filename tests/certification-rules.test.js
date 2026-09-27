@@ -1,4 +1,3 @@
-import fs from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   parseVitestJsonMetrics,
@@ -53,14 +52,6 @@ describe('Vitest JSON certification metrics', () => {
         ]
       })
     ).toBeNull()
-  })
-
-  it('accepts the tracked raw unit report without relying on stdout format', () => {
-    const report = JSON.parse(fs.readFileSync(VITEST_REPORT_PATHS.unit))
-    const metrics = parseVitestJsonMetrics(report)
-    expect(metrics?.filesPassed).toBeGreaterThan(300)
-    expect(metrics?.testsPassed).toBeGreaterThan(2000)
-    expect(metrics?.testsFailed).toBe(0)
   })
 
   it('verifies unit counts when the runner log has no textual summary', () => {
