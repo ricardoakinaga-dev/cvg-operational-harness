@@ -1,3 +1,9 @@
+# PR-301/302 — E2E confiável local completo — 27/09/2026
+
+- Sob SPEC 0144 e claim isolado, `deploy/local-oidc/verify-full.mjs` cria roles/schemas e operador sintéticos, sobe API e web, navega via Keycloak real e OTP, comprova que OTP errado não emite sessão, completa callback com OTP correto, confirma cookie HttpOnly/Strict, recarga da mesma identidade sem token/header de operador e revogação no logout. Commit isolado `cb943e8`; nenhuma credencial real, deploy ou push.
+- Primeiro E2E encontrou pacotes internos não compilados para Vite; `npm run build:runtime` preparou o runtime. Outro ciclo encontrou erro na instrumentação de cookie pelo Playwright, não no produto; a prova passou após usar a restauração real da identidade e atributos do cookie. Execuções finais Node 24.20.0 e Node 22.23.2 PASS. No Node 22, `typecheck`, `lint`, `build:web`, links e higiene PASS. Banco PostgreSQL 16 descartável terminou com zero roles/schemas de teste; browser, API, web, usuário e contêineres removidos. Prova/hashes em `docs/04_audit/evidence/PR301-302-TRUSTED-E2E-20260927/proof.json` no branch isolado.
+- Revisão independente, integração `main`, certificado/CI do mesmo SHA, IdP corporativo, retenção/purge, rollout e preflight read-only de produção ainda pendentes. Produção `NO_GO`.
+
 # PR-302-WEB-OIDC — BUILD web isolado e regressões — 27/09/2026
 
 - Sob SPEC 0144 aprovada, commits isolados `531ef2a` e `1c1ae32`: cliente web inicia OIDC por POST com cookie, valida esquema da URL de navegação, recarrega sessão por cookie sem token, trata 401 inicial sem callback global de expiração, trata 503 com retry e mantém a identidade local se o logout falha. Revisão interna corrigiu o retry do início após 503; não equivale a crítica independente.

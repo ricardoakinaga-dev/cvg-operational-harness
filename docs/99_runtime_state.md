@@ -1,3 +1,11 @@
+# PR-301/302 — E2E OIDC confiável local isolado — 27/09/2026
+
+- status: `TRUSTED_BROWSER_E2E_PASS_LOCAL / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: branch isolado `codex/pr301-oidc-client` commit `cb943e8` executou Chromium com console, API, Keycloak MFA real e PostgreSQL 16 de produto/autenticação com roles separadas. OTP errado não criou sessão; OTP válido completou callback, cookie HttpOnly/Strict, recarga sem headers de autoridade e logout com revogação. Prova repetida em Node 24 e no Node 22.23.2 fixado pelo repositório.
+- verification_state: `docs/04_audit/evidence/PR301-302-TRUSTED-E2E-20260927/proof.json` **no branch isolado** contém 12 hashes e logs finais. `build:runtime`, build web, tipos, lint, links, formato e higiene PASS. Roles/schemas sintéticos zerados; operador, API/web e contêineres descartáveis removidos. Primeira tentativa revelou runtime não compilado para Vite; outra revelou observação incorreta de header de cookie pelo Playwright; ambas corrigidas na preparação/prova final.
+- blocking_state: branch ainda fora do checkout compartilhado por claim PR-L04; revisão adversarial independente, IdP corporativo, retenção/purge, migração/rollout, startup de produção sem credencial DDL e certificação/CI remota no mesmo SHA continuam abertos.
+- next_action: integrar após PR-L04, revisar adversarialmente o candidato integrado e recertificar; sem liberar produção irrestrita.
+
 # PR-302-WEB-OIDC — console confiável local isolado — 27/09/2026
 
 - status: `BUILD_VERIFIED_LOCAL / REVIEW_AND_E2E_PENDING / ROOT_INTEGRATION_PENDING`; produção `NO_GO`.

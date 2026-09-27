@@ -549,6 +549,8 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-302 — Login web por OIDC · P0 · SPEC+BUILD
 
+- 27/09/2026, E2E confiável isolado `cb943e8`: Chromium percorreu console, API, PostgreSQL 16 e Keycloak MFA real; OTP errado não criou sessão, OTP válido emitiu cookie HttpOnly/Strict, recarga por cookie e logout revogado. Node 22.23.2 (alvo) e Node 24.20.0 PASS; roles/schemas/operador e contêineres sintéticos removidos. Prova no branch: `docs/04_audit/evidence/PR301-302-TRUSTED-E2E-20260927/proof.json`. Revisão independente, integração após PR-L04 e certificado/CI no SHA integrado pendentes; IdP corporativo e gates de dados/rollout/serving de produção ainda abertos. `E2E_LOCAL_PASS / NO_GO`.
+
 - 27/09/2026, branch isolado `codex/pr301-oidc-client` (`531ef2a`, `1c1ae32`): console inicia login OIDC/MFA por POST, recarrega sessão por cookie, diferencia 401 inicial/503, mantém acesso travado na indisponibilidade e preserva identidade local se o logout falha. Revisão interna corrigiu retry após falha 503 do início. Suíte web 26/96, typecheck, lint, build e links PASS. Prova no próprio branch: `docs/04_audit/evidence/PR302-OIDC-WEB-20260927/proof.json`. Crítica independente, E2E confiável web/API/PostgreSQL/Keycloak, integração no checkout após PR-L04 e certificado no SHA integrado pendentes. `BUILD_VERIFIED_LOCAL / NO_GO`.
 
 - 27/09/2026: SPEC 0144 e D-09 aprovadas. Tentativa de recarga por cookie rejeitada na crítica I2: `App.tsx` trata 503 como autenticação necessária e a primeira visita 401 pode aparecer como sessão expirada. Código web da tentativa retirado. Implementar recarga, estados da UI e callback 401 juntos quando PR-L04 liberar `App.tsx`/`client.ts`; depois E2E confiável e IdP. `OPEN / NO_GO`.
