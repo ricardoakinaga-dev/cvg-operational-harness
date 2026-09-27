@@ -1,5 +1,12 @@
 # 0190 — SPEC Validation
 
+## AUD-0578 / PR-010 — build limpo para E2E
+
+- [SPEC 0143](0143_clean_build_for_e2e.md) está `BUILD_LOCAL_AUTHORIZED` em
+  T2: a certificação em checkout limpo revelou `@cvg/shared` sem `dist` no
+  servidor Vite; `build:harness` seguido de E2E 12/12 reproduziu a solução.
+  A task PR-010 está registrada em 0356. Nenhuma produção é autorizada.
+
 ## AUD-0578 / PR-010 — prontidão do worker homolog
 
 - [SPEC 0141](0141_homolog_worker_shutdown_readiness.md) está

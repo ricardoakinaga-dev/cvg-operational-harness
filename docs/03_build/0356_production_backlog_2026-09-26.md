@@ -123,6 +123,10 @@
 
 ### PR-010 — Fazer o CI rodar no GitHub · P0 · SPEC+BUILD
 
+- Checkout limpo de 27/09/2026 ([SPEC 0143](../02_spec/0143_clean_build_for_e2e.md)):
+  a certificação chegava ao E2E sem `packages/shared/dist` porque `npm run
+build` não executava `build:harness`. Após a compilação do harness, E2E
+  12/12. O comando `build` deve preparar o workspace antes da certificação.
 - Atualização de 27/09/2026: o Verify do SHA `996233e` executou os jobs;
   documentação passou, mas E2E falhou no screenshot mobile por fallback de
   fonte (SPEC 0139). O novo candidato ainda exige Verify verde; o critério de
