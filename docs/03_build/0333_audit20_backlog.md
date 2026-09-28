@@ -136,7 +136,8 @@
 
 ### AUD20-008 — Adicionar fencing ao replay/webhook lease
 
-- status: `READY / G20-1_AUTHORIZED`, dependência: `G20-2`;
+- status: `IMPLEMENTED_LOCAL / I1_REJECTED_EVIDENCE / G20-2_CLOSED`;
+- revisão independente em 28/09/2026: [parecer I1](../04_audit/evidence/AUD-20260920/AUD20-008/I1-20260928.md) rejeitou fechamento histórico. Os seis arquivos próprios passaram SHA-256, mas 33 artefatos compartilhados, inclusive candidato/resultado, divergem; sentinel ainda não existe. Preservar `A21-F20` aberto até novo pacote verificável e parecer no mesmo run/candidate;
 - finding: `A20-F10`;
 - owner sugerido: security/data;
 - escopo: reserve/commit/release em memory e PostgreSQL;

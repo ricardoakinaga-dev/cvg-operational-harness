@@ -1,3 +1,11 @@
+# PR-003 / AUD20-008 — revisão de proveniência e I1 — 28/09/2026
+
+- status: `SPEC_0157_REVIEW_READY / AUD20_008_I1_REJECTED / PROGRAM_IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [SPEC 0157](02_spec/0157_certificate_live_head_binding.md) T3 foi corrigida após crítica independente e está pronta para revisão humana; exige vínculo entre Git HEAD, resultado, manifesto e candidato, com ciclo de certificado no SHA final e histórico separado. [Parecer I1](04_audit/evidence/AUD-20260920/AUD20-008/I1-20260928.md) rejeitou o fechamento histórico de AUD20-008: seis hashes próprios conferem, 33 artefatos compartilhados divergem e sentinel falta.
+- verification_state: `docs:check-links`, higiene, Prettier e diff passaram; nenhuma implementação T3 ou nova certificação nesta fatia. Código de fencing e teste PostgreSQL preservado apoiam comportamento local, sem vincular o run histórico.
+- blocking_state: revisão humana T3 da SPEC 0157, novo pacote I1 verificável, root PR-L04/CI/IAM/staging e condições 0354 pendentes.
+- next_action: após aprovação T3, implementar e testar o vínculo do verificador em branch isolado; para AUD20-008, recuperar bundle antigo íntegro ou revisar novo candidato congelado e registrar sentinel real. Produção `NO_GO`.
+
 # PR-003 — certificado interino do candidato OIDC/RLS — 28/09/2026
 
 - status: `ISOLATED_16_GATES_PASS / AAA_CONTROLLED_CONDITIONAL_GO / ROOT_AND_EXTERNAL_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

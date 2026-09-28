@@ -1,3 +1,8 @@
+# PR-003 / AUD20-008 — gates de proveniência em aberto — 28/09/2026
+
+- `SPEC_0157_REVIEW_READY / BUILD_T3_WAITING_HUMAN`: [contrato](02_spec/0157_certificate_live_head_binding.md) de vínculo Git HEAD ↔ certificado aceito em crítica técnica, aguardando revisão humana explícita e testes. Certificado local `7ef74e7` continua apenas daquele SHA.
+- `AUD20-008_I1_REJECTED_EVIDENCE / A21-F20_OPEN_INTERNAL`: [parecer](04_audit/evidence/AUD-20260920/AUD20-008/I1-20260928.md) encontrou 33 hashes históricos divergentes e sentinel ausente; reemitir pacote no mesmo candidato/run ou recuperar arquivos íntegros antes de I1. Root/CI/IAM/staging e 13 condições 0354 permanecem abertos; produção `NO_GO`.
+
 # PR-003 — certificado local passou; produção ainda aberta — 28/09/2026
 
 - `ISOLATED_16_GATES_PASS / AAA_CONTROLLED_CONDITIONAL_GO / PRODUCTION_NO_GO`: [prova](04_audit/evidence/PR003-COMPOSITE-20260928/proof.json) do SHA `7ef74e7` inclui 2.582 unit, PG 261, E2E 12, zero skips, RLS 96,95%, 38/38 hashes e verificador PASS. Integração root após PR-L04, certificado do SHA definitivo, CI/atestação, staging/IAM, provider/canal, revisão I1, proveniência do commit e condições 0354 seguem abertos.

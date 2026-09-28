@@ -16,6 +16,7 @@ Para cada task de código, a evidência mínima inclui testes pertinentes, typec
 
 ### H01 — Fechar a revisão I1 do candidato
 
+- Revisão independente de 28/09/2026 para `AUD20-008`: [REJECT](../04_audit/evidence/AUD-20260920/AUD20-008/I1-20260928.md) do candidato histórico por 33 hashes compartilhados divergentes e sentinel ausente. `A21-F20` permanece aberto; H01 exige pacote de candidato/run verificável após H02, novo parecer e sentinel.
 - Sprint: P4-S8.
 - O que/onde: docs/04_audit/evidence/AUD-20260921/REM21-019/, certification/manifest.json e novo dossiê I1.
 - Como: Congelar o candidato de H02, entregar artefatos a crítico independente em leitura, registrar parecer sem editar o candidato durante a janela.

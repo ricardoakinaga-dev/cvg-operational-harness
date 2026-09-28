@@ -1,3 +1,9 @@
+# PR-003 / AUD20-008 — crítica de proveniência e I1 — 28/09/2026
+
+- Inspeção de `computeCandidateId` e `verifyQualification` confirmou que o ID é baseado em arquivos e o verificador não compara commits registrados com Git HEAD. [SPEC 0157](02_spec/0157_certificate_live_head_binding.md) T3 define positivo e negativos, histórico separado e bundle no SHA final. Schrodinger rejeitou rascunho com 2 P1/1 P2; após correção, `ACCEPT_SPEC_REVIEW_READY`. BUILD depende de aprovação humana.
+- Mencius fez I1 independente somente leitura de `AUD20-008` e retornou [REJECT](04_audit/evidence/AUD-20260920/AUD20-008/I1-20260928.md): `sha256sum --check` passou os seis arquivos da task e falhou em 33 artefatos compartilhados, inclusive certificado/candidato. Código e relatório PostgreSQL 253/253 apoiam fencing funcional, sem provar o candidato histórico. Sentinel pendente; `A21-F20` aberto.
+- `docs:check-links`/higiene, Prettier e `git diff --check` PASS; nenhum BUILD, certificação, push ou deploy. Produção `NO_GO`.
+
 # PR-003 — certificado interino hash-bound do OIDC/RLS — 28/09/2026
 
 - `npm run certify` no SHA isolado `ae0344f` e PostgreSQL 16 teve 14/16 gates PASS; build falhou sem `VITE_CVG_CONSOLE_ORIGIN`/`VITE_CVG_API_ORIGIN` HTTPS e smoke antigo falhou porque o preflight exige `NODE_ENV`. O verificador rejeitou os dois gates, confirmou 38 hashes e `NO_GO`.
