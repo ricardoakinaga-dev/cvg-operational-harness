@@ -1,3 +1,11 @@
+# PR-204 — BUILD T3 validado no branch isolado — 27/09/2026
+
+- status: `ISOLATED_BUILD_LOCAL_PASS / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: sob [SPEC 0151](02_spec/0151_production_boot_configuration_contract.md) aprovada, branch `codex/pr204-boot-20260927` (`99692e3`) congela o perfil de boot da API, recusa produção sem autoridade OIDC corporativa, valida worker e gateway, e sela o bundle web. Imagem Docker remove arquivos padrão do Nginx e preserva UID 101. [Prova](04_audit/evidence/PR204-BUILD-20260927/proof.json).
+- verification_state: Node 22/PostgreSQL sintético: suíte 333 arquivos/2.477 testes, gate PG 35/258 e Chromium 12/12 PASS, zero skips; Docker web com 10 arquivos e digest validado. Cobertura completa 333/2.477 PASS, sem skips: statements 92,28%, branches 87,45%, funções 95,06%, linhas 93,27%.
+- blocking_state: PR-L04 detém integração root; rollout B2 do segredo, IdP corporativo, SPEC 0150, decisões de produto, certificado/CI/atestação do SHA integrado pendentes. Produção `NO_GO`.
+- next_action: compor após PR-L04, executar B2 controlado e certificar o SHA final com proveniência remota antes de qualquer promoção.
+
 # PR-203 — extração PostgreSQL inbound validada localmente — 27/09/2026
 
 - status: `ROOT_LOCAL_PASS / COMPOSITE_CERTIFICATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

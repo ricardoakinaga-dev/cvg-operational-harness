@@ -1,3 +1,7 @@
+# PR-204 — BUILD T3 isolado validado — 27/09/2026
+
+- `ISOLATED_BUILD_LOCAL_PASS / ROOT_INTEGRATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR204-BUILD-20260927/proof.json) do branch `99692e3` registra suíte 333/2.477, PG 35/258 e Chromium 12/12 sem skips, além da imagem web selada com 10 arquivos. Fechamento de boot, gateway e worker feito sob SPEC 0151; cobertura 333/2.477 PASS com 92,28% statements e 87,45% branches. Integrar após PR-L04, executar B2, completar IdP corporativo/SPEC 0150 e certificar o SHA integrado com CI/atestação antes de GO.
+
 # PR-203 — extração PostgreSQL inbound local concluída — 27/09/2026
 
 - `ROOT_LOCAL_PASS / COMPOSITE_CERTIFICATION_PENDING / NO_GO`: branch `codex/pr203-postgres-extraction-20260927` (`9e949d7`) integrado ao root em `7b3871d`, com três hashes iguais, deixa `postgres.ts`/`postgres-inbound.ts` em 1.455/813 linhas. [Prova](04_audit/evidence/PR203-20260927/proof.json): AST 9/9, assinatura 7/7, crítico `ACCEPT`, suíte final 325/2.392, PG 35/258, E2E 12/12, zero skips; tipo/lint/negativo focado PASS no root. Próximo gate: compor OIDC/PR-L04 e certificar o SHA final com CI remoto; sem promoção de produção.

@@ -1,3 +1,9 @@
+# PR-204 — BUILD T3 sintético de boot, gateway e bundle — 27/09/2026
+
+- Sob [SPEC 0151](02_spec/0151_production_boot_configuration_contract.md) aprovada, branch isolado `codex/pr204-boot-20260927` (`99692e3`) valida configuração uma vez no boot da API, fecha produção sem autoridade OIDC corporativa, recusa worker sem perfil/seletor, impede provider externo sem chave e sela o bundle web. Imagem Docker remove os arquivos padrão do Nginx e preserva UID 101.
+- [Prova](04_audit/evidence/PR204-BUILD-20260927/proof.json): Node 22, suíte 333/2.477 e PostgreSQL 35/258 sem skips, Chromium 12/12, build Docker web e verificação independente dos 10 arquivos PASS. Cobertura 333/2.477 PASS (92,28% statements, 87,45% branches, 95,06% funções, 93,27% linhas); testes negativos e gates locais resumidos na prova.
+- Críticas independentes I1–I3 tiveram P1 corrigidos. Integração root, B2 operacional, IdP corporativo, cross-origin SPEC 0150, CI remoto/atestação e certificado do SHA final ainda pendentes. Sem dado real, push ou deploy; produção `NO_GO`.
+
 # PR-203 — fatia 4 de PostgreSQL validada em branch isolado — 27/09/2026
 
 - Commit `9e949d7` extraiu sete métodos de inbound/sessão e dois helpers para `postgres-inbound.ts` (813 linhas), reduzindo `postgres.ts` a 1.455. AST 9/9 e assinaturas 7/7 preservados; crítica pós-código `ACCEPT`, sem P0/P1. [Prova](04_audit/evidence/PR203-20260927/proof.json).
