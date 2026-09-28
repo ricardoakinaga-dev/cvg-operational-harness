@@ -1,0 +1,116 @@
+{
+  "audit": "AUD-0584",
+  "sourceCommit": "7ef74e7f4fd2b1141e416b85c7337f119e1333ab",
+  "sourceClean": true,
+  "profile": "NODE_ENV=development; server configured for trusted local OIDC; sessions pre-created directly in the in-memory store; callback disabled",
+  "node": "v22.23.2",
+  "registeredRouteMethodPairs": 111,
+  "adminRouteMethodPairs": 48,
+  "operatorResponseCounts": {
+    "400": 3,
+    "403": 45
+  },
+  "operatorPermissionGrantedPaths": [
+    {
+      "method": "GET",
+      "path": "/v1/admin/capability-approvals/:approvalId",
+      "status": 400,
+      "errorCode": "invalid_action"
+    },
+    {
+      "method": "HEAD",
+      "path": "/v1/admin/capability-approvals/:approvalId",
+      "status": 400,
+      "errorCode": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/capability-approvals/:approvalId/execute",
+      "status": 400,
+      "errorCode": "invalid_action"
+    }
+  ],
+  "controls": [
+    {
+      "role": "Operator",
+      "method": "GET",
+      "path": "/v1/tasks",
+      "status": 200
+    },
+    {
+      "role": "Admin",
+      "method": "GET",
+      "path": "/v1/admin/agents",
+      "status": 200
+    },
+    {
+      "role": "Admin",
+      "method": "GET",
+      "path": "/v1/admin/knowledge-sources",
+      "status": 200
+    },
+    {
+      "role": "Admin",
+      "method": "POST",
+      "path": "/v1/admin/capability-approvals/:approvalId/execute",
+      "status": 403
+    },
+    {
+      "role": "Operator",
+      "method": "GET",
+      "path": "/v1/admin/capability-approvals/approval_00000000-0000-4000-8000-000000000000",
+      "scenario": "cross-tenant-header",
+      "status": 403
+    },
+    {
+      "role": "Admin",
+      "method": "GET",
+      "path": "/v1/admin/agents",
+      "scenario": "cross-tenant-header",
+      "status": 403
+    },
+    {
+      "role": "Operator",
+      "method": "GET",
+      "path": "/v1/admin/agents",
+      "scenario": "forged-role-headers",
+      "status": 403
+    }
+  ],
+  "interpretation": "Operator has approval:view and approval:execute in permissionsByRole; the 400s are missing-record errors after authorization. Admin lacks approval:execute and gets 403. Route prefix /v1/admin is not itself the authorization policy.",
+  "limitations": [
+    "All 48 admin methods used synthetic/missing inputs; a separate controlled positive issues an approval and executes it once with a pre-created synthetic session on a server configured for local OIDC. The probe does not functionally validate every admin method.",
+    "Synthetic local OIDC/development with in-memory store; production corporate OIDC, PostgreSQL, root integration, and IAM are outside scope."
+  ],
+  "files": {
+    "probe.mts": "a5d0c6f7a42c1735fa792044c3e237b0c47c3572ec3728a6ed067b5e5b998a09",
+    "probe.json": "6432060c1decde09ec54617d24f6584e33aa139c82a6a05d8e8c56fc54931c13",
+    "capability-positive.mts": "57f33a4da51a1e4dcf1f854b2fcbffc52ef85def9fba4459ea32407d13427c04",
+    "capability-positive.json": "ad3618735130b53646ab36ff3ef8436a0dd7e46385ea1791e1e3e829bf6074d2"
+  },
+  "sourceHashes": {
+    "apps/api/src/server.ts": "4cc989a7e0a67f1eee2f1ff3bdfcb45b509f10b88dbc489857a2f207a125028d",
+    "apps/api/src/operator-session-hook.ts": "f753981366ea6693baed65e588666c48ce8a4585be8f1e5f6c5c4703a8b63aba",
+    "packages/shared/src/auth.ts": "6dec8799b7e82f181697a9b27ba09a6d62c77fe012548d4b99bef0fc1d945123"
+  },
+  "functionalPositive": {
+    "statuses": {
+      "issued": 200,
+      "operatorView": 200,
+      "crossTenantView": 400,
+      "adminExecute": 403,
+      "operatorRevoke": 403,
+      "operatorExecute": 200,
+      "operatorReplay": 400,
+      "finalView": 200
+    },
+    "executedTools": [
+      {
+        "name": "find_available_slots",
+        "status": "succeeded"
+      }
+    ],
+    "finalApprovalStatus": "consumed"
+  },
+  "sessionProvenance": "Created by the probe through createInMemoryOperatorSessionStore; no IdP callback, MFA, or group mapping was exercised."
+}
