@@ -1,3 +1,7 @@
+# PR-301-WEBHOOK-CLOCK-GUARD — rascunho de SPEC T3 0162 — 28/09/2026
+
+- Criado rascunho documental da migration 0028 para o high-water do relógio PostgreSQL exigido pela SPEC 0160 A2. Define singleton global, grants limitados, monotonicidade, autocommit antes de reserve/receipt e negativos de regressão/crash/restart. A ferramenta recusou crítico independente (`agent thread limit reached`); não submetido à revisão humana nem autorizado para BUILD. [SPEC 0162](02_spec/0162_webhook_clock_highwater_marker.md), [evidência](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/report.md).
+
 # PR-301-WEBHOOK-REPLAY-SCHEMA — BUILD local SPEC 0161 — 28/09/2026
 
 - A migration aditiva 0027 e o inbox tenant-scoped cifrado foram concluídos no commit isolado `737e9c1` após aprovação T3 sintética. [Prova e limites](04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/report.md): suíte Node 22/PostgreSQL 16 com 341 arquivos/2.592 testes sem skips, E2E 12/12 e gate crítico RLS 96,09% PASS. Nenhum banco/dado/canal real; PostgreSQL descartável removido.

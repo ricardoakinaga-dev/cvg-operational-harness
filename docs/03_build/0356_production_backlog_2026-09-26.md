@@ -665,6 +665,14 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 - Verificação: PostgreSQL 16 descartável, suíte 341/2.592 sem skips, migration e negativos de owner/RLS/grants/transições, cipher e takeover PASS; [prova](../04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/proof.json). Container e porta removidos.
 - Aberto: não há cleanup até D-06 aprovado; high-water/reconciliador são outro gate T3; crítica independente, integração root/CI/staging e GO de produção pendentes.
 
+#### PR-301-WEBHOOK-CLOCK-GUARD — high-water durável do relógio · P1 · SPEC T3
+
+- 28/09/2026: draft [SPEC 0162](../02_spec/0162_webhook_clock_highwater_marker.md) deriva do requisito A2 de 0160 e propõe migration 0028 global singleton; nenhuma migration/código foi iniciado. [Evidência](../04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/report.md): crítica independente bloqueada por limite de threads, sem aprovação T3.
+- Estado: `SPEC_DRAFT / INDEPENDENT_CRITIQUE_BLOCKED / HUMAN_T3_REVIEW_NOT_REQUESTED / BUILD_NOT_AUTHORIZED / NO_GO`.
+- O que/onde: persistir monotonicamente maior `clock_timestamp()` observado entre processos/restarts, sem tenant/payload e sem permitir runtime abaixar ou adiantar artificialmente o marcador.
+- Como: crítica independente, revisão humana T3, então BUILD sintético PostgreSQL 16 com negativos de regressão, rollback/crash/restart e grants/preflight.
+- Pronto: regressão detectada antes de reserve/receipt, marcador sobrevive a rollback do inbound, duas APIs serializam avanço, preflight falha fechado; não fecha reconciliador pending, D-06 ou produção.
+
 ### PR-304 — Borda endurecida · P1 · OPS
 
 - O que: TLS ponta a ponta (incluindo PostgreSQL), `API_REQUIRE_HTTPS=true`,

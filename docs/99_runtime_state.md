@@ -1,3 +1,11 @@
+# PR-301-WEBHOOK-CLOCK-GUARD — SPEC 0162 draft — 28/09/2026
+
+- status: `SPEC_DRAFT / INDEPENDENT_CRITIQUE_BLOCKED / HUMAN_T3_REVIEW_NOT_REQUESTED / BUILD_NOT_AUTHORIZED`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [SPEC 0162](02_spec/0162_webhook_clock_highwater_marker.md) especifica proposta de migration 0028 para guardar o maior `clock_timestamp()` visto, sobreviver a rollback/crash e falhar fechado na regressão.
+- verification_state: revisão documental local contra os requisitos A2 de 0160; crítica independente recusada pela ferramenta por limite de threads; sem teste ou implementação. [Evidência](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/proof.json). Não há aprovação humana para este novo delta.
+- blocking_state: crítica independente e revisão humana T3 pendentes; reconciliador de pending, D-06, provider, integração root/CI/staging permanecem gates separados.
+- next_action: crítica independente do contrato; submeter à revisão humana somente após fechar achados; não iniciar BUILD antes de aprovação explícita.
+
 # PR-301-WEBHOOK-REPLAY-SCHEMA — BUILD sintético SPEC 0161 — 28/09/2026
 
 - status: `BUILD_LOCAL_VERIFIED / SPEC_ACCEPTANCE_INCOMPLETE / SYNTHETIC_ONLY`; programa `IN_PROGRESS`; produção `NO_GO`.

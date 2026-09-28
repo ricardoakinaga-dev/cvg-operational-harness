@@ -1,5 +1,9 @@
 # 0190 — SPEC Validation
 
+## PR-301-WEBHOOK-CLOCK-GUARD — SPEC 0162 draft — 28/09/2026
+
+- [SPEC 0162](0162_webhook_clock_highwater_marker.md) propõe migration 0028 para impedir que regressão do relógio PostgreSQL reabra uma janela de replay após crash/restart. Estado `SPEC_DRAFT / INDEPENDENT_CRITIQUE_BLOCKED / HUMAN_T3_REVIEW_NOT_REQUESTED / BUILD_NOT_AUTHORIZED`. Crítica independente não executada: a ferramenta recusou novo agente com `agent thread limit reached`; evidência e hashes em [proof](../04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/proof.json) e [relatório](../04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/report.md). Aprovação humana T3 não solicitada/recebida. Não alterar schema ou código.
+
 ## PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 aprovada para BUILD T3 sintético — 28/09/2026
 
 - [SPEC 0161](0161_webhook_inbox_schema_delta.md) descreve migration aditiva do inbox HMAC cifrado, RLS/roles, preflight e commit fencing. BUILD sintético commitado isoladamente em `737e9c1`; 341/2.592 testes sem skips, PG16, E2E 12/12 e gate crítico RLS 96,09% PASS. Aceitação 0160 incompleta, retenção e integração externa pendentes; produção `NO_GO`. [Prova](../04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/proof.json).

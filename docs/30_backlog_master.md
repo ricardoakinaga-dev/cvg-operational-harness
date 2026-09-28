@@ -1,3 +1,7 @@
+# PR-301-WEBHOOK-CLOCK-GUARD — SPEC 0162 draft — 28/09/2026
+
+- `SPEC_DRAFT / INDEPENDENT_CRITIQUE_BLOCKED / BUILD_NOT_AUTHORIZED / NO_GO`: [SPEC 0162](02_spec/0162_webhook_clock_highwater_marker.md) delimita o high-water PostgreSQL ausente de 0160, sem ampliar migration 0027. Proposta 0028 é global singleton sem payload, update monotônico, grants mínimos e verificação antes de reserve/receipt; ferramenta recusou crítico independente por limite de threads. Aprovação humana T3 não solicitada; não editar código/schema. [Evidência](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/proof.json).
+
 # PR-301-WEBHOOK-REPLAY — BUILD sintético SPEC 0160 — 28/09/2026
 
 - `SYNTHETIC_BUILD_GATES_PASS_WITH_OPEN_P1_SPEC_GAPS / NO_GO`: commit isolado `737e9c17b5246ab623ff9e7bdcf33a16f9ba0844` implementa replay com timestamp, inbox cifrado tenant-scoped, lease fencing e commit atômico. 341 arquivos/2.592 testes sem skips, PostgreSQL 16, E2E 12/12, cobertura crítica RLS 96,09% PASS. Faltam o high-water marker durável e reconciliador interno requeridos por 0160; retenção D-06, provider real, crítica independente e integração root/CI/staging pendentes. [Prova](04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/proof.json).
