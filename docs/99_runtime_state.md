@@ -1,3 +1,11 @@
+# PR-003 — certificado interino do candidato OIDC/RLS — 28/09/2026
+
+- status: `ISOLATED_16_GATES_PASS / AAA_CONTROLLED_CONDITIONAL_GO / ROOT_AND_EXTERNAL_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: sob [SPEC 0156](02_spec/0156_worker_startup_smoke_node_env.md), commit isolado `7ef74e7` corrigiu o ambiente dos smokes de worker. Certificação inicial de `ae0344f` encontrou 14/16 PASS; nova certificação de `7ef74e7` passou 16/16. [Prova](04_audit/evidence/PR003-COMPOSITE-20260928/proof.json) e crítica independente aceitam o certificado somente para o SHA isolado.
+- verification_state: Node 22/PostgreSQL 16, 340/2.582 unit, PG 35/261, Chromium 12/12, zero skips, RLS 191/197 (96,95%); `certification:verify` exit 0 e 38/38 hashes de artefatos também conferidos dentro do bundle arquivado. HEAD/manifest/resultado iguais a `7ef74e7`; zero objetos sintéticos residuais e contêiner removido.
+- blocking_state: root sob PR-L04 tem outro SHA; CI remoto/atestação e proveniência do SHA definitivo, IdP/provider/canal reais, staging HTTPS/IAM, decisão humana e 13 condições 0354 não foram comprovados. P2 do verificador não compara automaticamente commit registrado com Git HEAD; a comparação manual passou apenas aqui. P2 de revisão I1 independente permanece no certificado.
+- next_action: integrar após PR-L04, corrigir/revisar vínculo de commit do verificador sob gate apropriado, recertificar o SHA root, validar CI e staging e obter decisões externas. Produção `NO_GO`.
+
 # PR-301 — prévia integrada OIDC/RLS com catálogo reconciliado — 28/09/2026
 
 - status: `ISOLATED_COMPOSITION_TESTS_PASS / CURRENT_SHA_CERTIFICATION_PENDING / ROOT_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

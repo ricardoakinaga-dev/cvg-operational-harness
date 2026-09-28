@@ -1,3 +1,7 @@
+# PR-003 — certificado local passou; produção ainda aberta — 28/09/2026
+
+- `ISOLATED_16_GATES_PASS / AAA_CONTROLLED_CONDITIONAL_GO / PRODUCTION_NO_GO`: [prova](04_audit/evidence/PR003-COMPOSITE-20260928/proof.json) do SHA `7ef74e7` inclui 2.582 unit, PG 261, E2E 12, zero skips, RLS 96,95%, 38/38 hashes e verificador PASS. Integração root após PR-L04, certificado do SHA definitivo, CI/atestação, staging/IAM, provider/canal, revisão I1, proveniência do commit e condições 0354 seguem abertos.
+
 # PR-301 — composição sintética passou; certificado atual pendente — 28/09/2026
 
 - `ISOLATED_COMPOSITION_TESTS_PASS / CURRENT_SHA_CERTIFICATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-COMPOSITE-20260928/proof.json) de `ae0344f`: merge OIDC/RLS sem conflitos, 340/2.582, PG 35/261, E2E 12/12, guard de catálogo PASS e RLS 191/197 branches no pai de mesmo código. Relatórios versionados de skips são antigos e ainda não certificam este SHA. Após PR-L04, integrar root, gerar relatórios atuais, CI/atestação e staging/IAM; completar 0354 antes de GO.

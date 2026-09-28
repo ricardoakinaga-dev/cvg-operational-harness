@@ -6,7 +6,7 @@
   [backlog 0356](../03_build/0356_production_backlog_2026-09-26.md).
 - Base: [SPEC 0151](0151_production_boot_configuration_contract.md) aprovada
   para BUILD sintético; worker controlado exige `NODE_ENV=development|test`.
-- Estado: `SPEC_READY / ISOLATED_T2_BUILD_AUTHORIZED / PRODUCTION_NO_GO`.
+- Estado: `ISOLATED_T2_BUILD_PASS / INTERIM_CERTIFIED / PRODUCTION_NO_GO`.
 
 ## Recon
 
@@ -34,3 +34,22 @@ ambiente somente no processo filho controlado.
 3. Trabalhar apenas no branch/worktree isolado até PR-L04 liberar o root.
    O certificado do SHA isolado não substitui CI remoto, staging, IAM nem
    decisão humana de produção.
+
+## Resultado local — 28/09/2026
+
+- Commit `7ef74e7` definiu `NODE_ENV=test` somente nos dois processos
+  filhos dos smokes. Ambos passaram; o preflight do produto não mudou.
+- Primeiro certificado interino de `ae0344f`: 14/16 gates PASS,
+  `build` sem origens HTTPS e `worker_startup` com fixture antiga FAIL;
+  verificador confirmou `NO_GO` e 38/38 hashes.
+- Segundo certificado interino, de `7ef74e7`, com origens HTTPS sintéticas:
+  16/16 gates PASS; 340/2.582 testes, PostgreSQL 35/261, Chromium 12/12,
+  zero skips e cobertura crítica RLS 191/197. `certification:verify`
+  passou 38/38 hashes e qualificou **este candidato isolado** como
+  `AAA_CONTROLLED / CONDITIONAL_GO`.
+- [Prova e bundles](../04_audit/evidence/PR003-COMPOSITE-20260928/proof.json):
+  os dois arquivos compactados contêm os 38 artefatos dos respectivos
+  manifestos; HEAD, manifest e resultado coincidem no segundo run.
+  Crítica independente aceitou o certificado local, com P2 de vínculo de
+  commit no verificador. Root/CI, integrações externas, IAM, staging e
+  decisão humana seguem pendentes; produção `NO_GO`.

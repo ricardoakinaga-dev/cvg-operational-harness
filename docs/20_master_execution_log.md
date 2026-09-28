@@ -1,3 +1,9 @@
+# PR-003 — certificado interino hash-bound do OIDC/RLS — 28/09/2026
+
+- `npm run certify` no SHA isolado `ae0344f` e PostgreSQL 16 teve 14/16 gates PASS; build falhou sem `VITE_CVG_CONSOLE_ORIGIN`/`VITE_CVG_API_ORIGIN` HTTPS e smoke antigo falhou porque o preflight exige `NODE_ENV`. O verificador rejeitou os dois gates, confirmou 38 hashes e `NO_GO`.
+- Sob [SPEC 0156](02_spec/0156_worker_startup_smoke_node_env.md), commit `7ef74e7` definiu `NODE_ENV=test` somente nos filhos dos smokes; build web recebeu `https://console.cvg.example.test` e `https://api.cvg.example.test`. Nova certificação no SHA limpo passou 16/16; 340/2.582 unit, PG 35/261, E2E 12/12, zero skips, crítico RLS 191/197. `certification:verify` qualificou candidato `47440863…` e verificou 38/38 hashes. Ambos os bundles arquivados também passaram 38/38 [na inspeção direta](04_audit/evidence/PR003-COMPOSITE-20260928/proof.json).
+- Decisão mecânica **local** `AAA_CONTROLLED / CONDITIONAL_GO`; Lorentz aceitou evidência do SHA isolado, com P2 de commit binding automático e finding I1 ainda aberto. Root/PR-L04, CI remoto/atestação, IAM/staging, provider/canal e decisão humana continuam `NO_GO` para produção.
+
 # PR-301 — composição OIDC/RLS e reparo isolado do catálogo — 28/09/2026
 
 - Merge preview `c78a64a` entre root `40eb3ed` e branch OIDC/RLS `42e69f4` não teve conflitos. Typecheck, lint, build, 32 focados e cobertura 340/2.582 passaram; guard RLS 191/197 (96,95%). Arendt encontrou P1 no catálogo e P2 no inventário versionado.
