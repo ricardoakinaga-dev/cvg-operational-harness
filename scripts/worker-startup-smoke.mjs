@@ -24,7 +24,7 @@ function runWorkerEntrypoint() {
   return new Promise((resolve) => {
     const child = spawn(npmCommand, ['run', 'dev:worker'], {
       cwd: rootDir,
-      env: { ...process.env, CVG_WORKER_QUEUE_ADAPTER: '' },
+      env: { ...process.env, NODE_ENV: 'test', CVG_WORKER_QUEUE_ADAPTER: '' },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     let output = ''
