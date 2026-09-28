@@ -44,4 +44,4 @@ Se a nova versão não puder servir com replay íntegro, manter ingress de webho
 ## Revisão
 
 - [Críticas independentes I1–I4](../04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md): I1–I3 encontraram lacunas P1 corrigidas; dois I4 `READY_FOR_HUMAN_T3_REVIEW`, somente no contrato documental.
-- Revisão humana T3: pendente.
+- Revisão humana T3: usuário aprovou BUILD sintético em 28/09/2026; execução controlada em worktree isolado.

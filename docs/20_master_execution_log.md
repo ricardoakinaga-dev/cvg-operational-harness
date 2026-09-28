@@ -1,6 +1,6 @@
 # PR-301-WEBHOOK-REPLAY — contrato T3 em crítica — 28/09/2026
 
-- [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) proposta para dois P1 de AUD-0587: expiração de replay até o fim da janela da assinatura, posse/fencing dos efeitos sob lease vencido, recuperação e tenant sem header não assinado. [I1–I4](04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) corrigiram lacunas P1 do contrato; dois I4 `READY_FOR_HUMAN_T3_REVIEW`. Sem código, dados reais, push ou deploy; aprovação humana T3 pendente. Produção `NO_GO`.
+- [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) proposta para dois P1 de AUD-0587: expiração de replay até o fim da janela da assinatura, posse/fencing dos efeitos sob lease vencido, recuperação e tenant sem header não assinado. [I1–I4](04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) corrigiram lacunas P1 do contrato; dois I4 `READY_FOR_HUMAN_T3_REVIEW`. Usuário aprovou BUILD T3 sintético em 28/09/2026; implementação isolada em andamento, sem dados reais, push ou deploy. Produção `NO_GO`.
 
 # AUD-0587 — HMAC/replay do webhook — 28/09/2026
 

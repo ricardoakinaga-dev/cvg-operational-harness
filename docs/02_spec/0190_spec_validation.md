@@ -1,8 +1,8 @@
 # 0190 — SPEC Validation
 
-## PR-301-WEBHOOK-REPLAY — SPEC 0160 pronta para revisão humana T3 — 28/09/2026
+## PR-301-WEBHOOK-REPLAY — SPEC 0160 aprovada para BUILD T3 sintético — 28/09/2026
 
-- [SPEC 0160](0160_webhook_replay_window_and_processing_fence.md) deriva dos dois P1 reproduzidos em AUD-0587 e da task PR-301-WEBHOOK-REPLAY. Define janela/expiração, posse de lease e efeitos duráveis, recuperação e vínculo de tenant. [Críticas I1–I4](../04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) fecharam lacunas P1 do contrato; os dois I4 aceitaram para revisão humana. Estado `SPEC_READY_FOR_HUMAN_T3_REVIEW / BUILD_NOT_AUTHORIZED`; somente dados sintéticos, produção `NO_GO`.
+- [SPEC 0160](0160_webhook_replay_window_and_processing_fence.md) deriva dos dois P1 reproduzidos em AUD-0587 e da task PR-301-WEBHOOK-REPLAY. Define janela/expiração, posse de lease e efeitos duráveis, recuperação e vínculo de tenant. [Críticas I1–I4](../04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) fecharam lacunas P1 do contrato; os dois I4 aceitaram para revisão humana. O usuário aprovou explicitamente o BUILD sintético da SPEC 0160 em 28/09/2026. Estado `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS`; sem canal real, push, deploy ou produção.
 
 ## PR-011-CODEQL — SPEC 0159 pronta para revisão humana T3 — 28/09/2026
 

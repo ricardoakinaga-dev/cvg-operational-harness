@@ -1,6 +1,6 @@
 # PR-301-WEBHOOK-REPLAY — SPEC 0160 — 28/09/2026
 
-- `SPEC_0160_READY_FOR_HUMAN_T3_REVIEW / BUILD_NOT_AUTHORIZED / NO_GO`: [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) delimita correção dos dois P1 de replay e vínculo de tenant; dois I4 aceitaram o contrato, BUILD só após revisão humana explícita. Root/PR-L04, CI/staging e condições 0354 pendentes.
+- `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS / NO_GO`: [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) delimita correção dos dois P1 de replay e vínculo de tenant; dois I4 aceitaram o contrato e usuário aprovou BUILD sintético em 28/09/2026. Root/PR-L04, CI/staging e condições 0354 pendentes.
 
 # AUD-0587 — replay do webhook — 28/09/2026
 
