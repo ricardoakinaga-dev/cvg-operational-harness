@@ -1,5 +1,9 @@
 # 0190 — SPEC Validation
 
+## PR-203 — fatia 4 de `postgres.ts` — 27/09/2026
+
+- [SPEC 0134](0134_postgres_slice_extraction.md) foi atualizada após recon do commit `f9f84c9` (fatia 3 já executada) e do checkout `79f28cc` (`postgres.ts` 2.106 linhas). A task PR-203 está registrada em 0356; a instrução vigente do usuário autoriza a extração local T2 sob D-12. Crítica independente `ACCEPT_LOCAL_DESIGN` após esclarecer bind local do contexto, conexão única e negativos de rollback. Estado `BUILD_LOCAL_AUTHORIZED` apenas para mover os métodos inbound/sessão, preservar SQL/transações/contrato e executar os gates da SPEC em worktree isolado. Resultado ainda `NOT_RUN`; produção `NO_GO`.
+
 ## PR-204 — contrato de configuração de produção — 27/09/2026
 
 - [SPEC 0151](0151_production_boot_configuration_contract.md) está `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING`, derivada de [AUD-0581](../04_audit/0581_production_boot_configuration_gap_2026-09-27.md) e da task PR-204. I1 rejeitou quatro pontos P1: perfil ausente do worker, dependência HMAC no boot OIDC, rollout incompatível do segredo e override `requiresApiKey: false` externo. A revisão definiu negativos e rollout A/B1/B2; I2 `ACCEPT_SPEC_REVIEW_READY` somente para revisão humana. Nenhum BUILD, boot corrigido, deploy ou GO autorizado.

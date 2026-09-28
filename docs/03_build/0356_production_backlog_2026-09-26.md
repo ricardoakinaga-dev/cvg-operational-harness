@@ -481,6 +481,7 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-203 — Fatias 3 e 4 de `postgres.ts` (RA25-07) · P1 · SPEC+BUILD
 
+- 27/09/2026, recon: a fatia 3 já está no commit `f9f84c9` (`postgres-audit.ts` 612 linhas). O alvo atual `postgres.ts` tem 2.106 linhas no checkout `79f28cc`. A [SPEC 0134 revisada](../02_spec/0134_postgres_slice_extraction.md) autoriza BUILD local T2 da fatia 4 em branch isolado, com extração inbound/sessão sem mudar SQL, transação ou exports públicos; gates ainda `NOT_RUN`. Meta: ambos os módulos abaixo de 1.500 linhas e testes de PostgreSQL/E2E verdes.
 - Dependência: PR-001.
 - Pronto: `postgres.ts` abaixo de 1 500 linhas; `test:postgres` PASS.
 

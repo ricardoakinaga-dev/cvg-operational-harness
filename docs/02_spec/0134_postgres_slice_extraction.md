@@ -1,7 +1,7 @@
 # 0134 — SPEC: extração de fatias de `postgres.ts`
 
 - ID: `SPEC-STRUCT-002`
-- Estado: `SPEC_DRAFT_FOR_REVIEW / SLICE_2_COMPLETED`
+- Estado: `SLICE_3_COMPLETED / SLICE_4_BUILD_LOCAL_AUTHORIZED` em T2; produção `NO_GO`.
 - Origem: RA25-07 de [0351](../03_build/0351_audit0573_backlog.md), onda D3 de
   [0350](../03_build/0350_audit0573_roadmap.md).
 - Alvo: `packages/persistence/src/postgres.ts` (3 354 linhas).
@@ -39,9 +39,11 @@ de um arquivo desse tamanho.
 2. **R2 — contrato público intacto.** `PostgresRuntimeRepository` e os tipos já
    exportados mantêm a superfície. Nenhum export novo entra no `index.ts` do
    pacote; exports internos necessários à extração são permitidos e listados.
-3. **R3 — estado explícito.** Métodos extraídos recebem `PostgresOutboxContext`
-   construído por getter privado dentro da classe, sem mudar visibilidade de
-   membro algum e sem capturar `this` por closure.
+3. **R3 — estado explícito.** Métodos extraídos recebem contexto construído
+   por getter privado dentro da classe, sem mudar visibilidade de membro
+   algum. Callbacks arrow locais ao getter podem vincular `this` para chamar
+   métodos existentes; referências de método sem bind e captura global de
+   uma instância do repositório são proibidas.
 4. **R4 — uma fatia por gate.** Cada fatia é um commit próprio com `typecheck`,
    `lint`, `format:check`, `npm test`, `test:postgres` e cobertura verdes.
 5. **R5 — evidência de não-regressão.** Mesma contagem de testes verdes ou
@@ -75,13 +77,70 @@ Verificação: `typecheck`, `lint`, `format:check` exit 0; suíte completa
 
 ## Fatias seguintes
 
-- Fatia 3: auditoria e checkpoint (526 linhas).
-- Fatia 4: inbound runtime (361) e sessão/task (~546) — deve trazer
-  `postgres.ts` para ~1 400 linhas, cumprindo o alvo.
+- Fatia 3 já foi entregue em `f9f84c9`: o módulo interno
+  `postgres-audit.ts` tem 612 linhas. A revisão do checkout `79f28cc`
+  encontrou `postgres.ts` com 2.106 linhas, SHA-256
+  `00ad0ef4fea39c369ff48695285c8cf2d6ff5161ad977726f12beb340eac0153`.
+- Fatia 4 proposta abaixo: extrair inbound e sessão para deixar
+  `postgres.ts` **abaixo de 1.500 linhas**, sem alterar a API pública.
+
+## Fatia 4 — decisão e gate antes do código
+
+- **CURRENT:** `PostgresRuntimeRepository` concentra `findByExternalMessage`,
+  `createWithSession`, `bindSessionAgentVersion`, `appendOutboundMessage`,
+  `markInboundRuntimeCompleted`, `findInboundRuntimeContext` e
+  `completeInboundRuntime`. Esses métodos ocupam aproximadamente 760 linhas
+  e usam o mesmo `PostgresQueryable` que as transações existentes. As
+  helpers locais `assertInboundRuntimeCorrelation` e `mergeOutboxPayload`
+  pertencem à mesma fatia. Auditoria/outbox já têm módulos internos; o
+  pacote exporta a classe por `postgres.ts`/`index.ts`.
+- **Invariante:** parâmetros e texto SQL, ordem de queries/auditoria, chave
+  de idempotência, filtro de tenant, `BEGIN`/`COMMIT`/`ROLLBACK`, commits
+  antecipados e mesma conexão para outbox+inbound ficam idênticos. Falha
+  antes de `BEGIN` continua sem mutação; falha dentro da transação continua
+  a fazer rollback. `completeInboundRuntime` chama
+  `transitionTakeoverInTransaction`, nunca `transitionTakeover` (que abre
+  outra transação). Nenhuma mudança de schema, timeout, retry ou privilégio.
+- **Alternativas:** manter a classe monolítica não cumpre o alvo de tamanho;
+  criar outro serviço/Pool alteraria a fronteira transacional; extrair só
+  helpers deixaria a classe acima do limite. Seleção mínima: módulo interno
+  `postgres-inbound.ts` com funções que recebem um `PostgresInboundContext`
+  explícito, construído por getter privado da classe. O contexto fornece o
+  mesmo `client`, `tenantIsolation` e callbacks para métodos já existentes;
+  não cria conexão nem captura `this` em escopo global. A classe mantém as
+  assinaturas públicas, delegando. `createWithSessionAndOutbox` e os dois
+  métodos de transição de takeover permanecem nela.
+- **Limite de dependência:** o novo módulo não entra em `index.ts`; exports
+  auxiliares são internos. Não mudar SQL nem normalização de erro para
+  acomodar a extração. Contexto/callbacks não podem iniciar uma transação
+  concorrente nem trocar o client recebido. `postgres-audit.ts` e
+  `postgres-outbox.ts` permanecem funcionais e com seus contratos atuais.
+- **Prova estrutural:** comparar blocos de SQL e statements de transação
+  antes/depois por diff ou reconstrução byte a byte; qualquer diferença
+  semântica exige SPEC própria. `postgres.ts` e o novo módulo abaixo de
+  1.500 linhas após Prettier, sem export público novo.
+- **Prova comportamental:** Node 22, tipos/lint/formato, focados em
+  `outbox-durability`, `postgres-migration-smoke`,
+  `session-version-pinning-postgres`, `runtime-trace-correlation` e
+  `postgres-persistence-mode`; depois `npm test` com PostgreSQL,
+  `test:postgres`, cobertura e E2E no worktree isolado. Os testes devem
+  observar rollback inbound+outbox, replay/idempotência, tenant, handoff e
+  rejeição de correlation ID malformado antes de `BEGIN`, além de rollback de
+  auditoria quando a conclusão falha. Zero skip no ambiente PG.
+- **Rollback:** um único revert do commit da fatia; nenhum dado ou migration
+  nova. Certificação final e CI remoto só após integrar com PR-L04 e OIDC.
 
 ## Autorização e gates
 
 - Task registrada: RA25-07 em `docs/03_build/0351_audit0573_backlog.md`.
 - BUILD executado sob a instrução do usuário (“vamos para próxima etapa”,
   2026-09-25) e sob o mesmo padrão aprovado para a fatia 1.
-- Revisão independente / humana desta SPEC: `NOT_RUN`. Produção `NO_GO`.
+- A instrução vigente do usuário para corrigir e validar o programa autoriza
+  este BUILD **local T2**, com task PR-203 registrada em 0356 e claim
+  próprio; a transição está registrada em `0190_spec_validation.md`.
+  Nenhuma autorização T3/T4, push, dado real ou release decorre desta fatia.
+- Crítica independente antes do código: `ACCEPT_LOCAL_DESIGN` após conferir
+  os sete métodos, o limite de tamanho e as fronteiras de transação; os
+  riscos de bind do contexto, cliente único, correlation ID e rollback de
+  auditoria foram incorporados acima. Nenhum teste foi executado pelo
+  crítico e o aceite de desenho não substitui os gates do BUILD.
