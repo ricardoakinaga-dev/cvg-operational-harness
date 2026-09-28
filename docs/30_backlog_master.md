@@ -2,6 +2,10 @@
 
 - `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS / NO_GO`: [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) delimita correção dos dois P1 de replay e vínculo de tenant; dois I4 aceitaram o contrato e usuário aprovou BUILD sintético em 28/09/2026. Root/PR-L04, CI/staging e condições 0354 pendentes.
 
+# PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 — 28/09/2026
+
+- `SPEC_DRAFT_HUMAN_REVIEW_PENDING / SCHEMA_BUILD_NOT_AUTHORIZED / NO_GO`: [SPEC 0161](02_spec/0161_webhook_inbox_schema_delta.md) fixa delta T3 para inbox tenant-scoped e cifrado; exigido pela própria SPEC 0160 para migration. Crítica e aprovação humana pendentes. Implementação isolada não alterará schema antes do gate; produção `NO_GO`.
+
 # AUD-0587 — replay do webhook — 28/09/2026
 
 - `TWO_P1_REPLAY_REPRODUCED / NO_GO`: [AUD-0587](04_audit/0587_isolated_webhook_boundary_2026-09-28.md) obteve 16/16 testes HMAC/replay e sete casos HTTP, mas [negativo de timestamp](04_audit/evidence/AUD0587-WEBHOOK-20260928/future-replay.json) aceitou assinatura futura duas vezes e [takeover PG](04_audit/evidence/AUD0587-WEBHOOK-20260928/lease-takeover.json) deixou segunda entrega entrar enquanto a primeira processava (200/500). Sem efeito externo duplicado provado. [Pacote](04_audit/evidence/AUD0587-WEBHOOK-20260928/proof.json), task PR-301-WEBHOOK-REPLAY no [0356](03_build/0356_production_backlog_2026-09-26.md). SPEC T3, root/CI/staging e 0354 pendentes; produção `NO_GO`.

@@ -657,6 +657,13 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 - Como: SPEC T3 com negativos de relógio e concorrência HTTP+PostgreSQL, revisão da transação inbox/outbox/fencing e prova de limpeza. BUILD só após aprovação humana explícita; não alterar código PR-L04 no root enquanto claim ativo.
 - Pronto: mesma assinatura nunca aceita duas vezes enquanto válida; redelivery concorrente não causa processamento duplicado nem 500 após efeito, inclusive em dois processos; teste de tenant não assinado; CI/certificado no SHA final e staging HTTPS. Produção permanece `NO_GO`.
 
+#### PR-301-WEBHOOK-REPLAY-SCHEMA — inbox tenant-scoped para fencing · P1 · SPEC T3 + BUILD
+
+- 28/09/2026: [SPEC 0161](../02_spec/0161_webhook_inbox_schema_delta.md) proposta como delta separado exigido pela SPEC 0160 para schema/migration. Revisão humana T3 e crítica pendentes; migration/runner/preflight ainda não autorizados.
+- O que/onde: guardar binding imutável, payload AES-GCM recuperável, lease generation monotônica e receipt em inbox tenant-scoped; finalizar replay + inbound + outbox + audit em uma transação.
+- Como: migration aditiva 0027, inventário canônico de tenant, RLS/roles, preflight semântico, grants mínimos, isolamento/crypto/concurrency em PostgreSQL 16 descartável.
+- Pronto: migrations reais limpas/repetíveis; schema inválido/grants/RLS recusados; cipher não expõe plaintext; pending sobrevive ao cleanup; takeover não permite fencing antigo; sem skips; produção `NO_GO`.
+
 ### PR-304 — Borda endurecida · P1 · OPS
 
 - O que: TLS ponta a ponta (incluindo PostgreSQL), `API_REQUIRE_HTTPS=true`,

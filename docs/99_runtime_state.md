@@ -1,10 +1,18 @@
-# PR-301-WEBHOOK-REPLAY — SPEC 0160 T3 — 28/09/2026
+# PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 T3 — 28/09/2026
+
+- status: `SPEC_DRAFT_HUMAN_REVIEW_PENDING / SCHEMA_BUILD_NOT_AUTHORIZED`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: registrada [SPEC 0161](02_spec/0161_webhook_inbox_schema_delta.md), delta necessário para o ledger inbox cifrado/RLS/fencing que SPEC 0160 requer. Nenhuma migration ou preflight de schema foi editado.
+- verification_state: escopo/schema revisado estaticamente; links/formatação pendentes; crítica independente e aprovação humana T3 pendentes.
+- blocking_state: SPEC 0160 aprovada, porém seu gate exige SPEC T3 separada para migration; schema BUILD depende de decisão humana sobre 0161. Código sem schema avança somente no que não depender deste delta.
+- next_action: validar links/formato e revisar delta 0161; submeter para aprovação humana T3; manter implementação schema bloqueada e produção `NO_GO`.
+
+# PR-301-WEBHOOK-REPLAY — BUILD sintético T3 aprovado — 28/09/2026
 
 - status: `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS`; programa `IN_PROGRESS`; produção `NO_GO`.
 - last_completed_action: [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) deriva de [AUD-0587](04_audit/0587_isolated_webhook_boundary_2026-09-28.md) e fixa validade temporal, fencing/efeitos e tenant sem iniciar código; [I1–I4](04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) fecharam lacunas P1 do contrato.
-- verification_state: negativos Node 22/PostgreSQL 16 reproduzidos e hash-bound; dois críticos I4 `READY_FOR_HUMAN_T3_REVIEW` documental; usuário aprovou BUILD sintético da SPEC 0160 em 28/09/2026.
-- blocking_state: dois P1 de replay abertos até BUILD e provas; root/PR-L04, CI/IAM/staging, SPECs 0157/0158/0159 e condições 0354 pendentes.
-- next_action: implementar SPEC 0160 em worktree isolado com PG/duas APIs/relógio e gates, revisão independente do diff; produção `NO_GO`.
+- verification_state: negativos Node 22/PostgreSQL 16 reproduzidos e hash-bound; dois críticos I4 `READY_FOR_HUMAN_T3_REVIEW` documental; usuário aprovou BUILD sintético da SPEC 0160 em 28/09/2026; cálculo exato de TTL adicionado em worktree, teste focado 16 passed/1 skipped.
+- blocking_state: dois P1 de replay abertos até BUILD e provas; gate T3 de migration 0161 aguarda crítica/revisão humana; root/PR-L04, CI/IAM/staging, SPECs 0157/0158/0159 e condições 0354 pendentes.
+- next_action: seguir fatias sem migration, obter gate 0161 antes de schema, depois provar PG/duas APIs/relógio e todos os gates; produção `NO_GO`.
 
 # AUD-0587 — replay do webhook sob concorrência — 28/09/2026
 

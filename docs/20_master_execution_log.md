@@ -1,6 +1,10 @@
-# PR-301-WEBHOOK-REPLAY — contrato T3 em crítica — 28/09/2026
+# PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 separada para migration — 28/09/2026
 
-- [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) proposta para dois P1 de AUD-0587: expiração de replay até o fim da janela da assinatura, posse/fencing dos efeitos sob lease vencido, recuperação e tenant sem header não assinado. [I1–I4](04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) corrigiram lacunas P1 do contrato; dois I4 `READY_FOR_HUMAN_T3_REVIEW`. Usuário aprovou BUILD T3 sintético em 28/09/2026; implementação isolada em andamento, sem dados reais, push ou deploy. Produção `NO_GO`.
+- [SPEC 0161](02_spec/0161_webhook_inbox_schema_delta.md) delimita inbox tenant-scoped, ciphertext AES-GCM, lease fencing, RLS, roles e preflight exigidos para provar a SPEC 0160. A SPEC 0160 aprovada requer revisão T3 própria para migration; código/schema deste delta não iniciado. Crítica e aprovação humana pendentes, produção `NO_GO`.
+
+# PR-301-WEBHOOK-REPLAY — BUILD sintético T3 aprovado — 28/09/2026
+
+- [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) cobre dois P1 de AUD-0587; [I1–I4](04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) corrigiram as lacunas do contrato, e usuário aprovou BUILD T3 sintético. Worktree `codex/pr301-webhook-replay-20260928` em `7ef74e7`; expiracão exata por timestamp já implementada; teste focado `16 PASS / 1 SKIP` (PostgreSQL não configurado ainda). Nenhum dado real, push ou deploy. Migration exige SPEC T3 própria 0161; produção `NO_GO`.
 
 # AUD-0587 — HMAC/replay do webhook — 28/09/2026
 
