@@ -1,3 +1,7 @@
+# PR-301 — RLS crítico passou localmente; integração pendente — 28/09/2026
+
+- `CRITICAL_COVERAGE_LOCAL_PASS / ROOT_INTEGRATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-RLS-20260928/proof.json) do commit isolado `42e69f4` mostra RLS 191/197 branches (96,95% ≥ 95%), 340/2.581 testes, PostgreSQL 35/261 e E2E 12/12 sem skips. Integrar após PR-L04, reconciliar `SKIP-PG-004/006` e certificar o SHA composto; fechar positivo de staging/IAM/CI e condições 0354 antes de GO.
+
 # PR-301/302 — follow-up T3 isolado — 28/09/2026
 
 - `LOCAL_FUNCTIONAL_PASS / CRITICAL_COVERAGE_FAIL / SYNTHETIC_BROWSER_TRANSPORT_PASS / ROOT_INTEGRATION_PENDING / NO_GO`: [correção](04_audit/evidence/PR301-CORP-I1-20260928/proof.json) `ed012a4` passou 2.578 testes, PG 258, E2E 12 e cobertura global, mas o grupo RLS ficou em 83,76% de branches contra piso 95%; [prova HTTPS](04_audit/evidence/PR302-HTTPS-BROWSER-20260928/proof.json) passou no bundle/NGINX reais com API/IdP sintéticos. Integrar após PR-L04, elevar cobertura RLS com negativos significativos, corrigir o catálogo de skips, provar o entrypoint corporativo com MFA/PG no mesmo digest em staging HTTPS público controlado, receber IAM e fechar rollback, CI/atestação/certificação e condições 0354 antes de GO.

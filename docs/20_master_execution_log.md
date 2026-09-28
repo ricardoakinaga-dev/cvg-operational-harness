@@ -1,3 +1,9 @@
+# PR-301 — cobertura crítica RLS fechada localmente — 28/09/2026
+
+- Sob [SPEC 0154](02_spec/0154_rls_preflight_negative_coverage.md), commit isolado `42e69f4` acrescentou negativos PostgreSQL de catálogo/policy/RLS forçado, privilégios da role de serving e owner de migração; cada mutação foi observada no catálogo e revertida. Revisor independente `ACCEPT`, sem P1/P2 remanescente no diff.
+- [Prova](04_audit/evidence/PR301-RLS-20260928/proof.json): cobertura e `npm test` 340 arquivos/2.581 testes sem skips; PG 35/261; E2E 12/12; typecheck, lint e formato PASS. `coverage:critical` PASS em 191/197 branches RLS (96,95%, piso 95%) sem redução do denominador; zero roles/schemas sintéticos residuais.
+- `skip:governance` ainda falha por `SKIP-PG-004` preexistente e `SKIP-PG-006` alterado por esta fatia; catálogo sob claim PR-L04. Código root, CI/atestação, staging corporativo/IAM e certificado final pendentes. Produção `NO_GO`.
+
 # PR-301/302 — crítica pós-BUILD fechada localmente — 28/09/2026
 
 - Em `ed012a4`, o branch T3 isolado passou a exigir mesmo site HTTPS para console/API, a aceitar host corporativo de autorização distinto sob cookie seguro, a recusar cookies operacionais legados/malformados no callback e a limitar espera DNS. Hume identificou as quatro lacunas; Noether aceitou a revisão após correções.

@@ -6,7 +6,7 @@
 - Base: [SPEC 0144](0144_trusted_operator_session_production.md) aprovada,
   [SPEC 0148](0148_coverage_denominator_and_typed_lint.md) preserva o piso
   crítico de 95% sem exclusões nem testes artificiais.
-- Estado: `SPEC_READY / ISOLATED_T2_BUILD_PENDING / PRODUCTION_NO_GO`.
+- Estado: `ISOLATED_T2_BUILD_PASS / ROOT_INTEGRATION_PENDING / PRODUCTION_NO_GO`.
 
 ## Recon
 
@@ -23,11 +23,15 @@ policy, RLS forçado, colunas e privilégios. [Medição](../04_audit/evidence/P
 1. Acrescentar ao teste PostgreSQL existente casos que partem de schema
    migrado descartável e o deixam em estado inválido observável: policy
    removida ou relaxada, `FORCE ROW LEVEL SECURITY` desabilitado, coluna
-   obrigatória ou índice/constraint ausente e role de serving com privilégio
-   de DDL/DML indevido. O preflight deve falhar fechado com a mensagem
+   obrigatória ou índice/constraint ausente, role de serving com privilégio
+   de DDL/DML indevido e owner de migração inválido segundo o catálogo.
+   O preflight deve falhar fechado com a mensagem
    pública apropriada antes de qualquer serving; o caso íntegro deve passar.
-2. Cada caso deve provar qual mutação de catálogo/role foi aplicada e limpar
-   schema e role mesmo após falha. Não usar dados reais, banco compartilhado
+2. A prova de owner usa role de migração separada, role de serving com login
+   real e tabela criada pelo owner sintético; tenta depois grants de `CREATE`,
+   membership e troca de owner. Cada caso deve provar qual mutação de
+   catálogo/role foi aplicada e limpar schema e roles mesmo após falha.
+   Não usar dados reais, banco compartilhado
    ou credencial de produção. Evitar asserts internos que apenas espelhem
    expressões do código; usar SQL e o resultado público do preflight.
 3. Medir cobertura no mesmo branch, Node 22/PostgreSQL 16, mantendo os
@@ -42,3 +46,19 @@ Esta fatia não inicia o BUILD amplo da PR-007, que segue dependente da
 baseline integrada PR-003 e do claim PR-L04 em `vitest.config.mts`. Nenhum
 resultado isolado certifica o candidato de produção. Integração root,
 staging corporativo, IAM, CI/atestação e certificado seguem `NO_GO`.
+
+## Resultado local — 28/09/2026
+
+- Commit isolado `42e69f4` acrescenta negativos PostgreSQL reais para drift
+  de owner, role, policy, RLS forçado, colunas, constraints e índices; verifica
+  rollback e limpa as fixtures. Não modifica código de produto nem o guard.
+- Node 22/PostgreSQL 16: `npm test` e cobertura 340 arquivos/2.581 testes,
+  sem skips; `test:postgres` 35/261; Chromium 12/12; typecheck, lint e
+  formato PASS. A crítica independente fechou os P2 de limpeza e aceitou o
+  diff. Zero roles e schemas sintéticos residuais.
+- `coverage:critical` PASS: grupo RLS 191/197 branches (96,95%) contra piso
+  95%; o denominador permanece 197. [Prova e logs](../04_audit/evidence/PR301-RLS-20260928/proof.json).
+- `skip:governance` FAIL por dois hashes vencidos: `SKIP-PG-004` já estava
+  divergente sob PR-L04; `SKIP-PG-006` precisa ser reconciliado com este
+  teste e sua contagem nova. A integração root, CI, staging e certificação
+  do candidato seguem pendentes; produção `NO_GO`.

@@ -1,3 +1,11 @@
+# PR-301 — negativos RLS aceitos no branch isolado — 28/09/2026
+
+- status: `ISOLATED_T2_BUILD_PASS / CRITICAL_COVERAGE_PASS / ROOT_AND_CERTIFICATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: commit `42e69f4` adicionou negativos PostgreSQL reais de owner, role, RLS/policy e catálogo sob [SPEC 0154](02_spec/0154_rls_preflight_negative_coverage.md); crítica independente `ACCEPT`. [Prova](04_audit/evidence/PR301-RLS-20260928/proof.json).
+- verification_state: Node 22/PostgreSQL 16, cobertura e `npm test` 340/2.581 sem skips, PostgreSQL 35/261, Chromium 12/12, tipo/lint/formato PASS; RLS 191/197 branches (96,95%) com piso 95% e denominador preservado. Banco descartável terminou sem roles/schemas sintéticos.
+- blocking_state: `skip:governance` acusa `SKIP-PG-004/006` por hashes vencidos; PR-L04 detém o catálogo compartilhado. Código ainda isolado; falta compor root, CI remoto/atestação, positivo corporativo em staging, IAM real e certificado do SHA integrado.
+- next_action: após liberação PR-L04, integrar commit, reconciliar catálogo de skips e reemitir certificação no mesmo SHA; manter produção `NO_GO`.
+
 # PR-301/302 — correção OIDC corporativa e prova HTTPS do produto — 28/09/2026
 
 - status: `ISOLATED_REMEDIATION_ACCEPTED / SYNTHETIC_HTTPS_TRANSPORT_PASS / ROOT_AND_STAGING_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

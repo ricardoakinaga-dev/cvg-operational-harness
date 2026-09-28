@@ -92,7 +92,7 @@
 ### PR-007 — Cobertura com denominador completo e lint type-aware (RA26-15) · P1 · SPEC+BUILD
 
 - 28/09/2026, [medição no branch OIDC isolado](../04_audit/evidence/PR301-CORP-I1-20260928/critical-coverage.json): suíte com cobertura 340/2.578 sem skips e pisos globais PASS, mas `coverage:critical` `FAIL` no grupo RLS, 165/197 branches (83,76%) contra piso 95%. A fatia `ed012a4` não alterou `tenant-preflight.ts`. Abrir negativos de privilégio, policy e inventário com valor de segurança demonstrável, reexecutar o gate no candidato integrado e preservar o denominador; não baixar o piso para emitir PASS.
-- 28/09/2026, subtask T2 [PR-301-RLS-NEGATIVE-COVERAGE](../02_spec/0154_rls_preflight_negative_coverage.md) prepara negativos de catálogo, policy e privilégios em PostgreSQL descartável no branch isolado; não inicia o BUILD amplo da PR-007 nem toca `vitest.config.mts` sob PR-L04. O aceite exige valor de segurança observado e piso crítico inalterado.
+- 28/09/2026, subtask T2 [PR-301-RLS-NEGATIVE-COVERAGE](../02_spec/0154_rls_preflight_negative_coverage.md) concluída localmente em `42e69f4`: negativos reais de catálogo, policy, owner e privilégios elevaram RLS a 191/197 branches (96,95%) sem mudar denominador/guard; 340/2.581, PG 35/261 e E2E 12/12 PASS. [Prova](../04_audit/evidence/PR301-RLS-20260928/proof.json). Integrar no candidato após PR-L04 e reconciliar `SKIP-PG-004/006`; o BUILD amplo da PR-007, CI e certificação continuam abertos, produção `NO_GO`.
 - Estado: `SPEC_READY / BUILD_WAITING_PR003_AND_PATH_CLAIM` em 27/09/2026.
   [SPEC-PR007-001](../02_spec/0148_coverage_denominator_and_typed_lint.md)
   fixa inventário sem exclusão silenciosa, dois relatórios, margem de 3 pp,
