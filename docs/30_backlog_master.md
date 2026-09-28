@@ -1,3 +1,7 @@
+# PR-301 — merge OIDC isolado validado — 27/09/2026
+
+- `LOCAL_INTEGRATION_PASS / ROOT_INTEGRATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-ROOT-INTEGRATION-20260927/proof.json) do branch `codex/pr301-root-integration-preview` (`0b4a95b`) combina root com OIDC sem conflitos, com 331/2.437 testes, PG 35/258 e skips zero. E2E Keycloak MFA/Chromium, tipo/lint/links/higiene PASS. PR-L04 ainda detém API/web no checkout principal; certificado/CI do SHA final, IdP corporativo, SPEC 0149/0150 e decisões de dados seguem P0. Produção `NO_GO`.
+
 # PR-009-PROV — autenticação da CLI no job independente — 27/09/2026
 
 - `LOCAL_VALIDATION_PASS / REMOTE_PROVENANCE_PENDING / NO_GO`: commit `cae1c2a` fornece `GH_TOKEN` ao `gh attestation verify` e [prova](04_audit/evidence/PR009-GH-TOKEN-20260927/proof.json) inclui negativo, 16 testes focados, suíte Node 22 305/2.229, PostgreSQL 35/258, Chromium 12/12, tipo/lint/actionlint. Ainda exigir execução remota no SHA integrado, atestação/digest OCI, check obrigatório e certificação.
@@ -147,7 +151,3 @@ A [task list 0356](03_build/0356_production_backlog_2026-09-26.md) é a fonte de
 
 - [Backlog mestre anterior](08_runtime/archive/prod20260926_backlog_history.md), fonte `docs/30_backlog_master.md`, SHA-256 `fedc1c99cfe9333f80c8aad864df0a310995e1d1d5c5c26c427e276dd332f937` (revisão `4aac877e5e0c504940c8ef2856928e43a1a5ed2a`).
 - [Runtime anterior](08_runtime/archive/prod20260926_runtime_state_history.md) e [log anterior](08_runtime/archive/prod20260926_execution_log_history.md) mantêm as decisões e evidências completas dos ciclos anteriores.
-
-# PR-301 — merge OIDC isolado validado — 27/09/2026
-
-- `LOCAL_INTEGRATION_PASS / ROOT_INTEGRATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-ROOT-INTEGRATION-20260927/proof.json) do branch `codex/pr301-root-integration-preview` (`0b4a95b`) combina root com OIDC sem conflitos, com 331/2.437 testes, PG 35/258 e skips zero. E2E Keycloak MFA/Chromium, tipo/lint/links/higiene PASS. PR-L04 ainda detém API/web no checkout principal; certificado/CI do SHA final, IdP corporativo, SPEC 0149/0150 e decisões de dados seguem P0. Produção `NO_GO`.

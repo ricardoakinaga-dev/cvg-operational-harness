@@ -1,3 +1,9 @@
+# PR-301 — integração OIDC isolada, prova local — 27/09/2026
+
+- Claim `PR-301-ROOT-INTEGRATION-PREVIEW`: merge limpo `dd954ab` de root `d43d3f5` com `codex/pr301-oidc-client` `85c2c7d`, em worktree próprio. O commit isolado `0b4a95b` tornou a porta da API configurável no E2E e atualizou apenas hashes do catálogo `SKIP-PG-004/014`; nenhum código root sob PR-L04 foi alterado.
+- [Evidência](04_audit/evidence/PR301-ROOT-INTEGRATION-20260927/proof.json): Node 22 com PostgreSQL 16, 331/2.437 na suíte total e 35/258 no gate PG, zero skips; catálogo, tipo, lint, formato, links/higiene PASS. E2E Chromium/Keycloak MFA real em API 3215/web 4189 provou OTP inválido negado, cookie e callback entre sites, replace, logout e replay 401. Banco e IdP sintéticos foram limpos. A primeira suíte teve um skip por `PHASE4A_DISPOSABLE_PG` ausente; a final foi repetida com o ambiente completo.
+- O branch e a prova são locais. PR-L04, SPEC 0149/0150 T3, IdP corporativo, certificação e atestação remota do SHA integrado permanecem abertos; produção `NO_GO`.
+
 # PR-009-PROV — GH_TOKEN no verificador independente — 27/09/2026
 
 - A [documentação oficial do GitHub](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-github-cli) exige `GH_TOKEN` no passo Actions que invoca `gh`. O job `provenance-verify` chamava `gh attestation verify` sem essa variável; commit `cae1c2a` a fornece somente nesse passo e o teste de contrato passa a exigir o vínculo. Negativo retirou a linha em cópia descartável, obteve falha do teste e restaurou o workflow byte a byte.
@@ -181,9 +187,3 @@
 
 - [AUD-0579](04_audit/0579_current_candidate_deep_audit_2026-09-27.md) auditou `5c0b791`, registrou `skip:governance` e `certification:verify` em falha, o defeito da sessão confiável no entrypoint e a SPEC T3 correspondente.
 - O [log integral anterior](08_runtime/archive/prod20260926_execution_log_history.md) preserva os comandos, resultados, decisões e evidências de todos os ciclos anteriores; SHA-256 dos bytes de origem `576ac3f766e7d9b930bb47f11583c5bb088e8f8526b9b977c5c4ff08c5d8609e`.
-
-# PR-301 — integração OIDC isolada, prova local — 27/09/2026
-
-- Claim `PR-301-ROOT-INTEGRATION-PREVIEW`: merge limpo `dd954ab` de root `d43d3f5` com `codex/pr301-oidc-client` `85c2c7d`, em worktree próprio. O commit isolado `0b4a95b` tornou a porta da API configurável no E2E e atualizou apenas hashes do catálogo `SKIP-PG-004/014`; nenhum código root sob PR-L04 foi alterado.
-- [Evidência](04_audit/evidence/PR301-ROOT-INTEGRATION-20260927/proof.json): Node 22 com PostgreSQL 16, 331/2.437 na suíte total e 35/258 no gate PG, zero skips; catálogo, tipo, lint, formato, links/higiene PASS. E2E Chromium/Keycloak MFA real em API 3215/web 4189 provou OTP inválido negado, cookie e callback entre sites, replace, logout e replay 401. Banco e IdP sintéticos foram limpos. A primeira suíte teve um skip por `PHASE4A_DISPOSABLE_PG` ausente; a final foi repetida com o ambiente completo.
-- O branch e a prova são locais. PR-L04, SPEC 0149/0150 T3, IdP corporativo, certificação e atestação remota do SHA integrado permanecem abertos; produção `NO_GO`.
