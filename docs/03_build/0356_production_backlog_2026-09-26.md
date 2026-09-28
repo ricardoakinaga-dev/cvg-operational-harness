@@ -475,7 +475,8 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-202 — Decompor `runTurn` em `packages/agent-runtime/src/runtime.ts` · P1 · SPEC+BUILD
 
-- O que: 2 603 linhas, com um `runTurn` de 2 233.
+- 28/09/2026, [AUD-0583](../04_audit/0583_pr202_runtime_hotspot_recon_2026-09-28.md) mediu `runTurn` atual em cerca de 655 linhas, `#runExecutionTurn` em 629 e o arquivo em 2.609; a contagem histórica abaixo está vencida. Baseline focada Node 22: 13/274 PASS. [SPEC 0153](../02_spec/0153_pr202_approval_request_slice.md) autoriza fatia T2 mecânica do ramo de approval em worktree isolado; gates pós-código ainda `NOT_RUN`. O restante de execução/replay continua aberto.
+- Baseline histórica de 26/09: 2.603 linhas, com `runTurn` de 2.233; substituída pela medição de 28/09 acima.
 - Pronto: `runTurn` dividido em etapas nomeadas com testes por etapa; mesmo
   comportamento provado pela suíte de evals.
 
