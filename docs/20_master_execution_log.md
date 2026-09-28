@@ -1,3 +1,7 @@
+# PR-301-WEBHOOK-REPLAY — contrato T3 em crítica — 28/09/2026
+
+- [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) proposta para dois P1 de AUD-0587: expiração de replay até o fim da janela da assinatura, posse/fencing dos efeitos sob lease vencido, recuperação e tenant sem header não assinado. [I1–I4](04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) corrigiram lacunas P1 do contrato; dois I4 `READY_FOR_HUMAN_T3_REVIEW`. Sem código, dados reais, push ou deploy; aprovação humana T3 pendente. Produção `NO_GO`.
+
 # AUD-0587 — HMAC/replay do webhook — 28/09/2026
 
 - [16/16 testes](04_audit/evidence/AUD0587-WEBHOOK-20260928/vitest-pg.log) e [sete casos HTTP](04_audit/evidence/AUD0587-WEBHOOK-20260928/http-probe.json) passaram no candidato isolado `7ef74e7`, Node 22/PostgreSQL 16. Crítica [I1](04_audit/evidence/AUD0587-WEBHOOK-20260928/I1-review.md) encontrou dois P1 não cobertos: replay de assinatura futura após expiração do registro e takeover de lease após 30 s. [Negativos executados](04_audit/evidence/AUD0587-WEBHOOK-20260928/proof.json) confirmaram aceitação repetida e duas requisições no resolver, segunda 200/primeira 500; sem efeito externo duplicado demonstrado. PG próprio limpo, contêiner/porta removidos. Task PR-301-WEBHOOK-REPLAY registrada no 0356; SPEC T3 e aprovação humana antes do código. Produção `NO_GO`.

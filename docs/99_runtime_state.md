@@ -1,3 +1,11 @@
+# PR-301-WEBHOOK-REPLAY — SPEC 0160 T3 — 28/09/2026
+
+- status: `SPEC_READY_FOR_HUMAN_T3_REVIEW / BUILD_NOT_AUTHORIZED`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) deriva de [AUD-0587](04_audit/0587_isolated_webhook_boundary_2026-09-28.md) e fixa validade temporal, fencing/efeitos e tenant sem iniciar código; [I1–I4](04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) fecharam lacunas P1 do contrato.
+- verification_state: negativos Node 22/PostgreSQL 16 reproduzidos e hash-bound; dois críticos I4 `READY_FOR_HUMAN_T3_REVIEW` somente documental, revisão humana da SPEC pendente.
+- blocking_state: dois P1 de replay abertos; SPEC T3 exige aprovação explícita para BUILD; root/PR-L04, CI/IAM/staging, SPECs 0157/0158/0159 e condições 0354 pendentes.
+- next_action: submeter SPEC 0160 à revisão humana T3; após aprovação, BUILD sintético isolado com PG/duas APIs/relógio e gates, produção `NO_GO`.
+
 # AUD-0587 — replay do webhook sob concorrência — 28/09/2026
 
 - status: `HMAC_INPUT_BOUNDARY_PASS / TWO_P1_REPLAY_REPRODUCED`; programa `IN_PROGRESS`; produção `NO_GO`.

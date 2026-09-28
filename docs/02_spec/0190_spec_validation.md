@@ -1,5 +1,9 @@
 # 0190 — SPEC Validation
 
+## PR-301-WEBHOOK-REPLAY — SPEC 0160 pronta para revisão humana T3 — 28/09/2026
+
+- [SPEC 0160](0160_webhook_replay_window_and_processing_fence.md) deriva dos dois P1 reproduzidos em AUD-0587 e da task PR-301-WEBHOOK-REPLAY. Define janela/expiração, posse de lease e efeitos duráveis, recuperação e vínculo de tenant. [Críticas I1–I4](../04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) fecharam lacunas P1 do contrato; os dois I4 aceitaram para revisão humana. Estado `SPEC_READY_FOR_HUMAN_T3_REVIEW / BUILD_NOT_AUTHORIZED`; somente dados sintéticos, produção `NO_GO`.
+
 ## PR-011-CODEQL — SPEC 0159 pronta para revisão humana T3 — 28/09/2026
 
 - [SPEC 0159](0159_codeql_active_source_remediation.md) deriva de AUD-0585/0586 e da task PR-011-CODEQL: validação de alias no auditor, custo linear em quatro URLs e no filtro de instruções, prova autenticada de rate limit e disposição de histórico. [I1/I2](../04_audit/evidence/PR011-CODEQL-SPEC-20260928/I1-I2-review.md) corrigiram dois P1/três P2 e aceitaram a SPEC para decisão humana. Estado `SPEC_READY_FOR_HUMAN_T3_REVIEW / BUILD_NOT_AUTHORIZED`; dados sintéticos, produção `NO_GO`.

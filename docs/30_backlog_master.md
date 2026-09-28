@@ -1,3 +1,7 @@
+# PR-301-WEBHOOK-REPLAY — SPEC 0160 — 28/09/2026
+
+- `SPEC_0160_READY_FOR_HUMAN_T3_REVIEW / BUILD_NOT_AUTHORIZED / NO_GO`: [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) delimita correção dos dois P1 de replay e vínculo de tenant; dois I4 aceitaram o contrato, BUILD só após revisão humana explícita. Root/PR-L04, CI/staging e condições 0354 pendentes.
+
 # AUD-0587 — replay do webhook — 28/09/2026
 
 - `TWO_P1_REPLAY_REPRODUCED / NO_GO`: [AUD-0587](04_audit/0587_isolated_webhook_boundary_2026-09-28.md) obteve 16/16 testes HMAC/replay e sete casos HTTP, mas [negativo de timestamp](04_audit/evidence/AUD0587-WEBHOOK-20260928/future-replay.json) aceitou assinatura futura duas vezes e [takeover PG](04_audit/evidence/AUD0587-WEBHOOK-20260928/lease-takeover.json) deixou segunda entrega entrar enquanto a primeira processava (200/500). Sem efeito externo duplicado provado. [Pacote](04_audit/evidence/AUD0587-WEBHOOK-20260928/proof.json), task PR-301-WEBHOOK-REPLAY no [0356](03_build/0356_production_backlog_2026-09-26.md). SPEC T3, root/CI/staging e 0354 pendentes; produção `NO_GO`.
