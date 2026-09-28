@@ -1,3 +1,11 @@
+# AUD20-008 — I1 novo e sentinel no candidato isolado — 28/09/2026
+
+- status: `I1_APPROVED_NEW_CANDIDATE / SENTINEL_MATCH / CLOSURE_REGISTRY_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [packet](04_audit/evidence/AUD20-008-I1-20260928/packet.json) congelou os oito arquivos de fencing no candidato `47440863…`, run `run-pr003-composite-r2-20260928` e SHA `7ef74e7`; [parecer independente](04_audit/evidence/AUD20-008-I1-20260928/I1-review.md) aprovou o critério sem P0/P1. [Sentinel](04_audit/evidence/AUD20-008-I1-20260928/sentinel-review.md) `MATCH` foi rechecado por Hypatia em 1.503 arquivos e bundle.
+- verification_state: cert arquivado 16/16 gates, 38/38 artefatos e PG 261/261 sem skips; revisão de código/SQL/testes e hashes sem reexecutar gates nesta fatia. Worktree `7ef74e7` limpo, bytes do packet preservados.
+- blocking_state: o certificado existente ainda registra `A21-F20 OPEN_INTERNAL`; nova adjudicação e cert do SHA final exigem gate próprio. P2 do preflight confere nomes de constraints, não definições. Root PR-L04, CI/atestação, IAM/staging, SPEC 0157 T3 e condições 0354 pendentes.
+- next_action: registrar o P2 em SPEC de segurança e, após aprovação T3, corrigir; reemitir adjudicação/certificado no SHA integrado quando PR-L04 liberar os caminhos. Produção `NO_GO`.
+
 # PR-003 — negativo de HEAD do verificador — 28/09/2026
 
 - status: `HEAD_DRIFT_REPRODUCED / SPEC_0157_HUMAN_T3_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

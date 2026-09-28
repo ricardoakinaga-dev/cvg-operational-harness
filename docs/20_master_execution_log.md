@@ -1,3 +1,9 @@
+# AUD20-008 — I1 fresco com packet e sentinel — 28/09/2026
+
+- Novo [packet](04_audit/evidence/AUD20-008-I1-20260928/packet.json) vinculou oito arquivos de fencing ao manifesto de 1.503 arquivos e ao bundle certificado de `7ef74e7`, candidato `47440863…`, run `run-pr003-composite-r2-20260928`. O worktree estava limpo; hashes dos oito arquivos e do bundle conferiram antes da crítica.
+- Hypatia revisou código, SQL e testes reais do candidato e retornou [I1 `APPROVE`](04_audit/evidence/AUD20-008-I1-20260928/I1-review.md) sem P0/P1; a evidência arquivada mostra PG 261/261 sem skips. P2 novo: preflight checa nomes de constraints de fencing, sem semântica. Nenhum teste foi reexecutado por essa revisão.
+- O [sentinel final](04_audit/evidence/AUD20-008-I1-20260928/sentinel.json) retornou `MATCH` nos oito arquivos, 1.503 registros do candidato, HEAD limpo e bundle; Hypatia [reconferiu](04_audit/evidence/AUD20-008-I1-20260928/sentinel-review.md) em leitura. O run histórico `579d2100` continua rejeitado e `A21-F20` segue aberto no registro até nova adjudicação/certificação do SHA final. Produção `NO_GO`.
+
 # PR-003 — reprodução do desvio de HEAD — 28/09/2026
 
 - No worktree isolado do certificado `7ef74e7`, `npm run certification:verify` passou antes do teste. Um `git commit --allow-empty` criou `60bbf22` sem alterar árvore; a repetição do verificador também saiu 0 e declarou `current candidate qualified` para o mesmo ID `47440863…` e 38 artefatos, embora três campos de commit continuem no pai. [Pacote](04_audit/evidence/PR003-HEAD-DRIFT-20260928/reproduction.json) liga hashes dos logs e diff vazio.

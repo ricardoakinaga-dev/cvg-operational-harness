@@ -1,3 +1,7 @@
+# AUD20-008 — fencing I1 aceito no novo candidato — 28/09/2026
+
+- `I1_APPROVED_NEW_CANDIDATE / SENTINEL_MATCH / A21-F20_REGISTRY_OPEN / NO_GO`: [packet e parecer](04_audit/evidence/AUD20-008-I1-20260928/I1-review.md) de `7ef74e7` aprovam memory/PG fencing, com 1.503 arquivos e 38 artefatos vinculados; [sentinel](04_audit/evidence/AUD20-008-I1-20260928/sentinel-review.md) confere. P2 de definição de constraints no preflight exige SPEC/gate de segurança; reemitir adjudicação/certificado do SHA root após PR-L04. O histórico `579d2100` continua rejeitado; produção `NO_GO`.
+
 # PR-003 — desvio do HEAD aceito pelo verificador — 28/09/2026
 
 - `P1_REPRODUCED / SPEC_0157_REVIEW_PENDING / NO_GO`: [negativo](04_audit/evidence/PR003-HEAD-DRIFT-20260928/reproduction.json) aceito em I1 mostrou `certification:verify` exit 0 após commit vazio com HEAD diferente dos três commits registrados e candidato igual. Aprovar SPEC 0157 T3, corrigir/validar em branch isolado e recertificar o SHA final após PR-L04; CI/atestação, IAM/staging e 13 condições 0354 seguem abertos.
