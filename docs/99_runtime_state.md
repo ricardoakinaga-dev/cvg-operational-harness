@@ -1,3 +1,11 @@
+# PR-204 — preparação B2 validada, release pendente — 28/09/2026
+
+- status: `B2_PREPARATION_LOCAL_PASS / B2_RELEASE_NOT_PROVEN`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: branch isolado `643f6ad` adicionou aviso sem segredo para uso do alias antigo em dev/test na futura fase B2. [Prova](04_audit/evidence/PR204-B2-PREP-20260928/proof.json) inclui imagem API B1 real: `/live` 200 e spoof de fase B2 recusado antes do listener, sem valor secreto em logs.
+- verification_state: Node 22 333/2.478 com cobertura 92,28% statements/87,45% branches, PostgreSQL 35/258, Chromium 12/12, tipo/lint/formato/skip e build runtime/Docker PASS. Crítica independente rejeitou **prova de release B2** porque o binário segue corretamente pinado em B1.
+- blocking_state: drenar A, certificar B1, cofre e transições/rollback B2 em staging, branch root integrado após PR-L04 e demais gates produtivos. Produção `NO_GO`.
+- next_action: publicar um B2 pinado somente após a frota B1 certificada e drenagem de A, então testar entrypoint e rollback; continuar frentes independentes até lá.
+
 # PR-301/204 — contrato OIDC corporativo pronto para revisão — 28/09/2026
 
 - status: `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

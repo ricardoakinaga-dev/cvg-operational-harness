@@ -1,3 +1,7 @@
+# PR-204 — B2 preparado, release ainda aberto — 28/09/2026
+
+- `B2_PREPARATION_LOCAL_PASS / B2_RELEASE_NOT_PROVEN / NO_GO`: [prova](04_audit/evidence/PR204-B2-PREP-20260928/proof.json) de `643f6ad`: 333/2.478, PG 35/258, Chromium 12/12, cobertura e imagem API B1. Fase B2 por env falha antes do listener. Crítica rejeitou fechamento B2 enquanto o binário permanece pinado em B1; faltam dreno A, cofre, B1 certificado, imagem B2 e rollback em staging.
+
 # PR-301/204 — autoridade corporativa em SPEC T3 — 28/09/2026
 
 - `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING / NO_GO`: [AUD-0582](04_audit/0582_corporate_oidc_boot_gap_2026-09-27.md) e [SPEC 0152](02_spec/0152_corporate_oidc_authority_contract.md) delimitam boot OIDC corporativo e prova no mesmo candidato. I1–I3 P1 corrigidos, I4 aceitou revisão documental. BUILD depende de aprovação explícita; IAM, SPEC 0150, staging e certificado final seguem abertos.

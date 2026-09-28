@@ -1,3 +1,8 @@
+# PR-204 — aviso B2 preparado no branch isolado — 28/09/2026
+
+- Commit `643f6ad` acrescenta `providerKeyMigrationNotice` e log estruturado sem valor no entrypoint. No release atual B1, a função não emite aviso e a fase não pode ser trocada por env. A [prova](04_audit/evidence/PR204-B2-PREP-20260928/proof.json) registra suíte 333/2.478, PG 35/258, Chromium 12/12, cobertura acima dos thresholds, imagem Docker API B1 viva e negativo de spoof antes de listener, sem vazamento.
+- Crítica read-only `REJECT_B2_RELEASE`: não há imagem B2 pinada nem prova de rollback. Isto fecha apenas preparação local, não migração operacional ou certificação do SHA integrado. Contêineres PostgreSQL sintéticos removidos; produção `NO_GO`.
+
 # PR-301/204 — AUD-0582 e SPEC 0152 de autoridade corporativa — 28/09/2026
 
 - Código isolado PR‑204 fecha boot produtivo sem OIDC corporativo; [AUD-0582](04_audit/0582_corporate_oidc_boot_gap_2026-09-27.md) registra o gap. [SPEC 0152](02_spec/0152_corporate_oidc_authority_contract.md) define parâmetros IAM, separação local/corporativo, client secreto, MFA/grupo/tenant, prova sintética no entrypoint e Chromium do mesmo digest, schema compatível e drenagem integral para rollback.

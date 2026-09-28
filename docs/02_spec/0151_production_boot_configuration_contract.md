@@ -157,3 +157,13 @@ A escolha do IdP corporativo, D-05/PR-501, política de dados, SPEC 0150,
 infraestrutura e decisão humana T4 de release continuam gates separados.
 Aceite local desta SPEC ou do BUILD não satisfaz as 13 condições de GO do
 [plano 0354](../03_build/0354_production_executive_plan_2026-09-26.md).
+
+Em 28/09/2026, o follow-up B2 no branch isolado `643f6ad` acrescentou aviso
+sem valor de segredo para o alias antigo em dev/test **quando** um binário B2
+for publicado. [Prova](../04_audit/evidence/PR204-B2-PREP-20260928/proof.json):
+Node 22 333/2.478, PostgreSQL 35/258, Chromium 12/12, cobertura e imagem API
+PASS; o binário atual continua fixado em B1 e rejeita tentativa de mudar fase
+por variável de ambiente antes de abrir listener. Crítica independente
+`REJECT_B2_RELEASE`: o processo publicado B2 e o rollback B2→B1 não foram
+exercitados. Drenagem de A, cofre, staging e certificação B1/B2 continuam
+gates de release; não houve promoção B2 nem GO.
