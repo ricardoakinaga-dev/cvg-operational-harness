@@ -136,6 +136,11 @@
 
 ### AUD20-008 — Adicionar fencing ao replay/webhook lease
 
+- 28/09/2026: [prova PostgreSQL 16](../04_audit/evidence/PR301-FENCING-PREFLIGHT-SPEC-20260928/proof.json)
+  reproduziu aceitação por nome de uma CHECK permissiva na tabela certa e de
+  uma homônima fora dela. A [SPEC 0158](../02_spec/0158_webhook_fencing_constraint_preflight.md)
+  define a correção T3; BUILD aguarda revisão humana explícita. `A21-F20`
+  continua aberto até adjudicação/certificado do SHA final; produção `NO_GO`.
 - status: `IMPLEMENTED_LOCAL / I1_APPROVED_NEW_CANDIDATE / SENTINEL_MATCH / CLOSURE_REGISTRY_PENDING / G20-2_CLOSED`;
 - nova revisão no candidato isolado `7ef74e7`: [packet, parecer e sentinel](../04_audit/evidence/AUD20-008-I1-20260928/I1-review.md) têm vínculo ao mesmo candidato/run; Hypatia aprovou o critério de fencing sem P0/P1, e rechecagem independente confirmou `SENTINEL_MATCH` para 1.503 arquivos. O run antigo `579d2100` continua rejeitado; `A21-F20` ainda está `OPEN_INTERNAL` no registro de certificação até reemitir adjudicação/certificado do SHA final. P2 residual: preflight confere nomes, não definições das constraints de fencing;
 - revisão independente em 28/09/2026: [parecer I1](../04_audit/evidence/AUD-20260920/AUD20-008/I1-20260928.md) rejeitou fechamento histórico. Os seis arquivos próprios passaram SHA-256, mas 33 artefatos compartilhados, inclusive candidato/resultado, divergem; sentinel ainda não existe. Preservar `A21-F20` aberto até novo pacote verificável e parecer no mesmo run/candidate;

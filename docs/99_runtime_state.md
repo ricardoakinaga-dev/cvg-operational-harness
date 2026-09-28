@@ -1,3 +1,11 @@
+# PR-301 — SPEC T3 do preflight de fencing — 28/09/2026
+
+- status: `SPEC_0158_REVIEW_READY / HUMAN_T3_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [prova PostgreSQL 16](04_audit/evidence/PR301-FENCING-PREFLIGHT-SPEC-20260928/proof.json) mostrou duas aceitações indevidas pela consulta de nomes: CHECK homônima em outra tabela e `CHECK (true)` na tabela correta. Transação revertida, zero schema residual. [SPEC 0158](02_spec/0158_webhook_fencing_constraint_preflight.md) fixa vínculo ao OID, tipo, validação, definição e nulabilidade.
+- verification_state: recon/probe e SPEC, sem alteração de código, migration ou serving; crítica [I1](04_audit/evidence/PR301-FENCING-PREFLIGHT-SPEC-20260928/I1-review.md) rejeitou quatro P1/três P2, corrigidos no texto, e [I2](04_audit/evidence/PR301-FENCING-PREFLIGHT-SPEC-20260928/I2-review.md) aceitou SPEC para revisão humana. Probe é espelho sintético; BUILD deve executar migrations reais.
+- blocking_state: BUILD T3 aguarda revisão humana explícita; certificado do SHA final, PR-L04/root, CI/atestação, IAM/staging e condições 0354 abertos.
+- next_action: após revisão humana, implementar negativos PostgreSQL reais e fail-closed em branch isolado; produção `NO_GO`.
+
 # AUD20-008 — I1 novo e sentinel no candidato isolado — 28/09/2026
 
 - status: `I1_APPROVED_NEW_CANDIDATE / SENTINEL_MATCH / CLOSURE_REGISTRY_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

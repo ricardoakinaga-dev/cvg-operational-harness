@@ -60,6 +60,17 @@
   variação de até 0,04 pp. O critério "métricas iguais" não foi atingido
   literalmente; a investigação da variação entra na PR-007.
 
+### PR-301-FENCING-CONSTRAINT-PREFLIGHT — catálogo do webhook · P1 · SPEC+BUILD
+
+- 28/09/2026: [SPEC 0158](../02_spec/0158_webhook_fencing_constraint_preflight.md)
+  T3 pronta para revisão humana; [prova sintética](../04_audit/evidence/PR301-FENCING-PREFLIGHT-SPEC-20260928/proof.json)
+  em PostgreSQL 16 reproduziu que o preflight atual encontra uma constraint
+  homônima em outra tabela e aceita `CHECK (true)` na tabela correta. O BUILD
+  deve vincular OID, tipo, validação, definição e nulabilidade às migrations
+  0002/0025, com negativos reais e boot fail-closed. Nenhum código de
+  segurança foi alterado; root/PR-L04, cert do SHA final, CI/atestação e
+  IAM/staging permanecem pendentes. Produção `NO_GO`.
+
 ### PR-004 — Tirar o estado Gauntlet do versionamento · P0 · HUMAN + DOC
 
 - Estado: `COMPLETED` em 26/09/2026 (D-02, opção A).

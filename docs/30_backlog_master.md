@@ -213,3 +213,7 @@ A [task list 0356](03_build/0356_production_backlog_2026-09-26.md) é a fonte de
 
 - `FIRST_SLICE_ROOT_LOCAL_PASS / FULL_PR202_OPEN / NO_GO`: [prova](04_audit/evidence/PR202-SLICE-20260928/proof.json) do root `69d08d3` com AST 3/3, crítico I2 `ACCEPT`, 325/2.393 com cobertura, PG 35/258, Chromium 12/12 e regressão root 13/275. Restam execução/replay, redução do arquivo e certificado composto. `skip:governance` falha por hash `SKIP-PG-014` vencido sob PR-L04; zero skips observados.
 - [SPEC 0150](02_spec/0150_cross_origin_operator_console.md) e [SPEC 0152](02_spec/0152_corporate_oidc_authority_contract.md) receberam aprovação humana T3 para BUILD e testes somente sintéticos. Implementar em worktree com IdP HTTPS e hosts distintos; IAM real, DP/ops, integração, CI/atestação e 13 condições de 0354 permanecem gates de produção.
+
+# PR-301 — preflight semântico do fencing — 28/09/2026
+
+- `SPEC_0158_REVIEW_READY / HUMAN_T3_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-FENCING-PREFLIGHT-SPEC-20260928/proof.json) PostgreSQL 16 reproduziu constraint homônima em outra tabela e `CHECK (true)` aceita por nome. [SPEC 0158](02_spec/0158_webhook_fencing_constraint_preflight.md) define o reparo e os negativos reais; BUILD depende de revisão humana T3. `A21-F20` continua aberto no certificado; root/CI/IAM/staging e condições 0354 pendentes.
