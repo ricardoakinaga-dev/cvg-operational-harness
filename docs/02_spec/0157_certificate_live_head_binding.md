@@ -32,14 +32,14 @@ do gate, não uma alegação de adulteração do certificado arquivado.
    apenas dos artefatos excluídos do `candidateId`, passa a exigir novo run
    para qualificar o novo HEAD; não repetir o ciclo de certificar e commitar
    saídas geradas no mesmo branch.
-2. Exigir exatamente um registro de artefato no manifesto com caminho
-   canônico `certification/candidate-manifest.json`; hash, tamanho e bytes
-   precisam conferir. Interpretar seu conteúdo como `CandidateRecordSchema`
-   e comparar `candidateId`, `git.head` e a lista ordenada de arquivos com
-   `result.candidate`. Recalcular o ID a partir da lista registrada. Nenhum
-   campo novo de manifesto é necessário: a entrada canônica obrigatória é
-   a única referência. O certificado não poderá combinar um candidato de
-   um run com metadados de outro.
+2. Exigir que o campo **já existente** `manifest.candidateManifest` seja o
+   caminho canônico `certification/candidate-manifest.json` e que haja
+   exatamente um registro desse artefato em `manifest.artifacts`; hash,
+   tamanho e bytes precisam conferir. Interpretar seu conteúdo como
+   `CandidateRecordSchema` e comparar `candidateId`, `git.head` e a lista
+   ordenada de arquivos com `result.candidate`. Recalcular o ID a partir da
+   lista registrada. O certificado não poderá combinar um candidato de um
+   run com metadados de outro.
 3. No modo `--historical`, exigir coerência interna entre os campos de commit
    e o manifesto de candidato quando esses campos existem, sem coletar nem
    comparar **HEAD ou arquivos candidatos vivos** do checkout atual. Manter
@@ -58,7 +58,8 @@ do gate, não uma alegação de adulteração do certificado arquivado.
   os três juntos mantendo bytes do candidato; avançar o HEAD com commit
   vazio e com commit apenas de artefatos excluídos do `candidateId`; simular
   Git ausente/erro; omitir, duplicar ou renomear a entrada canônica de
-  `candidate-manifest.json`; adulterar seu conteúdo com hashes reemitidos;
+  `candidate-manifest.json`; apontar `manifest.candidateManifest` para outro
+  caminho; adulterar seu conteúdo com hashes reemitidos;
   declarar ID falsificado para a lista de arquivos. Cada caso deve falhar
   pela causa esperada, mesmo com hashes de artefatos coerentes no fixture.
 - Histórico: bundle cujo **ID e arquivos candidatos diferem dos do checkout**
