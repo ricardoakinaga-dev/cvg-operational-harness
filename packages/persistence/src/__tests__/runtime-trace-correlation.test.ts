@@ -67,6 +67,32 @@ function auditEvent(traceId: unknown): PluginAuditEvent {
 }
 
 describe('runtime trace correlation boundary', () => {
+  it('rejects an invalid completion correlation ID before database access', async () => {
+    const query = vi.fn(async () => {
+      throw new Error('database access must not occur')
+    })
+    const runtime = new PostgresRuntimeRepository({ query })
+    const recordExecutionTrace = vi.fn()
+
+    await expect(
+      runtime.completeInboundRuntime(
+        {
+          tenantId,
+          conversationId: 'conversation-controlled',
+          sessionId: null,
+          inboundMessageId: 'message-controlled',
+          trace: trace(),
+          toolAuditEvents: [],
+          correlationId:
+            'invalid-correlation' as PluginAuditEvent['correlationId']
+        },
+        { recordExecutionTrace }
+      )
+    ).rejects.toMatchObject({ code: 'validation_failed' })
+    expect(query).not.toHaveBeenCalled()
+    expect(recordExecutionTrace).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['missing or malformed', 'trace-invalid'],
     ['different from the persisted trace', createTraceId()]
