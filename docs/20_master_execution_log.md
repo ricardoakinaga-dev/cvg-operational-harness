@@ -1,3 +1,8 @@
+# PR-301/204 — AUD-0582 e SPEC 0152 de autoridade corporativa — 28/09/2026
+
+- Código isolado PR‑204 fecha boot produtivo sem OIDC corporativo; [AUD-0582](04_audit/0582_corporate_oidc_boot_gap_2026-09-27.md) registra o gap. [SPEC 0152](02_spec/0152_corporate_oidc_authority_contract.md) define parâmetros IAM, separação local/corporativo, client secreto, MFA/grupo/tenant, prova sintética no entrypoint e Chromium do mesmo digest, schema compatível e drenagem integral para rollback.
+- Revisões independentes I1–I3 `REJECT` localizaram lacunas P1; a revisão as corrigiu e I4 `ACCEPT_SPEC_REVIEW_READY` sem editar artefatos. Links, higiene e formato documentais PASS. Nenhum BUILD corporativo nem integração real autorizado; revisão T3 humana e issuer/claims ainda pendentes. Produção `NO_GO`.
+
 # PR-204 — BUILD T3 sintético de boot, gateway e bundle — 27/09/2026
 
 - Sob [SPEC 0151](02_spec/0151_production_boot_configuration_contract.md) aprovada, branch isolado `codex/pr204-boot-20260927` (`99692e3`) valida configuração uma vez no boot da API, fecha produção sem autoridade OIDC corporativa, recusa worker sem perfil/seletor, impede provider externo sem chave e sela o bundle web. Imagem Docker remove os arquivos padrão do Nginx e preserva UID 101.

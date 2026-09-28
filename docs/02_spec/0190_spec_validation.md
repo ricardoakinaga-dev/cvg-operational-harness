@@ -1,5 +1,9 @@
 # 0190 — SPEC Validation
 
+## PR-301/204 — SPEC 0152 corporativa pronta para revisão T3 — 28/09/2026
+
+- [AUD-0582](../04_audit/0582_corporate_oidc_boot_gap_2026-09-27.md) comprovou que o branch PR‑204 fecha o boot produtivo sem caminho OIDC corporativo. [SPEC 0152](0152_corporate_oidc_authority_contract.md) separa IdP local e campos compartilhados, define issuer/client/MFA/grupo/tenant, exige entrypoint e navegador no mesmo digest com IdP HTTPS sintético e prescreve drenagem integral e preflight compatível para rollback. Críticas I1–I3 rejeitaram lacunas P1 corrigidas; I4 `ACCEPT_SPEC_REVIEW_READY` somente documental. Estado `HUMAN_T3_REVIEW_PENDING / BUILD_NOT_AUTHORIZED / NO_GO`; issuer e parâmetros IAM ainda ausentes. SPEC 0150 segue gate separado.
+
 ## PR-204 — SPEC 0151 aprovada para BUILD T3 — 27/09/2026
 
 - O usuário aprovou explicitamente [SPEC 0151](0151_production_boot_configuration_contract.md) para BUILD T3 controlado com dados sintéticos em 27/09/2026, após I2 `ACCEPT_SPEC_REVIEW_READY`. Estado `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY`; claim PR-204-T3-BUILD em worktree isolado. IdP corporativo, SPEC 0150, provider/canal real, T4, deploy, certificação e GO continuam decisões/gates separados.

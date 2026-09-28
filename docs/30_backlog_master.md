@@ -1,3 +1,7 @@
+# PR-301/204 — autoridade corporativa em SPEC T3 — 28/09/2026
+
+- `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING / NO_GO`: [AUD-0582](04_audit/0582_corporate_oidc_boot_gap_2026-09-27.md) e [SPEC 0152](02_spec/0152_corporate_oidc_authority_contract.md) delimitam boot OIDC corporativo e prova no mesmo candidato. I1–I3 P1 corrigidos, I4 aceitou revisão documental. BUILD depende de aprovação explícita; IAM, SPEC 0150, staging e certificado final seguem abertos.
+
 # PR-204 — BUILD T3 isolado validado — 27/09/2026
 
 - `ISOLATED_BUILD_LOCAL_PASS / ROOT_INTEGRATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR204-BUILD-20260927/proof.json) do branch `99692e3` registra suíte 333/2.477, PG 35/258 e Chromium 12/12 sem skips, além da imagem web selada com 10 arquivos. Fechamento de boot, gateway e worker feito sob SPEC 0151; cobertura 333/2.477 PASS com 92,28% statements e 87,45% branches. Integrar após PR-L04, executar B2, completar IdP corporativo/SPEC 0150 e certificar o SHA integrado com CI/atestação antes de GO.

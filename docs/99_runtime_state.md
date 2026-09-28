@@ -1,3 +1,11 @@
+# PR-301/204 — contrato OIDC corporativo pronto para revisão — 28/09/2026
+
+- status: `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [AUD-0582](04_audit/0582_corporate_oidc_boot_gap_2026-09-27.md) distinguiu rejeição segura do boot de prova positiva corporativa. [SPEC 0152](02_spec/0152_corporate_oidc_authority_contract.md) exige client confidencial, MFA e grupos aprovados, boot e login Chromium no mesmo digest, preflight compatível e drenagem integral de sessões/state para rollback. Críticas I1–I3 rejeitaram lacunas P1 corrigidas; I4 `ACCEPT_SPEC_REVIEW_READY` documental.
+- verification_state: inspeção de código/contratos, crítica independente I1–I4 e links/formato documentais; nenhuma implementação corporativa, issuer IAM ou teste positivo de produção nesta fatia.
+- blocking_state: revisão humana T3 da SPEC 0152, parâmetros IAM, SPEC 0150, integração root após PR-L04, staging, CI/certificação e demais 13 condições de GO. Produção `NO_GO`.
+- next_action: após aprovação T3, implementar e testar com issuer HTTPS sintético; sem conexão ao IdP real até receber pacote IAM e gate de release.
+
 # PR-204 — BUILD T3 validado no branch isolado — 27/09/2026
 
 - status: `ISOLATED_BUILD_LOCAL_PASS / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
