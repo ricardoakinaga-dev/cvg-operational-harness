@@ -1,3 +1,12 @@
+# AUD-0584 — RBAC de `/v1/admin` — 28/09/2026
+
+- No SHA isolado `7ef74e7`, Node 22/servidor OIDC local e sessões sintéticas pré-criadas, [sonda](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/summary.json) percorreu 48 pares admin com role `Operator`: 45×403 e 3×400 em `GET`/`HEAD` capability approval e `POST execute` após permissões que a matriz concede. Controle funcional: `Supervisor` emitiu approval, `Operator` executou a ferramenta controlada uma vez (200) e replay falhou (400); tenant B e role falsificada não atravessaram o escopo. Prefixo `/v1/admin` não define por si a permissão; [AUD-0584](04_audit/0584_isolated_admin_rbac_2026-09-28.md), crítica [I2 `ACCEPT`](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/I2-review.md). Callback/IdP corporativo ainda pendente; produção `NO_GO`.
+
+# AUD-0583 — negativas de autenticação por rota — 28/09/2026
+
+- `buildServer` no SHA isolado limpo `7ef74e7` (Node 22.23.2, OIDC local sintético, `NODE_ENV=development`) registrou 111 pares rota/método, todos conferidos por `app.hasRoute`. Sonda sem cookie em três cenários: sem Origin, Origin permitido, Origin com headers/token falsificados. Os 98 pares protegidos retornaram 401 nos três; controles com sessão válida `session`, `tasks` e `admin/agents` deram 200. [Pacote e hashes](04_audit/evidence/AUD0583-ROUTES-20260928/summary.json).
+- Logout público idempotente sem cookie devolveu 200 com Origin permitido e zero `revoke`; revisão estática independente não confirmou bypass de rota protegida. Crítica [I2](04_audit/evidence/AUD0583-ROUTES-20260928/I2-review.md) `ACCEPT_SCOPE`, sem P0/P1 local, após três ajustes P2 de precisão. Webhook, positivo funcional completo, IdP corporativo/produção, root/PR-L04 e CI/IAM/staging ainda não são qualificados por esta prova; [AUD-0583](04_audit/0583_isolated_route_authentication_2026-09-28.md), produção `NO_GO`.
+
 # AUD20-008 — I1 fresco com packet e sentinel — 28/09/2026
 
 - Novo [packet](04_audit/evidence/AUD20-008-I1-20260928/packet.json) vinculou oito arquivos de fencing ao manifesto de 1.503 arquivos e ao bundle certificado de `7ef74e7`, candidato `47440863…`, run `run-pr003-composite-r2-20260928`. O worktree estava limpo; hashes dos oito arquivos e do bundle conferiram antes da crítica.
@@ -277,12 +286,3 @@
 
 - PostgreSQL 16.15 descartável: probe transacional reproduziu que a consulta atual por namespace/nome aceita `webhook_replay_events_fencing_check` em `decoy_fencing` após remover a constraint real, e aceita a constraint homônima `CHECK (true)` na tabela alvo. `ROLLBACK` e consulta confirmaram zero schema residual. [SQL/log/hashes](04_audit/evidence/PR301-FENCING-PREFLIGHT-SPEC-20260928/proof.json).
 - [SPEC 0158](02_spec/0158_webhook_fencing_constraint_preflight.md) T3 registra OID/tipo/validação/definição/nulabilidade, PK/índice, durabilidade e objetos de DML. [I1](04_audit/evidence/PR301-FENCING-PREFLIGHT-SPEC-20260928/I1-review.md) rejeitou quatro P1/três P2; texto corrigido e [I2](04_audit/evidence/PR301-FENCING-PREFLIGHT-SPEC-20260928/I2-review.md) `ACCEPT_SPEC_REVIEW_READY`. Nenhum código de segurança alterado; revisão humana e CI/IAM/staging/certificação do SHA final pendentes, produção `NO_GO`.
-
-# AUD-0583 — negativas de autenticação por rota — 28/09/2026
-
-- `buildServer` no SHA isolado limpo `7ef74e7` (Node 22.23.2, OIDC local sintético, `NODE_ENV=development`) registrou 111 pares rota/método, todos conferidos por `app.hasRoute`. Sonda sem cookie em três cenários: sem Origin, Origin permitido, Origin com headers/token falsificados. Os 98 pares protegidos retornaram 401 nos três; controles com sessão válida `session`, `tasks` e `admin/agents` deram 200. [Pacote e hashes](04_audit/evidence/AUD0583-ROUTES-20260928/summary.json).
-- Logout público idempotente sem cookie devolveu 200 com Origin permitido e zero `revoke`; revisão estática independente não confirmou bypass de rota protegida. Crítica [I2](04_audit/evidence/AUD0583-ROUTES-20260928/I2-review.md) `ACCEPT_SCOPE`, sem P0/P1 local, após três ajustes P2 de precisão. Webhook, positivo funcional completo, IdP corporativo/produção, root/PR-L04 e CI/IAM/staging ainda não são qualificados por esta prova; [AUD-0583](04_audit/0583_isolated_route_authentication_2026-09-28.md), produção `NO_GO`.
-
-# AUD-0584 — RBAC de `/v1/admin` — 28/09/2026
-
-- No SHA isolado `7ef74e7`, Node 22/servidor OIDC local e sessões sintéticas pré-criadas, [sonda](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/summary.json) percorreu 48 pares admin com role `Operator`: 45×403 e 3×400 em `GET`/`HEAD` capability approval e `POST execute` após permissões que a matriz concede. Controle funcional: `Supervisor` emitiu approval, `Operator` executou a ferramenta controlada uma vez (200) e replay falhou (400); tenant B e role falsificada não atravessaram o escopo. Prefixo `/v1/admin` não define por si a permissão; [AUD-0584](04_audit/0584_isolated_admin_rbac_2026-09-28.md), crítica [I2 `ACCEPT`](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/I2-review.md). Callback/IdP corporativo ainda pendente; produção `NO_GO`.

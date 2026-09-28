@@ -1,3 +1,19 @@
+# AUD-0584 — permissões por operação em `/v1/admin` — 28/09/2026
+
+- status: `LOCAL_RBAC_POLICY_MATCH / I2_ACCEPT`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [sonda](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/summary.json) no SHA isolado `7ef74e7` executou 48 pares admin com sessão `Operator`: 45 deram 403; três de capability approval deram 400 após `approval:view/execute`, coerente com matriz de papéis e handlers. Controle funcional emitiu approval com `Supervisor`, executou uma vez com `Operator` (200, tool succeeded) e recusou replay (400); tenant divergente e papel falsificado foram recusados. [Auditoria](04_audit/0584_isolated_admin_rbac_2026-09-28.md).
+- verification_state: Node 22.23.2, candidato limpo, sessões sintéticas pré-criadas em memória; fonte e testes de capability approval inspecionados, [I2](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/I2-review.md) confirmou quatro hashes de prova e três de fonte, sem P0/P1 local.
+- blocking_state: funcionalidade completa, IdP corporativo, PG, root/PR-L04, CI/IAM/staging e condições 0354 não cobertos.
+- next_action: repetir no SHA integrado/staging corporativo após PR-L04 e publicar contrato de permissão por operação em PR-207; manter produção `NO_GO`.
+
+# AUD-0583 — recusa de rotas sem sessão no candidato isolado — 28/09/2026
+
+- status: `LOCAL_ROUTE_NO_SESSION_PASS / I2_ACCEPT_SCOPE`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [sonda hash-bound](04_audit/evidence/AUD0583-ROUTES-20260928/summary.json) listou 111 pares rota/método em `7ef74e7` e fez três cenários sem cookie, incluindo headers legados falsificados. Todos os 98 pares classificados como protegidos deram 401; três GETs de controle com sessão válida deram 200. [Auditoria](04_audit/0583_isolated_route_authentication_2026-09-28.md).
+- verification_state: Node 22.23.2, fonte limpa, 333 requests sintéticas sem sessão e 9 controles positivos, zero revogações; auditoria estática sem bypass confirmado e [I2](04_audit/evidence/AUD0583-ROUTES-20260928/I2-review.md) `ACCEPT_SCOPE`, sem P0/P1 local.
+- blocking_state: prova local OIDC/dev não cobre produção corporativa, funcionalidade de cada rota, webhook assinado, root/PR-L04, IAM/staging, CI/atestação e condições 0354.
+- next_action: repetir no SHA integrado e no mesmo digest de staging corporativo após PR-L04; manter produção `NO_GO`.
+
 # PR-301 — SPEC T3 do preflight de fencing — 28/09/2026
 
 - status: `SPEC_0158_REVIEW_READY / HUMAN_T3_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
@@ -418,19 +434,3 @@
 - verification_state: Node 22, 13/275 focados, suíte 325/2.393, PostgreSQL 35/258, Chromium 12/12, cobertura 92,53%/87,66%/95,10%/93,56%, tipo/lint/formato e regressão root PASS; zero skips reportados. O verificador do catálogo falha por hash vencido em `SKIP-PG-014` sob PR-L04.
 - blocking_state: PR‑202 ainda tem execução/replay e tamanho da classe abertos; PR-L04, catálogo, composição/certificação e CI do digest final, IAM real, dados/ops/pentest/piloto e demais condições de 0354. Produção `NO_GO`.
 - next_action: implementar SPECs 0150/0152 em worktree com IdP HTTPS e dados sintéticos; conciliar catálogo após PR-L04 e certificar o candidato composto.
-
-# AUD-0583 — recusa de rotas sem sessão no candidato isolado — 28/09/2026
-
-- status: `LOCAL_ROUTE_NO_SESSION_PASS / I2_ACCEPT_SCOPE`; programa `IN_PROGRESS`; produção `NO_GO`.
-- last_completed_action: [sonda hash-bound](04_audit/evidence/AUD0583-ROUTES-20260928/summary.json) listou 111 pares rota/método em `7ef74e7` e fez três cenários sem cookie, incluindo headers legados falsificados. Todos os 98 pares classificados como protegidos deram 401; três GETs de controle com sessão válida deram 200. [Auditoria](04_audit/0583_isolated_route_authentication_2026-09-28.md).
-- verification_state: Node 22.23.2, fonte limpa, 333 requests sintéticas sem sessão e 9 controles positivos, zero revogações; auditoria estática sem bypass confirmado e [I2](04_audit/evidence/AUD0583-ROUTES-20260928/I2-review.md) `ACCEPT_SCOPE`, sem P0/P1 local.
-- blocking_state: prova local OIDC/dev não cobre produção corporativa, funcionalidade de cada rota, webhook assinado, root/PR-L04, IAM/staging, CI/atestação e condições 0354.
-- next_action: fechar crítica da evidência e repetir no SHA integrado e no mesmo digest de staging; produção `NO_GO`.
-
-# AUD-0584 — permissões por operação em `/v1/admin` — 28/09/2026
-
-- status: `LOCAL_RBAC_POLICY_MATCH / I2_ACCEPT`; programa `IN_PROGRESS`; produção `NO_GO`.
-- last_completed_action: [sonda](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/summary.json) no SHA isolado `7ef74e7` executou 48 pares admin com sessão `Operator`: 45 deram 403; três de capability approval deram 400 após `approval:view/execute`, coerente com matriz de papéis e handlers. Controle funcional emitiu approval com `Supervisor`, executou uma vez com `Operator` (200, tool succeeded) e recusou replay (400); tenant divergente e papel falsificado foram recusados. [Auditoria](04_audit/0584_isolated_admin_rbac_2026-09-28.md).
-- verification_state: Node 22.23.2, candidato limpo, sessões sintéticas pré-criadas em memória; fonte e testes de capability approval inspecionados, [I2](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/I2-review.md) confirmou quatro hashes de prova e três de fonte, sem P0/P1 local.
-- blocking_state: funcionalidade completa, IdP corporativo, PG, root/PR-L04, CI/IAM/staging e condições 0354 não cobertos.
-- next_action: concluir crítica e repetir no SHA integrado/staging corporativo; publicar contrato de permissão por operação em PR-207. Produção `NO_GO`.

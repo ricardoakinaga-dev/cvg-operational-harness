@@ -1,3 +1,11 @@
+# AUD-0584 — RBAC admin por operação — 28/09/2026
+
+- `LOCAL_RBAC_POLICY_MATCH / I2_ACCEPT / NO_GO`: [sonda](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/summary.json) no SHA isolado `7ef74e7`: 48 pares `/v1/admin` com sessão `Operator` pré-criada, 45×403 e 3×400 em capability approvals permitidos pela matriz. Ciclo sintético executou ferramenta uma vez (200) e recusou replay (400); tenant e role falsificada não elevaram acesso. [Relatório](04_audit/0584_isolated_admin_rbac_2026-09-28.md) e [I2](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/I2-review.md). PR-207 deve declarar permissão por operação; root/IdP/PG/CI/IAM/staging e condições 0354 pendentes.
+
+# AUD-0583 — negativas de rotas sem sessão — 28/09/2026
+
+- `LOCAL_ROUTE_NO_SESSION_PASS / I2_ACCEPT_SCOPE / NO_GO`: [AUD-0583](04_audit/0583_isolated_route_authentication_2026-09-28.md) sondou 111 pares rota/método no SHA isolado `7ef74e7`, com 98 pares protegidos 401 nos três cenários, três controles positivos 200 e zero revogações sem cookie. [Pacote](04_audit/evidence/AUD0583-ROUTES-20260928/summary.json) e [crítica I2](04_audit/evidence/AUD0583-ROUTES-20260928/I2-review.md). Repetir no SHA root/PR-L04 e staging corporativo do mesmo digest; CI/IAM e condições 0354 pendentes.
+
 # AUD20-008 — fencing I1 aceito no novo candidato — 28/09/2026
 
 - `I1_APPROVED_NEW_CANDIDATE / SENTINEL_MATCH / A21-F20_REGISTRY_OPEN / NO_GO`: [packet e parecer](04_audit/evidence/AUD20-008-I1-20260928/I1-review.md) de `7ef74e7` aprovam memory/PG fencing, com 1.503 arquivos e 38 artefatos vinculados; [sentinel](04_audit/evidence/AUD20-008-I1-20260928/sentinel-review.md) confere. P2 de definição de constraints no preflight exige SPEC/gate de segurança; reemitir adjudicação/certificado do SHA root após PR-L04. O histórico `579d2100` continua rejeitado; produção `NO_GO`.
@@ -217,11 +225,3 @@ A [task list 0356](03_build/0356_production_backlog_2026-09-26.md) é a fonte de
 # PR-301 — preflight semântico do fencing — 28/09/2026
 
 - `SPEC_0158_REVIEW_READY / HUMAN_T3_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-FENCING-PREFLIGHT-SPEC-20260928/proof.json) PostgreSQL 16 reproduziu constraint homônima em outra tabela e `CHECK (true)` aceita por nome. [SPEC 0158](02_spec/0158_webhook_fencing_constraint_preflight.md) define o reparo e os negativos reais; BUILD depende de revisão humana T3. `A21-F20` continua aberto no certificado; root/CI/IAM/staging e condições 0354 pendentes.
-
-# AUD-0583 — negativas de rotas sem sessão — 28/09/2026
-
-- `LOCAL_ROUTE_NO_SESSION_PASS / I2_ACCEPT_SCOPE / NO_GO`: [AUD-0583](04_audit/0583_isolated_route_authentication_2026-09-28.md) sondou 111 pares rota/método no SHA isolado `7ef74e7`, com 98 pares protegidos 401 nos três cenários, três controles positivos 200 e zero revogações sem cookie. [Pacote](04_audit/evidence/AUD0583-ROUTES-20260928/summary.json) e [crítica I2](04_audit/evidence/AUD0583-ROUTES-20260928/I2-review.md). Repetir no SHA root/PR-L04 e staging corporativo do mesmo digest; CI/IAM e condições 0354 pendentes.
-
-# AUD-0584 — RBAC admin por operação — 28/09/2026
-
-- `LOCAL_RBAC_POLICY_MATCH / I2_ACCEPT / NO_GO`: [sonda](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/summary.json) no SHA isolado `7ef74e7`: 48 pares `/v1/admin` com sessão `Operator` pré-criada, 45×403 e 3×400 em capability approvals permitidos pela matriz. Ciclo sintético executou ferramenta uma vez (200) e recusou replay (400); tenant e role falsificada não elevaram acesso. [Relatório](04_audit/0584_isolated_admin_rbac_2026-09-28.md) e [I2](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/I2-review.md). PR-207 deve declarar permissão por operação; root/IdP/PG/CI/IAM/staging e condições 0354 pendentes.
