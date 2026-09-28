@@ -1,3 +1,7 @@
+# AUD-0587 — replay do webhook — 28/09/2026
+
+- `TWO_P1_REPLAY_REPRODUCED / NO_GO`: [AUD-0587](04_audit/0587_isolated_webhook_boundary_2026-09-28.md) obteve 16/16 testes HMAC/replay e sete casos HTTP, mas [negativo de timestamp](04_audit/evidence/AUD0587-WEBHOOK-20260928/future-replay.json) aceitou assinatura futura duas vezes e [takeover PG](04_audit/evidence/AUD0587-WEBHOOK-20260928/lease-takeover.json) deixou segunda entrega entrar enquanto a primeira processava (200/500). Sem efeito externo duplicado provado. [Pacote](04_audit/evidence/AUD0587-WEBHOOK-20260928/proof.json), task PR-301-WEBHOOK-REPLAY no [0356](03_build/0356_production_backlog_2026-09-26.md). SPEC T3, root/CI/staging e 0354 pendentes; produção `NO_GO`.
+
 # PR-011-CODEQL — SPEC de remediação T3 — 28/09/2026
 
 - `SPEC_0159_I2_ACCEPT / HUMAN_T3_PENDING / NO_GO`: [contrato](02_spec/0159_codeql_active_source_remediation.md) delimita alias, regex, prova de rate limit e histórico sob PR-011-CODEQL; [I2](04_audit/evidence/PR011-CODEQL-SPEC-20260928/I1-I2-review.md) aceitou o contrato após 2 P1/3 P2 corrigidos; nenhum BUILD autorizado até revisão humana explícita. Integração PR-L04, CodeQL/CI no SHA final, IAM/staging e 0354 pendentes.

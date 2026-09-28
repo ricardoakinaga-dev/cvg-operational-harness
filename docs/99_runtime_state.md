@@ -1,3 +1,11 @@
+# AUD-0587 — replay do webhook sob concorrência — 28/09/2026
+
+- status: `HMAC_INPUT_BOUNDARY_PASS / TWO_P1_REPLAY_REPRODUCED`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [prova](04_audit/evidence/AUD0587-WEBHOOK-20260928/proof.json) no SHA isolado `7ef74e7`: 16/16 testes com PostgreSQL 16, sete casos HTTP de assinatura, [mesma assinatura futura aceita duas vezes](04_audit/evidence/AUD0587-WEBHOOK-20260928/future-replay.json) e [takeover PG em 31 s](04_audit/evidence/AUD0587-WEBHOOK-20260928/lease-takeover.json) com segunda entrega no resolver antes da primeira terminar (200/500). [Auditoria](04_audit/0587_isolated_webhook_boundary_2026-09-28.md).
+- verification_state: Node 22.23.2, fonte/checkout isolado limpos, HMAC recusa inválidos antes do tenant, zero schemas/contêiner/porta residuais; [I1/I2](04_audit/evidence/AUD0587-WEBHOOK-20260928/I2-review.md) aceitaram a auditoria local com 2 P1/1 P2; negativos em memória e PostgreSQL reproduzidos sem efeito externo duplicado demonstrado.
+- blocking_state: replay inseguro, SPEC T3 ainda necessária; root/PR-L04, CI/IAM/staging, canal externo, SPEC 0158 e condições 0354 abertos.
+- next_action: preparar/revisar SPEC T3 dos dois P1 e vínculo de tenant, obter aprovação humana antes do BUILD, repetir em HTTP+PG do SHA final; produção `NO_GO`.
+
 # PR-011-CODEQL — SPEC 0159 T3 — 28/09/2026
 
 - status: `SPEC_READY_FOR_HUMAN_T3_REVIEW / BUILD_NOT_AUTHORIZED`; programa `IN_PROGRESS`; produção `NO_GO`.

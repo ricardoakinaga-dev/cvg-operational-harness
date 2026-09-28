@@ -649,6 +649,13 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 - Pronto: nenhum segredo em env file ou imagem; rotação de cada segredo
   exercitada em staging sem downtime; runbook de rotação.
 
+### PR-301-WEBHOOK-REPLAY — janela e lease do webhook · P1 · SPEC T3 + BUILD
+
+- Estado: `P1_REPRODUCED / SPEC_T3_REQUIRED / NO_GO` em 28/09/2026. [AUD-0587](../04_audit/0587_isolated_webhook_boundary_2026-09-28.md) documenta dois negativos no SHA isolado cujo `webhook-security.ts` tem os mesmos bytes no root: assinatura com timestamp futuro aceita duas vezes após expiração da chave; lease PostgreSQL tomado após 31 s enquanto primeira entrega ainda estava no resolver (segunda 200, primeira 500). Não foi demonstrado efeito externo duplicado.
+- O que/onde: validade da chave de replay alinhada a toda a janela de timestamp; exclusividade/idempotência do processamento entre reserva e commit, mesmo acima de 30 s; resolver de tenant não pode depender de header não assinado sem vínculo.
+- Como: SPEC T3 com negativos de relógio e concorrência HTTP+PostgreSQL, revisão da transação inbox/outbox/fencing e prova de limpeza. BUILD só após aprovação humana explícita; não alterar código PR-L04 no root enquanto claim ativo.
+- Pronto: mesma assinatura nunca aceita duas vezes enquanto válida; redelivery concorrente não causa processamento duplicado nem 500 após efeito, inclusive em dois processos; teste de tenant não assinado; CI/certificado no SHA final e staging HTTPS. Produção permanece `NO_GO`.
+
 ### PR-304 — Borda endurecida · P1 · OPS
 
 - O que: TLS ponta a ponta (incluindo PostgreSQL), `API_REQUIRE_HTTPS=true`,
@@ -665,6 +672,7 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-306 — Threat model para integrações reais · P1 · DOC
 
+- 28/09/2026, [AUD-0587](../04_audit/0587_isolated_webhook_boundary_2026-09-28.md): 16/16 testes HMAC/replay passaram, mas dois negativos novos reproduziram P1 no SHA `7ef74e7`: mesma assinatura futura aceita após expirar registro de replay e takeover PostgreSQL após 31 s com duas requisições entrando no resolver. [Prova](../04_audit/evidence/AUD0587-WEBHOOK-20260928/proof.json). Sem efeito externo duplicado demonstrado; corrigir sob SPEC T3 e repetir no SHA final/staging. `P1_REPLAY_OPEN / NO_GO`.
 - Estado: `DOCUMENTED_LOCAL / FACT_CHECK_ACCEPTED` em 27/09/2026.
   O [modelo de ameaças](../10_phase10/PHASE10_THREAT_MODEL.md) agora vincula
   canal, provider, RAG, agenda, IdP/sessão e evidência de CI a controle,

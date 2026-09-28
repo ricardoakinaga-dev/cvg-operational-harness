@@ -1,3 +1,7 @@
+# AUD-0587 — HMAC/replay do webhook — 28/09/2026
+
+- [16/16 testes](04_audit/evidence/AUD0587-WEBHOOK-20260928/vitest-pg.log) e [sete casos HTTP](04_audit/evidence/AUD0587-WEBHOOK-20260928/http-probe.json) passaram no candidato isolado `7ef74e7`, Node 22/PostgreSQL 16. Crítica [I1](04_audit/evidence/AUD0587-WEBHOOK-20260928/I1-review.md) encontrou dois P1 não cobertos: replay de assinatura futura após expiração do registro e takeover de lease após 30 s. [Negativos executados](04_audit/evidence/AUD0587-WEBHOOK-20260928/proof.json) confirmaram aceitação repetida e duas requisições no resolver, segunda 200/primeira 500; sem efeito externo duplicado demonstrado. PG próprio limpo, contêiner/porta removidos. Task PR-301-WEBHOOK-REPLAY registrada no 0356; SPEC T3 e aprovação humana antes do código. Produção `NO_GO`.
+
 # PR-011-CODEQL — contrato T3 em revisão — 28/09/2026
 
 - [SPEC 0159](02_spec/0159_codeql_active_source_remediation.md) proposta a partir de AUD-0585/0586: auditor de alias fail-closed, custo linear em quatro URLs e filtro de instrução, provas de rate limit autenticado/PG e disposição dos sete arquivos históricos. Sem código, deploy, push ou alertas remotos alterados. [I1/I2](04_audit/evidence/PR011-CODEQL-SPEC-20260928/I1-I2-review.md) corrigiu 2 P1/3 P2 e aceitou a SPEC para revisão humana; aprovação T3 pendente, produção `NO_GO`.

@@ -1,0 +1,120 @@
+{
+  "candidate_head": "7ef74e7f4fd2b1141e416b85c7337f119e1333ab",
+  "candidate_clean_after": true,
+  "node": "22.23.2",
+  "postgres_version": "16.15",
+  "postgres_image_id": "sha256:3c5c8892d184f738f4fe282d14ddaa613a38f00f4189d2d94725ebe6f2909ddb",
+  "database_profile": "ephemeral Docker PostgreSQL, own port 127.0.0.1:55497, synthetic user/database, container removed",
+  "vitest": {
+    "command": "npx vitest run apps/api/src/__tests__/webhook-security.test.ts --reporter=verbose with TEST_DATABASE_URL to own ephemeral PG16",
+    "exit_code": 0,
+    "files_passed": 1,
+    "tests_passed": 16,
+    "tests_skipped": 0,
+    "log_sha256": "4e57270cdd05299ed865797915319afb8720e31036e06baad218c7d9aa9a8e68",
+    "postgres_real_test_count": 1,
+    "other_tests_profile": "in-memory or mocks"
+  },
+  "http_probe": {
+    "scenarios": 7,
+    "results": [
+      {
+        "name": "missing_hmac_headers",
+        "status": 401,
+        "error_code": "unauthorized",
+        "tenant_resolver_calls": 0
+      },
+      {
+        "name": "bad_signature",
+        "status": 401,
+        "error_code": "unauthorized",
+        "tenant_resolver_calls": 0
+      },
+      {
+        "name": "stale_signed",
+        "status": 401,
+        "error_code": "unauthorized",
+        "tenant_resolver_calls": 0
+      },
+      {
+        "name": "wrong_channel",
+        "status": 401,
+        "error_code": "unauthorized",
+        "tenant_resolver_calls": 0
+      },
+      {
+        "name": "valid",
+        "status": 200,
+        "error_code": null,
+        "tenant_resolver_calls": 1
+      },
+      {
+        "name": "replay",
+        "status": 401,
+        "error_code": "unauthorized",
+        "tenant_resolver_calls": 1
+      },
+      {
+        "name": "tampered_payload",
+        "status": 401,
+        "error_code": "unauthorized",
+        "tenant_resolver_calls": 1
+      }
+    ],
+    "sha256": "1774fde3165678be71a899d686631fcbf6124765c8b676bbecbe384a00fb491d",
+    "profile": "synthetic Fastify inject, HMAC in memory, no provider/network/real tenant"
+  },
+  "cleanup": {
+    "residual_test_schemas": 0,
+    "own_container_removed": true,
+    "own_host_port_closed": true,
+    "second_pg_run_residual_schemas": 0,
+    "second_pg_container_removed": true,
+    "second_pg_port_closed": true,
+    "third_pg_run_residual_schemas": 0,
+    "third_pg_container_removed": true,
+    "third_pg_port_closed": true
+  },
+  "source_sha256": {
+    "apps/api/src/server.ts": "4cc989a7e0a67f1eee2f1ff3bdfcb45b509f10b88dbc489857a2f207a125028d",
+    "apps/api/src/webhook-security.ts": "dd76b0107ab392fc77d754e7a41aefe51b998c2efe2488bf71a79975fe42db77",
+    "apps/api/src/__tests__/webhook-security.test.ts": "29008418d9081a8fb7a9da7698b72595988f5cae907a9e9b5f98679a4604b9f5"
+  },
+  "limits": [
+    "isolated source SHA, not root under PR-L04",
+    "HTTP probe uses in-memory HMAC/replay/tenant resolver; PG test exercises replay store separately",
+    "no external provider/channel, corporate staging or production ingress",
+    "does not qualify release CI or same-digest production",
+    "16/16 tests did not cover the two reproduced replay negatives; local route boundary is not closed"
+  ],
+  "negative_findings": {
+    "future_timestamp_replay": {
+      "severity": "P1",
+      "artifact": "future-replay.json",
+      "sha256": "59a6df33fe355c87a7bf7216dca2c55cf2bdb26d14aef6af599f619ec60b825a",
+      "first_accepted": true,
+      "same_signature_accepted_after_301_seconds": true
+    },
+    "expired_lease_overlap": {
+      "severity": "P1",
+      "artifact": "lease-takeover.json",
+      "sha256": "35a18efddd4d738db8a94f2ff7397e9622169e98fcfe50facff6581b832f4ded",
+      "second_entered_before_first_released": true,
+      "second_status": 200,
+      "first_status": 500,
+      "duplicate_external_effect_observed": false
+    },
+    "future_timestamp_replay_postgres": {
+      "severity": "P1",
+      "artifact": "future-replay-pg.json",
+      "sha256": "ea65918e3ddec44e8ae54ece4a3d61985d7b066b5b48c498784866c88193bfe8",
+      "first_accepted": true,
+      "second_accepted_after_row_aged": true,
+      "clock_method": "verifier clock +301 seconds; PostgreSQL row manually aged to expired"
+    }
+  },
+  "root_webhook_security_sha256": "dd76b0107ab392fc77d754e7a41aefe51b998c2efe2488bf71a79975fe42db77",
+  "root_webhook_security_matches_candidate": true,
+  "initial_suite_capture_at_utc": "2026-09-28T10:07:28.330125+00:00",
+  "assembled_at_utc": "2026-09-28T10:17:10.068514+00:00"
+}
