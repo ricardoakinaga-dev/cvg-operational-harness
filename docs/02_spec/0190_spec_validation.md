@@ -1,5 +1,10 @@
 # 0190 — SPEC Validation
 
+## PR-301/302 — SPECs 0150 e 0152 aprovadas para BUILD T3 sintético — 28/09/2026
+
+- O usuário aprovou explicitamente [SPEC 0152](0152_corporate_oidc_authority_contract.md) para BUILD controlado com IdP HTTPS e dados sintéticos e [SPEC 0150](0150_cross_origin_operator_console.md) para console/API em hosts HTTPS distintos com testes sintéticos. Estado de ambas: `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_PENDING`.
+- A aprovação não fornece parâmetros de IAM corporativo real, política de dados ou autorização de deploy. Integração no candidato compartilhado, E2E no mesmo digest, CI/certificação e decisão de GO continuam gates separados. Produção `NO_GO`.
+
 ## PR-202 — fatia T2 de approval do runtime — 28/09/2026
 
 - [AUD-0583](../04_audit/0583_pr202_runtime_hotspot_recon_2026-09-28.md) corrigiu a baseline: `runTurn` atual tem cerca de 655 linhas, não 2.233. [SPEC 0153](0153_pr202_approval_request_slice.md) delimita extração mecânica do ramo de solicitação de approval, sem mudança de contrato/efeito. Sob D-12 e a task PR‑202 registrada, estado `BUILD_LOCAL_AUTHORIZED / SYNTHETIC_ONLY / GATES_NOT_RUN`; Node 22 focado 13/274 é baseline, não resultado do BUILD. Produção `NO_GO`.
