@@ -1,10 +1,10 @@
 # SPEC-PR301/204-003 — autoridade OIDC corporativa no boot da API
 
 - Trilha: **T3**, contrato público de identidade, sessão e configuração de segurança.
-- Estado: `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING / BUILD_NOT_AUTHORIZED`.
+- Estado: `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / BUILD_NOT_STARTED / PRODUCTION_NO_GO` (aprovação explícita do usuário em 28/09/2026).
 - Tasks: [PR-301 e PR-204](../03_build/0356_production_backlog_2026-09-26.md). Recon: [AUD-0582](../04_audit/0582_corporate_oidc_boot_gap_2026-09-27.md).
-- Base: [SPEC 0144](0144_trusted_operator_session_production.md) aprovada para IdP local sintético e store PostgreSQL, [SPEC 0151](0151_production_boot_configuration_contract.md) aprovada para snapshot de boot e falha fechada, [SPEC 0150](0150_cross_origin_operator_console.md) ainda em revisão para transporte HTTPS. D-09 escolhe OIDC corporativo com MFA, mas o issuer e seus parâmetros continuam ausentes.
-- Limite: BUILD controlado, quando aprovado, usa somente IdP e dados sintéticos. Esta SPEC não autoriza conexão ao IdP real, deploy, dado real, provider, canal ou GO. A conexão real exige os parâmetros IAM abaixo, revisão da configuração e gate de release.
+- Base: [SPEC 0144](0144_trusted_operator_session_production.md) aprovada para IdP local sintético e store PostgreSQL, [SPEC 0151](0151_production_boot_configuration_contract.md) aprovada para snapshot de boot e falha fechada, [SPEC 0150](0150_cross_origin_operator_console.md) aprovada para BUILD sintético do transporte HTTPS. D-09 escolhe OIDC corporativo com MFA, mas o issuer e seus parâmetros reais continuam ausentes.
+- Limite: BUILD controlado usa somente IdP e dados sintéticos. Esta SPEC não autoriza conexão ao IdP real, deploy, dado real, provider, canal ou GO. A conexão real exige os parâmetros IAM abaixo, revisão da configuração e gate de release.
 
 ## Resultado exigido
 

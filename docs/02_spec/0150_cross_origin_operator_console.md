@@ -2,9 +2,9 @@
 
 - Trilha: **T3**; altera transporte do console, CORS com credenciais e
   proteção CSRF da sessão de operador.
-- Estado: `SPEC_REVIEW_READY / BUILD_NOT_STARTED / PRODUCTION_NO_GO`.
-  Esta SPEC requer revisão explícita do usuário antes de código T3. Não
-  autoriza dados reais, IdP corporativo, publicação nem release.
+- Estado: `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / BUILD_NOT_STARTED / PRODUCTION_NO_GO`.
+  O usuário aprovou BUILD e testes sintéticos em 28/09/2026. Dados reais,
+  publicação e release seguem fora do escopo desta aprovação.
 - Críticas independentes I27 (API/segurança) e I28 (browser/web): ambas
   `ACCEPT_SPEC_REVIEW_READY` após corrigir injeção de cookie por origem irmã,
   cache entre tenants, rollback do bundle antigo e prova de CSP/NGINX. Os
