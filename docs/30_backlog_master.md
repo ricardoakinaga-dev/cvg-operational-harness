@@ -1,3 +1,7 @@
+# PR-301/302/204 — BUILD T3 sintético isolado — 28/09/2026
+
+- `ISOLATED_SYNTHETIC_BUILD_PASS / ROOT_INTEGRATION_PENDING / STAGING_POSITIVE_NOT_RUN / NO_GO`: [prova](04_audit/evidence/PR301-CORP-T3-20260928/proof.json) do commit `7019422` registra 2.410 testes unitários PASS, PG 258/258 e OIDC/sessão PG 20/20, além do build web selado. Integrar após PR-L04 e comprovar entrypoint produtivo, MFA e recarga no mesmo digest em staging HTTPS público controlado; obter IAM, CI/atestação/certificado e demais gates 0354 antes de GO.
+
 # PR-204 — B2 preparado, release ainda aberto — 28/09/2026
 
 - `B2_PREPARATION_LOCAL_PASS / B2_RELEASE_NOT_PROVEN / NO_GO`: [prova](04_audit/evidence/PR204-B2-PREP-20260928/proof.json) de `643f6ad`: 333/2.478, PG 35/258, Chromium 12/12, cobertura e imagem API B1. Fase B2 por env falha antes do listener. Crítica rejeitou fechamento B2 enquanto o binário permanece pinado em B1; faltam dreno A, cofre, B1 certificado, imagem B2 e rollback em staging.

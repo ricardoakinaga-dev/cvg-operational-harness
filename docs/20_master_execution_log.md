@@ -1,3 +1,9 @@
+# PR-301/302/204 — BUILD T3 sintético isolado — 28/09/2026
+
+- Sob as SPECs 0150/0152 aprovadas pelo usuário, commit isolado `7019422` compôs OIDC corporativo, sessão PostgreSQL e transporte do console em hosts HTTPS distintos; rejeita modo local/HMAC/overrides em produção. [Prova](04_audit/evidence/PR301-CORP-T3-20260928/proof.json).
+- Node 22: suíte 319/2.410 PASS com 21/164 skips sem serviços externos; PostgreSQL 16 próprio 35/258 PASS; OIDC/sessão PG 2/20; web focado 2/35; tipo/lint/formato/build runtime e web PASS. A primeira rodada ampla/PG revelou somente fixtures antigas de erro de boot, corrigidas e repetidas verdes. Contêiner próprio removido.
+- Positivo do entrypoint `NODE_ENV=production` com issuer público HTTPS e E2E Chromium no mesmo digest `NOT_RUN`; root/CI/certificado/atestação e IAM real pendentes. Sem dados reais, deploy ou push; produção `NO_GO`.
+
 # PR-204 — aviso B2 preparado no branch isolado — 28/09/2026
 
 - Commit `643f6ad` acrescenta `providerKeyMigrationNotice` e log estruturado sem valor no entrypoint. No release atual B1, a função não emite aviso e a fase não pode ser trocada por env. A [prova](04_audit/evidence/PR204-B2-PREP-20260928/proof.json) registra suíte 333/2.478, PG 35/258, Chromium 12/12, cobertura acima dos thresholds, imagem Docker API B1 viva e negativo de spoof antes de listener, sem vazamento.

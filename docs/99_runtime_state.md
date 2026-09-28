@@ -1,3 +1,11 @@
+# PR-301/302/204 — BUILD T3 sintético corporativo/HTTPS isolado — 28/09/2026
+
+- status: `ISOLATED_SYNTHETIC_BUILD_PASS / ROOT_INTEGRATION_PENDING / STAGING_POSITIVE_NOT_RUN`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: branch `codex/pr301-corporate-20260928` (`7019422`) implementou client OIDC corporativo, MFA/grupos, composição de boot com PostgreSQL, cookies `__Host-`, console/API em hosts HTTPS distintos e bundle web selado. [Prova](04_audit/evidence/PR301-CORP-T3-20260928/proof.json).
+- verification_state: Node 22, suíte 319 arquivos/2.410 testes PASS (21/164 skips sem serviços externos), PostgreSQL 16 descartável 35/258 PASS e OIDC/sessão PostgreSQL 2/20 PASS; web focado 2/35, tipo/lint/formato/builds PASS. Banco próprio removido. Apenas dados sintéticos.
+- blocking_state: PR-L04 detém API/web no root; positivo do entrypoint produtivo com issuer HTTPS público controlado, prova Chromium do mesmo digest, pacote IAM real, migração/rollback, CI remoto/atestação e condições de GO do plano 0354 pendentes.
+- next_action: integrar branch após liberação da PR-L04, repetir gates no SHA final e executar staging sintético/publicado antes de qualquer decisão de produção.
+
 # PR-204 — preparação B2 validada, release pendente — 28/09/2026
 
 - status: `B2_PREPARATION_LOCAL_PASS / B2_RELEASE_NOT_PROVEN`; programa `IN_PROGRESS`; produção `NO_GO`.

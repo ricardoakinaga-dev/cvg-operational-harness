@@ -2,7 +2,7 @@
 
 - Trilha: **T3**; altera transporte do console, CORS com credenciais e
   proteção CSRF da sessão de operador.
-- Estado: `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / BUILD_NOT_STARTED / PRODUCTION_NO_GO`.
+- Estado: `BUILD_T3_APPROVED_USER / ISOLATED_SYNTHETIC_BUILD_PASS / ROOT_AND_STAGING_PENDING / PRODUCTION_NO_GO`.
   O usuário aprovou BUILD e testes sintéticos em 28/09/2026. Dados reais,
   publicação e release seguem fora do escopo desta aprovação.
 - Críticas independentes I27 (API/segurança) e I28 (browser/web): ambas
@@ -169,5 +169,10 @@ origem de API, issuer, redirect, certificado TLS e allowlist de proxy/CORS.
 
 ## Estado
 
-`SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING /
-CORPORATE_ISSUER_PENDING / BUILD_NOT_STARTED / PRODUCTION_NO_GO`.
+`BUILD_T3_APPROVED_USER / ISOLATED_SYNTHETIC_BUILD_PASS /
+CORPORATE_ISSUER_PENDING / ROOT_AND_STAGING_PENDING / PRODUCTION_NO_GO`.
+
+A implementação isolada `7019422` e os gates sintéticos estão registrados na
+[prova PR-301/302 T3](../04_audit/evidence/PR301-CORP-T3-20260928/proof.json).
+O E2E HTTPS do mesmo digest e a integração no checkout principal ainda não
+foram executados.

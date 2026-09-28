@@ -1,7 +1,7 @@
 # SPEC-PR301/204-003 — autoridade OIDC corporativa no boot da API
 
 - Trilha: **T3**, contrato público de identidade, sessão e configuração de segurança.
-- Estado: `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / BUILD_NOT_STARTED / PRODUCTION_NO_GO` (aprovação explícita do usuário em 28/09/2026).
+- Estado: `BUILD_T3_APPROVED_USER / ISOLATED_SYNTHETIC_BUILD_PASS / STAGING_POSITIVE_NOT_RUN / PRODUCTION_NO_GO` (aprovação explícita do usuário em 28/09/2026).
 - Tasks: [PR-301 e PR-204](../03_build/0356_production_backlog_2026-09-26.md). Recon: [AUD-0582](../04_audit/0582_corporate_oidc_boot_gap_2026-09-27.md).
 - Base: [SPEC 0144](0144_trusted_operator_session_production.md) aprovada para IdP local sintético e store PostgreSQL, [SPEC 0151](0151_production_boot_configuration_contract.md) aprovada para snapshot de boot e falha fechada, [SPEC 0150](0150_cross_origin_operator_console.md) aprovada para BUILD sintético do transporte HTTPS. D-09 escolhe OIDC corporativo com MFA, mas o issuer e seus parâmetros reais continuam ausentes.
 - Limite: BUILD controlado usa somente IdP e dados sintéticos. Esta SPEC não autoriza conexão ao IdP real, deploy, dado real, provider, canal ou GO. A conexão real exige os parâmetros IAM abaixo, revisão da configuração e gate de release.
@@ -49,4 +49,11 @@ O schema atual não marca sessão ou state com digest do candidato e a role de A
 
 ## Gate
 
-I1 rejeitou quatro pontos P1: campos OIDC compartilhados classificados como IdP local, claim de grupos/tenant ativo sem fonte explícita, positivo sintético incompatível com a proibição de DNS privado e rollback sem preflight compatível. A primeira revisão fechou esses contratos; I2 apontou falta de operação executável para invalidar sessões/state por tenant/candidato. A drenagem integral acima substitui a alegação de revogação seletiva por um procedimento verificável sem alterar o schema. I3 apontou que o teste de navegador não estava vinculado ao entrypoint produtivo; o critério acima exige o mesmo digest/processo sem override. I4, em contexto novo e sem edição, retornou `ACCEPT_SPEC_REVIEW_READY` sem P0/P1; foi revisão documental, não execução. A revisão humana T3 permanece pendente; não há BUILD corporativo autorizado. A aprovação T3 permite somente BUILD e testes sintéticos; a configuração real depende do pacote IAM e a promoção depende das 13 condições de GO do plano 0354.
+I1 rejeitou quatro pontos P1: campos OIDC compartilhados classificados como IdP local, claim de grupos/tenant ativo sem fonte explícita, positivo sintético incompatível com a proibição de DNS privado e rollback sem preflight compatível. A primeira revisão fechou esses contratos; I2 apontou falta de operação executável para invalidar sessões/state por tenant/candidato. A drenagem integral acima substitui a alegação de revogação seletiva por um procedimento verificável sem alterar o schema. I3 apontou que o teste de navegador não estava vinculado ao entrypoint produtivo; o critério acima exige o mesmo digest/processo sem override. I4, em contexto novo e sem edição, retornou `ACCEPT_SPEC_REVIEW_READY` sem P0/P1; foi revisão documental, não execução. O usuário aprovou BUILD T3 sintético em 28/09/2026. A configuração real depende do pacote IAM e a promoção depende das 13 condições de GO do plano 0354.
+
+BUILD sintético isolado `7019422`: client corporativo, composição de boot,
+MFA/grupos, PostgreSQL e transporte do console foram implementados e
+verificados conforme a [prova T3](../04_audit/evidence/PR301-CORP-T3-20260928/proof.json).
+O positivo do entrypoint de produção com issuer HTTPS público controlado, o
+Chromium no mesmo digest, a migração/rollback em staging e o pacote IAM real
+continuam pendentes. Não há liberação de produção.
