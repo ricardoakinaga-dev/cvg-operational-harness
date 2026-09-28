@@ -475,7 +475,7 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-202 — Decompor `runTurn` em `packages/agent-runtime/src/runtime.ts` · P1 · SPEC+BUILD
 
-- 28/09/2026, [AUD-0583](../04_audit/0583_pr202_runtime_hotspot_recon_2026-09-28.md) mediu `runTurn` atual em cerca de 655 linhas, `#runExecutionTurn` em 629 e o arquivo em 2.609; a contagem histórica abaixo está vencida. Baseline focada Node 22: 13/274 PASS. [SPEC 0153](../02_spec/0153_pr202_approval_request_slice.md) autoriza fatia T2 mecânica do ramo de approval em worktree isolado; gates pós-código ainda `NOT_RUN`. O restante de execução/replay continua aberto.
+- 28/09/2026, primeira fatia [SPEC 0153](../02_spec/0153_pr202_approval_request_slice.md) integrada ao root em `69d08d3` após commit isolado `f787ad9`: `runTurn` de cerca de 655 para 592 linhas; AST 3/3, regressão de autoridade/telemetria capturadas e crítica independente I2 `ACCEPT` após P1 corrigido. [Prova](../04_audit/evidence/PR202-SLICE-20260928/proof.json): Node 22 325/2.393, PostgreSQL 35/258, Chromium 12/12, cobertura acima dos thresholds e root 13/275, tipo/lint/formato PASS. Catálogo `SKIP-PG-014` tem hash vencido em caminho PR-L04, gate de skips `FAIL`; integração composta/certificação pendentes, produção `NO_GO`. `#runExecutionTurn` (~629 linhas), recuperação/replay e o arquivo de 2.636 linhas mantêm a PR‑202 aberta.
 - Baseline histórica de 26/09: 2.603 linhas, com `runTurn` de 2.233; substituída pela medição de 28/09 acima.
 - Pronto: `runTurn` dividido em etapas nomeadas com testes por etapa; mesmo
   comportamento provado pela suíte de evals.

@@ -7,7 +7,7 @@
 
 ## PR-202 — fatia T2 de approval do runtime — 28/09/2026
 
-- [AUD-0583](../04_audit/0583_pr202_runtime_hotspot_recon_2026-09-28.md) corrigiu a baseline: `runTurn` atual tem cerca de 655 linhas, não 2.233. [SPEC 0153](0153_pr202_approval_request_slice.md) delimita extração mecânica do ramo de solicitação de approval, sem mudança de contrato/efeito. Sob D-12 e a task PR‑202 registrada, estado `BUILD_LOCAL_AUTHORIZED / SYNTHETIC_ONLY / GATES_NOT_RUN`; Node 22 focado 13/274 é baseline, não resultado do BUILD. Produção `NO_GO`.
+- [AUD-0583](../04_audit/0583_pr202_runtime_hotspot_recon_2026-09-28.md) corrigiu a baseline: `runTurn` tinha cerca de 655 linhas, não 2.233. [SPEC 0153](0153_pr202_approval_request_slice.md) delimitou extração mecânica do ramo de solicitação de approval, sem mudança de contrato/efeito. Sob D-12 e a task PR‑202, commit isolado `f787ad9` integrado ao root em `69d08d3`: comparação AST 3/3, crítica I1 P1 corrigida e I2 `ACCEPT`, Node 22 13/275 focados, suíte 325/2.393, PostgreSQL 35/258, Chromium 12/12, cobertura acima dos thresholds, tipo/lint/formato PASS. [Prova](../04_audit/evidence/PR202-SLICE-20260928/proof.json). Estado `FIRST_SLICE_ROOT_LOCAL_PASS / FULL_PR202_OPEN / COMPOSITE_CERTIFICATION_PENDING`; o gate de catálogo `SKIP-PG-014` falha por hash vencido em caminho PR-L04, produção `NO_GO`.
 
 ## PR-301/204 — SPEC 0152 corporativa pronta para revisão T3 — 28/09/2026
 

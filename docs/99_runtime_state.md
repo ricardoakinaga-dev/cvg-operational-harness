@@ -330,3 +330,11 @@
 
 - [Estado operacional anterior](08_runtime/archive/prod20260926_runtime_state_history.md), fonte `docs/99_runtime_state.md`, SHA-256 `d8092246cb5f597dc32a469c937268b90afbfa2da7d5701e100d9f1a2544b10f`.
 - [Log anterior](08_runtime/archive/prod20260926_execution_log_history.md) e [backlog anterior](08_runtime/archive/prod20260926_backlog_history.md) preservam os ciclos anteriores. O Git também mantém os bytes originais na revisão `4aac877e5e0c504940c8ef2856928e43a1a5ed2a`.
+
+# PR-202 integrada; SPECs 0150/0152 liberadas para BUILD sintético — 28/09/2026
+
+- status: `PR202_FIRST_SLICE_ROOT_LOCAL_PASS / T3_SYNTHETIC_BUILD_APPROVED`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: commit isolado `f787ad9` e root `69d08d3` extraíram o pedido de approval de `runTurn`, preservando referências capturadas de autoridade/telemetria. A [prova](04_audit/evidence/PR202-SLICE-20260928/proof.json) registra AST 3/3 e crítica I2 `ACCEPT` após P1 corrigido. O usuário aprovou BUILD sintético das [SPEC 0150](02_spec/0150_cross_origin_operator_console.md) e [0152](02_spec/0152_corporate_oidc_authority_contract.md).
+- verification_state: Node 22, 13/275 focados, suíte 325/2.393, PostgreSQL 35/258, Chromium 12/12, cobertura 92,53%/87,66%/95,10%/93,56%, tipo/lint/formato e regressão root PASS; zero skips reportados. O verificador do catálogo falha por hash vencido em `SKIP-PG-014` sob PR-L04.
+- blocking_state: PR‑202 ainda tem execução/replay e tamanho da classe abertos; PR-L04, catálogo, composição/certificação e CI do digest final, IAM real, dados/ops/pentest/piloto e demais condições de 0354. Produção `NO_GO`.
+- next_action: implementar SPECs 0150/0152 em worktree com IdP HTTPS e dados sintéticos; conciliar catálogo após PR-L04 e certificar o candidato composto.

@@ -171,3 +171,8 @@ A [task list 0356](03_build/0356_production_backlog_2026-09-26.md) é a fonte de
 
 - [Backlog mestre anterior](08_runtime/archive/prod20260926_backlog_history.md), fonte `docs/30_backlog_master.md`, SHA-256 `fedc1c99cfe9333f80c8aad864df0a310995e1d1d5c5c26c427e276dd332f937` (revisão `4aac877e5e0c504940c8ef2856928e43a1a5ed2a`).
 - [Runtime anterior](08_runtime/archive/prod20260926_runtime_state_history.md) e [log anterior](08_runtime/archive/prod20260926_execution_log_history.md) mantêm as decisões e evidências completas dos ciclos anteriores.
+
+# PR-202 — fatia local integrada; OIDC/HTTPS T3 liberados para BUILD sintético — 28/09/2026
+
+- `FIRST_SLICE_ROOT_LOCAL_PASS / FULL_PR202_OPEN / NO_GO`: [prova](04_audit/evidence/PR202-SLICE-20260928/proof.json) do root `69d08d3` com AST 3/3, crítico I2 `ACCEPT`, 325/2.393 com cobertura, PG 35/258, Chromium 12/12 e regressão root 13/275. Restam execução/replay, redução do arquivo e certificado composto. `skip:governance` falha por hash `SKIP-PG-014` vencido sob PR-L04; zero skips observados.
+- [SPEC 0150](02_spec/0150_cross_origin_operator_console.md) e [SPEC 0152](02_spec/0152_corporate_oidc_authority_contract.md) receberam aprovação humana T3 para BUILD e testes somente sintéticos. Implementar em worktree com IdP HTTPS e hosts distintos; IAM real, DP/ops, integração, CI/atestação e 13 condições de 0354 permanecem gates de produção.

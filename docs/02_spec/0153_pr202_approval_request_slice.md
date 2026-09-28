@@ -2,7 +2,7 @@
 
 - Trilha: **T2** sob D-12; refatoração interna sem mudança de contrato público, schema, SQL, permissão ou efeito externo. BUILD local sintético autorizado pela task [PR-202](../03_build/0356_production_backlog_2026-09-26.md) e pela instrução do usuário de corrigir/validar o programa. Não concede GO nem altera o gate T3 de identidade.
 - Recon: [AUD-0583](../04_audit/0583_pr202_runtime_hotspot_recon_2026-09-28.md). Baseline `2e7e9ee`, `runtime.ts` SHA-256 `0834639780a3c8c6a73d1d05edc5551d3a5ff432b9c921f83c4c285f8c849bf8`.
-- Estado: `BUILD_LOCAL_AUTHORIZED / EVIDENCE_PENDING`. Worktree isolado `codex/pr202-runtime-20260928`; sem tocar caminhos ativos PR‑L04.
+- Estado: `FIRST_SLICE_ROOT_LOCAL_PASS / FULL_PR202_OPEN / PRODUCTION_NO_GO`. Worktree `codex/pr202-runtime-20260928` em `f787ad9`, integrado ao root em `69d08d3`; [prova](../04_audit/evidence/PR202-SLICE-20260928/proof.json). Nenhum caminho ativo PR‑L04 foi alterado.
 
 ## Fatia e invariante
 

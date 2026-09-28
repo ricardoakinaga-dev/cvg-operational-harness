@@ -214,3 +214,9 @@
 
 - [AUD-0579](04_audit/0579_current_candidate_deep_audit_2026-09-27.md) auditou `5c0b791`, registrou `skip:governance` e `certification:verify` em falha, o defeito da sessão confiável no entrypoint e a SPEC T3 correspondente.
 - O [log integral anterior](08_runtime/archive/prod20260926_execution_log_history.md) preserva os comandos, resultados, decisões e evidências de todos os ciclos anteriores; SHA-256 dos bytes de origem `576ac3f766e7d9b930bb47f11583c5bb088e8f8526b9b977c5c4ff08c5d8609e`.
+
+# PR-202 — primeira fatia integrada; gates T3 de OIDC/HTTPS aprovados — 28/09/2026
+
+- Sob [SPEC 0153](02_spec/0153_pr202_approval_request_slice.md), branch `f787ad9` e root `69d08d3` moveram somente as três instruções do ramo `REQUIRE_APPROVAL` para helper privado. I1 encontrou releitura mutável de `#options` após aguardar modelo; referências capturadas e teste de mutação corrigiram; I2 `ACCEPT`, sem P0/P1/P2. AST 3/3 igual e hashes de fonte iguais entre branch e root.
+- [Prova](04_audit/evidence/PR202-SLICE-20260928/proof.json): Node 22, 13/275 focados, suíte 325/2.393, PostgreSQL 35/258, Chromium 12/12 e cobertura 92,53% statements, 87,66% branches, 95,10% functions, 93,56% lines; tipo/lint/formato PASS. Primeira tentativa E2E sem dist de `@cvg/shared` falhou na preparação isolada; após `build:runtime`, 12/12 PASS. Os três PostgreSQL sintéticos foram removidos.
+- `skip:governance` falhou por `SKIP-PG-014` com hash de fonte vencido (`apps/worker/...homolog.integration.test.ts`) sob claim PR-L04; não houve teste ignorado nos gates executados. PR‑202 completa e certificação do SHA composto seguem abertas. O usuário aprovou BUILD T3 sintético das [SPEC 0150](02_spec/0150_cross_origin_operator_console.md) e [0152](02_spec/0152_corporate_oidc_authority_contract.md); sem IdP real, push, deploy ou GO.
