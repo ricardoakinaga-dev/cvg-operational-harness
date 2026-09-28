@@ -1,3 +1,7 @@
+# PR-301/302 — follow-up T3 isolado — 28/09/2026
+
+- `LOCAL_FUNCTIONAL_PASS / CRITICAL_COVERAGE_FAIL / SYNTHETIC_BROWSER_TRANSPORT_PASS / ROOT_INTEGRATION_PENDING / NO_GO`: [correção](04_audit/evidence/PR301-CORP-I1-20260928/proof.json) `ed012a4` passou 2.578 testes, PG 258, E2E 12 e cobertura global, mas o grupo RLS ficou em 83,76% de branches contra piso 95%; [prova HTTPS](04_audit/evidence/PR302-HTTPS-BROWSER-20260928/proof.json) passou no bundle/NGINX reais com API/IdP sintéticos. Integrar após PR-L04, elevar cobertura RLS com negativos significativos, corrigir o catálogo de skips, provar o entrypoint corporativo com MFA/PG no mesmo digest em staging HTTPS público controlado, receber IAM e fechar rollback, CI/atestação/certificação e condições 0354 antes de GO.
+
 # PR-301/302/204 — BUILD T3 sintético isolado — 28/09/2026
 
 - `ISOLATED_SYNTHETIC_BUILD_PASS / ROOT_INTEGRATION_PENDING / STAGING_POSITIVE_NOT_RUN / NO_GO`: [prova](04_audit/evidence/PR301-CORP-T3-20260928/proof.json) do commit `7019422` registra 2.410 testes unitários PASS, PG 258/258 e OIDC/sessão PG 20/20, além do build web selado. Integrar após PR-L04 e comprovar entrypoint produtivo, MFA e recarga no mesmo digest em staging HTTPS público controlado; obter IAM, CI/atestação/certificado e demais gates 0354 antes de GO.

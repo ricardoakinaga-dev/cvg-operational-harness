@@ -174,5 +174,11 @@ CORPORATE_ISSUER_PENDING / ROOT_AND_STAGING_PENDING / PRODUCTION_NO_GO`.
 
 A implementação isolada `7019422` e os gates sintéticos estão registrados na
 [prova PR-301/302 T3](../04_audit/evidence/PR301-CORP-T3-20260928/proof.json).
-O E2E HTTPS do mesmo digest e a integração no checkout principal ainda não
-foram executados.
+O follow-up isolado `ed012a4` exige que console e API HTTPS pertençam ao
+mesmo site, preservando o cookie operacional `SameSite=Strict`. A
+[prova Chromium de transporte](../04_audit/evidence/PR302-HTTPS-BROWSER-20260928/proof.json)
+usa a imagem NGINX do commit e hosts HTTPS sintéticos distintos; valida o
+bundle real, o hook de segurança da API, cookies, CORS, CSRF, CSP e estados
+401/503. O IdP, a sessão e os handlers da API nessa prova são sintéticos;
+o entrypoint corporativo com PostgreSQL, MFA e issuer HTTPS público no mesmo
+digest, a integração no root e o certificado de produção continuam pendentes.

@@ -1,3 +1,11 @@
+# PR-301/302 — correção OIDC corporativa e prova HTTPS do produto — 28/09/2026
+
+- status: `ISOLATED_REMEDIATION_ACCEPTED / SYNTHETIC_HTTPS_TRANSPORT_PASS / ROOT_AND_STAGING_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: commit isolado `ed012a4` corrigiu quatro falhas da crítica pós-BUILD: compatibilidade de site do cookie Strict, authorization host corporativo, callback com cookie legado/malformado e timeout DNS. [Prova de código](04_audit/evidence/PR301-CORP-I1-20260928/proof.json); [prova Chromium/NGINX](04_audit/evidence/PR302-HTTPS-BROWSER-20260928/proof.json) com imagem local do commit e hosts HTTPS sintéticos do mesmo site.
+- verification_state: Node 22 + PostgreSQL 16, suíte 340 arquivos/2.578 testes PASS sem skips, PG 35/258 PASS, Chromium 12/12 PASS, tipo/lint/formato/links PASS; cobertura global 92,14% statements/87,46% branches PASS. Crítica independente `ACCEPT`. O navegador comprovou bundle/NGINX e hook HTTP real, com sessão/IdP sintéticos.
+- blocking_state: cobertura crítica `FAIL` no grupo RLS (83,76% branches contra 95%); `skip:governance` `FAIL` por hash de fonte sob claim PR-L04; root API/web ainda sob PR-L04. Sem positivo do entrypoint corporativo com issuer HTTPS público controlado, IAM real, staging no mesmo digest, migração/rollback, CI remoto/atestação ou certificado do SHA integrado.
+- next_action: integrar o branch após a liberação da PR-L04, reconciliar o catálogo e certificar o SHA final; executar staging corporativo sintético e obter pacote IAM antes de qualquer decisão de produção.
+
 # PR-301/302/204 — BUILD T3 sintético corporativo/HTTPS isolado — 28/09/2026
 
 - status: `ISOLATED_SYNTHETIC_BUILD_PASS / ROOT_INTEGRATION_PENDING / STAGING_POSITIVE_NOT_RUN`; programa `IN_PROGRESS`; produção `NO_GO`.

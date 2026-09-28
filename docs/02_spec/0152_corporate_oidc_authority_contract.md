@@ -57,3 +57,12 @@ verificados conforme a [prova T3](../04_audit/evidence/PR301-CORP-T3-20260928/pr
 O positivo do entrypoint de produção com issuer HTTPS público controlado, o
 Chromium no mesmo digest, a migração/rollback em staging e o pacote IAM real
 continuam pendentes. Não há liberação de produção.
+
+Follow-up isolado `ed012a4` fecha P1/P2 da crítica pós-BUILD: valida mesmo
+site HTTPS para o cookie Strict, admite host de autorização corporativa
+distinto do issuer somente sob HTTPS e cookie `__Host-`, rejeita cookies
+operacionais legados/malformados no callback e limita a espera por DNS a
+cinco segundos. A [prova local](../04_audit/evidence/PR301-CORP-I1-20260928/proof.json)
+registra testes completos com PostgreSQL, Chromium e crítica independente
+`ACCEPT`. Isso não substitui o positivo de staging do entrypoint corporativo,
+o pacote IAM real, a migração/rollback ou a certificação do SHA integrado.

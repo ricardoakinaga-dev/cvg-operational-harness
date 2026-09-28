@@ -1,3 +1,8 @@
+# PR-301/302 — crítica pós-BUILD fechada localmente — 28/09/2026
+
+- Em `ed012a4`, o branch T3 isolado passou a exigir mesmo site HTTPS para console/API, a aceitar host corporativo de autorização distinto sob cookie seguro, a recusar cookies operacionais legados/malformados no callback e a limitar espera DNS. Hume identificou as quatro lacunas; Noether aceitou a revisão após correções.
+- [Gates de código](04_audit/evidence/PR301-CORP-I1-20260928/proof.json): 340/2.578 testes sem skips, PostgreSQL 35/258 e Chromium 12/12, Node 22, tipo/lint/formato/links e cobertura global PASS. Cobertura crítica `FAIL` no grupo RLS (83,76% branches para piso 95%). [Navegador HTTPS](04_audit/evidence/PR302-HTTPS-BROWSER-20260928/proof.json): imagem NGINX e bundle reais, hook HTTP da API, sessão/IdP sintéticos, cookies/CORS/CSRF/CSP/401/503 observados. O gate de skips falha por catálogo com hash vencido sob PR-L04; root integrado, IAM/staging, CI/atestação/certificado seguem abertos. Produção `NO_GO`.
+
 # PR-301/302/204 — BUILD T3 sintético isolado — 28/09/2026
 
 - Sob as SPECs 0150/0152 aprovadas pelo usuário, commit isolado `7019422` compôs OIDC corporativo, sessão PostgreSQL e transporte do console em hosts HTTPS distintos; rejeita modo local/HMAC/overrides em produção. [Prova](04_audit/evidence/PR301-CORP-T3-20260928/proof.json).
