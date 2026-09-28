@@ -162,6 +162,8 @@ Verificação: `typecheck`, `lint`, `format:check` exit 0; suíte completa
   statements, 87,67% branches, 95,10% functions, 93,57% lines, acima dos
   limiares do projeto. O teste negativo entrou após o início do primeiro
   `npm test`; a execução integral com cobertura inclui esse teste.
-- Estado `LOCAL_PASS / ROOT_INTEGRATION_PENDING`: branch principal, CI remoto,
-  certificação do SHA integrado e decisões T3/T4 ainda não foram validados.
+- Integração no checkout compartilhado `7b3871d`: os três arquivos têm SHA-256
+  idêntico ao branch isolado; tipo, lint e teste negativo focado passaram.
+  Estado `ROOT_LOCAL_PASS`: composição com OIDC/PR-L04, CI remoto,
+  certificação do SHA final e decisões T3/T4 continuam pendentes.
   Produção permanece `NO_GO`.

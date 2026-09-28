@@ -2,7 +2,7 @@
 
 ## PR-203 — fatia 4 executada localmente — 27/09/2026
 
-- [SPEC 0134](0134_postgres_slice_extraction.md) BUILD T2 no commit isolado `9e949d7`, com `postgres.ts` 1.455 linhas e `postgres-inbound.ts` 813. Prova AST 7 métodos/2 helpers, 7 assinaturas preservadas; crítica pós-código `ACCEPT`. Teste integral final com cobertura 325/2.392, PostgreSQL 35/258, Chromium 12/12, zero skips; tipo/lint/formato PASS. [Evidência](../04_audit/evidence/PR203-20260927/proof.json). Estado `LOCAL_PASS / ROOT_INTEGRATION_PENDING`; produção `NO_GO`.
+- [SPEC 0134](0134_postgres_slice_extraction.md) BUILD T2 no commit isolado `9e949d7`, integrado ao checkout compartilhado em `7b3871d` com três hashes iguais. `postgres.ts` tem 1.455 linhas e `postgres-inbound.ts` 813. Prova AST 7 métodos/2 helpers, 7 assinaturas preservadas; crítica pós-código `ACCEPT`. Teste integral final com cobertura 325/2.392, PostgreSQL 35/258, Chromium 12/12, zero skips; tipo/lint/formato PASS. No root, tipo/lint/negativo focado PASS. [Evidência](../04_audit/evidence/PR203-20260927/proof.json). Estado `ROOT_LOCAL_PASS / COMPOSITE_CERTIFICATION_PENDING`; produção `NO_GO`.
 
 ## PR-203 — fatia 4 de `postgres.ts` — 27/09/2026
 

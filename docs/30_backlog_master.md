@@ -1,6 +1,6 @@
 # PR-203 — extração PostgreSQL inbound local concluída — 27/09/2026
 
-- `LOCAL_PASS / ROOT_INTEGRATION_PENDING / NO_GO`: branch `codex/pr203-postgres-extraction-20260927` (`9e949d7`) deixa `postgres.ts`/`postgres-inbound.ts` em 1.455/813 linhas. [Prova](04_audit/evidence/PR203-20260927/proof.json): AST 9/9, assinatura 7/7, crítico `ACCEPT`, suíte final 325/2.392, PG 35/258, E2E 12/12 e zero skips. Próximo gate: integrar após PR-L04 e certificar o SHA composto com CI remoto; sem promoção de produção.
+- `ROOT_LOCAL_PASS / COMPOSITE_CERTIFICATION_PENDING / NO_GO`: branch `codex/pr203-postgres-extraction-20260927` (`9e949d7`) integrado ao root em `7b3871d`, com três hashes iguais, deixa `postgres.ts`/`postgres-inbound.ts` em 1.455/813 linhas. [Prova](04_audit/evidence/PR203-20260927/proof.json): AST 9/9, assinatura 7/7, crítico `ACCEPT`, suíte final 325/2.392, PG 35/258, E2E 12/12, zero skips; tipo/lint/negativo focado PASS no root. Próximo gate: compor OIDC/PR-L04 e certificar o SHA final com CI remoto; sem promoção de produção.
 
 # PR-204 — configuração de produção T3 pronta para revisão — 27/09/2026
 

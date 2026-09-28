@@ -2,7 +2,7 @@
 
 - Commit `9e949d7` extraiu sete métodos de inbound/sessão e dois helpers para `postgres-inbound.ts` (813 linhas), reduzindo `postgres.ts` a 1.455. AST 9/9 e assinaturas 7/7 preservados; crítica pós-código `ACCEPT`, sem P0/P1. [Prova](04_audit/evidence/PR203-20260927/proof.json).
 - Node 22/PostgreSQL 16: cinco arquivos focados/65, suíte inicial 325/2.391, suíte final com cobertura 325/2.392, PG 35/258 e Chromium 12/12, zero skips; tipo/lint/formato/links PASS. Teste novo valida rejeição de correlation ID inválido antes de qualquer query.
-- Trabalho local T2 concluído. Integração no root, certificação e CI no SHA composto permanecem; produção `NO_GO`.
+- Cherry-pick `7b3871d` integrou a fatia ao root; os três arquivos têm SHA-256 igual ao branch isolado. Tipo/lint/negativo focado PASS no checkout compartilhado. Composição com OIDC/PR-L04, certificação e CI no SHA final permanecem; produção `NO_GO`.
 
 # PR-204 — AUD-0581 e SPEC 0151 de boot de produção — 27/09/2026
 

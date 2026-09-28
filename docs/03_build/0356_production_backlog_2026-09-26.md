@@ -486,8 +486,9 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
   e 2 helpers preservados, crítica independente `ACCEPT`. Node 22: suíte
   final com cobertura 325/2.392, PostgreSQL 35/258, Chromium 12/12, zero
   skips, tipo/lint/formato PASS. [Prova](../04_audit/evidence/PR203-20260927/proof.json).
-  Integrar com candidato após PR-L04 e repetir certificação/CI no SHA final;
-  produção `NO_GO`.
+  Integrado ao checkout compartilhado em `7b3871d` com hashes iguais e
+  tipo/lint/negativo focado PASS. Compor com OIDC/PR-L04 e repetir
+  certificação/CI no SHA final; produção `NO_GO`.
 - 27/09/2026, recon: a fatia 3 já está no commit `f9f84c9` (`postgres-audit.ts` 612 linhas). O alvo atual `postgres.ts` tem 2.106 linhas no checkout `79f28cc`. A [SPEC 0134 revisada](../02_spec/0134_postgres_slice_extraction.md) autoriza BUILD local T2 da fatia 4 em branch isolado, com extração inbound/sessão sem mudar SQL, transação ou exports públicos; gates ainda `NOT_RUN`. Meta: ambos os módulos abaixo de 1.500 linhas e testes de PostgreSQL/E2E verdes.
 - Dependência: PR-001.
 - Pronto: `postgres.ts` abaixo de 1 500 linhas; `test:postgres` PASS.
