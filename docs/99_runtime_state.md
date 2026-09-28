@@ -1,3 +1,11 @@
+# PR-204 — contrato de configuração de produção especificado — 27/09/2026
+
+- status: `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last*completed_action: [AUD-0581](04_audit/0581_production_boot_configuration_gap_2026-09-27.md) reproduziu o parser aceitando flags `ENABLE_REAL*\*`e defaults inadequados; o preflight do worker aceita`NODE_ENV` ausente/inválido. [SPEC 0151](02_spec/0151_production_boot_configuration_contract.md) define snapshot de boot, seleção OIDC, bundle web, provider e rollout de segredo. I1 rejeitou quatro P1; I2 aceitou a revisão para revisão humana.
+- verification_state: sondas sintéticas Node 22 do parser e preflight, inspeção de API/worker/web/gateway, crítica independente I1/I2; links, higiene e formato documentais. Nenhum boot completo, teste amplo, código ou deploy nesta fatia.
+- blocking_state: revisão humana T3 antes de BUILD; PR-L04/branch OIDC, issuer corporativo, SPEC 0150, provider e certificação do SHA integrado ainda pendentes. Produção `NO_GO`.
+- next_action: após aprovação T3, implementar a matriz no candidato integrado, executar negativos de processo e gates Node 22/PostgreSQL/E2E; manter as demais frentes independentes em andamento.
+
 # PR-301 — merge OIDC no candidato isolado — 27/09/2026
 
 - status: `ISOLATED_INTEGRATION_LOCAL_PASS / ROOT_AND_REMOTE_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

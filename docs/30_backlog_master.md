@@ -1,3 +1,7 @@
+# PR-204 — configuração de produção T3 pronta para revisão — 27/09/2026
+
+- `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING / NO_GO`: [AUD-0581](04_audit/0581_production_boot_configuration_gap_2026-09-27.md) e [SPEC 0151](02_spec/0151_production_boot_configuration_contract.md) delimitam parser, API, worker, web e gateway. I1 rejeitou quatro P1; I2 aceitou a revisão documental. Implementar só após revisão T3, com negativos do entrypoint e certificado do SHA integrado; PR-L04 e decisões de produto continuam abertas.
+
 # PR-301 — merge OIDC isolado validado — 27/09/2026
 
 - `LOCAL_INTEGRATION_PASS / ROOT_INTEGRATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-ROOT-INTEGRATION-20260927/proof.json) do branch `codex/pr301-root-integration-preview` (`0b4a95b`) combina root com OIDC sem conflitos, com 331/2.437 testes, PG 35/258 e skips zero. E2E Keycloak MFA/Chromium, tipo/lint/links/higiene PASS. PR-L04 ainda detém API/web no checkout principal; certificado/CI do SHA final, IdP corporativo, SPEC 0149/0150 e decisões de dados seguem P0. Produção `NO_GO`.

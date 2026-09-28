@@ -486,6 +486,7 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-204 — Configuração única validada no boot (RA26-08) · P0 · SPEC+BUILD
 
+- 27/09/2026, [AUD-0581](../04_audit/0581_production_boot_configuration_gap_2026-09-27.md) confirmou que `parseEnv` aceita em produção flags `ENABLE_REAL_*` sem consumidor, identidade implícita e inbound durável desligado; o builder da API tem guards separados. O preflight do worker aceitou `NODE_ENV` ausente ou inválido em modo controlado. A [SPEC-PR204-001](../02_spec/0151_production_boot_configuration_contract.md) define snapshot tipado, gate do bundle web, seleção OIDC sem HMAC legado, rollout A/B1/B2 de segredo e negativos de entrypoint. I1 rejeitou quatro P1; I2 aceitou a revisão para análise humana T3. Estado `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING`; nenhum BUILD ou GO.
 - O que/onde: `ENABLE_REAL_*` sem consumidor em `packages/shared/src/env.ts`;
   segredo do provider chamado `OPENAI_API_KEY` num gateway neutro;
   `POSTGRES_RLS_ENFORCEMENT` e `OUTBOX_DURABLE_INBOUND` opcionais.

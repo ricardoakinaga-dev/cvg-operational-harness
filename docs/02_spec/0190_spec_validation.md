@@ -1,5 +1,9 @@
 # 0190 — SPEC Validation
 
+## PR-204 — contrato de configuração de produção — 27/09/2026
+
+- [SPEC 0151](0151_production_boot_configuration_contract.md) está `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING`, derivada de [AUD-0581](../04_audit/0581_production_boot_configuration_gap_2026-09-27.md) e da task PR-204. I1 rejeitou quatro pontos P1: perfil ausente do worker, dependência HMAC no boot OIDC, rollout incompatível do segredo e override `requiresApiKey: false` externo. A revisão definiu negativos e rollout A/B1/B2; I2 `ACCEPT_SPEC_REVIEW_READY` somente para revisão humana. Nenhum BUILD, boot corrigido, deploy ou GO autorizado.
+
 ## PR-301/302 — sessão confiável e D-09 — 27/09/2026
 
 - O usuário aprovou explicitamente [SPEC 0144](0144_trusted_operator_session_production.md) para BUILD T3 e D-09: IdP corporativo OIDC com MFA obrigatório. A aprovação cobre a implementação controlada com dados sintéticos, não produção irrestrita, integração real sem parâmetros do issuer nem release.

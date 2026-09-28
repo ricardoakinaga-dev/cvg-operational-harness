@@ -1,3 +1,8 @@
+# PR-204 — AUD-0581 e SPEC 0151 de boot de produção — 27/09/2026
+
+- Sondas Node 22 em valores sintéticos: `parseEnv` aceitou produção sem identidade explícita/keyrings, inbound não durável e `ENABLE_REAL_CHANNELS=true`; rejeitou identidade `simulation`. `getWorkerStartupFailure` aceitou `NODE_ENV` ausente e `unknown` com `controlled-memory`, rejeitou `production`. Inspeção confirmou guards adicionais na API e worker atual proibido em produção; não houve demonstração de ação externa ou bypass de boot completo. [AUD-0581](04_audit/0581_production_boot_configuration_gap_2026-09-27.md).
+- [SPEC 0151](02_spec/0151_production_boot_configuration_contract.md) traz snapshots por processo, positivos/negativos de entrypoint, bundle web, seleção exclusiva OIDC sem HMAC legado, provider externo autenticado e migração A/B1/B2 de `OPENAI_API_KEY` para `MODEL_PROVIDER_API_KEY`. Crítica I1 rejeitou quatro P1; revisão corrigiu e I2 `ACCEPT_SPEC_REVIEW_READY`. Links/higiene/formato PASS. Revisão humana T3, BUILD e certificação permanecem pendentes; produção `NO_GO`.
+
 # PR-301 — integração OIDC isolada, prova local — 27/09/2026
 
 - Claim `PR-301-ROOT-INTEGRATION-PREVIEW`: merge limpo `dd954ab` de root `d43d3f5` com `codex/pr301-oidc-client` `85c2c7d`, em worktree próprio. O commit isolado `0b4a95b` tornou a porta da API configurável no E2E e atualizou apenas hashes do catálogo `SKIP-PG-004/014`; nenhum código root sob PR-L04 foi alterado.
