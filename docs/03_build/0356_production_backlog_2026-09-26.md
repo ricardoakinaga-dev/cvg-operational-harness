@@ -203,6 +203,8 @@ policy` ainda é mudança externa pendente. Imagem OCI publicável ainda
   Verify/Security no mesmo SHA, manifesto e imagem com proveniência
   verificável fora do job; política de retenção e revisão de segurança.
 
+- 28/09/2026, [AUD-0585](../04_audit/0585_remote_ci_release_bar_2026-09-28.md): o PR remoto ainda aponta `8ee6fa2`, enquanto root local e candidato certificado têm SHAs diferentes. Quatro checks do PR passaram, mas o check CodeQL separado falhou; `main` não tem branch protection/ruleset e o `secret-scan` do seu SHA falhou. Prova de mesmo SHA/digest, check obrigatório e atestação externa continua `P0 / NO_GO`.
+
 ### PR-010 — Fazer o CI rodar no GitHub · P0 · SPEC+BUILD
 
 - Atualização de 27/09/2026: o Verify do SHA `996233e` executou os jobs;
@@ -245,6 +247,13 @@ policy` ainda é mudança externa pendente. Imagem OCI publicável ainda
   hash, fixtures de teste nomeadas e o padrão de hash hexadecimal), revisada
   item a item; manter o scan bloqueante.
 - Pronto: `security.yml` verde; allowlist documentada.
+
+### PR-011-CODEQL — Triagem de alerta alto no CI · P1 · SPEC T3 + BUILD
+
+- Estado: `OPEN / NO_GO` em 28/09/2026. [AUD-0585](../04_audit/0585_remote_ci_release_bar_2026-09-28.md) capturou check CodeQL reprovado no PR #1 por `js/incomplete-sanitization` em `scripts/workspace-dependency-audit.mjs:921`; o `main` remoto mostra 15 alertas high abertos, incluindo cópias históricas. Nenhum exploit foi demonstrado.
+- O que/onde: revisar origem de `target` e `captured`, padrões de alias e contenção de path; classificar os alertas remotos entre código ativo, histórico e falso positivo com justificativa auditável. Criar SPEC T3 para qualquer correção de segurança antes do BUILD.
+- Como: teste negativo com múltiplos `*` e caminho adversarial, correção restrita, CodeQL e testes de regressão no mesmo SHA, revisão da lista de alertas e dos checks externos. Não suprimir check para obter verde.
+- Pronto: check CodeQL aprovado no SHA definitivo e zero alertas altos aplicáveis sem disposição formal; evidência de negativos, review T3 e certificado/CI de mesmo SHA.
 
 ### PR-012 — Testes de processo sobre código compilado antigo · P0 · SPEC+BUILD
 

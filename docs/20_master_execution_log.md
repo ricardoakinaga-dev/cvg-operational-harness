@@ -1,3 +1,7 @@
+# AUD-0585 — CI remoto e barra de release — 28/09/2026
+
+- Consulta `gh` em leitura capturou [prova](04_audit/evidence/AUD0585-REMOTE-CI-20260928/proof.json) de `main` `02f586b`, PR #1 draft `8ee6fa2`, root local `f53dd1c` e isolado certificado `7ef74e7`. Verify `36309111340` e Security `36309111343` concluíram com sucesso no PR antigo, porém o check CodeQL `108591838851` falhou com um high em `scripts/workspace-dependency-audit.mjs:921`; o SHA do `main` tem `secret-scan` failure. Branch protection `404`, rulesets `[]` e 15 alertas high abertos no `main` remoto. [AUD-0585](04_audit/0585_remote_ci_release_bar_2026-09-28.md) registra limites e ações; sem push/deploy/teste real, produção `NO_GO`.
+
 # AUD-0584 — RBAC de `/v1/admin` — 28/09/2026
 
 - No SHA isolado `7ef74e7`, Node 22/servidor OIDC local e sessões sintéticas pré-criadas, [sonda](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/summary.json) percorreu 48 pares admin com role `Operator`: 45×403 e 3×400 em `GET`/`HEAD` capability approval e `POST execute` após permissões que a matriz concede. Controle funcional: `Supervisor` emitiu approval, `Operator` executou a ferramenta controlada uma vez (200) e replay falhou (400); tenant B e role falsificada não atravessaram o escopo. Prefixo `/v1/admin` não define por si a permissão; [AUD-0584](04_audit/0584_isolated_admin_rbac_2026-09-28.md), crítica [I2 `ACCEPT`](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/I2-review.md). Callback/IdP corporativo ainda pendente; produção `NO_GO`.

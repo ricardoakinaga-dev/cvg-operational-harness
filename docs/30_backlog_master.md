@@ -1,3 +1,7 @@
+# AUD-0585 — barra remota de CI/segurança — 28/09/2026
+
+- `REMOTE_CI_NOT_BOUND_TO_CANDIDATE / SECURITY_CHECK_FAILED / NO_GO`: [prova](04_audit/evidence/AUD0585-REMOTE-CI-20260928/proof.json) confirmou root local e candidato certificado ausentes do remoto, PR draft antigo com CodeQL high falho, `main` com `secret-scan` falho, branch protection 404 e rulesets vazios. [Auditoria](04_audit/0585_remote_ci_release_bar_2026-09-28.md); PR-009-PROV e PR-011-CODEQL no [backlog 0356](03_build/0356_production_backlog_2026-09-26.md). Triar alertas, corrigir sob SPEC T3, exigir checks externos/atestação no SHA final e completar 0354 antes de GO.
+
 # AUD-0584 — RBAC admin por operação — 28/09/2026
 
 - `LOCAL_RBAC_POLICY_MATCH / I2_ACCEPT / NO_GO`: [sonda](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/summary.json) no SHA isolado `7ef74e7`: 48 pares `/v1/admin` com sessão `Operator` pré-criada, 45×403 e 3×400 em capability approvals permitidos pela matriz. Ciclo sintético executou ferramenta uma vez (200) e recusou replay (400); tenant e role falsificada não elevaram acesso. [Relatório](04_audit/0584_isolated_admin_rbac_2026-09-28.md) e [I2](04_audit/evidence/AUD0584-ADMIN-RBAC-20260928/I2-review.md). PR-207 deve declarar permissão por operação; root/IdP/PG/CI/IAM/staging e condições 0354 pendentes.

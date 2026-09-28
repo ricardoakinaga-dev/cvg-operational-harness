@@ -1,3 +1,11 @@
+# AUD-0585 — CI remoto e CodeQL — 28/09/2026
+
+- status: `REMOTE_CI_NOT_BOUND_TO_CANDIDATE / SECURITY_CHECK_FAILED`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [prova GitHub](04_audit/evidence/AUD0585-REMOTE-CI-20260928/proof.json) capturou `main` remoto `02f586b`, PR draft `8ee6fa2`, root local `f53dd1c` e candidato certificado `7ef74e7`; PR tem quatro checks verdes e CodeQL high reprovado, `main` tem `secret-scan` falho, branch protection 404 e rulesets vazios. [Auditoria](04_audit/0585_remote_ci_release_bar_2026-09-28.md).
+- verification_state: consultas read-only via `gh` autenticado em 28/09 UTC; 15 alertas CodeQL high abertos no `main` remoto exigem triagem, sem alegar 15 exploits no candidato.
+- blocking_state: SHA/digest final não publicado/testado remotamente; check de segurança reprovado e política de merge ausente; SPEC 0157 T3, PR-L04, IAM/staging e condições 0354 pendentes.
+- next_action: triagem CodeQL e SPEC T3 de correção; integrar root após PR-L04, certificar SHA final, obter autorização de push e executar/proteger checks externos no mesmo digest; produção `NO_GO`.
+
 # AUD-0584 — permissões por operação em `/v1/admin` — 28/09/2026
 
 - status: `LOCAL_RBAC_POLICY_MATCH / I2_ACCEPT`; programa `IN_PROGRESS`; produção `NO_GO`.
