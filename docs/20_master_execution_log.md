@@ -1,6 +1,6 @@
 # PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 separada para migration — 28/09/2026
 
-- [SPEC 0161](02_spec/0161_webhook_inbox_schema_delta.md) delimita inbox tenant-scoped, ciphertext AES-GCM, lease fencing, RLS, roles e preflight exigidos para provar a SPEC 0160. A SPEC 0160 aprovada requer revisão T3 própria para migration; código/schema deste delta não iniciado. Crítica e aprovação humana pendentes, produção `NO_GO`.
+- [SPEC 0161](02_spec/0161_webhook_inbox_schema_delta.md) delimita inbox tenant-scoped, ciphertext AES-GCM, lease fencing, RLS, roles e preflight exigidos pela SPEC 0160. Usuário aprovou BUILD T3 sintético em 28/09/2026; implementação isolada no worktree, sem produção/dados reais.
 
 # PR-301-WEBHOOK-REPLAY — BUILD sintético T3 aprovado — 28/09/2026
 

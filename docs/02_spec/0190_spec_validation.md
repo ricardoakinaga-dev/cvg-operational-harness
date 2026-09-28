@@ -1,8 +1,8 @@
 # 0190 — SPEC Validation
 
-## PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 em revisão T3 — 28/09/2026
+## PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 aprovada para BUILD T3 sintético — 28/09/2026
 
-- [SPEC 0161](0161_webhook_inbox_schema_delta.md) descreve migration aditiva do inbox HMAC cifrado, RLS/roles, preflight e commit fencing. A SPEC 0160 aprovada exige gate T3 separado para qualquer mudança de schema; nesta etapa não alterar migration, runner, inventário ou preflight. Crítica técnica e revisão humana pendentes; BUILD não autorizado, produção `NO_GO`.
+- [SPEC 0161](0161_webhook_inbox_schema_delta.md) descreve migration aditiva do inbox HMAC cifrado, RLS/roles, preflight e commit fencing. O usuário aprovou BUILD T3 sintético em 28/09/2026; implementação controlada em andamento, produção `NO_GO`.
 
 ## PR-301-WEBHOOK-REPLAY — SPEC 0160 aprovada para BUILD T3 sintético — 28/09/2026
 

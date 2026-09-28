@@ -659,7 +659,7 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 #### PR-301-WEBHOOK-REPLAY-SCHEMA — inbox tenant-scoped para fencing · P1 · SPEC T3 + BUILD
 
-- 28/09/2026: [SPEC 0161](../02_spec/0161_webhook_inbox_schema_delta.md) proposta como delta separado exigido pela SPEC 0160 para schema/migration. Revisão humana T3 e crítica pendentes; migration/runner/preflight ainda não autorizados.
+- 28/09/2026: [SPEC 0161](../02_spec/0161_webhook_inbox_schema_delta.md) aprovada pelo usuário para BUILD T3 sintético; migration/runner/preflight implementados no worktree isolado, prova em andamento; produção `NO_GO`.
 - O que/onde: guardar binding imutável, payload AES-GCM recuperável, lease generation monotônica e receipt em inbox tenant-scoped; finalizar replay + inbound + outbox + audit em uma transação.
 - Como: migration aditiva 0027, inventário canônico de tenant, RLS/roles, preflight semântico, grants mínimos, isolamento/crypto/concurrency em PostgreSQL 16 descartável.
 - Pronto: migrations reais limpas/repetíveis; schema inválido/grants/RLS recusados; cipher não expõe plaintext; pending sobrevive ao cleanup; takeover não permite fencing antigo; sem skips; produção `NO_GO`.

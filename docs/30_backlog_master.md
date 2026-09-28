@@ -4,7 +4,7 @@
 
 # PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 — 28/09/2026
 
-- `SPEC_DRAFT_HUMAN_REVIEW_PENDING / SCHEMA_BUILD_NOT_AUTHORIZED / NO_GO`: [SPEC 0161](02_spec/0161_webhook_inbox_schema_delta.md) fixa delta T3 para inbox tenant-scoped e cifrado; exigido pela própria SPEC 0160 para migration. Crítica e aprovação humana pendentes. Implementação isolada não alterará schema antes do gate; produção `NO_GO`.
+- `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS / NO_GO`: [SPEC 0161](02_spec/0161_webhook_inbox_schema_delta.md) fixa delta T3 para inbox tenant-scoped e cifrado, exigido pela SPEC 0160. Usuário aprovou BUILD sintético; migration/preflight ainda em execução; produção `NO_GO`.
 
 # AUD-0587 — replay do webhook — 28/09/2026
 

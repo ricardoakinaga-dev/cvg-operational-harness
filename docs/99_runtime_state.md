@@ -1,10 +1,10 @@
 # PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 T3 — 28/09/2026
 
-- status: `SPEC_DRAFT_HUMAN_REVIEW_PENDING / SCHEMA_BUILD_NOT_AUTHORIZED`; programa `IN_PROGRESS`; produção `NO_GO`.
-- last_completed_action: registrada [SPEC 0161](02_spec/0161_webhook_inbox_schema_delta.md), delta necessário para o ledger inbox cifrado/RLS/fencing que SPEC 0160 requer. Nenhuma migration ou preflight de schema foi editado.
-- verification_state: escopo/schema revisado estaticamente; links/formatação pendentes; crítica independente e aprovação humana T3 pendentes.
-- blocking_state: SPEC 0160 aprovada, porém seu gate exige SPEC T3 separada para migration; schema BUILD depende de decisão humana sobre 0161. Código sem schema avança somente no que não depender deste delta.
-- next_action: validar links/formato e revisar delta 0161; submeter para aprovação humana T3; manter implementação schema bloqueada e produção `NO_GO`.
+- status: `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [SPEC 0161](02_spec/0161_webhook_inbox_schema_delta.md) aprovada pelo usuário para migration/preflight sintéticos em 28/09/2026; implementação em worktree isolado.
+- verification_state: Node 22 test focused 17 passed/1 PostgreSQL skipped antes da migration; links/formato PASS; migrations, RLS e concorrência PostgreSQL ainda não executados.
+- blocking_state: dois P1 de replay abertos até prova HTTP+PG; root/PR-L04, CI/IAM/staging, SPECs 0157/0158/0159 e condições 0354 pendentes.
+- next_action: implementar migration 0027, store/transaction, preflight e testes no worktree sintético; revisão independente do diff; produção `NO_GO`.
 
 # PR-301-WEBHOOK-REPLAY — BUILD sintético T3 aprovado — 28/09/2026
 

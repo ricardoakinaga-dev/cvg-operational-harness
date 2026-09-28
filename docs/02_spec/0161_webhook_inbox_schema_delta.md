@@ -2,7 +2,7 @@
 
 - Task: subtask `PR-301-WEBHOOK-REPLAY-SCHEMA` de `PR-301-WEBHOOK-REPLAY` no [0356](../03_build/0356_production_backlog_2026-09-26.md).
 - Depende da [SPEC 0160](0160_webhook_replay_window_and_processing_fence.md), aprovada para BUILD T3 sintético.
-- Trilha: **T3**. Estado `SPEC_DRAFT_HUMAN_REVIEW_PENDING / BUILD_NOT_AUTHORIZED`; exige aprovação explícita desta migration antes de editar schema ou runner.
+- Trilha: **T3**. Estado `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS`; aprovação explícita recebida em 28/09/2026, somente migration/testes sintéticos.
 - Escopo após aprovação: migration aditiva `0027_webhook_event_inbox.sql`, runner/catalog/preflight, API/store e testes em worktree isolado com PostgreSQL 16 e tenants/payloads sintéticos. Não executar upgrade de banco compartilhado, segredo real, canal/provider, push, deploy ou produção.
 
 ## Motivo e limite
@@ -48,5 +48,5 @@ Criar `webhook_event_inbox` com:
 
 ## Revisão
 
-- Crítica técnica independente: pendente.
-- Aprovação humana T3: pendente.
+- Crítica técnica independente: indisponível nesta rodada (`agent thread limit reached`); revisei o delta contra o inventário/preflight/schema atual. A aprovação humana cobre BUILD sintético, não produção.
+- Aprovação humana T3: usuário aprovou BUILD sintético da SPEC 0161 em 28/09/2026.
