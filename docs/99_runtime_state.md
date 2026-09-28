@@ -1,3 +1,11 @@
+# PR-003 — negativo de HEAD do verificador — 28/09/2026
+
+- status: `HEAD_DRIFT_REPRODUCED / SPEC_0157_HUMAN_T3_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: worktree certificado `7ef74e7` recebeu commit vazio `60bbf22`; zero diff de árvore e ID de candidato igual, mas `certification:verify` saiu 0 e qualificou o HEAD com `result.commit`, `manifest.commit` e `candidate.git.head` ainda em `7ef74e7`. [Prova](04_audit/evidence/PR003-HEAD-DRIFT-20260928/reproduction.json) e [crítica I1](04_audit/evidence/PR003-HEAD-DRIFT-20260928/I1-review.md) `ACCEPT_REPRO`.
+- verification_state: Node 22, dois runs do verificador exit 0, 38/38 hashes, dois logs rehashados, candidato `47440863…` inalterado; o crítico repetiu o verificador em leitura. Nenhum código de produto ou do verificador foi alterado.
+- blocking_state: P1 do gate de release aberto. [SPEC 0157](02_spec/0157_certificate_live_head_binding.md) T3 aguarda revisão humana; root/PR-L04, CI/atestação, IAM/staging e condições 0354 continuam pendentes.
+- next_action: após aprovação T3, implementar e testar recusa de HEAD divergente e vínculo interno do manifesto em worktree isolado; reemitir certificado somente no SHA final integrado. Produção `NO_GO`.
+
 # PR-301 — login Keycloak/MFA no entrypoint local — 28/09/2026
 
 - status: `ISOLATED_LOCAL_ENTRYPOINT_I2_ACCEPT / CORPORATE_STAGING_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

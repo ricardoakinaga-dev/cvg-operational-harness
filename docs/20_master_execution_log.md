@@ -1,3 +1,8 @@
+# PR-003 — reprodução do desvio de HEAD — 28/09/2026
+
+- No worktree isolado do certificado `7ef74e7`, `npm run certification:verify` passou antes do teste. Um `git commit --allow-empty` criou `60bbf22` sem alterar árvore; a repetição do verificador também saiu 0 e declarou `current candidate qualified` para o mesmo ID `47440863…` e 38 artefatos, embora três campos de commit continuem no pai. [Pacote](04_audit/evidence/PR003-HEAD-DRIFT-20260928/reproduction.json) liga hashes dos logs e diff vazio.
+- Anscombe confirmou em crítica independente [I1 `ACCEPT_REPRO`](04_audit/evidence/PR003-HEAD-DRIFT-20260928/I1-review.md), severidade/confiança altas, e repetiu o verificador em leitura. O caso prova drift de HEAD, sem alegar fraude de artefatos ou alteração de arquivos candidatos. SPEC 0157 T3 em revisão humana; nenhum BUILD de segurança, push ou deploy. Produção `NO_GO`.
+
 # PR-301 — positivo OIDC local com API e PostgreSQL — 28/09/2026
 
 - Em worktree isolado de `7ef74e7`, Keycloak local com OTP, Chromium, API Fastify HTTP e PostgreSQL 16 sintético foram executados juntos. O primeiro script retornou PASS, mas Noether rejeitou três P1 de evidência: sem replay do cookie operacional, sem inventário de limpeza no script e sem consulta pré-MFA da API/PG. O roteiro corrigido passou em Node 22.23.2 e [I2](04_audit/evidence/PR301-LOCAL-ENTRYPOINT-20260928/I2-review.md) aceitou o escopo local.

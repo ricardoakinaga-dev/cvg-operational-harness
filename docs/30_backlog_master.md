@@ -1,3 +1,7 @@
+# PR-003 — desvio do HEAD aceito pelo verificador — 28/09/2026
+
+- `P1_REPRODUCED / SPEC_0157_REVIEW_PENDING / NO_GO`: [negativo](04_audit/evidence/PR003-HEAD-DRIFT-20260928/reproduction.json) aceito em I1 mostrou `certification:verify` exit 0 após commit vazio com HEAD diferente dos três commits registrados e candidato igual. Aprovar SPEC 0157 T3, corrigir/validar em branch isolado e recertificar o SHA final após PR-L04; CI/atestação, IAM/staging e 13 condições 0354 seguem abertos.
+
 # PR-301 — login local completo validado; corporativo aberto — 28/09/2026
 
 - `LOCAL_KEYCLOAK_ENTRYPOINT_I2_ACCEPT / CORPORATE_STAGING_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-LOCAL-ENTRYPOINT-20260928/proof.json) do SHA isolado `7ef74e7` percorreu Keycloak OTP, Chromium, API e PostgreSQL; I2 aceitou negativos pré-MFA/replay/logout e limpeza, 10/10 hashes. O harness não pertence ao commit e usa console sintético. Ainda faltam root integrado, IdP/IAM corporativo, staging HTTPS no mesmo digest, CI/atestação, SPEC 0157 aprovada e condições 0354.
