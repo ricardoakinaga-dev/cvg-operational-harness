@@ -1,3 +1,7 @@
+# AUD-0586 — alertas CodeQL abertos — 28/09/2026
+
+- `15_HIGH_TRIAGED / ACTIVE_REMEDIATION_PENDING / NO_GO`: [AUD-0586](04_audit/0586_codeql_alert_triage_2026-09-28.md) classifica sete cópias históricas e oito paths ativos. [Negativos](04_audit/evidence/AUD0586-CODEQL-20260928/alias-audit-probe.json) mostram config TypeScript inválida aceita pelo auditor; regex tem custo sintético crescente e publish/rollback recebem limite global, com cobertura autenticada/PG ainda pendente. PR-011-CODEQL no [0356](03_build/0356_production_backlog_2026-09-26.md) requer SPEC T3, disposição formal dos alertas e CodeQL no SHA integrado; produção `NO_GO`.
+
 # AUD-0585 — barra remota de CI/segurança — 28/09/2026
 
 - `REMOTE_CI_NOT_BOUND_TO_CANDIDATE / SECURITY_CHECK_FAILED / NO_GO`: [prova](04_audit/evidence/AUD0585-REMOTE-CI-20260928/proof.json) confirmou root local e candidato certificado ausentes do remoto, PR draft antigo com CodeQL high falho, `main` com `secret-scan` falho, branch protection 404 e rulesets vazios. [Auditoria](04_audit/0585_remote_ci_release_bar_2026-09-28.md); PR-009-PROV e PR-011-CODEQL no [backlog 0356](03_build/0356_production_backlog_2026-09-26.md). Triar alertas, corrigir sob SPEC T3, exigir checks externos/atestação no SHA final e completar 0354 antes de GO.

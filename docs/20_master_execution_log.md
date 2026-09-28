@@ -1,3 +1,7 @@
+# AUD-0586 — triagem CodeQL high — 28/09/2026
+
+- [Relatório](04_audit/0586_codeql_alert_triage_2026-09-28.md) e [evidências](04_audit/evidence/AUD0586-CODEQL-20260928/alerts.json): 15 alertas abertos no `main` remoto, sete em snapshots históricos e oito em paths ativos. Auditor de aliases retornou PASS para target de dois `*`, enquanto TypeScript deu TS5062; regex sintética sem match mostrou custo crescente; publish/rollback devolveram 429 no 301º POST via hook global, sem sessão/handler funcional. Críticos independentes revisaram fluxos de regex e rate limit em leitura. Triagem não fecha alertas nem prova exploit; PR-011-CODEQL precisa SPEC T3 e CI no SHA final. Produção `NO_GO`.
+
 # AUD-0585 — CI remoto e barra de release — 28/09/2026
 
 - Consulta `gh` em leitura capturou [prova](04_audit/evidence/AUD0585-REMOTE-CI-20260928/proof.json) de `main` `02f586b`, PR #1 draft `8ee6fa2`, root local `f53dd1c` e isolado certificado `7ef74e7`. Verify `36309111340` e Security `36309111343` concluíram com sucesso no PR antigo, porém o check CodeQL `108591838851` falhou com um high em `scripts/workspace-dependency-audit.mjs:921`; o SHA do `main` tem `secret-scan` failure. Branch protection `404`, rulesets `[]` e 15 alertas high abertos no `main` remoto. [AUD-0585](04_audit/0585_remote_ci_release_bar_2026-09-28.md) registra limites e ações; sem push/deploy/teste real, produção `NO_GO`.

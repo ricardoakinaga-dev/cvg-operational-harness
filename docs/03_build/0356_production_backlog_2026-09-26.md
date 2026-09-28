@@ -250,6 +250,7 @@ policy` ainda é mudança externa pendente. Imagem OCI publicável ainda
 
 ### PR-011-CODEQL — Triagem de alerta alto no CI · P1 · SPEC T3 + BUILD
 
+- 28/09/2026, [AUD-0586](../04_audit/0586_codeql_alert_triage_2026-09-28.md): 15 alertas high = sete cópias históricas + oito paths ativos. O auditor de alias aceitou config que `tsc` recusou com TS5062; duas expressões compartilhadas por cinco alertas mostraram custo sintético crescente; publish/rollback passam pelo limitador global (429 no 301º POST), mas falta orçamento autenticado/PostgreSQL por operação. Corrigir fontes ativas sob SPEC T3 e dar disposição formal aos históricos; check no SHA final ainda pendente.
 - Estado: `OPEN / NO_GO` em 28/09/2026. [AUD-0585](../04_audit/0585_remote_ci_release_bar_2026-09-28.md) capturou check CodeQL reprovado no PR #1 por `js/incomplete-sanitization` em `scripts/workspace-dependency-audit.mjs:921`; o `main` remoto mostra 15 alertas high abertos, incluindo cópias históricas. Nenhum exploit foi demonstrado.
 - O que/onde: revisar origem de `target` e `captured`, padrões de alias e contenção de path; classificar os alertas remotos entre código ativo, histórico e falso positivo com justificativa auditável. Criar SPEC T3 para qualquer correção de segurança antes do BUILD.
 - Como: teste negativo com múltiplos `*` e caminho adversarial, correção restrita, CodeQL e testes de regressão no mesmo SHA, revisão da lista de alertas e dos checks externos. Não suprimir check para obter verde.

@@ -1,3 +1,11 @@
+# AUD-0586 — triagem CodeQL por fonte — 28/09/2026
+
+- status: `TRIAGED_WITH_OPEN_REMEDIATION`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [inventário hash-bound](04_audit/evidence/AUD0586-CODEQL-20260928/alerts.json) separou 15 alertas high do `main` remoto em sete cópias históricas e oito paths ativos. [Sondas](04_audit/0586_codeql_alert_triage_2026-09-28.md) confirmaram alias inválido aceito pelo auditor, TS5062 no compilador, crescimento de regex sintética e 429 global em publish/rollback sem sessão.
+- verification_state: leitura GitHub/fonte em root e isolado; testes sintéticos Node/TypeScript, sem exploração ou efeito externo. Rate limit autenticado/PG e exposição real das regex ainda não demonstrados.
+- blocking_state: check CodeQL high falho no PR remoto, disposição de alertas pendente; BUILD de segurança requer SPEC T3 aprovada; PR-L04/root, CI/atestação, IAM/staging e condições 0354 abertos.
+- next_action: preparar SPEC T3 focada e negativos para PR-011-CODEQL, obter revisão humana antes do código, repetir CodeQL no SHA final; produção `NO_GO`.
+
 # AUD-0585 — CI remoto e CodeQL — 28/09/2026
 
 - status: `REMOTE_CI_NOT_BOUND_TO_CANDIDATE / SECURITY_CHECK_FAILED`; programa `IN_PROGRESS`; produção `NO_GO`.
