@@ -1,8 +1,8 @@
 # SPEC-PR204-001 — contrato de configuração no boot de produção
 
 - Trilha: **T3** (fronteira de segurança, identidade e configuração pública).
-- Estado: `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING`. Esta SPEC não
-  autoriza BUILD, deploy, dado real nem promoção.
+- Estado: `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY` em 27/09/2026. BUILD
+  controlado autorizado; deploy, dado real e promoção não autorizados.
 - Task: [PR-204](../03_build/0356_production_backlog_2026-09-26.md).
   Recon: [AUD-0581](../04_audit/0581_production_boot_configuration_gap_2026-09-27.md).
 - Baseline de produto: [PRD 0027](../01_prd/0027_harness_refoundation.md)
@@ -149,7 +149,10 @@ externo. A revisão incluiu os negativos, a ordem da composição e o rollout
 A/B1/B2 acima. I2, em contexto novo, retornou
 `ACCEPT_SPEC_REVIEW_READY`; não executou testes nem aprovou BUILD.
 
-Revisão explícita desta SPEC pelo usuário é obrigatória antes de código T3.
+O usuário aprovou explicitamente a SPEC 0151 para BUILD T3 em 27/09/2026,
+com dados sintéticos, após I2 `ACCEPT_SPEC_REVIEW_READY`. O resultado do
+BUILD e seus gates serão registrados separadamente; a aprovação não libera
+deploy nem altera as decisões de produto abaixo.
 A escolha do IdP corporativo, D-05/PR-501, política de dados, SPEC 0150,
 infraestrutura e decisão humana T4 de release continuam gates separados.
 Aceite local desta SPEC ou do BUILD não satisfaz as 13 condições de GO do

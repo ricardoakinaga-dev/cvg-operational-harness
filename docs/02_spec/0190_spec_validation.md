@@ -1,5 +1,9 @@
 # 0190 — SPEC Validation
 
+## PR-204 — SPEC 0151 aprovada para BUILD T3 — 27/09/2026
+
+- O usuário aprovou explicitamente [SPEC 0151](0151_production_boot_configuration_contract.md) para BUILD T3 controlado com dados sintéticos em 27/09/2026, após I2 `ACCEPT_SPEC_REVIEW_READY`. Estado `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY`; claim PR-204-T3-BUILD em worktree isolado. IdP corporativo, SPEC 0150, provider/canal real, T4, deploy, certificação e GO continuam decisões/gates separados.
+
 ## PR-203 — fatia 4 executada localmente — 27/09/2026
 
 - [SPEC 0134](0134_postgres_slice_extraction.md) BUILD T2 no commit isolado `9e949d7`, integrado ao checkout compartilhado em `7b3871d` com três hashes iguais. `postgres.ts` tem 1.455 linhas e `postgres-inbound.ts` 813. Prova AST 7 métodos/2 helpers, 7 assinaturas preservadas; crítica pós-código `ACCEPT`. Teste integral final com cobertura 325/2.392, PostgreSQL 35/258, Chromium 12/12, zero skips; tipo/lint/formato PASS. No root, tipo/lint/negativo focado PASS. [Evidência](../04_audit/evidence/PR203-20260927/proof.json). Estado `ROOT_LOCAL_PASS / COMPOSITE_CERTIFICATION_PENDING`; produção `NO_GO`.
