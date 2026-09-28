@@ -1,3 +1,7 @@
+# PR-011-CODEQL — SPEC de remediação T3 — 28/09/2026
+
+- `SPEC_0159_I2_ACCEPT / HUMAN_T3_PENDING / NO_GO`: [contrato](02_spec/0159_codeql_active_source_remediation.md) delimita alias, regex, prova de rate limit e histórico sob PR-011-CODEQL; [I2](04_audit/evidence/PR011-CODEQL-SPEC-20260928/I1-I2-review.md) aceitou o contrato após 2 P1/3 P2 corrigidos; nenhum BUILD autorizado até revisão humana explícita. Integração PR-L04, CodeQL/CI no SHA final, IAM/staging e 0354 pendentes.
+
 # AUD-0586 — alertas CodeQL abertos — 28/09/2026
 
 - `15_HIGH_TRIAGED / ACTIVE_REMEDIATION_PENDING / NO_GO`: [AUD-0586](04_audit/0586_codeql_alert_triage_2026-09-28.md) classifica sete cópias históricas e oito paths ativos. [Negativos](04_audit/evidence/AUD0586-CODEQL-20260928/alias-audit-probe.json) mostram config TypeScript inválida aceita pelo auditor; regex tem custo sintético crescente e publish/rollback recebem limite global, com cobertura autenticada/PG ainda pendente. PR-011-CODEQL no [0356](03_build/0356_production_backlog_2026-09-26.md) requer SPEC T3, disposição formal dos alertas e CodeQL no SHA integrado; produção `NO_GO`.

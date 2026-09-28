@@ -1,3 +1,11 @@
+# PR-011-CODEQL — SPEC 0159 T3 — 28/09/2026
+
+- status: `SPEC_READY_FOR_HUMAN_T3_REVIEW / BUILD_NOT_AUTHORIZED`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [SPEC 0159](02_spec/0159_codeql_active_source_remediation.md) transformou AUD-0585/0586 em contrato para alias, regex e adjudicação de rate limit/histórico, sem BUILD de segurança; [I2](04_audit/evidence/PR011-CODEQL-SPEC-20260928/I1-I2-review.md) aceitou a revisão documental após 2 P1/3 P2 corrigidos.
+- verification_state: recon Node 22 e consultas GitHub da AUD-0586; crítica I2 aceita e [TS5066](04_audit/evidence/PR011-CODEQL-SPEC-20260928/ts5066.json) confirmado; revisão humana T3 pendente.
+- blocking_state: implementação T3 depende de aprovação explícita; PR-L04/root, CI/CodeQL final, IAM/staging, SPECs 0157/0158 e condições 0354 pendentes.
+- next_action: submeter SPEC 0159 à revisão humana T3; após aprovação, BUILD sintético isolado e gates, mantendo produção `NO_GO`.
+
 # AUD-0586 — triagem CodeQL por fonte — 28/09/2026
 
 - status: `TRIAGED_WITH_OPEN_REMEDIATION`; programa `IN_PROGRESS`; produção `NO_GO`.

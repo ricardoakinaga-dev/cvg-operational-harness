@@ -1,3 +1,7 @@
+# PR-011-CODEQL — contrato T3 em revisão — 28/09/2026
+
+- [SPEC 0159](02_spec/0159_codeql_active_source_remediation.md) proposta a partir de AUD-0585/0586: auditor de alias fail-closed, custo linear em quatro URLs e filtro de instrução, provas de rate limit autenticado/PG e disposição dos sete arquivos históricos. Sem código, deploy, push ou alertas remotos alterados. [I1/I2](04_audit/evidence/PR011-CODEQL-SPEC-20260928/I1-I2-review.md) corrigiu 2 P1/3 P2 e aceitou a SPEC para revisão humana; aprovação T3 pendente, produção `NO_GO`.
+
 # AUD-0586 — triagem CodeQL high — 28/09/2026
 
 - [Relatório](04_audit/0586_codeql_alert_triage_2026-09-28.md) e [evidências](04_audit/evidence/AUD0586-CODEQL-20260928/alerts.json): 15 alertas abertos no `main` remoto, sete em snapshots históricos e oito em paths ativos. Auditor de aliases retornou PASS para target de dois `*`, enquanto TypeScript deu TS5062; regex sintética sem match mostrou custo crescente; publish/rollback devolveram 429 no 301º POST via hook global, sem sessão/handler funcional. Críticos independentes revisaram fluxos de regex e rate limit em leitura. Triagem não fecha alertas nem prova exploit; PR-011-CODEQL precisa SPEC T3 e CI no SHA final. Produção `NO_GO`.

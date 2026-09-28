@@ -1,5 +1,9 @@
 # 0190 — SPEC Validation
 
+## PR-011-CODEQL — SPEC 0159 pronta para revisão humana T3 — 28/09/2026
+
+- [SPEC 0159](0159_codeql_active_source_remediation.md) deriva de AUD-0585/0586 e da task PR-011-CODEQL: validação de alias no auditor, custo linear em quatro URLs e no filtro de instruções, prova autenticada de rate limit e disposição de histórico. [I1/I2](../04_audit/evidence/PR011-CODEQL-SPEC-20260928/I1-I2-review.md) corrigiram dois P1/três P2 e aceitaram a SPEC para decisão humana. Estado `SPEC_READY_FOR_HUMAN_T3_REVIEW / BUILD_NOT_AUTHORIZED`; dados sintéticos, produção `NO_GO`.
+
 ## PR-301/302 — SPECs 0150 e 0152 aprovadas para BUILD T3 sintético — 28/09/2026
 
 - O usuário aprovou explicitamente [SPEC 0152](0152_corporate_oidc_authority_contract.md) para BUILD controlado com IdP HTTPS e dados sintéticos e [SPEC 0150](0150_cross_origin_operator_console.md) para console/API em hosts HTTPS distintos com testes sintéticos. Estado de ambas: `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_PENDING`.
