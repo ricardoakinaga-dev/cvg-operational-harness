@@ -282,3 +282,11 @@
 
 - [Estado operacional anterior](08_runtime/archive/prod20260926_runtime_state_history.md), fonte `docs/99_runtime_state.md`, SHA-256 `d8092246cb5f597dc32a469c937268b90afbfa2da7d5701e100d9f1a2544b10f`.
 - [Log anterior](08_runtime/archive/prod20260926_execution_log_history.md) e [backlog anterior](08_runtime/archive/prod20260926_backlog_history.md) preservam os ciclos anteriores. O Git também mantém os bytes originais na revisão `4aac877e5e0c504940c8ef2856928e43a1a5ed2a`.
+
+# PR-301 — merge OIDC no candidato isolado — 27/09/2026
+
+- status: `ISOLATED_INTEGRATION_LOCAL_PASS / ROOT_AND_REMOTE_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: branch `codex/pr301-root-integration-preview` mesclou sem conflito o checkout `d43d3f5` com OIDC `85c2c7d` (`dd954ab`); commit `0b4a95b` ajustou o verificador E2E para porta API isolada e reconciliou os hashes de `SKIP-PG-004/014`. [Prova](04_audit/evidence/PR301-ROOT-INTEGRATION-20260927/proof.json).
+- verification_state: Node 22/PostgreSQL 16: suíte completa 331 arquivos/2.437 testes e gate PostgreSQL 35/258, zero skips; `skip:governance`, tipo, lint, formato, links/higiene PASS. Chromium com Keycloak MFA real confirmou OTP errado negado, callback entre sites, recarga por cookie, troca/revogação e replay negado. Roles/schemas sintéticos zerados; Keycloak e PostgreSQL próprios removidos.
+- blocking_state: branch isolado ainda não integrado no checkout compartilhado por claim PR-L04; certificado e CI remoto no mesmo SHA, IdP corporativo, SPEC 0149/0150 T3, retenção e rollout pendentes. Produção `NO_GO`.
+- next_action: após PR-L04 liberar os caminhos, reconciliar o candidato principal e certificar seu SHA; obter decisões humanas de identidade, dados e topologia antes de promoção.
