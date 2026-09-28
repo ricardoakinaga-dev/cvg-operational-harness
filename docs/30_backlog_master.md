@@ -217,3 +217,7 @@ A [task list 0356](03_build/0356_production_backlog_2026-09-26.md) é a fonte de
 # PR-301 — preflight semântico do fencing — 28/09/2026
 
 - `SPEC_0158_REVIEW_READY / HUMAN_T3_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-FENCING-PREFLIGHT-SPEC-20260928/proof.json) PostgreSQL 16 reproduziu constraint homônima em outra tabela e `CHECK (true)` aceita por nome. [SPEC 0158](02_spec/0158_webhook_fencing_constraint_preflight.md) define o reparo e os negativos reais; BUILD depende de revisão humana T3. `A21-F20` continua aberto no certificado; root/CI/IAM/staging e condições 0354 pendentes.
+
+# AUD-0583 — negativas de rotas sem sessão — 28/09/2026
+
+- `LOCAL_ROUTE_NO_SESSION_PASS / I2_ACCEPT_SCOPE / NO_GO`: [AUD-0583](04_audit/0583_isolated_route_authentication_2026-09-28.md) sondou 111 pares rota/método no SHA isolado `7ef74e7`, com 98 pares protegidos 401 nos três cenários, três controles positivos 200 e zero revogações sem cookie. [Pacote](04_audit/evidence/AUD0583-ROUTES-20260928/summary.json) e [crítica I2](04_audit/evidence/AUD0583-ROUTES-20260928/I2-review.md). Repetir no SHA root/PR-L04 e staging corporativo do mesmo digest; CI/IAM e condições 0354 pendentes.

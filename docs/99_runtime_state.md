@@ -418,3 +418,11 @@
 - verification_state: Node 22, 13/275 focados, suíte 325/2.393, PostgreSQL 35/258, Chromium 12/12, cobertura 92,53%/87,66%/95,10%/93,56%, tipo/lint/formato e regressão root PASS; zero skips reportados. O verificador do catálogo falha por hash vencido em `SKIP-PG-014` sob PR-L04.
 - blocking_state: PR‑202 ainda tem execução/replay e tamanho da classe abertos; PR-L04, catálogo, composição/certificação e CI do digest final, IAM real, dados/ops/pentest/piloto e demais condições de 0354. Produção `NO_GO`.
 - next_action: implementar SPECs 0150/0152 em worktree com IdP HTTPS e dados sintéticos; conciliar catálogo após PR-L04 e certificar o candidato composto.
+
+# AUD-0583 — recusa de rotas sem sessão no candidato isolado — 28/09/2026
+
+- status: `LOCAL_ROUTE_NO_SESSION_PASS / I2_ACCEPT_SCOPE`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [sonda hash-bound](04_audit/evidence/AUD0583-ROUTES-20260928/summary.json) listou 111 pares rota/método em `7ef74e7` e fez três cenários sem cookie, incluindo headers legados falsificados. Todos os 98 pares classificados como protegidos deram 401; três GETs de controle com sessão válida deram 200. [Auditoria](04_audit/0583_isolated_route_authentication_2026-09-28.md).
+- verification_state: Node 22.23.2, fonte limpa, 333 requests sintéticas sem sessão e 9 controles positivos, zero revogações; auditoria estática sem bypass confirmado e [I2](04_audit/evidence/AUD0583-ROUTES-20260928/I2-review.md) `ACCEPT_SCOPE`, sem P0/P1 local.
+- blocking_state: prova local OIDC/dev não cobre produção corporativa, funcionalidade de cada rota, webhook assinado, root/PR-L04, IAM/staging, CI/atestação e condições 0354.
+- next_action: fechar crítica da evidência e repetir no SHA integrado e no mesmo digest de staging; produção `NO_GO`.
