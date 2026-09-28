@@ -179,7 +179,7 @@ function buildHarness(options: HarnessOptions = {}) {
         eventId: `evt_${event.idempotencyKey}`
       }))
   )
-  const runtime = new GovernedAgentRuntime({
+  const runtimeOptions = {
     policy,
     approvals,
     modelGateway,
@@ -200,9 +200,11 @@ function buildHarness(options: HarnessOptions = {}) {
     ...(options.reservationTtlMs !== undefined
       ? { reservationTtlMs: options.reservationTtlMs }
       : {})
-  })
+  }
+  const runtime = new GovernedAgentRuntime(runtimeOptions)
   return {
     runtime,
+    runtimeOptions,
     approvals,
     policy,
     modelGateway,
@@ -366,6 +368,54 @@ describe('kernel policy matrix through the public runTurn', () => {
     expect(record.status).toBe('REQUESTED')
     expect(record.proposalPayload).toEqual({ text: 'APPROVED_PAYLOAD' })
     expect(record.proposalHash).toMatch(/^[0-9a-f]{64}$/)
+    expectNoPendingSpans(harness)
+  })
+
+  it('keeps the approval authority and telemetry captured when the turn started', async () => {
+    const alternateApprovals = new ApprovalEngine({
+      store: new InMemoryApprovalStore(),
+      clock: () => NOW
+    })
+    const alternateTelemetry = new InMemoryTelemetry({ clock: () => NOW })
+    const alternateRequest = vi.spyOn(alternateApprovals, 'request')
+    const alternateMetric = vi.spyOn(alternateTelemetry, 'recordMetric')
+    const harness = buildHarness({
+      documents: [
+        policyDocument({
+          id: 'approval-authority-snapshot',
+          effect: 'REQUIRE_APPROVAL',
+          priority: 5,
+          capabilities: ['record.create'],
+          reason: 'synthetic approval requirement'
+        })
+      ],
+      respond: () => {
+        harness.runtimeOptions.approvals = alternateApprovals
+        harness.runtimeOptions.telemetry = alternateTelemetry
+        return {
+          text: JSON.stringify({ text: 'APPROVED_PAYLOAD' }),
+          usage: { inputTokens: 10, outputTokens: 5 },
+          providerId: 'deterministic',
+          model: 'deterministic-v1',
+          externalCall: false
+        }
+      }
+    })
+    const originalMetric = vi.spyOn(harness.telemetry, 'recordMetric')
+
+    const result = await harness.runtime.runTurn(turnInput())
+
+    expect(result.outcome).toBe('approval_required')
+    expect(harness.approvals.get(TENANT, result.approvalId ?? '').status).toBe(
+      'REQUESTED'
+    )
+    expect(alternateRequest).not.toHaveBeenCalled()
+    expect(originalMetric).toHaveBeenCalledWith(
+      'approval_required_total',
+      1,
+      expect.any(Object)
+    )
+    expect(alternateMetric).not.toHaveBeenCalled()
     expectNoPendingSpans(harness)
   })
 })
