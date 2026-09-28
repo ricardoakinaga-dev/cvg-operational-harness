@@ -144,3 +144,24 @@ Verificação: `typecheck`, `lint`, `format:check` exit 0; suíte completa
   riscos de bind do contexto, cliente único, correlation ID e rollback de
   auditoria foram incorporados acima. Nenhum teste foi executado pelo
   crítico e o aceite de desenho não substitui os gates do BUILD.
+
+## Fatia 4 — resultado local (27/09/2026)
+
+- Commit isolado `9e949d7` no branch `codex/pr203-postgres-extraction-20260927`;
+  [evidência](../04_audit/evidence/PR203-20260927/proof.json). `postgres.ts`
+  caiu para 1.455 linhas e `postgres-inbound.ts` tem 813. `index.ts`, SQL,
+  migration e assinatura pública não mudaram.
+- Prova AST comparou os sete corpos movidos e dois helpers com `235c6a0`,
+  normalizando somente `this` para `ctx`; sete assinaturas públicas iguais.
+  Revisão independente pós-código: `ACCEPT`, sem P0/P1 de transação, tenant,
+  ordem de efeito ou API. O teste negativo novo prova correlation ID inválido
+  sem acesso ao banco antes de `BEGIN`.
+- Node 22/PostgreSQL 16: cinco arquivos focados/65 testes, `npm test` inicial
+  325/2.391 e cobertura no estado final 325/2.392, sem skips. Gate PG 35/258;
+  Chromium 12/12; tipo, lint e formato PASS. Cobertura final: 92,54%
+  statements, 87,67% branches, 95,10% functions, 93,57% lines, acima dos
+  limiares do projeto. O teste negativo entrou após o início do primeiro
+  `npm test`; a execução integral com cobertura inclui esse teste.
+- Estado `LOCAL_PASS / ROOT_INTEGRATION_PENDING`: branch principal, CI remoto,
+  certificação do SHA integrado e decisões T3/T4 ainda não foram validados.
+  Produção permanece `NO_GO`.

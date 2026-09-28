@@ -1,3 +1,11 @@
+# PR-203 — extração PostgreSQL inbound validada localmente — 27/09/2026
+
+- status: `LOCAL_PASS / ROOT_INTEGRATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: commit isolado `9e949d7` moveu sete métodos inbound e dois helpers para `postgres-inbound.ts`; `postgres.ts` tem 1.455 linhas e o módulo novo 813. [Prova](04_audit/evidence/PR203-20260927/proof.json) inclui AST 9/9, assinaturas 7/7 e crítica independente `ACCEPT`.
+- verification_state: Node 22/PostgreSQL 16: suíte integral final com cobertura 325 arquivos/2.392 testes sem skips; PG 35/258; Chromium 12/12; tipo, lint, formato e links/higiene PASS. O teste negativo novo rejeita correlation ID inválido antes de acesso ao banco.
+- blocking_state: branch isolado ainda não integrado ao candidato compartilhado; PR-L04, CI remoto, certificado e decisões de identidade/dados/topologia permanecem. Produção `NO_GO`.
+- next_action: integrar a fatia quando os claims permitirem e repetir os gates no SHA composto; continuar frentes independentes.
+
 # PR-204 — contrato de configuração de produção especificado — 27/09/2026
 
 - status: `SPEC_REVIEW_READY / HUMAN_T3_REVIEW_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

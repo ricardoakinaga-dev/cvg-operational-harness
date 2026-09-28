@@ -1,5 +1,9 @@
 # 0190 — SPEC Validation
 
+## PR-203 — fatia 4 executada localmente — 27/09/2026
+
+- [SPEC 0134](0134_postgres_slice_extraction.md) BUILD T2 no commit isolado `9e949d7`, com `postgres.ts` 1.455 linhas e `postgres-inbound.ts` 813. Prova AST 7 métodos/2 helpers, 7 assinaturas preservadas; crítica pós-código `ACCEPT`. Teste integral final com cobertura 325/2.392, PostgreSQL 35/258, Chromium 12/12, zero skips; tipo/lint/formato PASS. [Evidência](../04_audit/evidence/PR203-20260927/proof.json). Estado `LOCAL_PASS / ROOT_INTEGRATION_PENDING`; produção `NO_GO`.
+
 ## PR-203 — fatia 4 de `postgres.ts` — 27/09/2026
 
 - [SPEC 0134](0134_postgres_slice_extraction.md) foi atualizada após recon do commit `f9f84c9` (fatia 3 já executada) e do checkout `79f28cc` (`postgres.ts` 2.106 linhas). A task PR-203 está registrada em 0356; a instrução vigente do usuário autoriza a extração local T2 sob D-12. Crítica independente `ACCEPT_LOCAL_DESIGN` após esclarecer bind local do contexto, conexão única e negativos de rollback. Estado `BUILD_LOCAL_AUTHORIZED` apenas para mover os métodos inbound/sessão, preservar SQL/transações/contrato e executar os gates da SPEC em worktree isolado. Resultado ainda `NOT_RUN`; produção `NO_GO`.

@@ -481,6 +481,13 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-203 — Fatias 3 e 4 de `postgres.ts` (RA25-07) · P1 · SPEC+BUILD
 
+- 27/09/2026, fatia 4 local `LOCAL_PASS` no commit isolado `9e949d7`:
+  `postgres.ts` 1.455 linhas, novo `postgres-inbound.ts` 813; AST 7 métodos
+  e 2 helpers preservados, crítica independente `ACCEPT`. Node 22: suíte
+  final com cobertura 325/2.392, PostgreSQL 35/258, Chromium 12/12, zero
+  skips, tipo/lint/formato PASS. [Prova](../04_audit/evidence/PR203-20260927/proof.json).
+  Integrar com candidato após PR-L04 e repetir certificação/CI no SHA final;
+  produção `NO_GO`.
 - 27/09/2026, recon: a fatia 3 já está no commit `f9f84c9` (`postgres-audit.ts` 612 linhas). O alvo atual `postgres.ts` tem 2.106 linhas no checkout `79f28cc`. A [SPEC 0134 revisada](../02_spec/0134_postgres_slice_extraction.md) autoriza BUILD local T2 da fatia 4 em branch isolado, com extração inbound/sessão sem mudar SQL, transação ou exports públicos; gates ainda `NOT_RUN`. Meta: ambos os módulos abaixo de 1.500 linhas e testes de PostgreSQL/E2E verdes.
 - Dependência: PR-001.
 - Pronto: `postgres.ts` abaixo de 1 500 linhas; `test:postgres` PASS.
