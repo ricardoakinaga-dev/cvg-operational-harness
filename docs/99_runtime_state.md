@@ -1,3 +1,11 @@
+# PR-301 — login Keycloak/MFA no entrypoint local — 28/09/2026
+
+- status: `ISOLATED_LOCAL_ENTRYPOINT_I2_ACCEPT / CORPORATE_STAGING_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [prova](04_audit/evidence/PR301-LOCAL-ENTRYPOINT-20260928/proof.json) no SHA isolado `7ef74e7` percorreu Chromium → Keycloak com OTP → callback HTTP Fastify → sessão PostgreSQL. Crítica I1 rejeitou três lacunas da prova; após correção e nova execução, [I2](04_audit/evidence/PR301-LOCAL-ENTRYPOINT-20260928/I2-review.md) aceitou o escopo local.
+- verification_state: Node 22.23.2, PostgreSQL 16.15 e Keycloak 26.7.4 pinado; sem sessão após OTP errado, sessão persistida após OTP válido, state consumido, replay com cookie pendente restaurado 401, cookie operacional antigo 401 após logout e família revogada. Exit 0, 10/10 hashes; zero usuários/roles/schemas/contêineres/portas próprios ao fim.
+- blocking_state: harness de auditoria fora do commit, destino de console sintético, IdP corporativo HTTPS/IAM real e staging no digest de produção não testados. Root PR-L04, CI/atestação, SPEC 0157 T3 aguardando revisão humana e condições 0354 abertos.
+- next_action: integrar o SHA root após PR-L04 e executar o positivo corporativo em staging HTTPS com IAM; implementar SPEC 0157 somente após aprovação T3. Produção `NO_GO`.
+
 # PR-003 / AUD20-008 — revisão de proveniência e I1 — 28/09/2026
 
 - status: `SPEC_0157_REVIEW_READY / AUD20_008_I1_REJECTED / PROGRAM_IN_PROGRESS`; produção `NO_GO`.

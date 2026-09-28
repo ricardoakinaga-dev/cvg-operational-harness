@@ -1,3 +1,9 @@
+# PR-301 — positivo OIDC local com API e PostgreSQL — 28/09/2026
+
+- Em worktree isolado de `7ef74e7`, Keycloak local com OTP, Chromium, API Fastify HTTP e PostgreSQL 16 sintético foram executados juntos. O primeiro script retornou PASS, mas Noether rejeitou três P1 de evidência: sem replay do cookie operacional, sem inventário de limpeza no script e sem consulta pré-MFA da API/PG. O roteiro corrigido passou em Node 22.23.2 e [I2](04_audit/evidence/PR301-LOCAL-ENTRYPOINT-20260928/I2-review.md) aceitou o escopo local.
+- [Pacote](04_audit/evidence/PR301-LOCAL-ENTRYPOINT-20260928/proof.json): comando/exit 0, script/log/compose/realm e limpeza com 10/10 hashes. Após OTP errado, API 401 e zero sessões; OTP válido gerou callback 303, sessão 200 e linha PostgreSQL. State consumido e replay com cookie restaurado 401; cookie antigo após logout 401 e família revogada. Usuários, roles, schemas, contêineres e portas próprios terminaram em zero.
+- O harness externo ao commit e o console sintético são limites P2; produção corporativa, CI, root/PR-L04, IAM/staging e 0354 permanecem `NO_GO`.
+
 # PR-003 / AUD20-008 — crítica de proveniência e I1 — 28/09/2026
 
 - Inspeção de `computeCandidateId` e `verifyQualification` confirmou que o ID é baseado em arquivos e o verificador não compara commits registrados com Git HEAD. [SPEC 0157](02_spec/0157_certificate_live_head_binding.md) T3 define positivo e negativos, histórico separado e bundle no SHA final. Schrodinger rejeitou rascunho com 2 P1/1 P2; após correção, `ACCEPT_SPEC_REVIEW_READY`. BUILD depende de aprovação humana.

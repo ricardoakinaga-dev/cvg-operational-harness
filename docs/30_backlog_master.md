@@ -1,3 +1,7 @@
+# PR-301 — login local completo validado; corporativo aberto — 28/09/2026
+
+- `LOCAL_KEYCLOAK_ENTRYPOINT_I2_ACCEPT / CORPORATE_STAGING_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-LOCAL-ENTRYPOINT-20260928/proof.json) do SHA isolado `7ef74e7` percorreu Keycloak OTP, Chromium, API e PostgreSQL; I2 aceitou negativos pré-MFA/replay/logout e limpeza, 10/10 hashes. O harness não pertence ao commit e usa console sintético. Ainda faltam root integrado, IdP/IAM corporativo, staging HTTPS no mesmo digest, CI/atestação, SPEC 0157 aprovada e condições 0354.
+
 # PR-003 / AUD20-008 — gates de proveniência em aberto — 28/09/2026
 
 - `SPEC_0157_REVIEW_READY / BUILD_T3_WAITING_HUMAN`: [contrato](02_spec/0157_certificate_live_head_binding.md) de vínculo Git HEAD ↔ certificado aceito em crítica técnica, aguardando revisão humana explícita e testes. Certificado local `7ef74e7` continua apenas daquele SHA.
