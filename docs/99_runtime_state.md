@@ -1,3 +1,11 @@
+# PR-301 — prévia integrada OIDC/RLS com catálogo reconciliado — 28/09/2026
+
+- status: `ISOLATED_COMPOSITION_TESTS_PASS / CURRENT_SHA_CERTIFICATION_PENDING / ROOT_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: merge isolado `c78a64a` combinou root e OIDC/RLS sem conflitos; commit `ae0344f` corrigiu apenas `SKIP-PG-004/006` segundo [SPEC 0155](02_spec/0155_isolated_skip_catalog_rebind_004_006.md). Revisor independente fechou P1 e deixou P2 de evidência do candidato. [Prova](04_audit/evidence/PR301-COMPOSITE-20260928/proof.json).
+- verification_state: Node 22/PostgreSQL 16: 340/2.582 testes no SHA final, PG 35/261, E2E 12/12, tipo/lint/formato/links PASS, zero skips e objetos sintéticos residuais. Cobertura no pai de mesmo código fonte 340/2.582, RLS crítico 191/197 (96,95%) PASS. Guard de catálogo PASS após o reparo, mas lê relatórios versionados antigos.
+- blocking_state: inventário/certificação hash-bound do SHA `ae0344f` ainda não emitidos; root e catálogo compartilhado sob PR-L04, CI remoto/atestação, positivo corporativo em staging/IAM e condições 0354 pendentes.
+- next_action: após PR-L04, reconciliar o catálogo no SHA root definitivo, gerar relatórios atuais e certificação completa; validar CI/atestação e staging antes de decisão humana de release. Produção `NO_GO`.
+
 # PR-301 — negativos RLS aceitos no branch isolado — 28/09/2026
 
 - status: `ISOLATED_T2_BUILD_PASS / CRITICAL_COVERAGE_PASS / ROOT_AND_CERTIFICATION_PENDING`; programa `IN_PROGRESS`; produção `NO_GO`.

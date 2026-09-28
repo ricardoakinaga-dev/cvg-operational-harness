@@ -1,3 +1,9 @@
+# PR-301 — composição OIDC/RLS e reparo isolado do catálogo — 28/09/2026
+
+- Merge preview `c78a64a` entre root `40eb3ed` e branch OIDC/RLS `42e69f4` não teve conflitos. Typecheck, lint, build, 32 focados e cobertura 340/2.582 passaram; guard RLS 191/197 (96,95%). Arendt encontrou P1 no catálogo e P2 no inventário versionado.
+- [SPEC 0155](02_spec/0155_isolated_skip_catalog_rebind_004_006.md) autorizou somente no worktree isolado a troca dos hashes de `SKIP-PG-004/006` e a contagem 4→7 do segundo, após prova 8/7 sem PostgreSQL. Commit `ae0344f`; revisor fechou P1. [Prova](04_audit/evidence/PR301-COMPOSITE-20260928/proof.json) vincula 340/2.582 `npm test`, PG 35/261, E2E 12/12, tipo/lint/formato/links PASS no commit final; zero skips e zero objetos sintéticos residuais.
+- `skip:governance` PASS contra catálogo e relatórios disponíveis, mas estes relatórios são anteriores ao SHA final. P2 de evidência permanece; não houve `certify`, push ou deploy. Código root, CI/atestação, staging corporativo/IAM e 13 condições 0354 abertos; produção `NO_GO`.
+
 # PR-301 — cobertura crítica RLS fechada localmente — 28/09/2026
 
 - Sob [SPEC 0154](02_spec/0154_rls_preflight_negative_coverage.md), commit isolado `42e69f4` acrescentou negativos PostgreSQL de catálogo/policy/RLS forçado, privilégios da role de serving e owner de migração; cada mutação foi observada no catálogo e revertida. Revisor independente `ACCEPT`, sem P1/P2 remanescente no diff.

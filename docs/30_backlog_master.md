@@ -1,3 +1,7 @@
+# PR-301 — composição sintética passou; certificado atual pendente — 28/09/2026
+
+- `ISOLATED_COMPOSITION_TESTS_PASS / CURRENT_SHA_CERTIFICATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-COMPOSITE-20260928/proof.json) de `ae0344f`: merge OIDC/RLS sem conflitos, 340/2.582, PG 35/261, E2E 12/12, guard de catálogo PASS e RLS 191/197 branches no pai de mesmo código. Relatórios versionados de skips são antigos e ainda não certificam este SHA. Após PR-L04, integrar root, gerar relatórios atuais, CI/atestação e staging/IAM; completar 0354 antes de GO.
+
 # PR-301 — RLS crítico passou localmente; integração pendente — 28/09/2026
 
 - `CRITICAL_COVERAGE_LOCAL_PASS / ROOT_INTEGRATION_PENDING / NO_GO`: [prova](04_audit/evidence/PR301-RLS-20260928/proof.json) do commit isolado `42e69f4` mostra RLS 191/197 branches (96,95% ≥ 95%), 340/2.581 testes, PostgreSQL 35/261 e E2E 12/12 sem skips. Integrar após PR-L04, reconciliar `SKIP-PG-004/006` e certificar o SHA composto; fechar positivo de staging/IAM/CI e condições 0354 antes de GO.
