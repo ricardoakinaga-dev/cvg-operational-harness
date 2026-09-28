@@ -1,7 +1,7 @@
 # SPEC-PR301-WEBHOOK-REPLAY-001 — janela e posse de processamento do webhook
 
 - Task: `PR-301-WEBHOOK-REPLAY` no [backlog 0356](../03_build/0356_production_backlog_2026-09-26.md).
-- Trilha: **T3**, pois altera contrato de segurança, replay e efeitos de inbound. Estado `SPEC_READY_FOR_HUMAN_T3_REVIEW / BUILD_NOT_AUTHORIZED`; revisão humana explícita exigida antes de código.
+- Trilha: **T3**, pois altera contrato de segurança, replay e efeitos de inbound. Estado `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY`; aprovação humana explícita recebida em 28/09/2026, sem autorização para dados/canal real, push, deploy ou produção.
 - Escopo após aprovação: worktree isolado, Node 22, PostgreSQL 16 descartável e mensagens/tenants sintéticos; sem canal/provider real, push, deploy ou produção.
 
 ## Recon e risco
@@ -40,6 +40,12 @@ O HMAC atual cobre `eventId`, timestamp, canal e bytes do corpo, mas não os hea
 ## Rollback e limite de decisão
 
 Se a nova versão não puder servir com replay íntegro, manter ingress de webhook fechado e eventos em handoff/retentativa controlada; não promover a versão anterior com os dois P1 conhecidos como rollback produtivo. Nenhuma consulta real é confirmada/cancelada/reagendada automaticamente. Esta SPEC não escolhe o canal D-06 nem autoriza dado real, provider, cofre real, deploy ou push.
+
+## Resultado do BUILD sintético — 28/09/2026
+
+- O commit isolado `737e9c17b5246ab623ff9e7bdcf33a16f9ba0844`, baseado em `7ef74e7`, passou 341 arquivos/2.592 testes sem skips, PostgreSQL 16, E2E 12/12, cobertura global e gate crítico RLS (96,09% branches). [Prova](../04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/proof.json).
+- Aceitação da SPEC permanece incompleta: marcador durável de maior instante do relógio, reconciliador de eventos pending após expirar a assinatura, D-06 de retenção e garantia externa do provider não foram implementados/demonstrados. A SPEC 0161 autorizou só a migration do inbox; extensão de schema exige novo gate T3.
+- O módulo de inbox teve 72,79% de cobertura de branches e não recebeu crítica independente nesta rodada. O branch não foi integrado ao SHA root/PR-L04; CI remoto, atestação e staging faltam. Produção `NO_GO`.
 
 ## Revisão
 

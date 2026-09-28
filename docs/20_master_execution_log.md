@@ -1,10 +1,10 @@
-# PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 separada para migration — 28/09/2026
+# PR-301-WEBHOOK-REPLAY-SCHEMA — BUILD local SPEC 0161 — 28/09/2026
 
-- [SPEC 0161](02_spec/0161_webhook_inbox_schema_delta.md) delimita inbox tenant-scoped, ciphertext AES-GCM, lease fencing, RLS, roles e preflight exigidos pela SPEC 0160. Usuário aprovou BUILD T3 sintético em 28/09/2026; implementação isolada no worktree, sem produção/dados reais.
+- A migration aditiva 0027 e o inbox tenant-scoped cifrado foram concluídos no commit isolado `737e9c1` após aprovação T3 sintética. [Prova e limites](04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/report.md): suíte Node 22/PostgreSQL 16 com 341 arquivos/2.592 testes sem skips, E2E 12/12 e gate crítico RLS 96,09% PASS. Nenhum banco/dado/canal real; PostgreSQL descartável removido.
 
-# PR-301-WEBHOOK-REPLAY — BUILD sintético T3 aprovado — 28/09/2026
+# PR-301-WEBHOOK-REPLAY — BUILD sintético T3 — 28/09/2026
 
-- [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) cobre dois P1 de AUD-0587; [I1–I4](04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) corrigiram as lacunas do contrato, e usuário aprovou BUILD T3 sintético. Worktree `codex/pr301-webhook-replay-20260928` em `7ef74e7`; expiracão exata por timestamp já implementada; teste focado `16 PASS / 1 SKIP` (PostgreSQL não configurado ainda). Nenhum dado real, push ou deploy. Migration exige SPEC T3 própria 0161; produção `NO_GO`.
+- O commit `737e9c17b5246ab623ff9e7bdcf33a16f9ba0844` corrige e testa validade de replay, reserva tenant-scoped, cifragem AES-GCM, fencing de lease, transação inbound/outbox/auditoria e comparação do relógio com decisão no PostgreSQL. Cobertura crítica PASS; inbox próprio está em 72,79% de branches. O BUILD não completa a SPEC 0160: faltam marcador durável de relógio, reconciliador interno de pendências e contrato de retenção/provedor; crítica independente indisponível. [Prova](04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/proof.json). Root/CI/atestação/staging não integrados; produção `NO_GO`.
 
 # AUD-0587 — HMAC/replay do webhook — 28/09/2026
 

@@ -2,7 +2,7 @@
 
 - Task: subtask `PR-301-WEBHOOK-REPLAY-SCHEMA` de `PR-301-WEBHOOK-REPLAY` no [0356](../03_build/0356_production_backlog_2026-09-26.md).
 - Depende da [SPEC 0160](0160_webhook_replay_window_and_processing_fence.md), aprovada para BUILD T3 sintético.
-- Trilha: **T3**. Estado `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS`; aprovação explícita recebida em 28/09/2026, somente migration/testes sintéticos.
+- Trilha: **T3**. Estado `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTED_IN_ISOLATED_BUILD`; aprovação explícita recebida em 28/09/2026, somente migration/testes sintéticos. Aceitação da SPEC 0160 segue incompleta; produção `NO_GO`.
 - Escopo após aprovação: migration aditiva `0027_webhook_event_inbox.sql`, runner/catalog/preflight, API/store e testes em worktree isolado com PostgreSQL 16 e tenants/payloads sintéticos. Não executar upgrade de banco compartilhado, segredo real, canal/provider, push, deploy ou produção.
 
 ## Motivo e limite
@@ -45,6 +45,12 @@ Criar `webhook_event_inbox` com:
 - Crítica independente do delta e aprovação humana T3 antes de código de migration/runner/preflight.
 - Node 22: typecheck, lint, testes focados, `npm test`, PostgreSQL 16 com migrations reais e sem skips; E2E/coverage como exige a SPEC 0160. Registrar digest dos arquivos, logs SQL/HTTP redigidos e limpeza do banco descartável.
 - Atualizar [0190](0190_spec_validation.md), [0356](../03_build/0356_production_backlog_2026-09-26.md) e ledgers após decisão e execução. Esta SPEC não concede GO; 0354 aplica-se integralmente.
+
+## Resultado do BUILD sintético — 28/09/2026
+
+- Migration 0027, catálogo/runner, inventário tenant, RLS/FORCE, triggers de transição, grants/preflight, store cifrada e transação final foram executados em PostgreSQL 16 descartável no commit isolado `737e9c17b5246ab623ff9e7bdcf33a16f9ba0844`.
+- Suíte: 341 arquivos/2.592 testes sem skips; inbox focado 5/5; E2E 12/12; cobertura crítica RLS 96,09% PASS. [Prova](../04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/proof.json).
+- Exclusão permanece bloqueada até D-06; não houve canal real, deploy, upgrade de banco compartilhado ou crítica independente. Esta migration não contém o high-water marker nem o reconciliador exigidos pela SPEC 0160.
 
 ## Revisão
 

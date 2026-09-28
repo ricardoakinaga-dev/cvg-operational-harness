@@ -2,11 +2,11 @@
 
 ## PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 aprovada para BUILD T3 sintético — 28/09/2026
 
-- [SPEC 0161](0161_webhook_inbox_schema_delta.md) descreve migration aditiva do inbox HMAC cifrado, RLS/roles, preflight e commit fencing. O usuário aprovou BUILD T3 sintético em 28/09/2026; implementação controlada em andamento, produção `NO_GO`.
+- [SPEC 0161](0161_webhook_inbox_schema_delta.md) descreve migration aditiva do inbox HMAC cifrado, RLS/roles, preflight e commit fencing. BUILD sintético commitado isoladamente em `737e9c1`; 341/2.592 testes sem skips, PG16, E2E 12/12 e gate crítico RLS 96,09% PASS. Aceitação 0160 incompleta, retenção e integração externa pendentes; produção `NO_GO`. [Prova](../04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/proof.json).
 
 ## PR-301-WEBHOOK-REPLAY — SPEC 0160 aprovada para BUILD T3 sintético — 28/09/2026
 
-- [SPEC 0160](0160_webhook_replay_window_and_processing_fence.md) deriva dos dois P1 reproduzidos em AUD-0587 e da task PR-301-WEBHOOK-REPLAY. Define janela/expiração, posse de lease e efeitos duráveis, recuperação e vínculo de tenant. [Críticas I1–I4](../04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) fecharam lacunas P1 do contrato; os dois I4 aceitaram para revisão humana. O usuário aprovou explicitamente o BUILD sintético da SPEC 0160 em 28/09/2026. Estado `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS`; sem canal real, push, deploy ou produção.
+- [SPEC 0160](0160_webhook_replay_window_and_processing_fence.md) deriva dos dois P1 reproduzidos em AUD-0587 e da task PR-301-WEBHOOK-REPLAY. O usuário aprovou BUILD sintético em 28/09/2026; commit isolado `737e9c1` passou 341/2.592 testes sem skips, PG16, E2E 12/12 e gate crítico RLS. Aceitação incompleta: high-water marker, reconciliador pending, D-06/provider, crítica independente e integração root/CI/staging faltam. Produção `NO_GO`. [Prova](../04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/report.md).
 
 ## PR-011-CODEQL — SPEC 0159 pronta para revisão humana T3 — 28/09/2026
 

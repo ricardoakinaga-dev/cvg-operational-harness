@@ -1,10 +1,10 @@
-# PR-301-WEBHOOK-REPLAY — SPEC 0160 — 28/09/2026
+# PR-301-WEBHOOK-REPLAY — BUILD sintético SPEC 0160 — 28/09/2026
 
-- `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS / NO_GO`: [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) delimita correção dos dois P1 de replay e vínculo de tenant; dois I4 aceitaram o contrato e usuário aprovou BUILD sintético em 28/09/2026. Root/PR-L04, CI/staging e condições 0354 pendentes.
+- `SYNTHETIC_BUILD_GATES_PASS_WITH_OPEN_P1_SPEC_GAPS / NO_GO`: commit isolado `737e9c17b5246ab623ff9e7bdcf33a16f9ba0844` implementa replay com timestamp, inbox cifrado tenant-scoped, lease fencing e commit atômico. 341 arquivos/2.592 testes sem skips, PostgreSQL 16, E2E 12/12, cobertura crítica RLS 96,09% PASS. Faltam o high-water marker durável e reconciliador interno requeridos por 0160; retenção D-06, provider real, crítica independente e integração root/CI/staging pendentes. [Prova](04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/proof.json).
 
-# PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 — 28/09/2026
+# PR-301-WEBHOOK-REPLAY-SCHEMA — BUILD sintético SPEC 0161 — 28/09/2026
 
-- `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS / NO_GO`: [SPEC 0161](02_spec/0161_webhook_inbox_schema_delta.md) fixa delta T3 para inbox tenant-scoped e cifrado, exigido pela SPEC 0160. Usuário aprovou BUILD sintético; migration/preflight ainda em execução; produção `NO_GO`.
+- `BUILD_LOCAL_VERIFIED / ACCEPTANCE_INCOMPLETE / NO_GO`: migration 0027, inventário, RLS/FORCE, trigger de transições e preflight semântico passaram em PostgreSQL 16 descartável. Payloads são AES-256-GCM; a suíte completa teve 341 arquivos/2.592 testes sem skips. Pending não é apagado e DELETE permanece bloqueado até política D-06. High-water/reconciliador não pertencem ao delta aprovado 0161 e precisam de gate T3 separado. [Prova](04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/report.md).
 
 # AUD-0587 — replay do webhook — 28/09/2026
 

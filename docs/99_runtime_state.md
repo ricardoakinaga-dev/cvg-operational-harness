@@ -1,18 +1,18 @@
-# PR-301-WEBHOOK-REPLAY-SCHEMA — SPEC 0161 T3 — 28/09/2026
+# PR-301-WEBHOOK-REPLAY-SCHEMA — BUILD sintético SPEC 0161 — 28/09/2026
 
-- status: `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS`; programa `IN_PROGRESS`; produção `NO_GO`.
-- last_completed_action: [SPEC 0161](02_spec/0161_webhook_inbox_schema_delta.md) aprovada pelo usuário para migration/preflight sintéticos em 28/09/2026; implementação em worktree isolado.
-- verification_state: Node 22 test focused 17 passed/1 PostgreSQL skipped antes da migration; links/formato PASS; migrations, RLS e concorrência PostgreSQL ainda não executados.
-- blocking_state: dois P1 de replay abertos até prova HTTP+PG; root/PR-L04, CI/IAM/staging, SPECs 0157/0158/0159 e condições 0354 pendentes.
-- next_action: implementar migration 0027, store/transaction, preflight e testes no worktree sintético; revisão independente do diff; produção `NO_GO`.
+- status: `BUILD_LOCAL_VERIFIED / SPEC_ACCEPTANCE_INCOMPLETE / SYNTHETIC_ONLY`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: [migration 0027 e implementação isolada](04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/report.md) foram commitadas em `737e9c1` após aprovação humana da SPEC 0161.
+- verification_state: Node 22.23.2/PostgreSQL 16.15 descartável; suíte 341 arquivos/2.592 testes sem skips; cobertura crítica RLS 96,09%; inbox focado 5/5; E2E 12/12; build, typecheck, lint, formato e links PASS. Container/porta removidos.
+- blocking_state: a SPEC 0160 ainda exige marcador durável contra regressão do relógio e reconciliador interno de pendências após expirar a assinatura; D-06 retenção e efeitos externos idempotentes não demonstrados. Cobertura de branches do inbox 72,79%; crítica independente indisponível; integração root/CI/staging pendentes.
+- next_action: obter contrato e gate T3 para marcador/reconciliador, aumentar cobertura do inbox, integrar após PR-L04 e repetir verificação no SHA final; produção `NO_GO`.
 
-# PR-301-WEBHOOK-REPLAY — BUILD sintético T3 aprovado — 28/09/2026
+# PR-301-WEBHOOK-REPLAY — BUILD sintético T3 — 28/09/2026
 
-- status: `BUILD_T3_APPROVED_USER / SYNTHETIC_ONLY / IMPLEMENTATION_IN_PROGRESS`; programa `IN_PROGRESS`; produção `NO_GO`.
-- last_completed_action: [SPEC 0160](02_spec/0160_webhook_replay_window_and_processing_fence.md) deriva de [AUD-0587](04_audit/0587_isolated_webhook_boundary_2026-09-28.md) e fixa validade temporal, fencing/efeitos e tenant sem iniciar código; [I1–I4](04_audit/evidence/PR301-WEBHOOK-REPLAY-SPEC-20260928/I1-I2-review.md) fecharam lacunas P1 do contrato.
-- verification_state: negativos Node 22/PostgreSQL 16 reproduzidos e hash-bound; dois críticos I4 `READY_FOR_HUMAN_T3_REVIEW` documental; usuário aprovou BUILD sintético da SPEC 0160 em 28/09/2026; cálculo exato de TTL adicionado em worktree, teste focado 16 passed/1 skipped.
-- blocking_state: dois P1 de replay abertos até BUILD e provas; gate T3 de migration 0161 aguarda crítica/revisão humana; root/PR-L04, CI/IAM/staging, SPECs 0157/0158/0159 e condições 0354 pendentes.
-- next_action: seguir fatias sem migration, obter gate 0161 antes de schema, depois provar PG/duas APIs/relógio e todos os gates; produção `NO_GO`.
+- status: `SYNTHETIC_BUILD_GATES_PASS_WITH_OPEN_P1_SPEC_GAPS`; programa `IN_PROGRESS`; produção `NO_GO`.
+- last_completed_action: o commit isolado `737e9c17b5246ab623ff9e7bdcf33a16f9ba0844`, baseado em `7ef74e7`, implementa HMAC ligado ao inbox cifrado, fencing PostgreSQL, RLS, fail-closed de relógio e commit atômico de inbound/outbox/auditoria. [Prova](04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/proof.json).
+- verification_state: 341/2.592 testes e coverage sem skips; cobertura global 92,06% statements e 87,51% branches; cobertura crítica PASS (RLS 96,09%); build web digest `ca34c1d4…`, harness, lint, formato, links e E2E 12/12 PASS; dados sintéticos; PostgreSQL removido.
+- blocking_state: high-water marker e reconciliação continuam P1 explícitos da SPEC 0160; retenção D-06, prova de idempotência do provider, cobertura de branches do inbox (72,79%), revisão independente, composição com root/PR-L04, CI remoto/atestação e staging não fechados.
+- next_action: preparar o próximo delta T3 e submetê-lo à revisão humana; depois integrar/retestar o SHA root, obter CI/atestação e staging autorizado. Não declarar Triple-A ou produção `GO`.
 
 # AUD-0587 — replay do webhook sob concorrência — 28/09/2026
 

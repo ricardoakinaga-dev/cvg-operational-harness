@@ -651,18 +651,19 @@ nunca depende do legado. Cada fatia de código tem SPEC curta e só fecha com
 
 ### PR-301-WEBHOOK-REPLAY — janela e lease do webhook · P1 · SPEC T3 + BUILD
 
-- 28/09/2026: [SPEC 0160](../02_spec/0160_webhook_replay_window_and_processing_fence.md) define expiração até fim da validade da assinatura, fencing/idempotência dos efeitos sob takeover/crash e tenant vinculado à assinatura. Dois críticos I4 aceitaram o contrato; usuário aprovou BUILD T3 somente sintético. Implementação isolada em andamento, P1 ainda aberto até prova.
-- Estado: `P1_REPRODUCED / SPEC_T3_REQUIRED / NO_GO` em 28/09/2026. [AUD-0587](../04_audit/0587_isolated_webhook_boundary_2026-09-28.md) documenta dois negativos no SHA isolado cujo `webhook-security.ts` tem os mesmos bytes no root: assinatura com timestamp futuro aceita duas vezes após expiração da chave; lease PostgreSQL tomado após 31 s enquanto primeira entrega ainda estava no resolver (segunda 200, primeira 500). Não foi demonstrado efeito externo duplicado.
+- 28/09/2026: [SPEC 0160](../02_spec/0160_webhook_replay_window_and_processing_fence.md) define validade temporal, fencing/idempotência e vínculo de tenant; usuário aprovou BUILD sintético. O [BUILD isolado `737e9c1`](../04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/report.md) passou 341 arquivos/2.592 testes sem skips, PG16, E2E 12/12 e gate crítico RLS.
+- Estado: `SYNTHETIC_BUILD_GATES_PASS / SPEC_ACCEPTANCE_INCOMPLETE / NO_GO` em 28/09/2026. Os dois negativos locais de AUD-0587 têm testes de regressão, mas a aceitação total permanece bloqueada pelo marcador durável de relógio e reconciliador interno exigidos em 0160; retenção D-06, idempotência externa, root/CI/staging e condições 0354 continuam pendentes. [Prova](../04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/proof.json).
 - O que/onde: validade da chave de replay alinhada a toda a janela de timestamp; exclusividade/idempotência do processamento entre reserva e commit, mesmo acima de 30 s; resolver de tenant não pode depender de header não assinado sem vínculo.
-- Como: SPEC T3 com negativos de relógio e concorrência HTTP+PostgreSQL, revisão da transação inbox/outbox/fencing e prova de limpeza. BUILD só após aprovação humana explícita; não alterar código PR-L04 no root enquanto claim ativo.
-- Pronto: mesma assinatura nunca aceita duas vezes enquanto válida; redelivery concorrente não causa processamento duplicado nem 500 após efeito, inclusive em dois processos; teste de tenant não assinado; CI/certificado no SHA final e staging HTTPS. Produção permanece `NO_GO`.
+- Como: BUILD sintético em branch isolado; próxima fatia precisa de SPEC/revisão T3 explícita para o marcador de relógio e reconciliação cross-tenant. Integrar somente após PR-L04 e repetir no SHA root.
+- Pronto: redelivery committed idêntica retorna o mesmo 200 receipt sem novo efeito; concorrência não duplica mensagem/outbox/auditoria nem responde 500 após commit, inclusive em dois processos; teste de tenant não assinado; CI/certificado no SHA final e staging HTTPS. Produção permanece `NO_GO`.
 
 #### PR-301-WEBHOOK-REPLAY-SCHEMA — inbox tenant-scoped para fencing · P1 · SPEC T3 + BUILD
 
-- 28/09/2026: [SPEC 0161](../02_spec/0161_webhook_inbox_schema_delta.md) aprovada pelo usuário para BUILD T3 sintético; migration/runner/preflight implementados no worktree isolado, prova em andamento; produção `NO_GO`.
+- 28/09/2026: [SPEC 0161](../02_spec/0161_webhook_inbox_schema_delta.md) aprovada pelo usuário para BUILD T3 sintético; migration 0027, runner, inventário, RLS/FORCE, preflight e testes implementados no commit isolado `737e9c1`; produção `NO_GO`.
 - O que/onde: guardar binding imutável, payload AES-GCM recuperável, lease generation monotônica e receipt em inbox tenant-scoped; finalizar replay + inbound + outbox + audit em uma transação.
 - Como: migration aditiva 0027, inventário canônico de tenant, RLS/roles, preflight semântico, grants mínimos, isolamento/crypto/concurrency em PostgreSQL 16 descartável.
-- Pronto: migrations reais limpas/repetíveis; schema inválido/grants/RLS recusados; cipher não expõe plaintext; pending sobrevive ao cleanup; takeover não permite fencing antigo; sem skips; produção `NO_GO`.
+- Verificação: PostgreSQL 16 descartável, suíte 341/2.592 sem skips, migration e negativos de owner/RLS/grants/transições, cipher e takeover PASS; [prova](../04_audit/evidence/PR301-WEBHOOK-REPLAY-BUILD-20260928/proof.json). Container e porta removidos.
+- Aberto: não há cleanup até D-06 aprovado; high-water/reconciliador são outro gate T3; crítica independente, integração root/CI/staging e GO de produção pendentes.
 
 ### PR-304 — Borda endurecida · P1 · OPS
 
