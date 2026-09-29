@@ -25,7 +25,9 @@ ou para o código que outros agentes estejam modificando agora.
   high-water e reconciliação somente sob SPEC/gate próprios.
 - **Como/dependência:** preservar prova F01 `[true,false,true]` como negativo;
   usar SPEC 0160 aprovada para a fatia autorizada e submeter a SPEC 0162 à
-  revisão humana T3 antes de migration 0028. Respeitar o claim ativo do patch.
+  revisão humana T3 antes de migration 0028. A correção local da janela já
+  consta como `CONCLUÍDO_LOCAL` no quadro de claims; conferir a prova e
+  integrar/retestar no root antes de fechar F01.
 - **Pronto:** timestamp futuro válido é aceito uma vez e recusado durante toda
   a janela assinada, inclusive após reinício, concorrência, skew e expiração;
   estado incerto não dispara efeito duplicado. Testes HTTP + PostgreSQL
