@@ -28,11 +28,21 @@ export interface WebhookReplayReservation {
   token: string
 }
 
+export interface WebhookReplayWindow {
+  timestampSeconds: number
+  toleranceSeconds: number
+}
+
 export interface WebhookReplayStore {
-  claim(key: string, expiresAtMs: number): boolean | Promise<boolean>
+  claim(
+    key: string,
+    expiresAtMs: number,
+    window?: WebhookReplayWindow
+  ): boolean | Promise<boolean>
   reserve?(
     key: string,
-    expiresAtMs: number
+    expiresAtMs: number,
+    window?: WebhookReplayWindow
   ):
     | WebhookReplayReservation
     | false
@@ -66,21 +76,36 @@ const TIMESTAMP_HEADER = 'x-cvg-webhook-timestamp'
 
 export class InMemoryWebhookReplayStore implements WebhookReplayStore {
   private entries = new Map<string, ReplayEntry>()
+  private lastObservedMs = -1
+  private clockRegressed = false
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  claim(key: string, expiresAtMs: number): boolean {
-    const reservation = this.reserve(key, expiresAtMs)
+  claim(
+    key: string,
+    expiresAtMs: number,
+    window?: WebhookReplayWindow
+  ): boolean {
+    const reservation = this.reserve(key, expiresAtMs, window)
     if (!reservation) return false
     if (this.commit(reservation)) return true
     this.release(reservation)
     return false
   }
 
-  reserve(key: string, expiresAtMs: number): WebhookReplayReservation | false {
-    const activeEntries = this.activeEntries()
-    const currentTime = this.now()
-    if (expiresAtMs <= currentTime || activeEntries.has(key)) {
+  reserve(
+    key: string,
+    expiresAtMs: number,
+    window?: WebhookReplayWindow
+  ): WebhookReplayReservation | false {
+    const currentTime = this.readTime()
+    if (currentTime === null) return false
+    const activeEntries = this.activeEntries(currentTime)
+    if (
+      expiresAtMs <= currentTime ||
+      (window !== undefined && !isWithinReplayWindow(currentTime, window)) ||
+      activeEntries.has(key)
+    ) {
       this.entries = activeEntries
       return false
     }
@@ -99,7 +124,9 @@ export class InMemoryWebhookReplayStore implements WebhookReplayStore {
   }
 
   commit(reservation: WebhookReplayReservation): boolean {
-    const activeEntries = this.activeEntries()
+    const currentTime = this.readTime()
+    if (currentTime === null) return false
+    const activeEntries = this.activeEntries(currentTime)
     const entry = activeEntries.get(reservation.key)
     if (
       !entry ||
@@ -118,7 +145,9 @@ export class InMemoryWebhookReplayStore implements WebhookReplayStore {
   }
 
   release(reservation: WebhookReplayReservation): boolean {
-    const activeEntries = this.activeEntries()
+    const currentTime = this.readTime()
+    if (currentTime === null) return false
+    const activeEntries = this.activeEntries(currentTime)
     const entry = activeEntries.get(reservation.key)
     if (
       !entry ||
@@ -135,8 +164,22 @@ export class InMemoryWebhookReplayStore implements WebhookReplayStore {
     return true
   }
 
-  private activeEntries(): Map<string, ReplayEntry> {
+  private readTime(): number | null {
+    if (this.clockRegressed) return null
     const currentTime = this.now()
+    if (
+      !Number.isSafeInteger(currentTime) ||
+      currentTime < 0 ||
+      currentTime < this.lastObservedMs
+    ) {
+      this.clockRegressed = true
+      return null
+    }
+    this.lastObservedMs = currentTime
+    return currentTime
+  }
+
+  private activeEntries(currentTime: number): Map<string, ReplayEntry> {
     return new Map(
       [...this.entries].filter(([, entry]) => entry.expiresAt > currentTime)
     )
@@ -151,8 +194,12 @@ export class InMemoryWebhookReplayStore implements WebhookReplayStore {
 export class PostgresWebhookReplayStore implements WebhookReplayStore {
   constructor(private readonly pool: PostgresPoolLike) {}
 
-  async claim(key: string, expiresAtMs: number): Promise<boolean> {
-    const reservation = await this.reserve(key, expiresAtMs)
+  async claim(
+    key: string,
+    expiresAtMs: number,
+    window?: WebhookReplayWindow
+  ): Promise<boolean> {
+    const reservation = await this.reserve(key, expiresAtMs, window)
     if (!reservation) return false
     const committed = await this.commit(reservation)
     if (committed) return true
@@ -162,10 +209,16 @@ export class PostgresWebhookReplayStore implements WebhookReplayStore {
 
   async reserve(
     key: string,
-    expiresAtMs: number
+    expiresAtMs: number,
+    window?: WebhookReplayWindow
   ): Promise<WebhookReplayReservation | false> {
-    validateReplayEntry(key, expiresAtMs)
+    validateReplayEntry(key, expiresAtMs, window === undefined)
+    if (window !== undefined) validateReplayWindow(window)
     const token = randomUUID()
+    const windowParams = [
+      window?.timestampSeconds ?? null,
+      window?.toleranceSeconds ?? null
+    ]
     const client = await this.pool.connect()
     try {
       await client.query(
@@ -175,10 +228,12 @@ export class PostgresWebhookReplayStore implements WebhookReplayStore {
       const inserted = await client.query<ReplayReservationRow>(
         `INSERT INTO webhook_replay_events
            (event_key, status, expires_at, lease_generation, lease_token)
-         VALUES ($1, 'reserved', $2, 1, $3)
+         SELECT $1, 'reserved', $2, 1, $3
+         WHERE $2::timestamptz > clock_timestamp()
+           AND ($4::bigint IS NULL OR ABS(FLOOR(EXTRACT(EPOCH FROM clock_timestamp())) - $4::bigint) <= $5::bigint)
          ON CONFLICT (event_key) DO NOTHING
          RETURNING event_key, lease_generation, lease_token`,
-        [key, new Date(expiresAtMs), token]
+        [key, new Date(expiresAtMs), token, ...windowParams]
       )
       if (inserted.rows[0]) return mapReplayReservation(inserted.rows[0])
       const reused = await client.query<ReplayReservationRow>(
@@ -190,12 +245,14 @@ export class PostgresWebhookReplayStore implements WebhookReplayStore {
               lease_token = $3
           WHERE event_key = $1
             AND status = 'reserved'
+            AND $2::timestamptz > clock_timestamp()
+            AND ($4::bigint IS NULL OR ABS(FLOOR(EXTRACT(EPOCH FROM clock_timestamp())) - $4::bigint) <= $5::bigint)
             AND (
               expires_at <= CURRENT_TIMESTAMP
               OR created_at <= CURRENT_TIMESTAMP - INTERVAL '${RESERVATION_LEASE_SECONDS} seconds'
             )
           RETURNING event_key, lease_generation, lease_token`,
-        [key, new Date(expiresAtMs), token]
+        [key, new Date(expiresAtMs), token, ...windowParams]
       )
       return reused.rows[0] ? mapReplayReservation(reused.rows[0]) : false
     } finally {
@@ -258,8 +315,9 @@ export class HmacWebhookVerifier {
     if (this.secrets.length === 0) {
       throw new Error('At least one webhook signing secret is required')
     }
-    this.replayStore = options.replayStore ?? new InMemoryWebhookReplayStore()
     this.now = options.now ?? Date.now
+    this.replayStore =
+      options.replayStore ?? new InMemoryWebhookReplayStore(this.now)
     this.toleranceSeconds =
       options.toleranceSeconds ?? DEFAULT_TOLERANCE_SECONDS
     if (
@@ -275,7 +333,11 @@ export class HmacWebhookVerifier {
     try {
       const prepared = this.prepare(input)
       if (!prepared) return false
-      return await this.replayStore.claim(prepared.key, prepared.expiresAtMs)
+      return await this.replayStore.claim(
+        prepared.key,
+        prepared.expiresAtMs,
+        prepared.window
+      )
     } catch {
       return false
     }
@@ -294,7 +356,8 @@ export class HmacWebhookVerifier {
       ) {
         const claimed = await this.replayStore.claim(
           prepared.key,
-          prepared.expiresAtMs
+          prepared.expiresAtMs,
+          prepared.window
         )
         return claimed
           ? {
@@ -306,7 +369,8 @@ export class HmacWebhookVerifier {
       }
       const reserved = await this.replayStore.reserve(
         prepared.key,
-        prepared.expiresAtMs
+        prepared.expiresAtMs,
+        prepared.window
       )
       if (!reserved) return null
       return {
@@ -326,7 +390,7 @@ export class HmacWebhookVerifier {
 
   private prepare(
     input: WebhookVerificationInput
-  ): { key: string; expiresAtMs: number } | null {
+  ): { key: string; expiresAtMs: number; window: WebhookReplayWindow } | null {
     const eventId = readHeader(input.headers, EVENT_ID_HEADER)
     const signature = readHeader(input.headers, SIGNATURE_HEADER)
     const timestampHeader = readHeader(input.headers, TIMESTAMP_HEADER)
@@ -340,7 +404,9 @@ export class HmacWebhookVerifier {
       return null
     }
 
-    const currentSeconds = Math.floor(this.now() / 1000)
+    const nowMs = this.now()
+    if (!Number.isSafeInteger(nowMs) || nowMs < 0) return null
+    const currentSeconds = Math.floor(nowMs / 1000)
     if (Math.abs(currentSeconds - timestampSeconds) > this.toleranceSeconds) {
       return null
     }
@@ -357,9 +423,21 @@ export class HmacWebhookVerifier {
     )
     if (!matchedSecret) return null
 
+    // The signed timestamp is valid through the end of second ts + T.
+    // The replay reservation expires at the start of the next second.
+    const exclusiveExpirySeconds = timestampSeconds + this.toleranceSeconds + 1
+    const expiresAtMs = exclusiveExpirySeconds * 1000
+    if (
+      !Number.isSafeInteger(exclusiveExpirySeconds) ||
+      !Number.isSafeInteger(expiresAtMs) ||
+      Number.isNaN(new Date(expiresAtMs).getTime())
+    ) {
+      return null
+    }
     return {
       key: `webhook:${input.channel}:${eventId}`,
-      expiresAtMs: this.now() + this.toleranceSeconds * 1000
+      expiresAtMs,
+      window: { timestampSeconds, toleranceSeconds: this.toleranceSeconds }
     }
   }
 }
@@ -446,13 +524,45 @@ function requireNonBlank(value: string, field: string): string {
   return normalized
 }
 
-function validateReplayEntry(key: string, expiresAtMs: number): void {
+function validateReplayEntry(
+  key: string,
+  expiresAtMs: number,
+  requireLocalFuture: boolean
+): void {
   if (!key.trim() || key.length > 300) {
     throw new Error('Webhook replay key is invalid')
   }
-  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+  if (
+    !Number.isSafeInteger(expiresAtMs) ||
+    Number.isNaN(new Date(expiresAtMs).getTime()) ||
+    (requireLocalFuture && expiresAtMs <= Date.now())
+  ) {
     throw new Error('Webhook replay expiry is invalid')
   }
+}
+
+function validateReplayWindow(window: WebhookReplayWindow): void {
+  if (
+    !Number.isSafeInteger(window.timestampSeconds) ||
+    window.timestampSeconds < 0 ||
+    !Number.isSafeInteger(window.toleranceSeconds) ||
+    window.toleranceSeconds <= 0 ||
+    window.toleranceSeconds > 86_400
+  ) {
+    throw new Error('Webhook replay window is invalid')
+  }
+}
+
+function isWithinReplayWindow(
+  nowMs: number,
+  window: WebhookReplayWindow
+): boolean {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) return false
+  validateReplayWindow(window)
+  return (
+    Math.abs(Math.floor(nowMs / 1000) - window.timestampSeconds) <=
+    window.toleranceSeconds
+  )
 }
 
 interface ReplayReservationRow {
