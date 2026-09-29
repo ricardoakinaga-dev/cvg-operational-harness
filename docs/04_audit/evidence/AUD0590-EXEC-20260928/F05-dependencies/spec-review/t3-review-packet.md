@@ -4,7 +4,13 @@
 [SPEC 0164](../../../../../02_spec/0164_dependency_advisory_remediation.md)
 SHA-256 `e485c7d37354ca33a9054ad47d05ec0aa8e601358f0f779cac70ed097705e6bd`.
 [I2 independente](I2-review.md): `ACCEPT_SPEC_REVIEW_READY`, sem
-P0/P1/P2. Aprovação humana: **PENDING**.
+P0/P1/P2. Aprovação humana: **APPROVED_SYNTHETIC_BUILD** em 29/09/2026.
+
+O usuário respondeu literalmente **“Aprovo BUILD sintético da SPEC 0164”**
+à pergunta que apresentou este pacote, o hash completo da SPEC acima e a
+condição de liberação do lockfile pela PR-L04. A decisão cobre apenas esse
+hash e o escopo sintético abaixo. Ela não libera o lockfile enquanto o claim
+PR-L04 estiver ativo.
 
 | Item | Escopo submetido |
 | --- | --- |
