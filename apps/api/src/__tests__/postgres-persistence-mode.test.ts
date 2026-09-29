@@ -1182,54 +1182,15 @@ describe('api PostgreSQL persistence mode', () => {
     ).rejects.toThrow('least-privilege')
   })
 
-  it('requires the complete durable webhook replay catalog contract', async () => {
-    const catalogClient = (relkind: string): PostgresQueryable => ({
-      async query<T extends QueryResultRow = QueryResultRow>(
-        text: string,
-        values?: unknown[]
-      ): Promise<QueryResult<T>> {
-        const names = (values?.[0] as string[] | undefined) ?? []
-        if (text.includes('FROM pg_class')) {
-          return queryResult([
-            { relname: 'webhook_replay_events', relkind }
-          ]) as unknown as QueryResult<T>
-        }
-        if (text.includes('information_schema.columns')) {
-          return queryResult([
-            { table_name: 'webhook_replay_events', column_name: 'event_key' },
-            { table_name: 'webhook_replay_events', column_name: 'status' },
-            {
-              table_name: 'webhook_replay_events',
-              column_name: 'expires_at'
-            },
-            {
-              table_name: 'webhook_replay_events',
-              column_name: 'lease_generation'
-            },
-            {
-              table_name: 'webhook_replay_events',
-              column_name: 'lease_token'
-            }
-          ]) as unknown as QueryResult<T>
-        }
-        if (text.includes('FROM pg_constraint')) {
-          return queryResult(
-            names.map((conname) => ({ conname }))
-          ) as unknown as QueryResult<T>
-        }
-        if (text.includes('FROM pg_indexes')) {
-          return queryResult(
-            names.map((indexname) => ({ indexname }))
-          ) as unknown as QueryResult<T>
-        }
+  it('rejects incomplete webhook replay catalog results', async () => {
+    const client: PostgresQueryable = {
+      async query<T extends QueryResultRow = QueryResultRow>(): Promise<
+        QueryResult<T>
+      > {
         return queryResult([]) as unknown as QueryResult<T>
       }
-    })
-
-    await expect(assertWebhookReplaySchema(catalogClient('r'))).resolves.toBe(
-      undefined
-    )
-    await expect(assertWebhookReplaySchema(catalogClient('v'))).rejects.toThrow(
+    }
+    await expect(assertWebhookReplaySchema(client)).rejects.toThrow(
       'webhook replay storage is not fully installed'
     )
   })
@@ -2363,6 +2324,337 @@ describe('api PostgreSQL persistence mode', () => {
         await client.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`)
         await client.end()
       }
+    }
+  )
+})
+
+// SPEC 0158: boot must reject catalog drift as the actual serving role.
+// This file is in the repository's standard test:postgres selection.
+async function withServingReplaySchema(
+  run: (fixture: {
+    admin: Client
+    schema: string
+    store: PostgresWebhookReplayStore
+    assertBootRejected: () => Promise<void>
+  }) => Promise<void>
+): Promise<void> {
+  if (!testDatabaseUrl) throw new Error('TEST_DATABASE_URL required')
+  const suffix = randomBytes(6).toString('hex')
+  const schema = `cvg_f02_boot_${suffix}`
+  const runtimeRole = `cvg_f02_runtime_${suffix}`
+  const migrationRole = `cvg_f02_migration_${suffix}`
+  const runtimePassword = randomBytes(18).toString('hex')
+  const migrationPassword = randomBytes(18).toString('hex')
+  const runtimeUrl = new URL(testDatabaseUrl)
+  runtimeUrl.username = runtimeRole
+  runtimeUrl.password = runtimePassword
+  const migrationUrl = new URL(testDatabaseUrl)
+  migrationUrl.username = migrationRole
+  migrationUrl.password = migrationPassword
+  const admin = new Client({ connectionString: testDatabaseUrl })
+  let runtimeClient: Client | undefined
+  let runtimeCreated = false
+  let migrationCreated = false
+  await admin.connect()
+  try {
+    await admin.query(
+      `CREATE ROLE ${runtimeRole} LOGIN PASSWORD '${runtimePassword}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`
+    )
+    runtimeCreated = true
+    await admin.query(
+      `CREATE ROLE ${migrationRole} LOGIN PASSWORD '${migrationPassword}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`
+    )
+    migrationCreated = true
+    await admin.query(`CREATE SCHEMA ${schema} AUTHORIZATION ${migrationRole}`)
+    const migrationClient = new Client({
+      connectionString: migrationUrl.toString()
+    })
+    await migrationClient.connect()
+    try {
+      await runPostgresMigrations(migrationClient, {
+        schemaName: schema,
+        createSchema: false
+      })
+    } finally {
+      await migrationClient.end()
+    }
+    await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${runtimeRole}`)
+    for (const table of [...TENANT_SCHEMA_TABLES, 'webhook_replay_events']) {
+      await admin.query(
+        `GRANT SELECT, INSERT, UPDATE ON ${schema}.${table} TO ${runtimeRole}`
+      )
+    }
+    await admin.query(
+      `GRANT DELETE ON ${schema}.webhook_replay_events TO ${runtimeRole}`
+    )
+    await admin.query(
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON ${schema}.rate_limit_buckets TO ${runtimeRole}`
+    )
+    await admin.query(`ALTER ROLE ${runtimeRole} SET search_path TO ${schema}`)
+    await admin.query(`SET search_path TO ${schema}`)
+
+    runtimeClient = new Client({ connectionString: runtimeUrl.toString() })
+    await runtimeClient.connect()
+    const runtimeSchema = await runtimeClient.query<{
+      current_schema: string
+      role_name: string
+    }>('SELECT current_schema(), current_user AS role_name')
+    expect(runtimeSchema.rows[0]?.current_schema).toBe(schema)
+    expect(runtimeSchema.rows[0]?.role_name).toBe(runtimeRole)
+    const pool = {
+      connect: async () => ({
+        query: runtimeClient!.query.bind(runtimeClient),
+        release: () => undefined
+      })
+    } as unknown as PostgresPoolLike
+    const store = new PostgresWebhookReplayStore(pool)
+    const env = {
+      NODE_ENV: 'production',
+      API_PERSISTENCE_MODE: 'postgres',
+      DATABASE_URL: runtimeUrl.toString(),
+      DATABASE_MIGRATION_URL: migrationUrl.toString(),
+      INBOUND_TENANT_ID: postgresTenantA,
+      INBOUND_AGENT_ID: postgresInboundAgent,
+      POSTGRES_AUTO_MIGRATE: 'false',
+      POSTGRES_RLS_ENFORCEMENT: 'true',
+      OUTBOX_DURABLE_INBOUND: 'true',
+      API_ALLOWED_ORIGINS: 'https://console.example.test',
+      API_REQUIRE_HTTPS: 'true',
+      API_TRUSTED_PROXY_ADDRESSES: '127.0.0.1',
+      POSTGRES_SCHEMA: schema,
+      CVG_RATE_LIMIT_KEYRING: rateLimitKeyRingEnv
+    }
+    const assertBootRejected = async () => {
+      let app: Awaited<ReturnType<typeof buildServerFromEnv>> | undefined
+      try {
+        app = await buildServerFromEnv(env, {
+          webhookVerifier: () => true,
+          operatorIdentityResolver: trustedProductionIdentity,
+          operatorSessionStore: createInMemoryOperatorSessionStore()
+        })
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error)
+        expect((error as Error).message).toContain(
+          'webhook replay storage is not fully installed'
+        )
+        return
+      } finally {
+        await app?.close()
+      }
+      throw new Error(
+        'PostgreSQL serving boot accepted a degraded replay catalog'
+      )
+    }
+    await run({ admin, schema, store, assertBootRejected })
+  } finally {
+    await runtimeClient?.end()
+    await admin.query(`DROP SCHEMA IF EXISTS ${schema}_other CASCADE`)
+    if (runtimeCreated) await admin.query(`DROP OWNED BY ${runtimeRole}`)
+    await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
+    if (runtimeCreated) await admin.query(`DROP ROLE ${runtimeRole}`)
+    if (migrationCreated) await admin.query(`DROP ROLE ${migrationRole}`)
+    await admin.end()
+  }
+}
+
+describe('SPEC 0158 serving-role webhook replay preflight', () => {
+  const itWithPostgres = testDatabaseUrl ? it : it.skip
+  const expiresAt = () => Date.now() + 60_000
+  async function assertBaselineStore(store: PostgresWebhookReplayStore) {
+    const reservation = await store.reserve(
+      `synthetic:baseline:${randomBytes(4).toString('hex')}`,
+      expiresAt()
+    )
+    expect(reservation).not.toBe(false)
+    if (!reservation) throw new Error('baseline reserve failed')
+    await expect(store.commit(reservation)).resolves.toBe(true)
+  }
+
+  const mutations = [
+    [
+      'fencing constraint moved to another table',
+      `ALTER TABLE webhook_replay_events DROP CONSTRAINT webhook_replay_events_fencing_check; CREATE TABLE decoy_fencing (key text, CONSTRAINT webhook_replay_events_fencing_check CHECK (true))`
+    ],
+    [
+      'fencing CHECK replaced by true',
+      `ALTER TABLE webhook_replay_events DROP CONSTRAINT webhook_replay_events_fencing_check; ALTER TABLE webhook_replay_events ADD CONSTRAINT webhook_replay_events_fencing_check CHECK (true)`
+    ],
+    [
+      'generation CHECK becomes permissive',
+      `ALTER TABLE webhook_replay_events DROP CONSTRAINT webhook_replay_events_lease_generation_check; ALTER TABLE webhook_replay_events ADD CONSTRAINT webhook_replay_events_lease_generation_check CHECK (lease_generation >= -1)`
+    ],
+    [
+      'fencing CHECK is NOT VALID',
+      `ALTER TABLE webhook_replay_events DROP CONSTRAINT webhook_replay_events_fencing_check; ALTER TABLE webhook_replay_events ADD CONSTRAINT webhook_replay_events_fencing_check CHECK (status = 'reserved' AND lease_generation > 0 AND lease_token IS NOT NULL AND btrim(lease_token) <> '' OR status = 'committed' AND lease_token IS NULL) NOT VALID`
+    ],
+    [
+      'event key CHECK becomes permissive',
+      `ALTER TABLE webhook_replay_events DROP CONSTRAINT webhook_replay_events_event_key_check; ALTER TABLE webhook_replay_events ADD CONSTRAINT webhook_replay_events_event_key_check CHECK (true)`
+    ],
+    [
+      'status CHECK becomes permissive',
+      `ALTER TABLE webhook_replay_events DROP CONSTRAINT webhook_replay_events_status_check; ALTER TABLE webhook_replay_events ADD CONSTRAINT webhook_replay_events_status_check CHECK (true)`
+    ],
+    [
+      'created_at becomes nullable',
+      `ALTER TABLE webhook_replay_events ALTER COLUMN created_at DROP NOT NULL`
+    ],
+    [
+      'created_at default disappears',
+      `ALTER TABLE webhook_replay_events ALTER COLUMN created_at DROP DEFAULT`
+    ],
+    [
+      'lease_generation becomes nullable',
+      `ALTER TABLE webhook_replay_events ALTER COLUMN lease_generation DROP NOT NULL`
+    ],
+    [
+      'lease_generation default disappears',
+      `ALTER TABLE webhook_replay_events ALTER COLUMN lease_generation DROP DEFAULT`
+    ],
+    [
+      'lease token type changes',
+      `ALTER TABLE webhook_replay_events ALTER COLUMN lease_token TYPE varchar(200)`
+    ],
+    [
+      'unexpected NOT NULL column blocks reservations',
+      `ALTER TABLE webhook_replay_events ADD COLUMN unexpected text NOT NULL`
+    ],
+    [
+      'PK becomes deferrable',
+      `ALTER TABLE webhook_replay_events DROP CONSTRAINT webhook_replay_events_pkey; ALTER TABLE webhook_replay_events ADD CONSTRAINT webhook_replay_events_pkey PRIMARY KEY (event_key) DEFERRABLE`
+    ],
+    [
+      'table becomes unlogged',
+      `ALTER TABLE webhook_replay_events SET UNLOGGED`
+    ],
+    [
+      'table inherits another table',
+      `CREATE TABLE replay_parent (); ALTER TABLE webhook_replay_events INHERIT replay_parent`
+    ],
+    [
+      'expiry index is on the wrong column',
+      `DROP INDEX idx_webhook_replay_events_expires; CREATE INDEX idx_webhook_replay_events_expires ON webhook_replay_events (created_at)`
+    ],
+    [
+      'expiry index has a predicate',
+      `DROP INDEX idx_webhook_replay_events_expires; CREATE INDEX idx_webhook_replay_events_expires ON webhook_replay_events (expires_at) WHERE status = 'reserved'`
+    ],
+    [
+      'expiry index is unique',
+      `DROP INDEX idx_webhook_replay_events_expires; CREATE UNIQUE INDEX idx_webhook_replay_events_expires ON webhook_replay_events (expires_at)`
+    ],
+    [
+      'extra unique index changes replay writes',
+      `CREATE UNIQUE INDEX replay_status_unique ON webhook_replay_events (status)`
+    ],
+    [
+      'expiry index name exists on another table',
+      `DROP INDEX idx_webhook_replay_events_expires; CREATE TABLE decoy_index (expires_at timestamptz); CREATE INDEX idx_webhook_replay_events_expires ON decoy_index (expires_at)`
+    ],
+    [
+      'user trigger suppresses reservation',
+      `CREATE FUNCTION suppress_replay() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END'; CREATE TRIGGER suppress_replay BEFORE INSERT ON webhook_replay_events FOR EACH ROW EXECUTE FUNCTION suppress_replay()`
+    ],
+    [
+      'rewrite rule suppresses reservation',
+      `CREATE RULE suppress_replay AS ON INSERT TO webhook_replay_events DO INSTEAD NOTHING`
+    ],
+    [
+      'cross-schema FK references replay state',
+      `CREATE SCHEMA __OTHER_SCHEMA__; CREATE TABLE __OTHER_SCHEMA__.reference (event_key text REFERENCES webhook_replay_events(event_key))`
+    ],
+    [
+      'RLS policy is installed',
+      `CREATE POLICY replay_policy ON webhook_replay_events USING (true)`
+    ]
+  ] as const
+
+  itWithPostgres.each(mutations)(
+    'blocks serving boot after %s',
+    async (label, mutation) => {
+      await withServingReplaySchema(
+        async ({ admin, schema, store, assertBootRejected }) => {
+          if (label.includes('suppress') || label.includes('cross-schema FK')) {
+            await assertBaselineStore(store)
+          }
+          await admin.query(
+            mutation.replaceAll('__OTHER_SCHEMA__', `${schema}_other`)
+          )
+          if (label === 'user trigger suppresses reservation') {
+            await expect(
+              store.reserve('synthetic:trigger', expiresAt())
+            ).resolves.toBe(false)
+          }
+          if (label === 'rewrite rule suppresses reservation') {
+            await expect(
+              store.reserve('synthetic:rule', expiresAt())
+            ).rejects.toThrow(/INSERT RETURNING/)
+          }
+          if (label === 'cross-schema FK references replay state') {
+            await admin.query(`INSERT INTO webhook_replay_events
+          (event_key, status, expires_at, lease_generation)
+          VALUES ('synthetic:expired-fk', 'committed', now() - interval '1 minute', 1)`)
+            await admin.query(
+              `INSERT INTO ${schema}_other.reference (event_key) VALUES ('synthetic:expired-fk')`
+            )
+            await expect(
+              store.reserve('synthetic:fk', expiresAt())
+            ).rejects.toThrow(/foreign key/)
+          }
+          await assertBootRejected()
+        }
+      )
+    }
+  )
+
+  itWithPostgres(
+    'blocks an invalid expiry index left by a failed concurrent build',
+    async () => {
+      await withServingReplaySchema(
+        async ({ admin, schema, assertBootRejected }) => {
+          await admin.query(`INSERT INTO webhook_replay_events
+        (event_key, status, expires_at, lease_generation)
+        VALUES ('synthetic:one', 'committed', now() + interval '1 minute', 1),
+               ('synthetic:two', 'committed', now() + interval '1 minute', 1)`)
+          await admin.query('DROP INDEX idx_webhook_replay_events_expires')
+          await expect(
+            admin.query(
+              'CREATE UNIQUE INDEX CONCURRENTLY idx_webhook_replay_events_expires ON webhook_replay_events (expires_at)'
+            )
+          ).rejects.toThrow()
+          const index = await admin.query<{ indisvalid: boolean }>(
+            `SELECT i.indisvalid FROM pg_index AS i
+         JOIN pg_class AS c ON c.oid = i.indexrelid
+         JOIN pg_namespace AS n ON n.oid = c.relnamespace
+         WHERE n.nspname = $1 AND c.relname = 'idx_webhook_replay_events_expires'`,
+            [schema]
+          )
+          expect(index.rows).toEqual([{ indisvalid: false }])
+          await assertBootRejected()
+        }
+      )
+    }
+  )
+
+  itWithPostgres(
+    'blocks a CHECK bound to an application function',
+    async () => {
+      await withServingReplaySchema(
+        async ({ admin, schema, assertBootRejected }) => {
+          await admin.query(`CREATE FUNCTION ${schema}.btrim(text) RETURNS text
+        LANGUAGE sql IMMUTABLE AS 'SELECT ''x''::text';
+        ALTER TABLE webhook_replay_events DROP CONSTRAINT webhook_replay_events_event_key_check;
+        ALTER TABLE webhook_replay_events ADD CONSTRAINT webhook_replay_events_event_key_check
+          CHECK (${schema}.btrim(event_key) <> '')`)
+          const catalog = await admin.query<{ definition: string }>(
+            `SELECT pg_get_constraintdef(oid, true) AS definition FROM pg_constraint
+         WHERE conrelid = 'webhook_replay_events'::regclass
+           AND conname = 'webhook_replay_events_event_key_check'`
+          )
+          expect(catalog.rows[0]?.definition).toContain(`${schema}.btrim`)
+          await assertBootRejected()
+        }
+      )
     }
   )
 })

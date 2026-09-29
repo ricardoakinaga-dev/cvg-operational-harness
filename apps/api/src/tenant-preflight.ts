@@ -618,76 +618,286 @@ export async function assertTenantIsolationSchema(
   await assertApprovalDecisionAuditDedupe(client)
 }
 
+const webhookReplayChecks = new Map([
+  [
+    'webhook_replay_events_event_key_check',
+    "CHECK (btrim(event_key) <> ''::text)"
+  ],
+  [
+    'webhook_replay_events_status_check',
+    "CHECK (status = ANY (ARRAY['reserved'::text, 'committed'::text]))"
+  ],
+  [
+    'webhook_replay_events_lease_generation_check',
+    'CHECK (lease_generation >= 0)'
+  ],
+  [
+    'webhook_replay_events_fencing_check',
+    "CHECK (status = 'reserved'::text AND lease_generation > 0 AND lease_token IS NOT NULL AND btrim(lease_token) <> ''::text OR status = 'committed'::text AND lease_token IS NULL)"
+  ]
+])
+
+/** The migration's PG16 catalog contract, checked before a runtime pool serves traffic. */
 export async function assertWebhookReplaySchema(
   client: PostgresQueryable
 ): Promise<void> {
-  const requiredConstraints = [
-    'webhook_replay_events_pkey',
-    'webhook_replay_events_event_key_check',
-    'webhook_replay_events_status_check',
-    'webhook_replay_events_lease_generation_check',
-    'webhook_replay_events_fencing_check'
-  ]
-  const requiredIndexes = [
-    'webhook_replay_events_pkey',
-    'idx_webhook_replay_events_expires'
-  ]
-  const relation = await client.query<{
-    relname: string
-    relkind: string
-  }>(
-    `SELECT c.relname, c.relkind
-     FROM pg_class AS c
-     INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
-     WHERE n.nspname = current_schema()
-       AND c.relname = ANY($1::text[])`,
-    [webhookReplayTables]
-  )
-  const columns = await client.query<{
-    table_name: string
-    column_name: string
-  }>(
-    `SELECT table_name, column_name
-     FROM information_schema.columns
-     WHERE table_schema = current_schema()
-       AND table_name = ANY($1::text[])`,
-    [webhookReplayTables]
-  )
-  const columnNames = new Set(columns.rows.map((row) => row.column_name))
-  const constraints = await client.query<{ conname: string }>(
-    `SELECT conname
-     FROM pg_constraint
-     WHERE connamespace = current_schema()::regnamespace
-       AND conname = ANY($1::text[])`,
-    [requiredConstraints]
-  )
-  const indexes = await client.query<{ indexname: string }>(
-    `SELECT indexname
-     FROM pg_indexes
-     WHERE schemaname = current_schema()
-       AND indexname = ANY($1::text[])`,
-    [requiredIndexes]
-  )
-  const constraintNames = new Set(
-    constraints.rows.map((constraint) => constraint.conname)
-  )
-  const indexNames = new Set(indexes.rows.map((index) => index.indexname))
-  if (
-    relation.rows.length !== webhookReplayTables.length ||
-    relation.rows[0]?.relkind !== 'r' ||
-    ![
-      'event_key',
-      'status',
-      'expires_at',
-      'lease_generation',
-      'lease_token'
-    ].every((column) => columnNames.has(column)) ||
-    requiredConstraints.some(
-      (constraint) => !constraintNames.has(constraint)
-    ) ||
-    requiredIndexes.some((index) => !indexNames.has(index))
-  ) {
-    throw new Error('PostgreSQL webhook replay storage is not fully installed')
+  const invalid = () =>
+    new Error('PostgreSQL webhook replay storage is not fully installed')
+  let transactionStarted = false
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    transactionStarted = true
+    // Resolve the application schema before pg_catalog becomes the first path entry.
+    const schema = await client.query<{ schema_oid: string; version: number }>(
+      `SELECT n.oid::text AS schema_oid, current_setting('server_version_num')::int AS version
+       FROM pg_namespace AS n WHERE n.nspname = current_schema()`
+    )
+    const schemaOid = schema.rows[0]?.schema_oid
+    const version = schema.rows[0]?.version
+    if (
+      schema.rows.length !== 1 ||
+      !schemaOid ||
+      typeof version !== 'number' ||
+      version < 160000 ||
+      version >= 170000
+    )
+      throw invalid()
+    await client.query('SET LOCAL search_path TO pg_catalog')
+
+    const relation = await client.query<{
+      oid: string
+      relkind: string
+      relpersistence: string
+      relispartition: boolean
+      relrowsecurity: boolean
+      relforcerowsecurity: boolean
+      inherited: boolean
+      policies: number
+    }>(
+      `SELECT c.oid::text AS oid, c.relkind, c.relpersistence, c.relispartition,
+              c.relrowsecurity, c.relforcerowsecurity,
+              EXISTS (SELECT 1 FROM pg_inherits AS h WHERE h.inhrelid = c.oid OR h.inhparent = c.oid) AS inherited,
+              (SELECT count(*)::int FROM pg_policy AS p WHERE p.polrelid = c.oid) AS policies
+       FROM pg_class AS c WHERE c.relnamespace = $1::oid AND c.relname = 'webhook_replay_events'`,
+      [schemaOid]
+    )
+    const table = relation.rows[0]
+    if (
+      relation.rows.length !== 1 ||
+      !table ||
+      table.relkind !== 'r' ||
+      table.relpersistence !== 'p' ||
+      table.relispartition !== false ||
+      table.inherited !== false ||
+      table.relrowsecurity !== false ||
+      table.relforcerowsecurity !== false ||
+      table.policies !== 0
+    )
+      throw invalid()
+
+    const columns = await client.query<{
+      attname: string
+      attnum: number
+      atttypid: string
+      attnotnull: boolean
+      attisdropped: boolean
+      default_expr: string | null
+    }>(
+      `SELECT a.attname, a.attnum, a.atttypid::text AS atttypid, a.attnotnull,
+              a.attisdropped, pg_get_expr(d.adbin, d.adrelid, true) AS default_expr
+       FROM pg_attribute AS a LEFT JOIN pg_attrdef AS d
+         ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+       WHERE a.attrelid = $1::oid AND a.attnum > 0`,
+      [table.oid]
+    )
+    const expectedColumns = [
+      ['event_key', '25', true, null],
+      ['status', '25', true, null],
+      ['expires_at', '1184', true, null],
+      ['created_at', '1184', true, 'now()'],
+      ['lease_generation', '20', true, '0'],
+      ['lease_token', '25', false, null]
+    ] as const
+    const byName = new Map(
+      columns.rows.map((column) => [column.attname, column])
+    )
+    if (
+      columns.rows.filter((column) => !column.attisdropped).length !==
+        expectedColumns.length ||
+      byName.size !== columns.rows.length ||
+      expectedColumns.some(([name, type, notNull, defaultExpr]) => {
+        const column = byName.get(name)
+        return (
+          !column ||
+          column.attisdropped !== false ||
+          column.attnum <= 0 ||
+          column.atttypid !== type ||
+          column.attnotnull !== notNull ||
+          column.default_expr !== defaultExpr
+        )
+      })
+    )
+      throw invalid()
+    const eventKey = byName.get('event_key')!
+    const expiresAt = byName.get('expires_at')!
+
+    const constraints = await client.query<{
+      oid: string
+      conname: string
+      contype: string
+      convalidated: boolean
+      condeferrable: boolean
+      condeferred: boolean
+      conkey: number[] | null
+      conindid: string
+      definition: string
+    }>(
+      `SELECT x.oid::text AS oid, x.conname, x.contype, x.convalidated,
+              x.condeferrable, x.condeferred, x.conkey, x.conindid::text AS conindid,
+              pg_get_constraintdef(x.oid, true) AS definition
+       FROM pg_constraint AS x WHERE x.conrelid = $1::oid`,
+      [table.oid]
+    )
+    if (
+      constraints.rows.length !== 5 ||
+      new Set(constraints.rows.map((x) => x.conname)).size !== 5
+    )
+      throw invalid()
+    const byConstraint = new Map(constraints.rows.map((x) => [x.conname, x]))
+    const pk = byConstraint.get('webhook_replay_events_pkey')
+    if (
+      !pk ||
+      pk.contype !== 'p' ||
+      pk.convalidated !== true ||
+      pk.condeferrable !== false ||
+      pk.condeferred !== false ||
+      pk.definition !== 'PRIMARY KEY (event_key)' ||
+      !Array.isArray(pk.conkey) ||
+      pk.conkey.length !== 1 ||
+      pk.conkey[0] !== eventKey.attnum ||
+      pk.conindid === '0'
+    )
+      throw invalid()
+    for (const [name, definition] of webhookReplayChecks) {
+      const check = byConstraint.get(name)
+      if (
+        !check ||
+        check.contype !== 'c' ||
+        check.convalidated !== true ||
+        check.condeferrable !== false ||
+        check.definition !== definition
+      )
+        throw invalid()
+    }
+    // A name/pretty-printed expression alone cannot prove that operators and
+    // functions were resolved to built-ins when the DDL was installed.
+    const externalDependencies = await client.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM pg_depend AS dep
+       JOIN pg_constraint AS con ON con.oid = dep.objid AND dep.classid = 'pg_constraint'::regclass
+       LEFT JOIN pg_proc AS proc ON dep.refclassid = 'pg_proc'::regclass AND proc.oid = dep.refobjid
+       LEFT JOIN pg_operator AS op ON dep.refclassid = 'pg_operator'::regclass AND op.oid = dep.refobjid
+       LEFT JOIN pg_type AS typ ON dep.refclassid = 'pg_type'::regclass AND typ.oid = dep.refobjid
+       WHERE con.conrelid = $1::oid AND con.contype = 'c'
+         AND dep.refclassid IN ('pg_proc'::regclass, 'pg_operator'::regclass, 'pg_type'::regclass)
+         AND coalesce(proc.pronamespace, op.oprnamespace, typ.typnamespace) IS DISTINCT FROM 'pg_catalog'::regnamespace`,
+      [table.oid]
+    )
+    if (
+      externalDependencies.rows.length !== 1 ||
+      externalDependencies.rows[0]?.count !== 0
+    )
+      throw invalid()
+
+    const indexes = await client.query<{
+      oid: string
+      relname: string
+      relkind: string
+      relpersistence: string
+      amname: string
+      indkey: string
+      indnatts: number
+      indnkeyatts: number
+      indisprimary: boolean
+      indisunique: boolean
+      indimmediate: boolean
+      indisvalid: boolean
+      indisready: boolean
+      indislive: boolean
+      indexprs: string | null
+      indpred: string | null
+    }>(
+      `SELECT ic.oid::text AS oid, ic.relname, ic.relkind, ic.relpersistence,
+              am.amname, i.indkey::text AS indkey, i.indnatts, i.indnkeyatts,
+              i.indisprimary, i.indisunique, i.indimmediate, i.indisvalid,
+              i.indisready, i.indislive, i.indexprs::text AS indexprs,
+              i.indpred::text AS indpred
+       FROM pg_index AS i JOIN pg_class AS ic ON ic.oid = i.indexrelid
+       JOIN pg_am AS am ON am.oid = ic.relam
+       WHERE i.indrelid = $1::oid`,
+      [table.oid]
+    )
+    const indexByName = new Map(
+      indexes.rows.map((index) => [index.relname, index])
+    )
+    if (indexes.rows.length !== 2 || indexByName.size !== 2) throw invalid()
+    const pkIndex = indexByName.get('webhook_replay_events_pkey')
+    const expiryIndex = indexByName.get('idx_webhook_replay_events_expires')
+    if (
+      !pkIndex ||
+      !expiryIndex ||
+      pkIndex.oid !== pk.conindid ||
+      ![pkIndex, expiryIndex].every(
+        (index) =>
+          index.relkind === 'i' &&
+          index.relpersistence === 'p' &&
+          index.amname === 'btree' &&
+          index.indnatts === 1 &&
+          index.indnkeyatts === 1 &&
+          index.indisvalid === true &&
+          index.indisready === true &&
+          index.indislive === true &&
+          index.indexprs === null &&
+          index.indpred === null
+      ) ||
+      pkIndex.indisprimary !== true ||
+      pkIndex.indisunique !== true ||
+      pkIndex.indimmediate !== true ||
+      pkIndex.indkey !== String(eventKey.attnum) ||
+      expiryIndex.indisprimary !== false ||
+      expiryIndex.indisunique !== false ||
+      expiryIndex.indkey !== String(expiresAt.attnum)
+    )
+      throw invalid()
+
+    const blockers = await client.query<{
+      triggers: number
+      rules: number
+      foreign_keys: number
+    }>(
+      `SELECT
+         (SELECT count(*)::int FROM pg_trigger WHERE tgrelid = $1::oid AND NOT tgisinternal) AS triggers,
+         (SELECT count(*)::int FROM pg_rewrite WHERE ev_class = $1::oid) AS rules,
+         (SELECT count(*)::int FROM pg_constraint WHERE contype = 'f'
+            AND (conrelid = $1::oid OR confrelid = $1::oid)) AS foreign_keys`,
+      [table.oid]
+    )
+    const blocker = blockers.rows[0]
+    if (
+      blockers.rows.length !== 1 ||
+      !blocker ||
+      blocker.triggers !== 0 ||
+      blocker.rules !== 0 ||
+      blocker.foreign_keys !== 0
+    )
+      throw invalid()
+  } catch {
+    throw invalid()
+  } finally {
+    if (transactionStarted) {
+      await client.query('ROLLBACK').catch(() => {
+        throw invalid()
+      })
+    }
   }
 }
 
