@@ -2,6 +2,29 @@
 
 Escopo: ambiente local/sintético/descartável. Produção: `NO_GO`.
 
+## Preparação do checkout
+
+Execute em Node 22, com dependências instaladas e claim próprio para os
+artefatos que serão escritos. Um snapshot feito apenas dos arquivos
+versionados não inclui necessariamente os `dist/` dos workspaces. O export
+de `@cvg/shared` aponta para `packages/shared/dist/index.js`; o Vite precisa
+desse arquivo para carregar o console.
+
+No checkout sintético isolado, compile e confira esse pré-requisito:
+
+```bash
+node_modules/.bin/tsc -b packages/shared/tsconfig.json --pretty false
+node --input-type=module -e "import { redactSensitiveText } from '@cvg/shared'; console.log('shared_export', typeof redactSensitiveText)"
+```
+
+O segundo comando deve imprimir `shared_export function`. Isso verifica
+resolução do pacote; não substitui a matriz de navegadores nem autoriza
+atualizar o lockfile. Reserve portas e diretórios de saída exclusivos e
+confira o bind dos servidores: os entrypoints atuais usam `0.0.0.0`. Um
+ensaio restrito a loopback precisa de configuração/fixture explícita para
+API e Vite, com esse desvio registrado na evidência. Essa fixture não é
+prova do entrypoint publicado.
+
 ## Gate qualificado
 
 O proof trusted é separado da suíte histórica de simulação:
@@ -48,6 +71,26 @@ O report `certification/rem21-014-browser-proof.json` deve mostrar:
   horizontal verificados em 375, 768 e 1440 pixels.
 
 ## Falhas comuns
+
+### Tela branca ou heading ausente
+
+Preserve o primeiro trace, screenshot, console, rede, relatório bruto e
+identidade do snapshot. Um timeout no heading só informa que o console não
+ficou visível dentro do prazo; não identifica sozinho uma falha de sessão,
+contraste ou permissão.
+
+Se o Vite reportar import de `@cvg/shared` não resolvido, confira o export
+e o `dist/` antes de alterar o aplicativo. Se o trace registrar
+`ERR_NETWORK_CHANGED` em módulos JavaScript, registre caminhos e horários
+das requisições interrompidas; esse registro não identifica qual mudança
+de rede ou processo do host causou a interrupção.
+
+Depois de resolver um pré-requisito ou diagnosticar uma causa, repita a
+matriz inteira com saídas novas, mantendo a falha inicial. Não acrescente
+retries ou aumente timeouts somente para obter verde. O
+[diagnóstico F07](../04_audit/evidence/AUD0590-EXEC-20260928/F07-browser/proof.json)
+preserva uma falha de preparação por `dist/` ausente e um ensaio posterior
+de 15/15; não constitui as duas execuções qualificadas exigidas abaixo.
 
 ### Browser não executado
 

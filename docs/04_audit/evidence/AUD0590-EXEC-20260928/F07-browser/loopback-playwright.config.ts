@@ -1,0 +1,12 @@
+import { defineConfig } from '@playwright/test'
+import base from './playwright.rem21-014.config.ts'
+if (!Array.isArray(base.webServer)) throw new Error('Expected two servers')
+export default defineConfig({
+  ...base,
+  webServer: base.webServer.map((server, index) => ({
+    ...server,
+    command: index === 0
+      ? server.command!.replace('npm run dev:api', 'node --import tsx apps/api/src/f07-loopback-main.ts')
+      : server.command + ' --host 127.0.0.1 --strictPort'
+  }))
+})
