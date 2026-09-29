@@ -12,6 +12,12 @@ infer approval, certification or production access.
 - [master backlog](30_backlog_master.md)
 - [AUD21 executable backlog](03_build/0337_comprehensive_remediation_backlog.md)
 
+## Arquitetura e correções em andamento — AUD-0590
+
+- [Guia da implementação atual](architecture/CURRENT_IMPLEMENTATION_2026-09-29.md) — snapshot do código em `54257e3`; a composição e a certificação do candidato integrado continuam abertas.
+- [Auditoria sistêmica AUD-0590](04_audit/0590_deep_system_audit_2026-09-28.md) — achados e notas da baseline auditada.
+- [Roadmap M0–M5](03_build/0360_aud0590_remediation_roadmap.md) e [backlog A59-01–15](03_build/0361_aud0590_remediation_backlog.md) — sequência, dependências e critérios de fechamento; produção `NO_GO`.
+
 ## Current controlled work — AUD-0576
 
 - [Current runtime state](99_runtime_state.md)
