@@ -3,6 +3,8 @@
 - Data: 29/09/2026; claim `AUD0590-F05-SPEC-002`; task `A59-05`/`PR-205`.
 - [SPEC 0164](../../../../../02_spec/0164_dependency_advisory_remediation.md)
   SHA-256 inicial formatado `d68013400db55a2309ad61589190ed0343fc5c4d20feef6a1c9ea1a90ea86d04`.
+- [I1](I1-review.md) `REVISE` (2 P1/3 P2); resposta documental na SPEC
+  SHA-256 `e485c7d37354ca33a9054ad47d05ec0aa8e601358f0f779cac70ed097705e6bd`.
 - Fonte local: [triagem](../triage.md) e
   [audit produtivo bruto](../production-audit.json), lockfile SHA-256
   `3bcb581b47e69246c4905d922db8a5a235e0bfd1ec20f82ac4c70a1f59c4062e`.
@@ -19,5 +21,5 @@ de release até candidato integrado. A exposição dos vetores no produto não
 foi demonstrada. `package.json`/`package-lock.json` estão apenas em leitura
 por claim PR-L04; nenhum `npm install`, BUILD, E2E ou certificação foi feito.
 
-Estado: `SPEC_DRAFT / INDEPENDENT_CRITIQUE_PENDING / HUMAN_T3_PENDING /
+Estado: `SPEC_I1_REVISE_RESPONDED / I2_REQUIRED / HUMAN_T3_PENDING /
 BUILD_NOT_AUTHORIZED / PRODUCTION_NO_GO`.
