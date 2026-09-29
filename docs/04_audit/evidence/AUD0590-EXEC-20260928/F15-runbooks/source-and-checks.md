@@ -29,3 +29,27 @@
 - `git diff --cached --check` nos dois arquivos reclamados: PASS.
 
 **Limite do aceite:** documentação T1 pronta para revisão; PR-605/A59-14/F15 e G09/G10 continuam abertos, produção `NO_GO`.
+
+## Complemento de recuperação — 29/09/2026
+
+Após conferir a [SPEC 0149](../../../../02_spec/0149_operator_auth_purge.md),
+SHA-256 `aeb8033b29fd07725023cb7679b92030e4d68af81bfc88b08e1f4610489f5c9f`,
+o líder acrescentou ao runbook a salvaguarda de sessões após restore/PITR:
+bloquear serving ou revogar todas as sessões restauradas até revalidar
+relógio, policy e purge. Sem procedimento de revogação aprovado, serving
+permanece bloqueado. DP-04 precisa definir o prazo de reexpurgo; a prova
+sintética futura deve recusar cookies revogados antes da restauração.
+
+Checagens executadas pelo líder em Node `22.23.2`: Prettier direcionado com
+`--ignore-path /dev/null`, `npm run docs:check-links` (inclui higiene de
+evidências) e `git diff --check` do runbook, todos com exit `0`.
+O runbook submetido à crítica independente tem SHA-256
+`d9306b967877933e6f7f70a40275e7257fd20c95937f408f3f535b74aeacbcac`.
+Não houve teste de produto, PostgreSQL, E2E, PITR ou certificação nesta
+continuação documental.
+
+O [parecer independente I1](I1-review.md) retornou
+`ACCEPT_DOCUMENTARY_SCOPE` para esse hash, sem achados no escopo T1. O
+líder confirmou a identidade do artefato após a revisão. A leitura
+complementar bloqueada e os limites de validação estática permanecem
+registrados; nenhum gate operacional foi encerrado.

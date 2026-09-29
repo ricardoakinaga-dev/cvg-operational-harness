@@ -22,6 +22,26 @@
 | Necessidade de kill switch                                   | Registre escopo desejado (global, tenant, capacidade), motivo, autoridade e tempo de contenção.                                                                                                                                                                       | Use apenas parada/drenagem controlada e isolamento do staging pelo dono do ambiente; valide ausência de novos ingressos e reconcilie in-flight. **Não há kill switch geral comprovado nem autoridade de acionamento definida.** `CVG_WORKER_CONTROLLED_MODE=true` é guarda de startup, não comando de parada ao vivo ([configuração homolog](../../apps/worker/src/homolog-worker.ts), [task pendente](../03_build/0356_production_backlog_2026-09-26.md)).                                                                                                                             |
 | Suspeita de vazamento em logs, traces, métricas ou auditoria | Preserve sink, janela UTC, chave/atributo afetado e ID fictício; restrinja acesso ao artefato. Não replique o valor suspeito em evidência ou mensagem.                                                                                                                | Suspenda exportação/ensaio afetado por responsável autorizado; handoff a segurança/privacidade. Investigue se o valor chegou ao sink antes da redação e o alcance/retenção. Não trate o teste de exporter local como prova de todos os sinks: F03/PR-403/604 exigem correção e validação ([AUD-0590 F03](../04_audit/0590_deep_system_audit_2026-09-28.md), [observabilidade homolog](../runbooks/homolog-observability.md)).                                                                                                                                                           |
 
+### Sessões e retenção após restauração
+
+Antes de reabrir ingressos após restore/PITR, **bloqueie serving ou revogue
+todas as sessões restauradas até revalidar relógio, policy e purge**,
+conforme a [SPEC 0149](../02_spec/0149_operator_auth_purge.md#rollout-e-recuperação).
+Uma restauração pode reativar sessão revogada que ainda esteja dentro de
+sua validade. A revogação deve seguir procedimento aprovado e verificável
+do ambiente; se ele não existir, mantenha serving bloqueado e faça handoff.
+Não improvise exclusões SQL nem considere readiness prova de revogação.
+
+O responsável por dados deve registrar o **prazo de reexpurgo após
+restauração**, a versão da policy e o tratamento de pedidos de eliminação
+em backups, conforme DP-04. Sem a decisão e a prova de revalidação,
+mantenha o ambiente bloqueado. O ensaio sintético deve demonstrar que
+cookies revogados antes da restauração continuam recusados após a
+recuperação e que o reexpurgo ocorre dentro do prazo aprovado. As
+[decisões DP-01 a DP-06](../04_audit/evidence/AUD0590-EXEC-20260928/F14-retention/decision-packet.md)
+e o BUILD da purga ainda dependem dos gates da SPEC; este runbook não
+autoriza migration, purge ou alteração de backup.
+
 ## Registro de evidência e encerramento
 
 Use estes campos no registro: ID/severidade; abertura, detecção, contenção e recuperação em UTC; ambiente e prova de dados fictícios; SHA/digest/configuração; versões de schema e dependências; sinais/probes e contagens antes/depois; correlação, idempotency key e estado de auditoria/outbox; escopo de exposição; ação, executor e aprovação; artefato redigido com hash; hipóteses descartadas; risco residual; dono que recebeu o handoff; próximo checkpoint. Para restore, acrescente ponto escolhido, último commit íntegro, perda observada e tempo medido, sem declarar RPO/RTO aceitos antes da decisão.
