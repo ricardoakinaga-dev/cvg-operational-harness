@@ -1,0 +1,45 @@
+# SPEC 0164 — remediação delimitada de advisories do lockfile
+
+- Task: `A59-05`/F05 da [AUD-0590](../04_audit/0590_deep_system_audit_2026-09-28.md), subtask de segurança de `PR-205` no [backlog 0361](../03_build/0361_aud0590_remediation_backlog.md). As remoções de dependências órfãs e de código duplicado do PR-205 canônico não fazem parte deste corte.
+- Trilha: **T3**, pois muda a resolução de uma dependência produtiva afetada por advisory. Estado: `SPEC_DRAFT / INDEPENDENT_CRITIQUE_PENDING / HUMAN_T3_APPROVAL_PENDING / BUILD_NOT_AUTHORIZED`.
+- Escopo após crítica e revisão humana do **hash exato desta SPEC**: mudança mínima de `package-lock.json` e, somente se necessário e justificado, metadados de resolução em `package.json`, com testes sintéticos locais. Sem provider, dado real, alteração de serviço publicado, push, deploy ou produção.
+- Baseline factual: [triagem F05](../04_audit/evidence/AUD0590-EXEC-20260928/F05-dependencies/triage.md), lockfile SHA-256 `3bcb581b47e69246c4905d922db8a5a235e0bfd1ec20f82ac4c70a1f59c4062e` em 29/09/2026. O lockfile é caminho compartilhado sob claim PR-L04; nenhum BUILD deve iniciá-lo antes da liberação e de claim exclusivo próprio.
+
+## 1. Problema, fontes e limite
+
+O `npm audit --json --package-lock-only --omit=dev` no Node 22.23.2 retornou exit 1 com um pacote produtivo alto, `fast-uri` 3.1.6. `npm ls` ligou a resolução a `fastify → @fastify/ajv-compiler → fast-uri`; o lockfile também contém `fast-uri` 4.1.4 sob `fast-json-stringify`, já corrigido. A árvore de desenvolvimento contém `jsdom → undici` 7.29.0, afetado por advisory moderado e omitido no audit produtivo. A instalação do pacote é fato observado; este repositório ainda não demonstrou exploração dos vetores em uma trajetória do produto.
+
+Fontes primárias: os advisories [GHSA-qw65-cvwx-89v3](https://github.com/advisories/GHSA-qw65-cvwx-89v3) e [GHSA-58mr-gqgx-xq4g](https://github.com/advisories/GHSA-58mr-gqgx-xq4g) listam `fast-uri` 3.1.6 como afetado e 3.1.7 como corrigido; [GHSA-3wwx-pv8p-q78v](https://github.com/advisories/GHSA-3wwx-pv8p-q78v) lista `undici` 7.29.0 como afetado e 7.29.1 como corrigido. O advisory de Undici descreve também o WebSocket embutido no Node; a atualização da cópia npm de `jsdom` não prova correção da versão embutida. Avaliá-la exige inventário/runtime de Node separado, sem atribuir exposição por inferência.
+
+As faixas já declaradas no baseline aceitam as versões corrigidas: `@fastify/ajv-compiler` e `fast-json-stringify` usam `fast-uri` `^3.0.0`; `jsdom` usa `undici` `^7.25.0`. O corte não pretende upgrade major de Fastify, AJV, jsdom ou Node. Antes do BUILD, repetir `npm audit` e conferir os advisories atuais, pois o feed pode mudar; advisory novo não deve ser escondido por este contrato.
+
+## 2. Contrato de alteração
+
+1. Registrar SHA do HEAD, `package.json` e `package-lock.json`, diff limpo dos caminhos reivindicados, versões instaladas e árvore `npm ls` antes de mutar. Se PR-L04 ainda mantiver alteração no lockfile ou se a baseline divergir, parar e reavaliar o escopo/hash da SPEC; nunca sobrescrever trecho concorrente.
+2. Sob claim exclusivo do lockfile, gerar resolução que fixe **todas as instâncias produtivas de `fast-uri` na linha 3.x em versão ≥3.1.7 e <4**, preservando a instância 4.x em versão corrigida ≥4.1.4. Atualizar a instância de desenvolvimento `undici` na linha 7.x para ≥7.29.1 e <8. Preferir a menor versão corrigida publicada/compatível e manter as faixas dos pais. Não adicionar `fast-uri`/`undici` como dependência direta só para alterar o lockfile, a menos que uma justificativa técnica e novo diff sejam revisados.
+3. A mudança permitida é resolução/integridade/metadados do lockfile das dependências afetadas e seus nós estritamente necessários. `package.json` só muda se o gerenciador não puder fixar a resolução transitiva de forma reproduzível; qualquer override deve ser exato, documentado, revisado contra todos os pais e limitado à subárvore afetada. Se o gerenciador atualizar packages não relacionados, interromper, isolar o motivo e submeter delta novo à revisão antes de aceitar.
+4. `npm ci` em checkout descartável Node 22 deve reproduzir lockfile sem reescrever `package.json`/`package-lock.json`. Sem scripts de instalação externos não inventariados, dados reais, `npm audit fix --force`, `--legacy-peer-deps`, supressão global de advisory ou lowering de gates. Guardar SHA-256 e diff do lockfile aprovado.
+5. O código do produto não muda neste corte. Uma regressão sintética em teste próprio pode exercitar `fast-uri` diretamente com entradas do advisory: `parse()` recusa host com bracket malformado; `serialize`/`normalize` recusam componente de porta não numérica. A asserção verifica também um URI benigno. Se a API pública da versão corrigida não for acessível pelo projeto sem dependência direta, usar fixture executada em checkout descartável e arquivar comando/log/hash; não criar import produtivo artificial.
+
+## 3. Critérios de aceite e negativos
+
+| Critério                 | Prova exigida                                                                                                                                                                                                                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Resolução                | `npm ls fast-uri undici --all --json` mostra todas as cópias e o caminho; nenhuma instância afetada do lockfile permanece. Não contar a cópia 4.1.4 como problema.                                                                                                     |
+| Audit                    | `npm audit --json --package-lock-only --omit=dev` retorna sem advisory alto/critico aplicável à árvore produtiva; audit completo separa desenvolvimento e produção e adjudica qualquer alerta residual. Não usar `--audit-level` para ocultar severidade no relatório. |
+| Vetores de URI           | Fixture sintética confirma falha fechada das duas entradas afetadas em `fast-uri` corrigido e preserva parse/serialize benignos. A fixture não faz requisição de rede.                                                                                                 |
+| Reprodutibilidade        | `npm ci` Node 22 em checkout descartável, `npm ls`, lockfile/source SHA e diff sem alterações colaterais; instalação reproduz o mesmo resultado.                                                                                                                       |
+| Regressão                | Typecheck, lint, testes focados de URI/validação, `npm test`, `test:postgres`, build web/runtime e E2E com claim próprio no candidato integrado; sem skips aplicáveis. `certify`, `sbom`, licenses e lockfile só com claims correspondentes.                           |
+| Integridade do candidato | Crítica independente do diff, hashes de fonte/lockfile, teste e audit no mesmo SHA; repeat após PR-L04 e antes de M3. Uma execução isolada não fecha F05 para release.                                                                                                 |
+
+Negativos adicionais: lockfile mantido em 3.1.6, `undici` 7.29.0, `npm ls` com cópia não auditada, override que troca major, pacote não relacionado alterado, `npm ci` que modifica o lockfile, fixture que aceita host/porta adversarial, advisory alto residual ou feed indisponível não podem produzir `PASS`. Falha de rede no audit deve ser `UNVERIFIED`, não zero vulnerabilities.
+
+## 4. Sequência, rollback e decisão
+
+1. Crítica independente da SPEC e revisão humana T3 do seu SHA antes de BUILD. O pedido inclui diff pretendido, baseline de lockfile, referências oficiais, ambientes e comando de teste; mudança material reinicia a revisão.
+2. Após liberação PR-L04 e claim exclusivo, executar BUILD em worktree/ambiente sintético, sem tocar banco/artefatos de outro agente. Registrar antes/depois, regressões e crítica do diff. Integrar no root apenas após gates verdes; repetir audit/testes no SHA final.
+3. Se a atualização falhar, parar a promoção, preservar logs/diff e manter `NO_GO`. Rollback de um candidato ainda não publicado significa descartar **somente o delta próprio em worktree isolado** e voltar ao candidato anterior para diagnóstico; o baseline anterior continua com advisory alto e não é automaticamente seguro para release. Em ambiente publicado, rollback exigiria decisão T4 própria e um digest adjudicado, nunca retorno silencioso à versão vulnerável.
+
+F05 só fecha localmente quando versões, audit, fixture e regressões do código integrado passarem. Para produção, ainda são necessários candidato limpo, certificação/CI/atestação, staging e os gates G01–G13. Esta SPEC não aprova dados reais nem release.
+
+Crítica independente: `NOT_RUN`. Aprovação humana T3: `PENDING`. BUILD: `NOT_AUTHORIZED`.
