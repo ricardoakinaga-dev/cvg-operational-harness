@@ -1,13 +1,15 @@
 # AUD0590 F03 — recon e revisão documental da SPEC 0163
 
 - Data: 29/09/2026; claim `AUD0590-F03-SPEC-001`; task `A59-03` / `PR-403` / `PR-604`.
-- Estado: `SPEC_DRAFT_I3_REVISE_RESPONDED`; BUILD `NOT_AUTHORIZED`; [I1 Fermat](I1-review.md) `REVISE` (0 P0/4 P1/1 P2), [I2 Ramanujan](I2-review.md) `REVISE` (0 P0/1 P1/2 P2) e [I3 Boyle](I3-review.md) `REVISE` (0 P0/1 P1/1 P2), rechecagem independente `PENDING`; aprovação humana T3 `PENDING`; produção `NO_GO`.
+- Estado: `SPEC_DRAFT_I4_REVISE_RESPONDED`; BUILD `NOT_AUTHORIZED`; [I1 Fermat](I1-review.md) `REVISE` (0 P0/4 P1/1 P2), [I2 Ramanujan](I2-review.md) `REVISE` (0 P0/1 P1/2 P2), [I3 Boyle](I3-review.md) `REVISE` (0 P0/1 P1/1 P2) e [I4 Lorentz](I4-review.md) `REVISE` (1 P1/1 P2 relatados), rechecagem independente `PENDING`; aprovação humana T3 `PENDING`; produção `NO_GO`.
 - Base de leitura original: root `3859032a5b4ca45e5e45689bffda290997ba6176` com trabalho concorrente no diretório. Recon adicional da revisão I1 leu `packages/policy-engine/src/profile.ts` e `reference-profile.ts`, `packages/model-gateway/src/contracts.ts`, `packages/agent-runtime/src/contracts.ts` e `runtime.ts`, `apps/api/src/server.ts`, `apps/worker/src/worker-observability.ts`, `continuous-worker.ts`, `sweeps.ts`, `main.ts`, `homolog-worker.ts` e `packages/shared/src/lifecycle.ts`. Os hashes abaixo identificam **arquivos da leitura original**, não certificam o root integrado.
 - SPEC anterior SHA-256 `d5fe42e1c2f4b729a47aa28f1aae8f747a7ae8a5c003615e6c2d4b587faa1d99`, commit `806a8901d9e1ab8f5c334f8416b8e16fb327eece`: histórica, alvo de I1, não aprovada.
 - SPEC anterior SHA-256 `ca3b757d802dd5aeb3e0c84e2ff74116452bd2ead11f3c298c59457498d2311a`, commit `d7c79c644143580603d10da9de631654dfb98cbd`: histórica, alvo de I2, não aprovada.
 - SPEC revisada I2 SHA-256 `4ac0aaae824bfe53b5e9290df02cf81e4600b6228b4ec427169cd76080844835`: minuta para nova crítica; sem aprovação T3.
 - O hash I2 acima é histórico, alvo de I3; I3 relatou aceite dos findings I2, mas deu `REVISE` à SPEC. A nova revisão não herda aprovação.
 - SPEC revisada I3 SHA-256 `b6843684d26400b14945b2b067eb536a0b45cd65a446af4dc6f6c27d19856154`: minuta para nova crítica; sem aprovação T3.
+- O hash I3 acima é histórico, alvo de I4; I4 relatou aceite dos pontos I3, mas deu `REVISE` à SPEC. A nova revisão não herda aprovação.
+- SPEC revisada I4 SHA-256 `6d9ea34dbab457e32678a411c9ac21298e51772342c1b86869154c86ff670672`: minuta para nova crítica; sem aprovação T3.
 
 | Fonte lida | SHA-256 | Observação relevante |
 | --- | --- | --- |
@@ -37,19 +39,22 @@ Recon I2 na fonte já inventariada: `continuous-worker.ts` inicializa `counters.
 
 Recon I3 na fonte já inventariada: `apps/api/src/server.ts` expõe `RuntimeLogEntry` com `event`, `correlationId`, `route`, `status`, `sessionId?`, `conversationId?`, `resourceId?`, `errorCode?`; `emitRuntimeLog` entrega o objeto bruto a `options.runtimeLogger?.(entry)` depois de `telemetry.log`. `apps/worker/src/worker-observability.ts` aceita `Pick<Telemetry, 'log' | 'recordMetric'>` em `createTelemetryWorkerSink` e encaminha argumentos sem sanitização própria. Os hashes de fonte na tabela acima continuam correspondendo aos arquivos lidos; nenhuma fonte foi alterada. I3 exige snapshot seguro antes do callback API e admissão no próprio adapter worker.
 
+Recon I4 na fonte já inventariada: `createContinuousWorker` (`continuous-worker.ts`) e `createPeriodicSweepRunner` (`sweeps.ts`) usam `options.telemetry ?? createJsonWorkerTelemetry()` e fazem chamadas diretas `telemetry.log/metric`; a injeção `WorkerTelemetry` contorna `createTelemetryWorkerSink`. `server.ts` escolhe `approval.handoff_assumed` quando `decided.status === 'assumed'` e `approval.decided` no outro ramo, ambos com `status: 'ok'`. Os hashes na tabela acima ainda correspondem aos arquivos lidos. I4 exige facade obrigatória nos dois construtores e admissão dos dois nomes exatos. Nenhuma fonte foi alterada.
+
 ## Revisão própria contra F03
 
 | Critério | Cobertura na SPEC | Estado |
 | --- | --- | --- |
 | Ameaça e fronteira anterior ao SDK | §§1–2, com destinos e cópia sanitizada antes da primeira chamada | `SPECIFIED`, não implementado |
-| Schema exato de chave/valor e fontes aceitas | §§2.1–2.2 e §3: `F03-C1` fixo por produtor, nomes, valores, códigos, campos e destinos; `capability`/`agentProfile` omitidos | `SPECIFIED`, I2 recheck pending |
+| Schema exato de chave/valor e fontes aceitas | §§2.1–2.2 e §3: `F03-C1` fixo por produtor, nomes, valores, códigos, campos e destinos; `capability`/`agentProfile` omitidos | `SPECIFIED`, I2 findings aceitos em I3; implementação não testada |
 | Contexto interno, root/filho e inert | §§2.3–2.5: contexto separado, sem IDs nos atributos, filho OTel com contexto limpo e inert com IDs locais | `SPECIFIED`, não testado |
 | DTO público e fan-out | §§2.6–2.7: todos os campos, omissão nullable de `lag`, sinks diretos, cópia por exporter | `SPECIFIED`, não testado |
-| Callback API paralelo e `Telemetry` worker injetado | §§2.2, 2.5–2.6 e §4: `SafeRuntimeLogEntry` antes de `runtimeLogger`/telemetria e admissão no ingress do worker | `SPECIFIED`, I3 recheck pending |
+| Callback API paralelo e `Telemetry` worker injetado | §§2.2, 2.5–2.6 e §4: `SafeRuntimeLogEntry` antes de `runtimeLogger`/telemetria e admissão no ingress do worker | `SPECIFIED`, I3 findings aceitos em I4; implementação não testada |
+| `WorkerTelemetry` injetado nos construtores e aprovação API | §§2.2, 2.5 e §4: facade obrigatória nos dois construtores; dois eventos de aprovação em `API-L1` com prova positiva/negativa | `SPECIFIED`, I4 recheck pending |
 | Fail-closed sem contaminar negócio/erro | §2.4 e §4, com injeção de falha | `SPECIFIED`, não testado |
 | Negativos com marcador e SDK falso na entrada | §4 | `PLANNED`, não executado |
 | Rollout/rollback, T3, NO_GO | §5–6 | `SPECIFIED`, decisão humana pendente |
 
-**Limitação material:** `F03-C1` mantém as capacidades e perfis de referência como inventário, sem autorizá-los como dimensões exportáveis. Perfis de produto, providers/modelos e nomes novos não são aceitos automaticamente; qualquer expansão exige nova revisão da SPEC. `CompositeTelemetry` é o entrypoint API padrão observado na auditoria, e nenhuma exportação OTel externa foi observada. A política proposta remove `capability`/`agentProfile`, reduz outras dimensões e campos hoje visíveis, muda `BuildServerOptions.runtimeLogger` para DTO mínimo e muda a semântica de `MetricAttributeError`; isso exige revisão T3 dos consumidores e teste de compatibilidade.
+**Limitação material:** `F03-C1` mantém as capacidades e perfis de referência como inventário, sem autorizá-los como dimensões exportáveis. Perfis de produto, providers/modelos e nomes novos não são aceitos automaticamente; qualquer expansão exige nova revisão da SPEC. `CompositeTelemetry` é o entrypoint API padrão observado na auditoria, e nenhuma exportação OTel externa foi observada. A política proposta remove `capability`/`agentProfile`, reduz outras dimensões e campos hoje visíveis, muda `BuildServerOptions.runtimeLogger` para DTO mínimo, exige facade para `WorkerTelemetry` injetado nos dois construtores e muda a semântica de `MetricAttributeError`; isso exige revisão T3 dos consumidores e teste de compatibilidade.
 
 **Próxima ação:** submeter o hash revisado da SPEC 0163 a crítica independente fresca; depois, se os findings forem resolvidos, pedir revisão humana T3. Somente aprovação explícita da revisão vigente autoriza BUILD sintético. Este recon não é crítica independente, aprovação, teste de implementação nem fechamento de F03.
