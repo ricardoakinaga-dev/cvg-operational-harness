@@ -1,0 +1,80 @@
+# Assistente de Plantão — instalação e operação do piloto (fase 1)
+
+Contrato: [SPEC 0177](../02_spec/0177_assistente_plantao_fase1_caderno.md).
+Barra de produção: [0368](../03_build/0368_barra_proporcional_assistente_de_plantao.md).
+Código: `apps/worker/src/shift-assistant/`.
+
+## O que precisa estar rodando
+
+1. **WhatsApp:** WAHA ou Evolution API com um **número dedicado** da equipe
+   (não usar número pessoal nem o número de atendimento ao tutor).
+2. **Whisper local** com API compatível com OpenAI
+   (`POST /v1/audio/transcriptions`), por exemplo `faster-whisper-server` ou
+   `whisper.cpp` em modo servidor. Fica na mesma rede do assistente.
+3. **Modelo externo** com API compatível com OpenAI (`/chat/completions`) e
+   contrato de tratamento de dados assinado. Só HTTPS.
+4. **Disco persistente** para `SHIFT_DATA_DIR`, incluído no backup do servidor.
+
+## Configuração
+
+| Variável                                                   | Exemplo                                       | Observação                                                   |
+| ---------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------ |
+| `SHIFT_PROVIDER`                                           | `waha` ou `evolution`                         | Canal escolhido (D1)                                         |
+| `SHIFT_MEMBERS`                                            | `5511900000001=Dra Ana;5511900000009=Gestor*` | Só estes números falam com o assistente; `*` marca o gestor  |
+| `SHIFT_WEBHOOK_SECRET`                                     | 24+ caracteres aleatórios                     | Enviado pelo WAHA/Evolution no header `x-cvg-webhook-secret` |
+| `SHIFT_DATA_DIR`                                           | `/var/lib/cvg-shift`                          | Registro de eventos e mídias; documentos (D4)                |
+| `SHIFT_PORT`, `SHIFT_HOST`                                 | `3400`, `0.0.0.0`                             |                                                              |
+| `SHIFT_TICK_SECONDS`                                       | `60`                                          | Frequência de verificação de lembretes                       |
+| `WAHA_URL`, `WAHA_API_KEY`, `WAHA_SESSION`                 | `http://waha:3000`, chave, `default`          | Quando `SHIFT_PROVIDER=waha`                                 |
+| `EVOLUTION_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_INSTANCE` | `http://evolution:8080`, chave, `cvg`         | Quando `SHIFT_PROVIDER=evolution`                            |
+| `WHISPER_URL`, `WHISPER_MODEL`                             | `http://whisper:8000`, `large-v3`             | Transcrição local (D2)                                       |
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`                 | `https://.../v1`, chave, modelo               | Organização do texto (D2)                                    |
+
+Sem qualquer variável obrigatória, o processo **não sobe** e diz qual falta,
+sem mostrar valores.
+
+## Subir
+
+```bash
+npm run build:runtime   # compila os pacotes usados em runtime
+npx tsx apps/worker/src/shift-assistant/main.ts
+```
+
+Verificação: `GET /health` responde `ok`, provedor, pausa, mensagens pendentes e
+pendências abertas.
+
+## Ligar o WhatsApp ao assistente
+
+- **WAHA:** webhook da sessão para `http://<assistente>:3400/webhooks/waha`,
+  evento `message`, header customizado `x-cvg-webhook-secret: <segredo>`.
+- **Evolution:** webhook da instância para
+  `http://<assistente>:3400/webhooks/evolution`, evento `MESSAGES_UPSERT`,
+  header `x-cvg-webhook-secret: <segredo>`. Com `webhook_base64` ligado, áudios
+  chegam no próprio webhook; sem ele, o assistente baixa pelo id da mensagem.
+- Se o provedor não aceitar header customizado, use `?secret=<segredo>` na URL.
+
+Só mensagens diretas são tratadas; grupos são ignorados nesta fase.
+
+## Uso pela equipe
+
+Mande `ajuda` para o número do assistente. Resumo: áudio, texto ou foto viram
+nota; `pendências`, `feito N`, `adiar N 30`, `ok`, `corrigir <texto>`. O
+registro oficial continua sendo no HIS.
+
+## Operação
+
+- **Desligar (barra item 8):** o gestor manda `pausar assistente`. Mensagens
+  continuam guardadas e nenhum lembrete sai. `retomar assistente` processa o que
+  chegou durante a pausa.
+- **Queda e reinício:** mensagens recebidas e não processadas são processadas
+  automaticamente ao subir de novo.
+- **Retenção (D4):** nada é apagado por prazo. Arquivos de `SHIFT_DATA_DIR` só
+  saem do servidor depois de confirmados no backup.
+- **Logs:** sem conteúdo de mensagem; só eventos, tipos e resultados.
+
+## Medir o piloto (AP-016)
+
+Por turno: quantas notas cada plantonista mandou, quantas pendências foram
+criadas e quantas fecharam com `feito`. Os dados estão em
+`SHIFT_DATA_DIR/events.jsonl` (`note_created`, `task_created`, `task_done`).
+Em duas semanas, decidir seguir, ajustar ou parar.
