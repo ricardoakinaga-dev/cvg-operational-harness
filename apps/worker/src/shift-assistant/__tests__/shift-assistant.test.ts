@@ -234,7 +234,8 @@ describe('commands', () => {
     ['adiar 3 1h', { type: 'snooze', number: 3, minutes: 60 }],
     ['OK', { type: 'confirm' }],
     ['corrigir Thor leito 4', { type: 'correct', text: 'Thor leito 4' }],
-    ['Pausar assistente', { type: 'pause' }]
+    ['Pausar assistente', { type: 'pause' }],
+    ['novo paciente', { type: 'template' }]
   ])('parses %s', (text, expected) => {
     expect(parseCommand(text)).toEqual(expected)
   })

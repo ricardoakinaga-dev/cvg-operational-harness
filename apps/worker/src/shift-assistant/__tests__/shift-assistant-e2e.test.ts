@@ -142,6 +142,61 @@ describe('Assistente de Plantão end to end', () => {
     )
   })
 
+  it('guides a new admission with the template and returns tutor and reason', async () => {
+    const { services, app, webhook } = await boot(
+      'waha',
+      () => new Date('2026-10-01T17:00:00.000Z')
+    )
+    await webhook({
+      event: 'message',
+      payload: {
+        id: 't1',
+        from: `${ANA}@c.us`,
+        fromMe: false,
+        body: 'novo paciente'
+      }
+    })
+    expect(services.sent.at(-1)?.text).toContain('Novo paciente: <nome>')
+    expect(services.llmCalls).toBe(0)
+
+    await webhook({
+      event: 'message',
+      payload: {
+        id: 't2',
+        from: `${ANA}@c.us`,
+        fromMe: false,
+        body: 'Novo paciente: Rex, canino, leito 4, tutor João Silva. Motivo: atropelamento. Evolução: consciente, com dor. Pedi raio-x e hemograma. Vou reavaliar a dor às 22h.'
+      }
+    })
+    const reply = services.sent.at(-1)!.text
+    expect(reply).toContain('Rex · canino · leito 4')
+    expect(reply).toContain('Tutor: João Silva')
+    expect(reply).toContain('Motivo da internação: atropelamento')
+    expect(reply).toContain('Evolução: consciente, com dor')
+    expect(reply).toContain('Exames solicitados: raio-x; hemograma')
+    expect(app.store.openTasks(ANA).at(0)).toMatchObject({
+      description: 'Reavaliar a dor',
+      dueAt: '2026-10-02T01:00:00.000Z'
+    })
+  })
+
+  it('asks for the patient name when it cannot tell who the note is about', async () => {
+    const { services, webhook } = await boot(
+      'waha',
+      () => new Date('2026-10-01T17:00:00.000Z')
+    )
+    await webhook({
+      event: 'message',
+      payload: {
+        id: 'q1',
+        from: `${ANA}@c.us`,
+        fromMe: false,
+        body: 'tudo tranquilo'
+      }
+    })
+    expect(services.sent.at(-1)?.text).toContain('Qual é o nome do paciente?')
+  })
+
   it('ignores strangers and keeps the model out of the loop for commands', async () => {
     const { services, webhook } = await boot(
       'waha',

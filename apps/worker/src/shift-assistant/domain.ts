@@ -29,6 +29,8 @@ export const OrganizedSchema = z.object({
         nome: z.string().min(1).max(120),
         leito: z.string().max(40).nullish(),
         especie: z.string().max(60).nullish(),
+        tutor: z.string().max(120).nullish(),
+        motivo: z.string().max(1000).nullish(),
         evolucao: z.string().max(4000).nullish(),
         exames_pedidos: z.array(z.string().min(1).max(200)).max(30).default([]),
         condutas: z.array(z.string().min(1).max(500)).max(30).default([])

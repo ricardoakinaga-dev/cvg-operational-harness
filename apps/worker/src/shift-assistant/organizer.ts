@@ -10,6 +10,7 @@ export const ORGANIZER_PROMPT = `Você organiza anotações de plantão de um ho
 Recebe a fala ou o texto de um plantonista e devolve SOMENTE um objeto JSON com:
 {
   "pacientes": [{"nome": "...", "leito": "...|null", "especie": "...|null",
+                 "tutor": "...|null", "motivo": "...|null",
                  "evolucao": "...|null", "exames_pedidos": ["..."], "condutas": ["..."]}],
   "pendencias": [{"descricao": "...", "paciente": "...|null", "quando": "AAAA-MM-DDTHH:MM:SS-03:00|null"}],
   "duvidas": ["..."]
@@ -17,6 +18,8 @@ Recebe a fala ou o texto de um plantonista e devolve SOMENTE um objeto JSON com:
 Regras:
 - Use apenas o que foi dito. Não invente diagnóstico, dose, valor, exame ou horário.
 - Copie números, doses e valores exatamente como foram ditos.
+- "motivo" só para paciente novo ou internação: o motivo da internação dito pelo plantonista.
+- "tutor" só quando o nome do tutor foi dito.
 - "pendencias" são coisas que o plantonista disse que ainda vai fazer ou que ficaram por fazer.
 - "quando" só quando um horário foi dito; converta para data e hora completas usando o momento atual informado.
 - Se o paciente ou algo importante estiver ambíguo, registre uma pergunta curta em "duvidas".
@@ -98,6 +101,7 @@ export function unverifiedNumbers(
   const output = [
     ...organized.pacientes.flatMap((patient) => [
       patient.leito ?? '',
+      patient.motivo ?? '',
       patient.evolucao ?? '',
       ...patient.exames_pedidos,
       ...patient.condutas

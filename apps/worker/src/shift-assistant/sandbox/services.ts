@@ -209,31 +209,81 @@ export async function startSandboxServices(): Promise<SandboxServices> {
 }
 
 /**
- * A tiny rule-based stand-in for the model, enough for the demo phrases:
- * "<Nome> do leito <n> ...", "pedi <exames>", "<verbo> ... às <h>h".
+ * Rule-based stand-in for the model, so the sandbox works offline. It knows
+ * the "novo paciente" template and common phrasings; the real model is far
+ * more flexible. Recognized pieces:
+ *   patient: "novo paciente: Rex", "paciente Rex", "Rex do leito 4", "Rex, canino"
+ *   "leito 4", species, "tutor João Silva", "motivo: ...", "evolução: ...",
+ *   "pedi ..." / "exames: ...", "vou ... às 22h" / "às 22:30".
  */
+const SPECIES =
+  /\b(canin[oa]|felin[oa]|c[aã]o|cachorr[oa]|gat[oa]|equin[oa]|av[ei]s?|coelh[oa]|roedor|r[eé]ptil)\b/i
+const STOP =
+  /^(novo|nova|paciente|tutor|motivo|leito|pedi|vou|evolu[cç][aã]o|exames?)$/i
+const NAME = '[A-ZÁÉÍÓÚ][\\wÀ-ú]+'
+
+function field(note: string, label: RegExp): string | undefined {
+  const match = label.exec(note)
+  return match?.[1]?.trim().replace(/[.;]$/, '') || undefined
+}
+
+function freeEvolution(note: string): string {
+  return note
+    .replace(/novo paciente:?[^.\n]*[.\n]?/i, '')
+    .replace(/motivo:?[^.\n]*[.\n]?/i, '')
+    .replace(/,?\s*(?:pedi|exames?:)[^.\n]*?(?=,\s*vou\b|\.|\n|$)/i, '')
+    .replace(/,?\s*vou [^.\n]*/i, '')
+    .replace(new RegExp(`\\bpaciente:?\\s*${NAME}`), '')
+    .replace(new RegExp(`\\b${NAME} do leito \\d+`), '')
+    .replace(/\bleito:?\s*\d+/i, '')
+    .replace(new RegExp(`\\btutora?:?\\s+${NAME}(?: ${NAME})?`), '')
+    .replace(SPECIES, '')
+    .replace(new RegExp(`^\\s*${NAME}\\s*,`), '')
+    .replace(/(\s*,\s*)+/g, ', ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[,.\s]+|[,.\s]+$/g, '')
+}
+
 export function sandboxOrganize(message: string) {
   const note = message.split('Anotação:\n').at(-1) ?? message
   const now =
     /Momento atual: (\d{4}-\d{2}-\d{2})/.exec(message)?.[1] ?? '2026-10-01'
-  const patient = /([A-ZÁÉÍÓÚ][a-záéíóúãõç]+) do leito (\d+)/.exec(note)
-  const exams = /pedi ([^,.]+)/.exec(note)?.[1]
-  const promise = /(vou [^,.]+?) (?:às|as) (\d{1,2})h/.exec(note)
-  const evolution = note
-    .replace(/,? ?pedi [^,.]+/, '')
-    .replace(/,? ?vou [^,.]+/, '')
-    .replace(/^[^,]+do leito \d+,? ?/, '')
-    .trim()
+  const name =
+    field(note, new RegExp(`novo paciente:?\\s*(${NAME})`, 'i')) ??
+    field(note, new RegExp(`paciente:?\\s*(${NAME})`)) ??
+    field(note, new RegExp(`(${NAME}) do leito`)) ??
+    field(note, new RegExp(`^(${NAME}),`))
+  const patientName = name && !STOP.test(name) ? name : undefined
+  const bed = field(note, /leito:?\s*(\d+)/i)
+  const species = SPECIES.exec(note)?.[1]?.toLowerCase()
+  const tutor = field(note, new RegExp(`tutora?:?\\s+(${NAME}(?: ${NAME})?)`))
+  const reason = field(note, /motivo:?\s*([^.\n]+)/i)
+  const examsText = field(
+    note,
+    /(?:pedi|exames?:)\s*(.+?)(?=,\s*vou\b|\.|\n|$)/i
+  )
+  const promise =
+    /vou ([^.\n]+?) (?:às|as) (\d{1,2})(?:h(\d{2})?|:(\d{2}))/i.exec(note)
+  const evolution =
+    field(note, /evolu[cç][aã]o:?\s*([^.\n]+)/i) ?? freeEvolution(note)
+  const hour = promise?.[2]?.padStart(2, '0')
+  const minutes = promise?.[3] ?? promise?.[4] ?? '00'
   return {
-    pacientes: patient
+    pacientes: patientName
       ? [
           {
-            nome: patient[1],
-            leito: patient[2],
-            especie: null,
+            nome: patientName,
+            leito: bed ?? null,
+            especie: species ?? null,
+            tutor: tutor ?? null,
+            motivo: reason ?? null,
             evolucao: evolution || null,
-            exames_pedidos: exams
-              ? exams.split(/ e |, /).map((exam) => exam.trim())
+            exames_pedidos: examsText
+              ? examsText
+                  .split(/,| e /)
+                  .map((exam) => exam.trim())
+                  .filter(Boolean)
               : [],
             condutas: []
           }
@@ -242,14 +292,16 @@ export function sandboxOrganize(message: string) {
     pendencias: promise
       ? [
           {
-            descricao: promise[1]!
-              .replace(/^vou /, '')
-              .replace(/^./, (c) => c.toUpperCase()),
-            paciente: patient?.[1] ?? null,
-            quando: `${now}T${promise[2]!.padStart(2, '0')}:00:00-03:00`
+            descricao: promise[1]!.replace(/^./, (c) => c.toUpperCase()),
+            paciente: patientName ?? null,
+            quando: `${now}T${hour}:${minutes}:00-03:00`
           }
         ]
       : [],
-    duvidas: patient ? [] : ['Qual paciente?']
+    duvidas: patientName
+      ? []
+      : [
+          'Qual é o nome do paciente? (dica: mande "novo paciente" para ver o modelo)'
+        ]
   }
 }

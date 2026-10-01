@@ -5,6 +5,7 @@ export type Command =
   | { type: 'confirm' }
   | { type: 'correct'; text: string }
   | { type: 'help' }
+  | { type: 'template' }
   | { type: 'pause' }
   | { type: 'resume' }
 
@@ -24,6 +25,9 @@ export function parseCommand(text: string): Command | undefined {
   const folded = fold(text).replace(/\s+/g, ' ')
   if (/^(minhas )?pendencias\??$|^lista$/.test(folded)) return { type: 'list' }
   if (/^(ajuda|menu|\?)$/.test(folded)) return { type: 'help' }
+  if (/^(novo paciente|modelo|internacao)$/.test(folded)) {
+    return { type: 'template' }
+  }
   if (/^(ok|confirmo|confirmado)[.!]?$/.test(folded)) return { type: 'confirm' }
   if (folded === 'pausar assistente') return { type: 'pause' }
   if (folded === 'retomar assistente') return { type: 'resume' }
@@ -53,11 +57,26 @@ export function parseCommand(text: string): Command | undefined {
 
 export const HELP_TEXT = [
   'Assistente de Plantão — como usar:',
-  '• Mande áudio, texto ou foto com o que aconteceu no plantão.',
+  '• Fale ou escreva do jeito que for mais rápido: áudio, texto ou foto.',
+  '• Sempre diga o nome do paciente e, se tiver, o leito.',
+  '• "novo paciente" — mostra um modelo para internação nova.',
   '• "pendências" — lista o que é seu e está aberto.',
   '• "feito 3" — conclui a pendência 3.',
   '• "adiar 3 30" ou "adiar 3 1h" — adia a pendência 3.',
   '• "ok" — confirma a última nota.',
   '• "corrigir <texto>" — refaz a última nota com o texto certo.',
-  'O registro oficial continua sendo no HIS.'
+  'O assistente não grava no HIS: ele devolve o texto pronto para você colar lá.'
+].join('\n')
+
+export const NEW_PATIENT_TEMPLATE = [
+  'Paciente novo — mande em um áudio ou copie, preencha e envie:',
+  '',
+  'Novo paciente: <nome>, <espécie>, leito <número>, tutor <nome do tutor>.',
+  'Motivo: <por que internou>.',
+  'Evolução: <como está agora>.',
+  'Pedi <exames>.',
+  'Vou <o que ainda vai fazer> às <hora>.',
+  '',
+  'Exemplo: "Novo paciente: Rex, canino, leito 4, tutor João Silva. Motivo: atropelamento. Evolução: consciente, com dor. Pedi raio-x e hemograma. Vou reavaliar a dor às 22h."',
+  'O cadastro oficial do paciente continua sendo feito no HIS.'
 ].join('\n')

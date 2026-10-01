@@ -44,6 +44,39 @@ faz-de-conta em loopback (WhatsApp, Whisper e modelo) e mostra no terminal uma
 conversa de plantão com dados fictícios: áudio, texto para colar no HIS,
 pendências, lembrete, `feito` e `adiar`.
 
+## Testar conversando, no terminal
+
+```bash
+npx tsx apps/worker/src/shift-assistant/sandbox/chat.ts
+```
+
+Você digita como se estivesse no WhatsApp e vê as respostas do assistente.
+Comandos do teste: `/audio <o que você falaria>` simula um áudio,
+`/avancar 2h` avança o relógio e dispara lembretes, `/gestor <mensagem>` fala
+como gestor, `/sair` encerra. Sem configuração, o modelo é um simulador
+simples que entende o modelo de paciente novo e frases como "Thor do leito 3
+...". Para testar com o modelo real, defina `LLM_BASE_URL`, `LLM_API_KEY` e
+`LLM_MODEL` antes de rodar. Use só dados fictícios nos testes.
+
+## Como mandar um paciente novo
+
+Mande `novo paciente` e o assistente responde com este modelo, que pode ser
+falado num áudio ou copiado e preenchido:
+
+```text
+Novo paciente: <nome>, <espécie>, leito <número>, tutor <nome do tutor>.
+Motivo: <por que internou>.
+Evolução: <como está agora>.
+Pedi <exames>.
+Vou <o que ainda vai fazer> às <hora>.
+```
+
+A resposta traz o texto pronto para colar no HIS (tutor, motivo da internação,
+evolução, exames para lançar na comanda) e cria as pendências com horário. O
+assistente **não cadastra** o paciente no HIS: o cadastro e o prontuário
+oficiais continuam sendo feitos lá. Se a mensagem não disser de qual paciente
+se trata, o assistente pergunta.
+
 ## Subir com Docker (recomendado)
 
 ```bash

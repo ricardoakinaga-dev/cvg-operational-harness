@@ -24,14 +24,15 @@ pendências com lembrete. Sem integração com o HIS nesta fase.
    processamento (idempotente por id da mensagem). Na reinicialização, mensagens
    recebidas e não processadas são processadas.
 4. Comandos são tratados de forma determinística: `pendências`, `feito N`,
-   `adiar N 30` / `adiar N 1h`, `ok`, `corrigir <texto>`, `ajuda`; o gestor
+   `adiar N 30` / `adiar N 1h`, `ok`, `corrigir <texto>`, `ajuda` e
+   `novo paciente` (devolve o modelo de internação); o gestor
    também tem `pausar assistente` e `retomar assistente`.
 5. Áudio → Whisper local (API compatível com OpenAI, `/v1/audio/transcriptions`).
    Foto → guardada como anexo da nota, com a legenda como texto.
 6. O texto vai ao modelo externo pelo `OpenAICompatibleProvider` do
    `model-gateway`. O modelo **não recebe ferramentas**: devolve JSON validado
-   por schema (pacientes, evolução, exames pedidos, condutas, pendências com
-   horário, dúvidas). JSON inválido ou falha do provedor → a nota fica com o
+   por schema (pacientes com leito, espécie, tutor e motivo da internação,
+   evolução, exames pedidos, condutas, pendências com horário, dúvidas). JSON inválido ou falha do provedor → a nota fica com o
    texto bruto e o plantonista é avisado.
 7. O serviço monta, de forma determinística, o texto para colar no HIS e as
    pendências. Todo número que aparece na saída do modelo e não está no texto

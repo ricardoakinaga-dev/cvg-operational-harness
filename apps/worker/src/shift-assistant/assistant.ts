@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { HELP_TEXT, parseCommand, type Command } from './commands.ts'
+import {
+  HELP_TEXT,
+  NEW_PATIENT_TEMPLATE,
+  parseCommand,
+  type Command
+} from './commands.ts'
 import type { InboundMessage, Member, Note, Organized, Task } from './domain.ts'
 import { samePhone } from './domain.ts'
 import {
@@ -189,6 +194,8 @@ export class ShiftAssistant {
     switch (command.type) {
       case 'help':
         return HELP_TEXT
+      case 'template':
+        return NEW_PATIENT_TEMPLATE
       case 'list':
         return this.#listTasks(member)
       case 'done': {
@@ -428,6 +435,8 @@ export function formatNoteReply(
       .filter(Boolean)
       .join(' · ')
     const lines = [`🐾 ${header}`, '— Texto para colar no HIS —']
+    if (patient.tutor) lines.push(`Tutor: ${patient.tutor}`)
+    if (patient.motivo) lines.push(`Motivo da internação: ${patient.motivo}`)
     if (patient.evolucao) lines.push(`Evolução: ${patient.evolucao}`)
     if (patient.exames_pedidos.length > 0) {
       lines.push(
