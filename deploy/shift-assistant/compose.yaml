@@ -1,0 +1,31 @@
+# Assistente de Plantão — run from the repository root:
+#   cp deploy/shift-assistant/.env.example deploy/shift-assistant/.env   # fill it in
+#   docker compose -f deploy/shift-assistant/compose.yaml up -d --build
+#
+# WAHA or Evolution and the Whisper server are the hospital's existing
+# services; point the variables in .env at them. Runbook:
+# docs/runbooks/assistente-plantao-fase1.md
+services:
+  shift-assistant:
+    build:
+      context: ../..
+      dockerfile: deploy/shift-assistant/Dockerfile
+    image: cvg-shift-assistant:local
+    env_file: .env
+    ports:
+      - '127.0.0.1:3400:3400'
+    volumes:
+      # Event log and media are documents (decision D4): keep this volume in
+      # the server backup; nothing in it is deleted by the assistant.
+      - shift-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  shift-data:

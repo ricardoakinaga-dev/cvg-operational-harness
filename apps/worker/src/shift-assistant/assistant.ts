@@ -206,9 +206,10 @@ export class ShiftAssistant {
         const task = this.#ownTask(command.number, member)
         if (!task)
           return `Não encontrei a pendência ${command.number} aberta para você.`
-        const dueAt = new Date(
-          this.#clock().getTime() + command.minutes * MINUTE
-        ).toISOString()
+        // Snoozing never brings a task forward: count from the later of
+        // now and the time already set.
+        const base = Math.max(this.#clock().getTime(), Date.parse(task.dueAt))
+        const dueAt = new Date(base + command.minutes * MINUTE).toISOString()
         this.#store.append({
           type: 'task_snoozed',
           at: this.#now(),

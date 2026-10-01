@@ -326,7 +326,8 @@ describe('ShiftAssistant', () => {
     await env.receive(wahaPayload('c2', ANA, 'pendências'))
     expect(env.waha.textsTo(ANA).at(-1)).toContain('#1 — Ligar para o tutor')
     await env.receive(wahaPayload('c3', ANA, 'adiar 1 30'))
-    expect(env.store.task(1)?.dueAt).toBe('2026-09-30T18:30:00.000Z')
+    // due at 19:00Z (16:00 local) and snoozed before it: 30 min after that
+    expect(env.store.task(1)?.dueAt).toBe('2026-09-30T19:30:00.000Z')
     await env.receive(wahaPayload('c4', ANA, 'feito 1'))
     expect(env.store.task(1)?.status).toBe('done')
   })

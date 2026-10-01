@@ -33,15 +33,39 @@ Código: `apps/worker/src/shift-assistant/`.
 Sem qualquer variável obrigatória, o processo **não sobe** e diz qual falta,
 sem mostrar valores.
 
-## Subir
+## Ver funcionando sem configurar nada
 
 ```bash
-npm run build:runtime   # compila os pacotes usados em runtime
-npx tsx apps/worker/src/shift-assistant/main.ts
+npx tsx apps/worker/src/shift-assistant/sandbox/demo.ts
 ```
 
-Verificação: `GET /health` responde `ok`, provedor, pausa, mensagens pendentes e
-pendências abertas.
+Roda o assistente real, com a mesma montagem de produção, contra serviços de
+faz-de-conta em loopback (WhatsApp, Whisper e modelo) e mostra no terminal uma
+conversa de plantão com dados fictícios: áudio, texto para colar no HIS,
+pendências, lembrete, `feito` e `adiar`.
+
+## Subir com Docker (recomendado)
+
+```bash
+cp deploy/shift-assistant/.env.example deploy/shift-assistant/.env  # preencher
+docker compose -f deploy/shift-assistant/compose.yaml up -d --build
+curl http://127.0.0.1:3400/health
+```
+
+A imagem tem só o Node e um arquivo JavaScript; roda sem root, com disco
+somente leitura e sem capacidades extras. O volume `shift-data` guarda o
+registro de eventos e as mídias (documentos, D4) e deve entrar no backup.
+
+O `compose.yaml` publica a porta só em `127.0.0.1`. Se o WAHA ou a Evolution
+rodarem em outro container, coloque os dois na mesma rede Docker e use o nome do
+serviço na URL do webhook; se rodarem em outra máquina, publique a porta na
+interface da rede interna, nunca na internet.
+
+## Subir sem Docker
+
+```bash
+npx tsx apps/worker/src/shift-assistant/main.ts   # com as variáveis acima no ambiente
+```
 
 ## Ligar o WhatsApp ao assistente
 
