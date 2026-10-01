@@ -117,6 +117,63 @@ describe('PolicyProfile (SPEC-LEGACY-002)', () => {
     expect(engine.listProfiles()).toEqual(['assistant'])
   })
 
+  // AP-005: a winning ALLOW rule must not lower the mandatory risk floor.
+  it('keeps the high-risk and medical-operator floors when an ALLOW rule wins', () => {
+    const input = baseInput()
+    input.agentProfileGrants = {
+      assistant: [
+        { capability: 'record.read', level: 'allow' },
+        {
+          capability: 'record.update',
+          level: 'allow',
+          requiresMedicalOperator: true
+        }
+      ]
+    }
+    const profile = createPolicyProfile(input)
+    const registry = new PolicyRegistry(profile)
+    registry.register({
+      policyId: 'p-allow-all',
+      version: '1',
+      effectiveFrom: '2026-01-01T00:00:00.000Z',
+      rules: [
+        {
+          id: 'r-allow',
+          effect: 'ALLOW',
+          capabilities: ['record.read', 'record.update'],
+          reason: 'permissive rule'
+        }
+      ]
+    })
+    const engine = new PolicyEngine({
+      profile,
+      documents: registry.list(),
+      clock: () => new Date('2026-09-26T12:00:00.000Z')
+    })
+    const update = request({
+      capability: 'record.update',
+      action: 'record.update',
+      resource: { type: 'record' }
+    })
+
+    // Medical-operator floor, then the high-risk floor once the operator is
+    // medical; both stay attributed to the matching ALLOW rule's document.
+    for (const context of [undefined, { medicalOperator: true }]) {
+      const decision = engine.evaluate({
+        ...(update as object),
+        ...(context ? { context } : {})
+      } as never)
+      expect(decision.decision).toBe('REQUIRE_APPROVAL')
+      expect(decision.policyId).toBe('p-allow-all')
+      expect(decision.reason).toBe('permissive rule')
+    }
+
+    const read = engine.evaluate(request())
+    expect(read.decision).toBe('ALLOW')
+    expect(read.policyId).toBe('p-allow-all')
+    expect(read.reason).toBe('permissive rule')
+  })
+
   it('validates policy documents against the profile catalog', () => {
     const registry = new PolicyRegistry(createPolicyProfile(baseInput()))
     const document = {

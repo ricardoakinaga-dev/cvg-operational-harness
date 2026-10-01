@@ -203,12 +203,13 @@ export class PolicyEngine {
           risk
         )
       }
-      return this.#decision(
-        grant.level === 'require_approval' ? 'REQUIRE_APPROVAL' : 'ALLOW',
-        winner.rule.reason,
-        source,
+      // An ALLOW rule only stands in for the grant's own ALLOW: the mandatory
+      // floors below (medical operator, grant level, high risk) still apply.
+      return this.#fromGrant(
         request,
-        risk
+        grant.level,
+        grant.requiresMedicalOperator === true,
+        { reason: winner.rule.reason, source }
       )
     }
 
@@ -222,10 +223,14 @@ export class PolicyEngine {
   #fromGrant(
     request: NormalizedPolicyEvaluationInput,
     level: GrantLevel,
-    requiresMedicalOperator: boolean
+    requiresMedicalOperator: boolean,
+    allowedBy?: { reason: string; source: PolicyDocument }
   ): PolicyDecision {
     const risk = this.profile.risk(request.capability)
     const emergency = request.context?.emergency === true
+    // A decision reached through a winning ALLOW rule stays attributed to that
+    // rule's document; only the outcome is raised by the floors.
+    const attribute = (reason: string) => allowedBy?.reason ?? reason
     if (
       requiresMedicalOperator &&
       request.context?.medicalOperator !== true &&
@@ -233,8 +238,10 @@ export class PolicyEngine {
     ) {
       return this.#decision(
         'REQUIRE_APPROVAL',
-        'Capability requires a medical operator or explicit approval',
-        undefined,
+        attribute(
+          'Capability requires a medical operator or explicit approval'
+        ),
+        allowedBy?.source,
         request,
         risk
       )
@@ -242,8 +249,8 @@ export class PolicyEngine {
     if (level === 'require_approval') {
       return this.#decision(
         'REQUIRE_APPROVAL',
-        'Capability grant requires human approval',
-        undefined,
+        attribute('Capability grant requires human approval'),
+        allowedBy?.source,
         request,
         risk
       )
@@ -251,16 +258,16 @@ export class PolicyEngine {
     if (risk === 'HIGH_RISK_WRITE' || risk === 'ADMIN') {
       return this.#decision(
         'REQUIRE_APPROVAL',
-        'High-risk capability always requires human approval',
-        undefined,
+        attribute('High-risk capability always requires human approval'),
+        allowedBy?.source,
         request,
         risk
       )
     }
     return this.#decision(
       'ALLOW',
-      'Capability granted by least-privilege profile',
-      undefined,
+      attribute('Capability granted by least-privilege profile'),
+      allowedBy?.source,
       request,
       risk
     )

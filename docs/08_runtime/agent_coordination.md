@@ -37,6 +37,32 @@
    um `git worktree` em branch própria e integrar em `main` só com todos os
    gates verdes; o claim continua obrigatório.
 
+## Mudança de missão — 30/09/2026 — vale para todos os agentes
+
+- **Decisão do usuário (Ricardo):** o harness passa a ser o **Assistente de
+  Plantão**. Fonte da verdade:
+  [CVG_DIRECAO_PROGRAMAS_E_PLANO_HARNESS_2026-09-30.md](../CVG_DIRECAO_PROGRAMAS_E_PLANO_HARNESS_2026-09-30.md)
+  e [ADR-009](../architecture/adrs/ADR-009-assistente-de-plantao.md). Barra de
+  produção: [0368](../03_build/0368_barra_proporcional_assistente_de_plantao.md).
+- **Codex:** encerrar as frentes UP91, AUD0592, PR-301 (webhook/clock/replay),
+  SPECs 0157–0176 em revisão e certificação. Ao terminar o que estiver no meio,
+  commitar os próprios arquivos, marcar os claims como `SUPERSEDED` com o motivo
+  "mudança de missão ADR-009" e não abrir novas frentes do programa anterior.
+  Nenhuma auditoria nova do harness antes do fim da fase 2.
+- **Ledgers compartilhados:** estão com alterações não commitadas do Codex. Pela
+  regra 5, o Claude Code não os editou. Quem estiver com eles deve incluir no
+  topo, depois de commitar o próprio trabalho:
+  - `99_runtime_state.md`: "ADR-009 — mudança de missão — 30/09/2026. Programa
+    reorientado para o Assistente de Plantão; produção `NO_GO` até a barra
+    0368. Próxima ação: fase 0 (AP-001–AP-006) e decisões D1–D4 do usuário."
+  - `20_master_execution_log.md`: "30/09/2026 — ADR-009 aceita pelo usuário;
+    AP-005 corrigido (regra ALLOW não dispensa o piso de risco); 0368 proposto."
+  - `30_backlog_master.md`: "Backlog vigente: seção Backlog inicial do documento
+    de direção (AP-001–AP-016). 0356/0367 viram histórico."
+- **Regras de trabalho novas:** agentes implementam e corrigem; relatórios,
+  planos e auditorias só a pedido do usuário; no máximo duas revisões por
+  mudança; um backlog vigente.
+
 ## Divisão de frentes (confirmada pelo usuário em 27/09/2026)
 
 | Frente                                                                                                               | Dono        | Referência                                                                                                |
@@ -121,3 +147,5 @@
 | PR-L06 — evals neutros                                               | Claude Code | `packages/agent-evals/**`, `legacy/**`, `tsconfig.base.json`, `tsconfig.json`, `vitest.config.mts`, trechos próprios de `package-lock.json`, `docs/02_spec/0140_*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | 27/09/2026 | `CONCLUÍDO` em `2533153`; os trechos restantes do lockfile (fonte Inter) são do Codex                                                                                                                               |
 | PR-003 — certificação do candidato                                   | Codex       | `certification/**`, `coverage/**`, `test-results/**`, `playwright-results.xml`, `docs/99_runtime_state.md`, `docs/20_master_execution_log.md`, `docs/30_backlog_master.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | 27/09/2026 | `AGUARDANDO_PR-L04`: E2E 12/12 e cobertura concluídos; `test-results/**` e `playwright-results.xml` liberados para a PR-L04. Reabrir claim de certificação após integração e correção de SKIP-PG-014.               |
 | PR-L04 — jornadas tutor/pet/consulta (SPEC-LEGACY-004, T3 aprovada)  | Claude Code | `packages/persistence/src/journeys*.ts`, `packages/persistence/src/index.ts`, `packages/persistence/src/__tests__/journey*.test.ts`, `apps/api/src/server.ts` (rotas e persistência de jornadas), `apps/api/src/legacy-composition.ts`, `apps/web/src/features/journeys/**`, `apps/web/src/api/client.ts`, `apps/web/src/App.tsx`, `legacy/**`, `package.json` (`test:postgres`), `scripts/skip-catalog.json` (entradas de jornada), `scripts/build-runtime.mjs`, `docs/03_build/0305_*` (dependência da API), `vitest.config.mts`, `vite.config.mts`, `tsconfig*.json`, `apps/api/package.json`, `apps/api/tsconfig.json`, trechos próprios de `package-lock.json`, `docs/02_spec/0142_*`; PostgreSQL próprio em `127.0.0.1:5437`                                                                                                                                                                                    | 27/09/2026 | `ATIVO`: fatias 1 (`2e977f8`) e 2 (`5041427`) concluídas; fatia 3 (web) e E2E das três fatias aguardam a liberação de `apps/web/**` (SPEC 0139) e de `test-results/**`/`playwright-results.xml` (PR-003) pelo Codex |
+| CVG-DIRECAO-20260930 — cópia do relatório de direção dos programas | Claude Code | `docs/CVG_DIRECAO_PROGRAMAS_E_PLANO_HARNESS_2026-09-30.md` (arquivo novo) e somente esta linha deste quadro | 30/09/2026 | `CONCLUÍDO` sem commit: arquivo criado e formatado; commit aguarda autorização do usuário |
+| AP-FASE0 — reorientação para o Assistente de Plantão (AP-001, AP-003, AP-004, AP-005) | Claude Code | `packages/policy-engine/src/engine.ts`, `packages/policy-engine/src/__tests__/policy-profile.test.ts`, `docs/architecture/adrs/ADR-009-assistente-de-plantao.md`, `docs/03_build/0368_*`, seção própria "Mudança de missão" e esta linha deste quadro; sem ledgers compartilhados (sujos pelo Codex), lockfile, certify, push ou deploy | 30/09/2026 | `ATIVO` |
