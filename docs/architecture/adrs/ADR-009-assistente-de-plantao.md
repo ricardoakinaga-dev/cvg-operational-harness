@@ -40,6 +40,19 @@ verdade e segue com equipe própria.
   `channel-gateway`, `model-gateway`, `policy-engine`, núcleo do runtime,
   `persistence`, `apps/worker`, `observability`.
 
+## Decisões do usuário para a fase 1 (30/09/2026)
+
+- **D1 — WhatsApp:** WAHA ou Evolution API (não oficial). Mitigação do risco de
+  banimento: número dedicado, uso só pela equipe, sem disparo em massa.
+- **D2 — IA:** transcrição local com Whisper; modelo externo, compatível com a
+  API OpenAI, só para organizar o texto transcrito. O modelo não recebe
+  ferramentas: devolve JSON validado, e o serviço decide o que fazer.
+- **D3 — Piloto:** por turno, com os plantonistas da internação de cada turno.
+- **D4 — Retenção:** conversas, áudios e notas são documentos e **não** são
+  apagados por prazo. Só podem sair da base ativa depois de confirmados no
+  backup. Isso substitui o apagamento em N dias previsto antes.
+- **Barra 0368:** aprovada, com o item 5 ajustado para a retenção de D4.
+
 ## Consequências
 
 - Frentes abertas do programa anterior (UP91, AUD0592, PR-301, SPECs em revisão

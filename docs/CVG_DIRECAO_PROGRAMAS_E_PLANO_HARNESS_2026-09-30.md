@@ -202,7 +202,7 @@ Poder zero: o assistente só alcança ferramentas de uma lista fechada
  │  ┌──────────▼──────────────┐ ┌──────────────────┐ │ │    │ API somente leitura  │
  │  │ Pendências e auditoria  │ │ Worker           │─┘ │    │ credencial de escopo │
  │  │ PostgreSQL; notas       │ │ lembretes,       │   │    │ mínimo               │
- │  │ apagadas em N dias      │ │ rotinas, escala  │   │    └──────────────────────┘
+ │  │ guardadas (documentos)  │ │ rotinas, escala  │   │    └──────────────────────┘
  │  └─────────────────────────┘ └──────────────────┘   │
  └─────────────────────────────────────────────────────┘
 
@@ -269,7 +269,7 @@ As semanas são estimativas para um ritmo de horas extras, com agentes executand
 - Promessas viram lembretes com hora (“vou ligar às 16h”).
 - Comandos simples: “minhas pendências”, “feito”, “adiar 30 min”.
 - Paciente identificado pelo que o plantonista falar (nome e leito), sem consultar o HIS ainda; o assistente pergunta quando estiver ambíguo.
-- Notas apagadas automaticamente depois de N dias.
+- Conversas e notas guardadas como documentos; saem da base ativa só depois de confirmadas no backup (D4).
 - Piloto com 2 plantonistas da internação.
 
 **Aceite:** um plantonista consegue registrar por áudio, receber o texto organizado e ser lembrado na hora certa, sem ajuda.
@@ -345,7 +345,7 @@ Ordem de execução de cima para baixo. “Agente” significa Codex ou Claude C
 | AP-010 | 1    | Resposta com texto pronto para colar no HIS + botões Confirmar/Corrigir                                  | Agente           | Fluxo completo em teste ponta a ponta                                                         |
 | AP-011 | 1    | Pendências com dono, hora e estado; lembrete na hora certa                                               | Agente           | Lembrete chega em até 1 min do horário; persiste após reinício do serviço                     |
 | AP-012 | 1    | Comandos “minhas pendências”, “feito”, “adiar”                                                           | Agente           | Cada comando com teste                                                                        |
-| AP-013 | 1    | Apagamento automático de notas e áudios após N dias (D4)                                                 | Agente           | Teste de expurgo; nada além do prazo                                                          |
+| AP-013 | 1    | Retenção como documento: nada é apagado por prazo; remoção da base ativa só após backup confirmado (D4)  | Agente           | Teste: nada removido sem backup confirmado                                                    |
 | AP-014 | 1    | Deploy mínimo endurecido: container sem shell e sem root, disco somente leitura, saída de rede por lista | Agente           | Checklist de segurança da seção “Barra proporcional”                                          |
 | AP-015 | 1    | Guia de uma página para os plantonistas (como mandar, o que esperar)                                     | Ricardo + agente | Lido pelos 2 pilotos                                                                          |
 | AP-016 | 1    | Piloto de 2 semanas com 2 plantonistas; registro de uso por turno                                        | Ricardo          | Dados de uso coletados; decisão seguir/ajustar/parar                                          |
@@ -384,16 +384,16 @@ Nada é apagado. “Congelar” significa: não recebe trabalho novo e não entr
 
 Substitui as 13 condições do plano 0354, que eram padrão enterprise. Vale para o assistente entrar em uso com a equipe da CVG. Cada item é verificado uma vez antes do piloto e revisto quando algo relevante muda.
 
-| #   | Condição                                                                                                                                             | Como se verifica                                                                         |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| 1   | **Só a equipe fala com o assistente.** Lista de números permitidos; o resto é ignorado                                                               | Teste com número não cadastrado                                                          |
-| 2   | **Poder zero por construção.** Sem ferramenta de escrita no HIS, shell, arquivo ou rede livre                                                        | Revisão da lista de ferramentas; container sem shell e sem root; saída de rede por lista |
-| 3   | **HIS somente leitura.** Credencial com escopo mínimo                                                                                                | Tentativa de escrita recusada pelo HIS                                                   |
-| 4   | **Segredos fora do código e da imagem**                                                                                                              | Varredura de segredos no CI; segredos só por variável ou cofre do servidor               |
-| 5   | **LGPD básica.** Contrato de tratamento com o provedor de IA (ou transcrição local); notas e áudios apagados após N dias; registro do que é guardado | Documento de uma página + teste de expurgo                                               |
-| 6   | **Backup testado** das pendências e da auditoria                                                                                                     | Um restore feito e registrado                                                            |
-| 7   | **Alguém sabe quando quebra.** Alerta se o assistente parar de responder ou de disparar lembretes                                                    | Teste de parada com alerta recebido                                                      |
-| 8   | **Botão de desligar.** O gestor desliga o assistente em um passo, sem perder as pendências                                                           | Teste do desligamento e da retomada                                                      |
+| #   | Condição                                                                                                                                                                                                               | Como se verifica                                                                         |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| 1   | **Só a equipe fala com o assistente.** Lista de números permitidos; o resto é ignorado                                                                                                                                 | Teste com número não cadastrado                                                          |
+| 2   | **Poder zero por construção.** Sem ferramenta de escrita no HIS, shell, arquivo ou rede livre                                                                                                                          | Revisão da lista de ferramentas; container sem shell e sem root; saída de rede por lista |
+| 3   | **HIS somente leitura.** Credencial com escopo mínimo                                                                                                                                                                  | Tentativa de escrita recusada pelo HIS                                                   |
+| 4   | **Segredos fora do código e da imagem**                                                                                                                                                                                | Varredura de segredos no CI; segredos só por variável ou cofre do servidor               |
+| 5   | **LGPD básica.** Contrato de tratamento com o provedor de IA externo; transcrição local (Whisper); conversas guardadas como documentos e retiradas da base ativa só após backup confirmado; registro do que é guardado | Documento de uma página + teste de retenção                                              |
+| 6   | **Backup testado** das pendências e da auditoria                                                                                                                                                                       | Um restore feito e registrado                                                            |
+| 7   | **Alguém sabe quando quebra.** Alerta se o assistente parar de responder ou de disparar lembretes                                                                                                                      | Teste de parada com alerta recebido                                                      |
+| 8   | **Botão de desligar.** O gestor desliga o assistente em um passo, sem perder as pendências                                                                                                                             | Teste do desligamento e da retomada                                                      |
 
 O que deixa de ser exigido para começar: pentest externo, PITR com RPO/RTO formal, on-call escalonado, certificação com 16 gates, IdP corporativo com MFA para o console e 0 itens P1 no backlog. Esses itens voltam a ser avaliados se o assistente passar a escrever no HIS, se for usado por outra organização ou se o painel web abrir para a internet.
 
@@ -447,10 +447,12 @@ O que travou o harness não foi o código, foi o processo. Estas regras valem pa
 
 Só o Ricardo pode tomar. D1–D4 bloqueiam a fase 1; as demais podem esperar a fase indicada.
 
-- [ ] **D1 — WhatsApp da equipe.** API oficial do WhatsApp Business (recomendado, sem risco de banimento) ou DeskcommCRM com WAHA/Evolution? _Bloqueia a fase 1._
-- [ ] **D2 — Provedor de IA e transcrição.** Provedor externo com contrato de tratamento de dados, ou transcrição local (Whisper) e modelo externo só para organizar o texto? _Bloqueia a fase 1._
-- [ ] **D3 — Pilotos.** Quais dois plantonistas da internação começam, e em quais turnos? _Bloqueia a fase 1._
-- [ ] **D4 — Retenção.** Por quantos dias notas e áudios ficam guardados no assistente (sugestão: 7 dias depois de registrados no HIS)? _Bloqueia a fase 1._
+> Respostas de 30/09/2026, registradas na [ADR-009](architecture/adrs/ADR-009-assistente-de-plantao.md): D1 WAHA/Evolution; D2 Whisper local + modelo externo; D3 piloto por turno; D4 conversas são documentos, sem apagamento por prazo, saem da base ativa só após backup confirmado. Barra 0368 aprovada.
+
+- [x] **D1 — WhatsApp da equipe.** API oficial do WhatsApp Business (recomendado, sem risco de banimento) ou DeskcommCRM com WAHA/Evolution? _Bloqueia a fase 1._
+- [x] **D2 — Provedor de IA e transcrição.** Provedor externo com contrato de tratamento de dados, ou transcrição local (Whisper) e modelo externo só para organizar o texto? _Bloqueia a fase 1._
+- [x] **D3 — Pilotos.** Quais dois plantonistas da internação começam, e em quais turnos? _Bloqueia a fase 1._
+- [x] **D4 — Retenção.** Por quantos dias notas e áudios ficam guardados no assistente (sugestão: 7 dias depois de registrados no HIS)? _Bloqueia a fase 1._
 - [ ] **D5 — As cinco coisas que mais se esquecem no plantão,** na lista real do hospital. Define as primeiras regras e rotinas. _Fase 2._
 - [ ] **D6 — Escada de escalonamento.** Quem é supervisor de cada turno e setor, e em quanto tempo cada tipo de pendência sobe. _Fase 2._
 - [ ] **D7 — API de leitura do HIS.** Conversa com a equipe do HIS sobre internados, evoluções, pedidos, laudos e escala. _Fase 3, mas deve começar já._
