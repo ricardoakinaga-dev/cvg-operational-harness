@@ -31,12 +31,13 @@ export async function fetchWithResolvedAddress(
     headers.set('content-length', String(body.byteLength))
   }
 
+  const method = typeof init.method === 'string' ? init.method : 'GET'
   const requestOptions = {
     agent: false,
     hostname,
     port: url.port || undefined,
     path: `${url.pathname || '/'}${url.search}`,
-    method: typeof init.method === 'string' ? init.method : 'GET',
+    method,
     headers: Object.fromEntries(headers.entries()),
     lookup: pinnedLookup(stripBrackets(address)),
     ...(url.protocol === 'https:' ? { servername: hostname } : {})
@@ -53,13 +54,13 @@ export async function fetchWithResolvedAddress(
     const request =
       url.protocol === 'https:'
         ? httpsRequest(requestOptions, (response) => {
-            void readResponse(response).then(
+            void readResponse(response, method).then(
               (result) => finish(() => resolve(result)),
               (error: unknown) => finish(() => reject(error))
             )
           })
         : httpRequest(requestOptions, (response) => {
-            void readResponse(response).then(
+            void readResponse(response, method).then(
               (result) => finish(() => resolve(result)),
               (error: unknown) => finish(() => reject(error))
             )
@@ -96,7 +97,15 @@ function stripBrackets(value: string): string {
 function pinnedLookup(address: string): LookupFunction {
   const family = isIP(address)
   if (family === 0) throw new Error('Resolved address is not an IP literal')
-  return (_hostname, _options, callback) => callback(null, address, family)
+  // Node 22+ connect lookup asks for every address (`all: true`, used by
+  // autoSelectFamily); answer in the shape requested, always with the pin.
+  return (_hostname, options, callback) => {
+    if (options.all === true) {
+      callback(null, [{ address, family }])
+      return
+    }
+    callback(null, address, family)
+  }
 }
 
 function toHeaders(value: unknown): Headers {
@@ -155,7 +164,10 @@ function asAbortSignal(value: unknown): AbortSignal | undefined {
   return undefined
 }
 
-async function readResponse(response: import('node:http').IncomingMessage) {
+async function readResponse(
+  response: import('node:http').IncomingMessage,
+  method: string
+) {
   const chunks: Buffer[] = []
   for await (const chunk of response) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
@@ -170,7 +182,14 @@ async function readResponse(response: import('node:http').IncomingMessage) {
   }
   const status = response.statusCode
   if (!status) throw new Error('Response did not include an HTTP status')
-  return new Response(Buffer.concat(chunks), {
+  // The Fetch Response constructor rejects a body for these statuses, and a
+  // HEAD response never has one.
+  const bodyless =
+    method.toUpperCase() === 'HEAD' ||
+    status === 204 ||
+    status === 205 ||
+    status === 304
+  return new Response(bodyless ? null : Buffer.concat(chunks), {
     status,
     statusText: response.statusMessage ?? '',
     headers
