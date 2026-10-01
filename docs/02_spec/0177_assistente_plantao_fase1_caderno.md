@@ -31,13 +31,17 @@ pendências com lembrete. Sem integração com o HIS nesta fase.
    Foto → guardada como anexo da nota, com a legenda como texto.
 6. O texto vai ao modelo externo pelo `OpenAICompatibleProvider` do
    `model-gateway`. O modelo **não recebe ferramentas**: devolve JSON validado
-   por schema (pacientes com leito, espécie, tutor e motivo da internação,
+   por schema (pacientes com ID do HIS, leito, espécie, tutor e motivo da internação,
    evolução, exames pedidos, condutas, pendências com horário, dúvidas). JSON inválido ou falha do provedor → a nota fica com o
    texto bruto e o plantonista é avisado.
 7. O serviço monta, de forma determinística, o texto para colar no HIS e as
    pendências. Todo número que aparece na saída do modelo e não está no texto
    original é sinalizado para conferência.
-8. Lembrete na hora da pendência (sem hora: 2 h depois), repetido a cada 30 min
+8. O ID do paciente no HIS identifica o paciente (há homônimos). Sem ID na
+   mensagem, o serviço completa pelo histórico de notas somente quando há um
+   único candidato por nome (ou nome e leito) e avisa para conferir; com mais de
+   um ou nenhum, pergunta. ID não dito pelo plantonista é sinalizado.
+9. Lembrete na hora da pendência (sem hora: 2 h depois), repetido a cada 30 min
    até 4 vezes, até `feito N`. Escalonamento fica para a fase 2.
 
 ## Segurança (poder zero por construção)

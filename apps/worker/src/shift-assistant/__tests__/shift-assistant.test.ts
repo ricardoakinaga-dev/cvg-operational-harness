@@ -260,7 +260,7 @@ describe('ShiftAssistant', () => {
       )
     ).toBe(true)
     const [reply] = env.waha.textsTo(ANA)
-    expect(reply).toContain('Thor · canino · leito 3')
+    expect(reply).toContain('Thor · ID não informado · canino · leito 3')
     expect(reply).toContain('Evolução: Vomitou 2 vezes, piora clínica')
     expect(reply).toContain(
       'Exames solicitados: hemograma; bioquímico (lançar na comanda)'
@@ -268,6 +268,16 @@ describe('ShiftAssistant', () => {
     expect(reply).toContain('#1 — Ligar para o tutor (Thor)')
     const [task] = env.store.openTasks(ANA)
     expect(task).toMatchObject({ number: 1, dueAt: '2026-09-30T19:00:00.000Z' })
+  })
+
+  it('flags a patient ID the model produced that was never said', () => {
+    const organized: Organized = {
+      ...THOR,
+      pacientes: [{ ...THOR.pacientes[0]!, id: '99999' }]
+    }
+    expect(
+      unverifiedNumbers(organized, 'Thor leito 3 vomitou 2 vezes')
+    ).toEqual(['99999'])
   })
 
   it('flags numbers the model produced that were never said', () => {

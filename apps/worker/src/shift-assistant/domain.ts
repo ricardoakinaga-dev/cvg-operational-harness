@@ -27,6 +27,8 @@ export const OrganizedSchema = z.object({
     .array(
       z.object({
         nome: z.string().min(1).max(120),
+        /** Patient ID in the HIS (ficha/prontuário), exactly as said. */
+        id: z.string().max(40).nullish(),
         leito: z.string().max(40).nullish(),
         especie: z.string().max(60).nullish(),
         tutor: z.string().max(120).nullish(),
@@ -74,6 +76,7 @@ export interface Task {
   noteId?: string
   description: string
   patient?: string
+  patientId?: string
   dueAt: string
   createdAt: string
   status: 'open' | 'done' | 'cancelled'
@@ -136,4 +139,25 @@ export function parseMembers(value: string): Member[] {
     members.push({ phone, name, manager })
   }
   return members
+}
+
+/** Patient IDs compare without spaces, punctuation or case. */
+export function normalizePatientId(value: string): string {
+  return value.replace(/[^0-9a-z]/gi, '').toUpperCase()
+}
+
+/** Names compare without accents, case or surrounding spaces. */
+export function normalizePatientName(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+}
+
+export interface KnownPatient {
+  id: string
+  name: string
+  bed?: string
+  lastSeen: string
 }

@@ -213,13 +213,13 @@ export async function startSandboxServices(): Promise<SandboxServices> {
  * the "novo paciente" template and common phrasings; the real model is far
  * more flexible. Recognized pieces:
  *   patient: "novo paciente: Rex", "paciente Rex", "Rex do leito 4", "Rex, canino"
- *   "leito 4", species, "tutor João Silva", "motivo: ...", "evolução: ...",
+ *   "ID 48213" / "ficha 48213", "leito 4", species, "tutor João Silva", "motivo: ...", "evolução: ...",
  *   "pedi ..." / "exames: ...", "vou ... às 22h" / "às 22:30".
  */
 const SPECIES =
   /\b(canin[oa]|felin[oa]|c[aã]o|cachorr[oa]|gat[oa]|equin[oa]|av[ei]s?|coelh[oa]|roedor|r[eé]ptil)\b/i
 const STOP =
-  /^(novo|nova|paciente|tutor|motivo|leito|pedi|vou|evolu[cç][aã]o|exames?)$/i
+  /^(novo|nova|paciente|tutor|motivo|leito|pedi|vou|evolu[cç][aã]o|exames?|tudo|hoje|agora|plant[aã]o|todos|nenhum|sem|ok|bom|boa|ainda|j[aá])$/i
 const NAME = '[A-ZÁÉÍÓÚ][\\wÀ-ú]+'
 
 function field(note: string, label: RegExp): string | undefined {
@@ -236,6 +236,10 @@ function freeEvolution(note: string): string {
     .replace(new RegExp(`\\bpaciente:?\\s*${NAME}`), '')
     .replace(new RegExp(`\\b${NAME} do leito \\d+`), '')
     .replace(/\bleito:?\s*\d+/i, '')
+    .replace(
+      /\b(?:id|ficha|prontu[aá]rio|registro)\s*(?:n[ºo°]?\.?)?\s*[:#]?\s*\d[\w-]{1,19}/i,
+      ''
+    )
     .replace(new RegExp(`\\btutora?:?\\s+${NAME}(?: ${NAME})?`), '')
     .replace(SPECIES, '')
     .replace(new RegExp(`^\\s*${NAME}\\s*,`), '')
@@ -253,9 +257,14 @@ export function sandboxOrganize(message: string) {
     field(note, new RegExp(`novo paciente:?\\s*(${NAME})`, 'i')) ??
     field(note, new RegExp(`paciente:?\\s*(${NAME})`)) ??
     field(note, new RegExp(`(${NAME}) do leito`)) ??
-    field(note, new RegExp(`^(${NAME}),`))
+    field(note, new RegExp(`^(${NAME}),`)) ??
+    field(note, new RegExp(`^(${NAME})\\s`))
   const patientName = name && !STOP.test(name) ? name : undefined
   const bed = field(note, /leito:?\s*(\d+)/i)
+  const patientId = field(
+    note,
+    /\b(?:id|ficha|prontu[aá]rio|registro)\s*(?:n[ºo°]?\.?)?\s*[:#]?\s*(\d[\w-]{1,19})/i
+  )
   const species = SPECIES.exec(note)?.[1]?.toLowerCase()
   const tutor = field(note, new RegExp(`tutora?:?\\s+(${NAME}(?: ${NAME})?)`))
   const reason = field(note, /motivo:?\s*([^.\n]+)/i)
@@ -265,8 +274,9 @@ export function sandboxOrganize(message: string) {
   )
   const promise =
     /vou ([^.\n]+?) (?:às|as) (\d{1,2})(?:h(\d{2})?|:(\d{2}))/i.exec(note)
-  const evolution =
+  const evolution = (
     field(note, /evolu[cç][aã]o:?\s*([^.\n]+)/i) ?? freeEvolution(note)
+  ).replace(patientName ? new RegExp(`^${patientName}\\s+`) : /^$/, '')
   const hour = promise?.[2]?.padStart(2, '0')
   const minutes = promise?.[3] ?? promise?.[4] ?? '00'
   return {
@@ -274,6 +284,7 @@ export function sandboxOrganize(message: string) {
       ? [
           {
             nome: patientName,
+            id: patientId ?? null,
             leito: bed ?? null,
             especie: species ?? null,
             tutor: tutor ?? null,

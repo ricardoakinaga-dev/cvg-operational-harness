@@ -58,7 +58,7 @@ export function parseCommand(text: string): Command | undefined {
 export const HELP_TEXT = [
   'Assistente de Plantão — como usar:',
   '• Fale ou escreva do jeito que for mais rápido: áudio, texto ou foto.',
-  '• Sempre diga o nome do paciente e, se tiver, o leito.',
+  '• Sempre diga o nome e o ID do paciente (e o leito, se tiver): pode haver mais de um com o mesmo nome.',
   '• "novo paciente" — mostra um modelo para internação nova.',
   '• "pendências" — lista o que é seu e está aberto.',
   '• "feito 3" — conclui a pendência 3.',
@@ -71,12 +71,12 @@ export const HELP_TEXT = [
 export const NEW_PATIENT_TEMPLATE = [
   'Paciente novo — mande em um áudio ou copie, preencha e envie:',
   '',
-  'Novo paciente: <nome>, <espécie>, leito <número>, tutor <nome do tutor>.',
+  'Novo paciente: <nome>, ID <número do HIS>, <espécie>, leito <número>, tutor <nome do tutor>.',
   'Motivo: <por que internou>.',
   'Evolução: <como está agora>.',
   'Pedi <exames>.',
   'Vou <o que ainda vai fazer> às <hora>.',
   '',
-  'Exemplo: "Novo paciente: Rex, canino, leito 4, tutor João Silva. Motivo: atropelamento. Evolução: consciente, com dor. Pedi raio-x e hemograma. Vou reavaliar a dor às 22h."',
+  'Exemplo: "Novo paciente: Rex, ID 48213, canino, leito 4, tutor João Silva. Motivo: atropelamento. Evolução: consciente, com dor. Pedi raio-x e hemograma. Vou reavaliar a dor às 22h."',
   'O cadastro oficial do paciente continua sendo feito no HIS.'
 ].join('\n')

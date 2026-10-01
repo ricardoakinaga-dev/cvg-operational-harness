@@ -96,7 +96,7 @@ describe('Assistente de Plantão end to end', () => {
 
     const reply = services.sent.at(-1)!
     expect(reply.to).toBe(ANA)
-    expect(reply.text).toContain('Thor · leito 3')
+    expect(reply.text).toContain('Thor · ID não informado · leito 3')
     expect(reply.text).toContain('Exames solicitados: hemograma; bioquímico')
     expect(reply.text).toContain('#1 — Ligar pro tutor (Thor)')
     expect(app.store.openTasks(ANA)).toHaveLength(1)
@@ -136,7 +136,9 @@ describe('Assistente de Plantão end to end', () => {
       provider: 'evolution',
       to: ANA
     })
-    expect(services.sent.at(-1)?.text).toContain('Bob · leito 2')
+    expect(services.sent.at(-1)?.text).toContain(
+      'Bob · ID não informado · leito 2'
+    )
     expect(app.store.openTasks(ANA).at(0)?.description).toBe(
       'Trocar o curativo'
     )
@@ -165,19 +167,76 @@ describe('Assistente de Plantão end to end', () => {
         id: 't2',
         from: `${ANA}@c.us`,
         fromMe: false,
-        body: 'Novo paciente: Rex, canino, leito 4, tutor João Silva. Motivo: atropelamento. Evolução: consciente, com dor. Pedi raio-x e hemograma. Vou reavaliar a dor às 22h.'
+        body: 'Novo paciente: Rex, ID 48213, canino, leito 4, tutor João Silva. Motivo: atropelamento. Evolução: consciente, com dor. Pedi raio-x e hemograma. Vou reavaliar a dor às 22h.'
       }
     })
     const reply = services.sent.at(-1)!.text
-    expect(reply).toContain('Rex · canino · leito 4')
+    expect(reply).toContain('Rex · ID 48213 · canino · leito 4')
     expect(reply).toContain('Tutor: João Silva')
     expect(reply).toContain('Motivo da internação: atropelamento')
     expect(reply).toContain('Evolução: consciente, com dor')
     expect(reply).toContain('Exames solicitados: raio-x; hemograma')
+    expect(reply).toContain('#1 — Reavaliar a dor (Rex · ID 48213)')
     expect(app.store.openTasks(ANA).at(0)).toMatchObject({
+      patientId: '48213',
       description: 'Reavaliar a dor',
       dueAt: '2026-10-02T01:00:00.000Z'
     })
+  })
+
+  it('tells two patients with the same name apart by ID and bed', async () => {
+    const { services, app, webhook } = await boot(
+      'waha',
+      () => new Date('2026-10-01T17:00:00.000Z')
+    )
+    const say = async (id: string, body: string) => {
+      await webhook({
+        event: 'message',
+        payload: { id, from: `${ANA}@c.us`, fromMe: false, body }
+      })
+      return services.sent.at(-1)!.text
+    }
+    await say(
+      'r1',
+      'Novo paciente: Rex, ID 111, canino, leito 4. Motivo: atropelamento.'
+    )
+    await say(
+      'r2',
+      'Novo paciente: Rex, ID 222, canino, leito 7. Motivo: vômito.'
+    )
+
+    const byBed = await say(
+      'r3',
+      'Rex do leito 4 comeu bem, vou medicar às 18h'
+    )
+    expect(byBed).toContain('Rex · ID 111 · leito 4')
+    expect(byBed).toContain(
+      '🔎 ID 111 do Rex veio de uma nota anterior (leito 4); confira.'
+    )
+    expect(app.store.openTasks(ANA).at(-1)).toMatchObject({ patientId: '111' })
+
+    const ambiguous = await say('r4', 'paciente Rex comeu bem')
+    expect(ambiguous).toContain('Rex · ID não informado')
+    expect(ambiguous).toContain('Há mais de um Rex:')
+    expect(ambiguous).toContain('ID 111 (leito 4)')
+    expect(ambiguous).toContain('ID 222 (leito 7)')
+  })
+
+  it('asks for the ID of a patient it has never seen', async () => {
+    const { services, webhook } = await boot(
+      'waha',
+      () => new Date('2026-10-01T17:00:00.000Z')
+    )
+    await webhook({
+      event: 'message',
+      payload: {
+        id: 'n1',
+        from: `${ANA}@c.us`,
+        fromMe: false,
+        body: 'Thor do leito 3 estável'
+      }
+    })
+    expect(services.sent.at(-1)?.text).toContain('Qual é o ID do Thor?')
   })
 
   it('asks for the patient name when it cannot tell who the note is about', async () => {

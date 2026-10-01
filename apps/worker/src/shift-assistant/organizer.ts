@@ -9,7 +9,7 @@ export interface Organizer {
 export const ORGANIZER_PROMPT = `Você organiza anotações de plantão de um hospital veterinário.
 Recebe a fala ou o texto de um plantonista e devolve SOMENTE um objeto JSON com:
 {
-  "pacientes": [{"nome": "...", "leito": "...|null", "especie": "...|null",
+  "pacientes": [{"nome": "...", "id": "...|null", "leito": "...|null", "especie": "...|null",
                  "tutor": "...|null", "motivo": "...|null",
                  "evolucao": "...|null", "exames_pedidos": ["..."], "condutas": ["..."]}],
   "pendencias": [{"descricao": "...", "paciente": "...|null", "quando": "AAAA-MM-DDTHH:MM:SS-03:00|null"}],
@@ -20,6 +20,7 @@ Regras:
 - Copie números, doses e valores exatamente como foram ditos.
 - "motivo" só para paciente novo ou internação: o motivo da internação dito pelo plantonista.
 - "tutor" só quando o nome do tutor foi dito.
+- "id" é o número do paciente no HIS (ID, ficha ou prontuário); copie exatamente como foi dito e use null se não foi dito. Nunca invente ou deduza um ID.
 - "pendencias" são coisas que o plantonista disse que ainda vai fazer ou que ficaram por fazer.
 - "quando" só quando um horário foi dito; converta para data e hora completas usando o momento atual informado.
 - Se o paciente ou algo importante estiver ambíguo, registre uma pergunta curta em "duvidas".
@@ -100,6 +101,7 @@ export function unverifiedNumbers(
   const sourceNumbers = new Set(numbersIn(source))
   const output = [
     ...organized.pacientes.flatMap((patient) => [
+      patient.id ?? '',
       patient.leito ?? '',
       patient.motivo ?? '',
       patient.evolucao ?? '',

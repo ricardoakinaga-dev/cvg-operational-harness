@@ -64,12 +64,20 @@ Mande `novo paciente` e o assistente responde com este modelo, que pode ser
 falado num áudio ou copiado e preenchido:
 
 ```text
-Novo paciente: <nome>, <espécie>, leito <número>, tutor <nome do tutor>.
+Novo paciente: <nome>, ID <número do HIS>, <espécie>, leito <número>, tutor <nome do tutor>.
 Motivo: <por que internou>.
 Evolução: <como está agora>.
 Pedi <exames>.
 Vou <o que ainda vai fazer> às <hora>.
 ```
+
+**O ID do paciente é o identificador.** Pode haver mais de um Rex internado,
+então mande sempre o ID (também vale "ficha" ou "prontuário"). Se uma mensagem
+vier sem ID, o assistente procura nos pacientes que já apareceram nas notas:
+com um único candidato pelo nome (ou pelo nome e leito), completa o ID e avisa
+"confira"; com mais de um, lista os IDs e leitos e pergunta qual; sem nenhum,
+pede o ID. Um ID que o modelo devolva sem ter sido dito é sinalizado para
+conferência. As pendências mostram nome e ID ("Rex · ID 48213").
 
 A resposta traz o texto pronto para colar no HIS (tutor, motivo da internação,
 evolução, exames para lançar na comanda) e cria as pendências com horário. O

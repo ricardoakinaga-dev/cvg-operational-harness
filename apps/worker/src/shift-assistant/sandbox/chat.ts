@@ -23,7 +23,7 @@ const SECRET = 'segredo-sintetico-do-modo-conversa'
 const HELP = `
 Digite como se fosse no WhatsApp. Exemplos:
   novo paciente            → mostra o modelo para internação nova
-  Novo paciente: Rex, canino, leito 4, tutor João Silva. Motivo: atropelamento. Evolução: consciente, com dor. Pedi raio-x e hemograma. Vou reavaliar a dor às 22h.
+  Novo paciente: Rex, ID 48213, canino, leito 4, tutor João Silva. Motivo: atropelamento. Evolução: consciente, com dor. Pedi raio-x e hemograma. Vou reavaliar a dor às 22h.
   Thor do leito 3 vomitou duas vezes, pedi hemograma, vou ligar pro tutor às 16h
   pendências | feito 1 | adiar 1 30 | ok | corrigir <texto> | ajuda
 

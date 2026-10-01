@@ -6,7 +6,15 @@ import {
   writeFileSync
 } from 'node:fs'
 import { join } from 'node:path'
-import type { InboundMessage, Note, ShiftEvent, Task } from './domain.ts'
+import {
+  normalizePatientId,
+  normalizePatientName,
+  type InboundMessage,
+  type KnownPatient,
+  type Note,
+  type ShiftEvent,
+  type Task
+} from './domain.ts'
 
 /**
  * State rebuilt from an append-only JSONL event log. The log is the document
@@ -65,6 +73,31 @@ export class ShiftStore {
     return [...this.#notes.values()]
       .filter((note) => note.authorPhone === authorPhone && !note.supersededBy)
       .at(-1)
+  }
+
+  /**
+   * Patients with an ID seen in active notes, most recent first. Phase 1 has
+   * no HIS access, so this is the assistant's only memory of who is who.
+   */
+  knownPatients(name: string): KnownPatient[] {
+    const wanted = normalizePatientName(name)
+    const byId = new Map<string, KnownPatient>()
+    for (const note of this.#notes.values()) {
+      if (note.supersededBy) continue
+      for (const patient of note.organized?.pacientes ?? []) {
+        if (!patient.id || normalizePatientName(patient.nome) !== wanted)
+          continue
+        byId.set(normalizePatientId(patient.id), {
+          id: patient.id,
+          name: patient.nome,
+          ...(patient.leito ? { bed: patient.leito } : {}),
+          lastSeen: note.createdAt
+        })
+      }
+    }
+    return [...byId.values()].sort((a, b) =>
+      b.lastSeen.localeCompare(a.lastSeen)
+    )
   }
 
   task(number: number): Task | undefined {

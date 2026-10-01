@@ -6,7 +6,7 @@ import {
   type Command
 } from './commands.ts'
 import type { InboundMessage, Member, Note, Organized, Task } from './domain.ts'
-import { samePhone } from './domain.ts'
+import { normalizePatientName, samePhone } from './domain.ts'
 import {
   formatLocalTime,
   unverifiedNumbers,
@@ -319,23 +319,30 @@ export class ShiftAssistant {
       this.#logger.error('shift.organizer.failed', { error: errorName(error) })
     }
 
+    if (!organized) {
+      const note = this.#note(noteId, message, member, rawText, mediaFile)
+      this.#store.append({ type: 'note_created', at: this.#now(), note })
+      return `📝 Guardei sua nota, mas não consegui organizá-la agora. Texto recebido:\n\n${rawText}`
+    }
+
+    // Numbers are checked against what was said before any ID is completed
+    // from earlier notes, so only model-invented values are flagged.
+    const unverified = unverifiedNumbers(organized, rawText)
+    const resolved = this.#resolvePatientIds(organized)
     const note = this.#note(
       noteId,
       message,
       member,
       rawText,
       mediaFile,
-      organized
+      resolved.organized,
+      unverified
     )
     this.#store.append({ type: 'note_created', at: this.#now(), note })
-    if (!organized) {
-      return `📝 Guardei sua nota, mas não consegui organizá-la agora. Texto recebido:\n\n${rawText}`
-    }
-
-    const tasks = organized.pendencias.map((pending) =>
-      this.#createTask(member, noteId, pending)
+    const tasks = resolved.organized.pendencias.map((pending) =>
+      this.#createTask(member, noteId, pending, resolved.organized)
     )
-    return formatNoteReply(note, organized, tasks)
+    return formatNoteReply(note, resolved.organized, tasks, resolved.completed)
   }
 
   #note(
@@ -344,7 +351,8 @@ export class ShiftAssistant {
     member: Member,
     rawText: string,
     mediaFile?: string,
-    organized?: Organized
+    organized?: Organized,
+    unverified: string[] = []
   ): Note {
     return {
       id,
@@ -355,15 +363,66 @@ export class ShiftAssistant {
       rawText,
       ...(mediaFile ? { mediaFile } : {}),
       ...(organized ? { organized } : {}),
-      unverifiedNumbers: organized ? unverifiedNumbers(organized, rawText) : [],
+      unverifiedNumbers: unverified,
       confirmed: false
+    }
+  }
+
+  /**
+   * Fills a missing patient ID from earlier notes only when exactly one known
+   * patient matches the name (and the bed, when said); otherwise asks.
+   */
+  #resolvePatientIds(organized: Organized): {
+    organized: Organized
+    completed: string[]
+  } {
+    const completed: string[] = []
+    const questions: string[] = []
+    const pacientes = organized.pacientes.map((patient) => {
+      if (patient.id) return patient
+      const known = this.#store.knownPatients(patient.nome)
+      const byBed = patient.leito
+        ? known.filter((candidate) => candidate.bed === patient.leito)
+        : []
+      const match =
+        byBed.length === 1
+          ? byBed[0]
+          : known.length === 1
+            ? known[0]
+            : undefined
+      if (match) {
+        completed.push(
+          `ID ${match.id} do ${patient.nome} veio de uma nota anterior${match.bed ? ` (leito ${match.bed})` : ''}; confira.`
+        )
+        return { ...patient, id: match.id }
+      }
+      questions.push(
+        known.length > 1
+          ? `Há mais de um ${patient.nome}: ${known
+              .map(
+                (candidate) =>
+                  `ID ${candidate.id}${candidate.bed ? ` (leito ${candidate.bed})` : ''}`
+              )
+              .join(', ')}. Qual deles? Mande "corrigir" com o texto e o ID.`
+          : `Qual é o ID do ${patient.nome}? Mande "corrigir" com o texto e o ID.`
+      )
+      return patient
+    })
+    return {
+      organized: {
+        ...organized,
+        pacientes,
+        duvidas: [...organized.duvidas, ...questions]
+      },
+      completed
     }
   }
 
   #createTask(
     member: Member,
     noteId: string,
-    pending: Organized['pendencias'][number]
+    pending: Organized['pendencias'][number],
+    organized: Organized
   ): Task {
     const now = this.#clock()
     const said = pending.quando ? Date.parse(pending.quando) : Number.NaN
@@ -380,6 +439,9 @@ export class ShiftAssistant {
       noteId,
       description: pending.descricao,
       ...(pending.paciente ? { patient: pending.paciente } : {}),
+      ...(patientIdFor(pending, organized)
+        ? { patientId: patientIdFor(pending, organized)! }
+        : {}),
       dueAt,
       createdAt: now.toISOString(),
       status: 'open',
@@ -415,20 +477,46 @@ export class ShiftAssistant {
 }
 
 function describeTask(task: Task): string {
-  const patient = task.patient ? ` (${task.patient})` : ''
+  const label = [
+    task.patient,
+    task.patientId ? `ID ${task.patientId}` : undefined
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  const patient = label ? ` (${label})` : ''
   return `${task.description}${patient} — ${formatLocalTime(task.dueAt)}`
+}
+
+/** The ID of the patient a task refers to: by name, or the only patient. */
+function patientIdFor(
+  pending: Organized['pendencias'][number],
+  organized: Organized
+): string | undefined {
+  const patients = organized.pacientes
+  const target = pending.paciente
+    ? patients.find(
+        (patient) =>
+          normalizePatientName(patient.nome) ===
+          normalizePatientName(pending.paciente!)
+      )
+    : patients.length === 1
+      ? patients[0]
+      : undefined
+  return target?.id ? target.id.trim() : undefined
 }
 
 /** Deterministic, paste-ready text for the HIS, built only from the fields. */
 export function formatNoteReply(
   note: Note,
   organized: Organized,
-  tasks: Task[]
+  tasks: Task[],
+  completedIds: string[] = []
 ): string {
   const blocks: string[] = []
   for (const patient of organized.pacientes) {
     const header = [
       patient.nome,
+      patient.id ? `ID ${patient.id}` : 'ID não informado',
       patient.especie,
       patient.leito ? `leito ${patient.leito}` : undefined
     ]
@@ -454,6 +542,9 @@ export function formatNoteReply(
         ...tasks.map((task) => `#${task.number} — ${describeTask(task)}`)
       ].join('\n')
     )
+  }
+  if (completedIds.length > 0) {
+    blocks.push(completedIds.map((line) => `🔎 ${line}`).join('\n'))
   }
   if (note.unverifiedNumbers.length > 0) {
     blocks.push(
