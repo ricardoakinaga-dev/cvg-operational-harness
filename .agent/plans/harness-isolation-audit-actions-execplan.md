@@ -9,7 +9,7 @@ Executar o plano anexado pelo usuário e as decisões B1/B2/B3 registradas em `d
 - [x] Recuperação e leitura do anexo, decisões, skills, constituição, coordenação e ledgers. D-12 igual ao HEAD.
 - [x] A1: commit próprio `fa915323386a1bf7563c27d1b3766daaf1c30892`, 437 arquivos de corpus/SPECs/evidências/handoff; sem push e sem arquivos alheios. Checkpoint de preservação, não release ou candidato integrado.
 - [ ] A2: WAITING_LEDGER_OWNER; 99/20/30 têm alterações anteriores não pertencentes a esta execução.
-- [x] A4/A5: runner/reconstrução duráveis executados; estados anteriores explicitamente históricos. A3 parcialmente confirmado, owner do delta0190 não comprovado.
+- [x] A4/A5: runner/reconstrução duráveis executados; estados anteriores explicitamente históricos. A3 frente/claim de0190 correlacionados ao I10-FIX-009 anterior; autoria exata do processo editor permanece não comprovada.
 - [ ] C1: código congelado; 17 arquivados/78 focais PASS, typecheck/lint/builds PASS; 2680 casos descobertos cobertos (2679 rodada completa+1 PG complementar),288 testes PG dedicados e12E2E PASS/MATCH. Única revisão posterior encerrada REJECT, doisP1/sete falsos PASS novos; encaminhamento semanal, nenhuma correção/revisão adicional autorizada.
 - [x] C2/C3/C5/C6/C8: emendas T1/SPEC aprovadas pelos hashes concretos; contratos T3 ainda não implementados.
 - [x] C4: suporte documental WAHA/Evolution registrado; qualificação operacional ainda pendente.
@@ -46,7 +46,7 @@ Não limpar, restaurar, resetar ou stashar arquivos alheios. Reconstrução cria
 
 ## Artifacts and Notes
 
-Baseline e cópias anteriores das SPECs preservadas em arquivos .txt para não criar documentos vigentes com links relativos inválidos. A1 registrado em a1-commit.json. Diferenças de SPECs serão vinculadas aos hashes novos no packet T3; aprovação humana confirmada para BUILD local sintético.
+Baseline e cópias anteriores das SPECs preservadas em arquivos .txt para não criar documentos vigentes com links relativos inválidos. A1 registrado em a1-commit.json. Diferenças de SPECs serão vinculadas aos hashes novos no packet T3; aprovação humana confirmada para BUILD local sintético. Entradas atuais dos ledgers em audit-actions/ledger-handoff-current.md; PostgreSQL próprio parado após gates. Critérios da primeira fatia projetados diretamente da SPEC aprovada em product-first-vertical-acceptance.json, sem alterar a barra original.
 
 ## Outcomes & Retrospective
 

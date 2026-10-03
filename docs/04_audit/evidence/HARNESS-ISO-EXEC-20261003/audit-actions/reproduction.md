@@ -22,3 +22,11 @@ Checks T2 adicionais são executados no mesmo candidato: typecheck, lint, suíte
 As fixtures antigas estão no zip versionado do diretório pai. Extraí-las somente em scratch/candidato exclusivo após validar paths; não inseri-las como packages/docs vigentes. Os resultados anteriores não são atribuídos ao candidato novo. A [barra atual](quality-bar.json), [baseline](baseline.json), [commit de preservação](a1-commit.json) e [controles da reconstrução/captura](portable-controls.json) permitem retomar sem depender de contexto de conversa. Os seis controles verificaram reconstrução boa, recusa de destino existente/dentro do source, capture readonly, DRIFT provocado e recusa de sobrescrever logs.
 
 Estado corrente e hashes das SPECs ficam no packet humano do diretório pai; antes de BUILD T3 exigir sua aprovação separada. Uma captura verde não aprova contrato público, mudança de política ou dado real.
+
+## C1 após a única revisão posterior
+
+A correção reproduz os17casos arquivados, mas a revisão posterior REJECT encontrou sete falsos PASS novos; C1 não está aceito. O [encaminhamento](c1-weekly-handoff.md) e [fixture ZIP completa](c1-posterior-fixtures.zip) são duráveis. Extraia o ZIP somente em diretório novo e privado; os arquivos dentro de node_modules são pacotes controlados sintéticos, nunca dependências vigentes. O checker e seus testes ficaram no checkpoint de tentativa rejeitada, não release.
+
+## Fundação PISO004 ainda não integrada
+
+[source ZIP](piso004-foundation-source.zip) preserva cinco arquivos pelo [manifesto](piso004-builder/source-freeze.json); [isolamento](piso004-isolation.json) registra a devolução somente dos próprios arquivos à baseline. Extraia a fundação sobre um candidato privado novo reconstruído pelo procedimento acima, verifique cada SHA e instale pelo lock imutável. Sua execução própria40PASS não aceita o fluxo antigo:27PASS/10FAIL, com integração restante. A primeira fatia vertical do produto está em BUILD separado; patch congelado/resultados futuros devem ser vinculados a esse candidato antes da promoção.

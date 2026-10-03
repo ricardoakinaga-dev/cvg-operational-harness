@@ -1,0 +1,21 @@
+# Entradas atuais para integração coordenada — 03/10/2026
+
+Estado **WAITING_LEDGER_OWNER / NOT_INTEGRATED**. Esta proposta substitui, para a execução atual, as entradas históricas pendentes do handoff de execução. Não é conteúdo já escrito nos ledgers. A regra 5 da coordenação impede sobrescrever as alterações concorrentes em 99/20/30.
+
+## docs/99_runtime_state.md — inserir no topo após liberação
+
+- status: `IN_PROGRESS / LOCAL_SYNTHETIC_PRODUCT_BUILD / GLOBAL_FAIL / C1_REJECT_WEEKLY_SESSION_REQUIRED`; produção `NO_GO`.
+- last_completed_action: preservados commits locais próprios `fa915323`, `24904468` e `689ee002`, sem push. Aprovações humanas separadas das SPECs 0179/0180 recebidas pelos hashes do recibo. C1 corrigido e verificado; única revisão posterior encerrou REJECT, dois P1 e sete falsos PASS novos, com sentinels MATCH. Fundação PISO-004 preservada em ZIP/candidato privado; root baseline restaurada somente nos cinco caminhos próprios para não promover callers incompatíveis.
+- verification_state: candidato C1 Node22 typecheck/lint/builds PASS; suíte completa 2679 PASS e 1 SKIP, com o único caso PostgreSQL executado separadamente 1 PASS: união de 2680 casos cobertos, não uma invocação sem skips. Suite dedicada PG 288 PASS, sobrepostos; E2E 12 PASS após build dos exports, com falha inicial preservada. Fundação de journal 40 PASS, callers antigos 27 PASS/10 FAIL antes de integração. Resultado parcial e histórico, não prova do produto futuro.
+- next_action: concluir, congelar e verificar fluxo de texto webhook→draft→confirmação→tarefas→restart no candidato privado, obter crítica independente específica antes de promover. HISO-005 encaminhado à sessão semanal; não realizar outra correção/revisão sem nova autoridade. D009/D011 dependem do aceite HISO-005. Manter NO_MODEL CLINICAL e D2 aberta; não repetir aprovação das SPECs.
+- blocking_state: HISO-005 FAIL; dependências 3 grupos HIGH e 1 MODERATE não corrigidas; integração compartilhada e qualificação humana/operacional pendentes. 24 critérios originais preservados, somente HISO-001 DONE. Nenhum piloto/provider real/produção autorizado. Ledgers aguardam owner.
+
+## docs/20_master_execution_log.md — inserir no topo após liberação
+
+03/10/2026 — AUDIT_ACTIONS_EXEC_20261003, ADR-010. Plano B1/B2/B3 executado parcialmente: arquivos próprios preservados no Git, runner durável reconstruído e executado fora de /tmp, emendas 0179/0180 aprovadas por hashes separados. NO_MODEL clínico/D2 aberta preservados. C1: 17 negativos/controles arquivados e 78 testes focais PASS; regressões2680 cobertas por rodada2679+complemento1, PG288 e E2E12 PASS. Única crítica posterior REJECT com dois P1/sete falsos PASS novos; prova592arquivos/ZIP e sentinels preservados, caso devolvido à sessão semanal. BUILD independente do consumidor autorizado: journal40PASS congelado, regressões callers10FAIL motivam integração somente no candidato privado; nenhuma promoção parcial ao root. Pesquisa primária de receipts e patches de dependências preservada; qualificação e correções não executadas. PostgreSQL próprio parado após os gates, sem tocar serviços3400/3401. Global FAIL; sem dados reais, provider real, push, release ou piloto.
+
+## docs/30_backlog_master.md — inserir no topo após liberação
+
+Backlog canônico do harness: 0370. Backlog canônico do consumidor: products/shift-assistant/docs/backlog.md. HISO-001 DONE; HISO-002–009 IN_PROGRESS, com HISO-005 explicitamente FAIL/encaminhamento semanal; HISO-010–014 TODO. PISO-001–004 IN_PROGRESS apenas no candidato privado, PISO-005–010 TODO. D2 OPEN/HUMAN_DECISION_REQUIRED; aprovação local das SPECs não concede organização CLINICAL por modelo. Os 24 IDs/aceites/dependências permanecem; não somar preparação documental como critério aceito.
+
+Provas: recibo `human-t3-approval.json`, `t2-gates-summary.json`, `c1-posterior-critic/verdict.json`, `c1-posterior-lead-integrity.json`, `c1-weekly-handoff.md`, `piso004-isolation.json` e `product-first-vertical-acceptance.json`, todos neste diretório de evidência. Entrada de execução do produto será complementada após congelamento e revisão, sem antecipar resultado.
