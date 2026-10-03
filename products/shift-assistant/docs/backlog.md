@@ -1,5 +1,9 @@
 # Backlog do Assistente de Plantão
 
+## Decisão separada — revisão da D2 (organização por modelo)
+
+Estado `OPEN / HUMAN_DECISION_REQUIRED`, decisão B3 de 03/10/2026. Manter `NO_MODEL`: notas clínicas recebem `policy_denied` antes de budget/provider, com zero chamadas. A revisão da D2 pertence ao responsável e não é approval da SPEC 0180 nem novo critério PISO. Organização clínica por modelo permanece fora enquanto a decisão estiver aberta; o impedimento se limita à parte clínica do D009, sem bloquear preparações e fatias independentes autorizadas. Não implementar grant/exceção ou mudar classificação para contornar a política. Os dez cartões originais abaixo preservam seus aceites.
+
 Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](../../../docs/03_build/0370_harness_product_isolation_backlog.md), por HISO-008. IDs, dependências, aceites e status foram preservados. As tarefas HISO permanecem no backlog do harness. Contratos [SPEC](spec.md) e procedimentos [operação local](operacao-local.md).
 
 ### PISO-001 — Ativar tarefas somente após confirmação humana

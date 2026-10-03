@@ -1,0 +1,14 @@
+# A2/A3/A5 — ownership e continuidade
+
+03/10/2026. Ledgers 99/20/30 continuam com alterações anteriores: **WAITING_LEDGER_OWNER**. A2 não foi integrado; entradas prontas permanecem no handoff próprio. Não sobrescrever estado de outros programas nem apresentar a proposta como atualização efetiva.
+
+| Arquivo                  | Dono/claim observado                                                                                                | Tratamento                                                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| SPEC 0162                | Codex, frente SPEC-PR301-WEBHOOK-CLOCK e respostas/revisões I12–I17 na coordenação                                  | Outra frente; somente leitura; fora dos commits A1/C1.                                                               |
+| SPEC 0163                | Codex, AUD0590-F03-SPEC-001/I10-RESPONSE, frente OTel                                                               | Outra frente; somente leitura; fora dos commits.                                                                     |
+| SPEC 0190                | Arquivo compartilhado citado em UP91-EXEC e vários claims PR301; claims recentes declaram-no dirty alheio/read-only | Autoria exclusiva do delta atual não comprovada. Preservado; atribuição exata continua pendente, sem inventar owner. |
+| docs/07_agents/AGENTS.md | Codex Lead, HARNESS-ISO-EXEC, alteração documental da identidade do Operational Harness                             | Não foi incluído em A1. Diff observável altera o propósito; D-12 permanece idêntica ao HEAD.                         |
+
+Não se confundiu a identidade Git compartilhada com ownership da tarefa. Essas associações vêm do registro de claims; ele não demonstra que um processo antigo continue vivo. [Baseline de hashes](baseline.json) preserva os arquivos observados. O trecho completo entre Governança proporcional e Regras de Build foi comparado com `git show HEAD:docs/07_agents/AGENTS.md`: MATCH. A alteração observada está no propósito, mantendo a identidade histórica como origem e o core como infraestrutura reutilizável. Nenhuma aprovação T3 foi inferida.
+
+A5: ACTIVE no handoff designa continuações históricas, antecedidas pelo aviso explícito de estado final BLOCKED. A linha corrigida por Claude foi preservada. A decisão B1 posterior autoriza nova execução C1 e não reescreve as capturas anteriores. Novo goal está ACTIVE por pedido do usuário, mas o aceite integral anterior continua FAIL; a correção ainda precisa dos gates e revisão.
