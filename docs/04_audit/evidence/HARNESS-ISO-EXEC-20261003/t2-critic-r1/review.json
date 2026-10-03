@@ -1,0 +1,116 @@
+{
+  "scope": "T2 implementation SPEC0178 only, structural HISO001-009 portions; no SPEC0179/0180 approval, T3 implementation acceptance, global completion or clinical/pilot grant",
+  "independence": "I1 fresh context; sealed; readonly; no descendants",
+  "verdict": "FAIL",
+  "confidence": "high",
+  "qualityBarSha256": "230faa2999636f53209d3eaaf87c3506bb13ce8626d0fc9486694dc52d472e42",
+  "frozenCriteriaCount": 24,
+  "sentinel": {
+    "suppliedCount": 50,
+    "beforeMatches": true,
+    "afterDrift": [],
+    "aggregate": "65e651d763ee1d3be18bae0b3e71e6824522c2dcac13867767acd6342e654b9e",
+    "extendedCount": 1043,
+    "extendedDrift": []
+  },
+  "findings": [
+    {
+      "id": "T2-I1-F1",
+      "severity": "P1",
+      "title": "Closure transitiva deixa intermediários resolvidos sem inspeção",
+      "paths": [
+        {
+          "path": "scripts/check-product-boundary.mjs",
+          "line": 52
+        },
+        {
+          "path": "scripts/check-product-boundary.mjs",
+          "line": 178
+        },
+        {
+          "path": "scripts/check-product-boundary.mjs",
+          "line": 187
+        }
+      ],
+      "criteria": [
+        "HISO-005",
+        "SPEC0178 item5",
+        "ADR010 item2"
+      ],
+      "proof": "boundary-probes.json: transitive-scripts returns passed=true, diagnostics=[], violations=[]; real Node22 import prints PRODUCT_LOADED. Core -> scripts/bridge.mjs -> products/shift/src/index.mjs. A type-declaration bridge also returns true.",
+      "fix": "Visitar recursivamente cada alvo local resolvido, inclusive intermediários fora das quatro raízes e declarações relevantes; se a closure não puder ser verificada, reprovar explicitamente."
+    },
+    {
+      "id": "T2-I1-F2",
+      "severity": "P1",
+      "title": "createRequire e referências desconhecidas por loader recebem PASS",
+      "paths": [
+        {
+          "path": "scripts/check-product-boundary.mjs",
+          "line": 218
+        }
+      ],
+      "criteria": [
+        "HISO-005",
+        "SPEC0178 failclosed unknown"
+      ],
+      "proof": "boundary-probes.json: createRequire-literal and createRequire-unknown both passed=true with empty diagnostics, and both real Node22 executions print PRODUCT_LOADED. Visitor recognizes only a call identifier literally named require or ImportKeyword.",
+      "fix": "Reconhecer loaders de createRequire e aliases/imports correspondentes; referência não literal nesses loaders deve produzir diagnóstico bloqueante ou inventário estrito aprovado."
+    },
+    {
+      "id": "T2-I1-F3",
+      "severity": "P2",
+      "title": "Manifesto after dos dois deploys não identifica o candidato atual",
+      "paths": [
+        {
+          "path": "docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/source-moves.json",
+          "line": 115
+        },
+        {
+          "path": "docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/source-moves.json",
+          "line": 121
+        },
+        {
+          "path": "docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/source-moves.json",
+          "line": 124
+        }
+      ],
+      "criteria": [
+        "HISO-004 evidence",
+        "HISO-007 evidence"
+      ],
+      "proof": "independent-moves.json: Dockerfile now f3f8c5c7becf8ed6a729cf946a517566295ab73f101ac22286de851e11206fbb, compose now d2f08099a0f9df8fbdb6388e7d2b27356094c58e6dd4444fd078e4b0143980db; source-moves after hashes are initial old bytes and allBytesPreserved is true. The 17 TS and .env are preserved; deploy path adjustments are authorized, not behavior regressions.",
+      "fix": "Preservar manifesto histórico e anexar delta/fingerprint final de deploy, explicitando que sha256After inicial precede os ajustes autorizados."
+    },
+    {
+      "id": "T2-I1-F4",
+      "severity": "P2",
+      "title": "Descoberta canônica de links omite a documentação transferida",
+      "paths": [
+        {
+          "path": "package.json",
+          "line": 58
+        }
+      ],
+      "criteria": [
+        "HISO-008 docs checks",
+        "SPEC0178 item7"
+      ],
+      "proof": "docs-discovery-probes.json: exact root script roots README.md/docs gives exit0 while products/shift-assistant/docs/broken.md references missing-real.md; adding product root gives exit1. Current actual product docs pass when explicitly scanned.",
+      "fix": "Incluir docs do produto no comando canônico de descoberta de links, ou fornecer comando próprio ligado ao gate de documentação. Não exige implementar os jobs T3 de HISO-010."
+    }
+  ],
+  "checks": {
+    "fullTestsR2": "PASS 335 files / 2614 tests / 0 skips, raw log and before/after sentinel",
+    "neutral": "PASS offline npm ci finalr2, public closure build, typecheck, 27files/369tests and real composition smoke",
+    "17TSmoves": "PASS independently compared with HEAD old paths and hashes",
+    "backlogTransfer": "PASS all 10 targets/evidence texts match frozen bar and section byte hashes match transfer manifest",
+    "boundaryKnownControls": "PASS positive neutral and direct forbidden negative",
+    "boundaryAdequacy": "FAIL intermediary and createRequire escapes reproduced",
+    "docLinksExplicitProductRoot": "PASS independent current scan, 20 resolved moves, 0broken/stale/missing",
+    "format48SupportedSealedPaths": "FAIL two unformatted paths; initial all50 invocation invalid for two unsupported parsers, preserved",
+    "coverageExecutionByOwner": "NOT_RUN current measured coverage unavailable; static executable inventory 257->257 unchanged, packages188/apps46/legacy9/product14",
+    "initialTypecheckLintPgE2E": "Recorded PASS: Node22 initial typecheck/lint, 288 PG, 12 E2E; final typecheck/lint after link/oracle changes not captured; PG oracle focused retest and full suite captured",
+    "globalT3Release": "NOT_RUN excluded scope"
+  }
+}

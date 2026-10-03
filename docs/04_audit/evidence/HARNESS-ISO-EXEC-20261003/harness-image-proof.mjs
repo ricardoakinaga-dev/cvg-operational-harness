@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {createRequire} from 'node:module';
+import {spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+const root=process.cwd();
+const forbidden=['products','apps/worker/src/shift-assistant','deploy/shift-assistant','node_modules/@cvg/shift-assistant'];
+for(const name of forbidden) assert(!fs.existsSync(path.join(root,name)) && !(()=>{try{fs.lstatSync(path.join(root,name));return true}catch{return false}})(),`consumer_path_present:${name}`);
+assert.equal(Object.keys(process.env).filter(k=>k.startsWith('SHIFT_')).length,0,'consumer_env');
+const require=createRequire(path.join(root,'package.json'));
+assert.throws(()=>require.resolve('@cvg/shift-assistant'),e=>e.code==='MODULE_NOT_FOUND');
+const files=[];const compiled=[];const envReads=[];
+function walk(dir){for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const p=path.join(dir,entry.name);if(entry.isDirectory()){walk(p)}else if(entry.isFile()){const rel=path.relative(root,p);const bytes=fs.readFileSync(p);files.push({path:rel,sha256:createHash('sha256').update(bytes).digest('hex'),size:bytes.length});if(!rel.startsWith('node_modules/') && rel.endsWith('.js')){compiled.push(rel);if(/SHIFT_[A-Z_]+/.test(bytes.toString()))envReads.push(rel)}}}}
+walk(root);assert.deepEqual(envReads,[],'compiled consumer env references');
+for(const f of files)assert(!f.path.startsWith('products/')&&!f.path.includes('shift-assistant'),'consumer artifact filename');
+console.log(JSON.stringify({imageFilesystem:'PASS',user:process.getuid(),forbiddenPaths:forbidden,consumerEnv:[],consumerPackageResolution:'MODULE_NOT_FOUND',compiledFiles:compiled.length,files:files.length,inventorySha256:createHash('sha256').update(JSON.stringify(files.sort((a,b)=>a.path.localeCompare(b.path)))).digest('hex')}));
+fs.writeFileSync('/tmp/harness-file-inventory.json',JSON.stringify(files));
+await import('file:///verification/neutral-smoke.mjs');
+const result=spawnSync(process.execPath,['scripts/runtime-image-smoke.mjs'],{stdio:'inherit',env:process.env});assert.equal(result.status,0,'actual API runtime smoke');
+console.log(JSON.stringify({status:'PASS',runtimeEntrypoint:'apps/api/dist/main.js',consumerProcessRequired:false,network:'none',data:'synthetic memory',scope:'HISO007 runtime image plus limited public harness journey; no complete governance/CI/release or frontier soundness claim'}));
