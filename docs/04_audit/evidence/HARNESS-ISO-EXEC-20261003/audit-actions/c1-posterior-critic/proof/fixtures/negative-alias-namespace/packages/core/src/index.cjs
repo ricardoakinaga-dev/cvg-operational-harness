@@ -1,0 +1,1 @@
+const r=require;const mod=r('node:module');const load=mod.createRequire(__filename);console.log(load('../../../products/shift/src/index.cjs').marker)

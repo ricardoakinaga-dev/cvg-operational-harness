@@ -1,0 +1,163 @@
+{
+  "criticId": "C1-HISO005-POSTERIOR-20261003-3b8e74840ac3",
+  "timestampUtc": "2026-10-03T12:34:29.554609+00:00",
+  "reviewOrdinal": "single authorized posterior review",
+  "scope": "C1/HISO005 only",
+  "verdict": "REJECT",
+  "criterionResult": "FAIL",
+  "independence": "I1, with disclosed governance exposure limitation",
+  "fork_turns": "none",
+  "descendants": 0,
+  "packetSha256": "190ca95526ee90124407d2397aac4d945764b068f48c91ce7690aab27f910f19",
+  "archiveSha256": "0ab9aa550325297a86976f0b64efde67db9da5d36fdd11cefe0b74b390184a10",
+  "candidate": "/home/ricardo/.cache/cvg-harness-audit-actions-20261003/candidate",
+  "candidateArtifactHashes": {
+    "scripts/check-product-boundary.mjs": "d69c6ef1bfda824250809707cec6a25eb0777a32132282ea6828a48f5b4113fb",
+    "tests/product-boundary.test.js": "dd13c0ad7626012007ea6b6a114a094523eee0079f93a236c0a65637d4d23d4e"
+  },
+  "fingerprints": {
+    "pre": "c479e182893cee1b2d3a2c13bffbbabd8a243748e2a68a910601db55fdd60d3c",
+    "post": "c479e182893cee1b2d3a2c13bffbbabd8a243748e2a68a910601db55fdd60d3c",
+    "match": true,
+    "wholePhysicalPre": "c5e88dfa245759c07925bdf1c880fc1e3e09144fc272867b81847066f6cabd1b",
+    "wholePhysicalPost": "c5e88dfa245759c07925bdf1c880fc1e3e09144fc272867b81847066f6cabd1b",
+    "wholePhysicalMatch": true,
+    "wholePhysicalEntries": 30143
+  },
+  "frozenCriteria": [
+    {
+      "id": "C1",
+      "required": true,
+      "target": "No core-to-product runtime or type reachable dependency via direct/transitive/dynamic/alias references. Types declarations may not hide runtime closure. All archived seven negatives rejected, four positives admitted; unknown references/resolution return INCOMPLETE and nonzero public CLI. Core neutral/product-to-core imports admitted. Artifact inputs immutable."
+    }
+  ],
+  "criterionAspects": [
+    {
+      "aspect": "public root API and CLI",
+      "status": "OBSERVED_PASS",
+      "evidence": "public-root",
+      "limit": "Checker output is not proof of a complete runtime/type closure."
+    },
+    {
+      "aspect": "17 sealed archived cases, including original seven negatives and four positives",
+      "status": "PASS",
+      "evidence": "archived-*; 13 rejects, four positives"
+    },
+    {
+      "aspect": "direct/transitive runtime and type closure",
+      "status": "FAIL",
+      "evidence": "negative-physical-npm-require/import/type-closure"
+    },
+    {
+      "aspect": "neutral declarations may not conceal runtime closure",
+      "status": "PASS_FOR_TESTED_CASES",
+      "evidence": "archived script shadow, adversarial runtime-declaration mjs/cjs and type-closure"
+    },
+    {
+      "aspect": "loader capability propagation",
+      "status": "FAIL",
+      "evidence": "negative-process-module-capability; negative-main-module-loader"
+    },
+    {
+      "aspect": "unknown references/resolution => INCOMPLETE and nonzero CLI",
+      "status": "FAIL",
+      "evidence": "unknown-process-module-capability-product/neutral => PASS, exit0"
+    },
+    {
+      "aspect": "neutral core, type declarations and product-to-core admitted",
+      "status": "PASS_FOR_TESTED_CASES",
+      "evidence": "four archived positives + 11 new positive fixtures"
+    },
+    {
+      "aspect": "artifact inputs immutable",
+      "status": "PASS",
+      "evidence": "repository+state and whole physical candidate pre/post MATCH"
+    }
+  ],
+  "archived": {
+    "total": 17,
+    "matched": 17
+  },
+  "adversarial": {
+    "total": 28,
+    "matched": 21,
+    "expected": {
+      "PASS": 11,
+      "REJECT": 11,
+      "INCOMPLETE": 6
+    }
+  },
+  "publicRoot": {
+    "id": "public-root",
+    "root": "/home/ricardo/.cache/cvg-harness-audit-actions-20261003/candidate",
+    "expected": "PASS",
+    "apiStatus": "PASS",
+    "cliExit": 0,
+    "apiCliAligned": true,
+    "matched": true,
+    "violations": [],
+    "diagnostics": []
+  },
+  "runtimeControls": 23,
+  "caseTotal": 46,
+  "matchedTotal": 39,
+  "falsePasses": [
+    "negative-process-module-capability",
+    "unknown-process-module-capability-product",
+    "unknown-process-module-capability-neutral",
+    "negative-main-module-loader",
+    "negative-physical-npm-require",
+    "negative-physical-npm-import",
+    "negative-physical-npm-type-closure"
+  ],
+  "findings": [
+    {
+      "id": "C1-P1-01",
+      "severity": "P1",
+      "confidence": "HIGH",
+      "title": "Physical node_modules runtime and type closures are silently omitted",
+      "candidateLocation": "scripts/check-product-boundary.mjs:196",
+      "largestMaterialGap": true,
+      "observed": "Three negative fixtures return API PASS with empty violations/diagnostics and CLI exit0. Both runtime fixtures exit0 and print PRODUCT_LOADED; the type fixture resolves through index.d.mts to products/shift/src/types.d.mts.",
+      "cause": "localTarget only adds an edge and enqueues source when the real physical target does not contain /node_modules/. Ordinary installed packages and their declarations are discarded without INCOMPLETE. Symlinked packages that realpath outside node_modules do not exercise this branch.",
+      "reproducers": [
+        "negative-physical-npm-require",
+        "negative-physical-npm-import",
+        "negative-physical-npm-type-closure"
+      ]
+    },
+    {
+      "id": "C1-P1-02",
+      "severity": "P1",
+      "confidence": "HIGH",
+      "title": "Node22 process-derived loader capabilities bypass checking",
+      "candidateLocation": "scripts/check-product-boundary.mjs:426; call visitor:809",
+      "largestMaterialGap": false,
+      "observed": "process.getBuiltinModule(module).createRequire loader aliases and process.mainModule.require return API PASS and CLI exit0 while loading the synthetic product. Two identical process-derived unknown-target sources return PASS for both product and neutral runtime targets, instead of INCOMPLETE.",
+      "cause": "Module namespaces are seeded from known imports or tracked require calls; process.getBuiltinModule and process.mainModule loader hosts are not classified. Their loader invocations and nonliteral targets escape the reference visitor.",
+      "reproducers": [
+        "negative-process-module-capability",
+        "negative-main-module-loader",
+        "unknown-process-module-capability-product",
+        "unknown-process-module-capability-neutral"
+      ]
+    }
+  ],
+  "limitations": [
+    "I1: same model family, no inherited conversation/Builder rationale, fork_turns none as assigned. No descendants were created. Host fork configuration was not independently attestable from within this session.",
+    "Reading the required coordination document too broadly incidentally exposed historical verdict summaries and other task history. The review was therefore not fully blind; this procedural limitation is explicit. No Builder report, prior review artifact, SPEC history, or .gauntlet contents were opened or used to derive findings. The rejection rests on new preserved API/CLI/runtime captures, not those summaries.",
+    "Finite synthetic fixtures cannot prove universal static-analysis completeness. The actual candidate product/runtime was never imported or executed; only resolution and static inspection were performed on the candidate.",
+    "T2 raw logs were read and hash-verified, not independently rerun. Record inputSentinel MATCH claims were not accepted as an independent check of every historical artifact. Their referenced before/after inputs were outside the allowed packet list and were not opened.",
+    "Whole physical fingerprints hash ignored files, dependencies, builds, .git and state; symlinks are recorded without following external targets. No permission, ownership, atime, inode or external symlink-content attestation is claimed.",
+    "Runtime controls execute synthetic JavaScript only. Type-only closure is demonstrated through preserved declarations and standalone TypeScript resolution, not runtime execution of types."
+  ],
+  "notRun": [
+    "Vitest or cache-writing checks in candidate",
+    "T2 full suites reexecution",
+    "actual root product/runtime imports or execution",
+    "T3/financial/other product gates",
+    "fixes, subsequent review cycles, descendants, commit, push"
+  ],
+  "nextAction": "Frozen report handed to Lead; no remediation or additional review performed. Lead owns shared ledger integration under existing claim.",
+  "artifactManifestSha256": "af32693f37ac1e1a0a67642bb57fddab72675d14864cae2385b2777a535fc02d"
+}

@@ -1,0 +1,1 @@
+const name='../../../products/shift/src/index.cjs';import(name)

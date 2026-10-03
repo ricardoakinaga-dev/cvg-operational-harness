@@ -1,0 +1,1 @@
+const resolve=require.resolve;console.log(resolve('../../../products/shift/src/index.cjs'))

@@ -1,0 +1,1 @@
+module.exports = {marker:"PRODUCT_LOADED"};

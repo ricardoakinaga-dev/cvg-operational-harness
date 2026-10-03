@@ -1,0 +1,1 @@
+const host=module;console.log(host.require('../../../products/shift/src/index.cjs').marker)

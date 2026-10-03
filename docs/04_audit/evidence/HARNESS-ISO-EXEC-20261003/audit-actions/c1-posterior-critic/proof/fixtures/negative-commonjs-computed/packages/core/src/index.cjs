@@ -1,0 +1,1 @@
+const key='require';console.log(module[key]('../../../products/shift/src/index.cjs').marker)

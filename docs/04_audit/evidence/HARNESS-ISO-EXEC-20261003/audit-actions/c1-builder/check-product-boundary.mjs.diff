@@ -1,0 +1,514 @@
+--- before/scripts/check-product-boundary.mjs
++++ after/scripts/check-product-boundary.mjs
+@@ -2,6 +2,7 @@
+ import path from 'node:path'
+ import { builtinModules, createRequire } from 'node:module'
+ import { pathToFileURL } from 'node:url'
++import { spawnSync } from 'node:child_process'
+ 
+ const require = createRequire(import.meta.url)
+ const ts = require('typescript')
+@@ -115,6 +116,166 @@
+   const owner = (file) =>
+     [...workspaces.values()].find((item) => inside(item.workspace, file))
+   const workspaceNode = (item) => path.join(item.workspace, 'package.json')
++  const runtimeReferences = []
++  const declaration = (file) => /\.d\.[cm]?ts$/.test(file)
++  const sourceProjection = (ref) => {
++    if (
++      !ref.typeTarget ||
++      declaration(ref.typeTarget) ||
++      !/\.[cm]?tsx?$/.test(ref.typeTarget)
++    )
++      return false
++    const matches = (candidate) => {
++      const ext = path.extname(candidate)
++      const substitutions =
++        {
++          '.js': ['.ts', '.tsx'],
++          '.mjs': ['.mts'],
++          '.cjs': ['.cts']
++        }[ext] ?? []
++      const candidates = [
++        candidate,
++        ...substitutions.map(
++          (suffix) => candidate.slice(0, -ext.length) + suffix
++        )
++      ]
++      if (!ext && ref.mode === 'require')
++        candidates.push(
++          `${candidate}.ts`,
++          `${candidate}.tsx`,
++          path.join(candidate, 'index.ts'),
++          path.join(candidate, 'index.tsx')
++        )
++      return candidates.some(
++        (value) => path.resolve(value) === path.resolve(ref.typeTarget)
++      )
++    }
++    if (ref.specifier.startsWith('.'))
++      return matches(path.resolve(path.dirname(ref.file), ref.specifier))
++    // Explicit TS path mappings are the repository's source build projection.
++    // A package's "types" condition alone never establishes a runtime target.
++    for (const [pattern, replacements] of Object.entries(
++      compilerOptions.paths ?? {}
++    )) {
++      const [prefix, suffix] = pattern.split('*')
++      const matched =
++        suffix === undefined
++          ? ref.specifier === prefix
++          : ref.specifier.startsWith(prefix) && ref.specifier.endsWith(suffix)
++      if (!matched) continue
++      const wildcard =
++        suffix === undefined
++          ? ''
++          : ref.specifier.slice(
++              prefix.length,
++              ref.specifier.length - suffix.length
++            )
++      for (const replacement of replacements)
++        if (
++          matches(
++            path.resolve(
++              compilerOptions.baseUrl ?? root,
++              replacement.replace('*', wildcard)
++            )
++          )
++        )
++          return true
++    }
++    return false
++  }
++  const localTarget = (file, location, specifier, resolvedFile) => {
++    const target = fs.realpathSync(path.resolve(resolvedFile))
++    if (!inside(root, target)) {
++      diagnostics.push({
++        file: location,
++        specifier,
++        reason: 'MODULE_OUTSIDE_REPOSITORY'
++      })
++      return
++    }
++    if (!target.includes(`${path.sep}node_modules${path.sep}`)) {
++      edge(file, target)
++      if (
++        extensions.has(path.extname(target)) &&
++        !discoveredSources.has(target)
++      ) {
++        discoveredSources.add(target)
++        sourceFiles.push(target)
++      }
++      const targetOwner = owner(target)
++      if (targetOwner && inside(productRoot, targetOwner.workspace))
++        edge(file, workspaceNode(targetOwner))
++    }
++  }
++  // Ask Node for physical runtime targets without importing/executing them.
++  // Batch the frontier so a repository scan does not spawn once per import.
++  const resolveRuntime = () => {
++    const pending = runtimeReferences.splice(0)
++    const conditions = []
++    for (let index = 0; index < process.execArgv.length; index += 1) {
++      const arg = process.execArgv[index]
++      if (/^(--conditions=|-C=)/.test(arg)) conditions.push(arg)
++      else if (
++        ['--conditions', '-C'].includes(arg) &&
++        process.execArgv[index + 1]
++      )
++        conditions.push(arg, process.execArgv[++index])
++    }
++    const child = spawnSync(
++      process.execPath,
++      [
++        ...conditions,
++        '--experimental-import-meta-resolve',
++        '--input-type=module',
++        '--eval',
++        `import fs from 'node:fs';
++         import {createRequire} from 'node:module';
++         import {fileURLToPath,pathToFileURL} from 'node:url';
++         const refs=JSON.parse(fs.readFileSync(0,'utf8'));
++         console.log(JSON.stringify(refs.map(({file,specifier,mode})=>{
++           try {
++             const target=mode==='require' ? createRequire(file).resolve(specifier)
++               : fileURLToPath(import.meta.resolve(specifier,pathToFileURL(file).href));
++             return fs.statSync(target).isFile() ? target : null;
++           } catch { return null; }
++         })));`
++      ],
++      {
++        input: JSON.stringify(pending),
++        encoding: 'utf8',
++        timeout: 30000,
++        maxBuffer: 16 * 1024 * 1024
++      }
++    )
++    let targets
++    try {
++      if (child.status === 0) targets = JSON.parse(child.stdout)
++    } catch {
++      // Malformed/incomplete resolver output is an unknown frontier, never PASS.
++    }
++    for (const [index, ref] of pending.entries()) {
++      const target = targets?.[index]
++      if (typeof target === 'string')
++        localTarget(ref.file, ref.location, ref.specifier, target)
++      // Unbuilt TS projects intentionally use extension substitution and paths.
++      // Only an implementation source is evidence for that build projection;
++      // declarations cannot stand in for a missing or different runtime.
++      else if (
++        Array.isArray(targets) &&
++        targets.length === pending.length &&
++        sourceProjection(ref)
++      )
++        localTarget(ref.file, ref.location, ref.specifier, ref.typeTarget)
++      else
++        diagnostics.push({
++          file: ref.location,
++          specifier: ref.specifier,
++          reason: ref.typeTarget
++            ? 'UNRESOLVED_RUNTIME_MODULE_REFERENCE'
++            : 'UNRESOLVED_MODULE_REFERENCE'
++        })
++    }
++  }
+   for (const item of workspaces.values()) {
+     for (const file of sourceFiles.filter((file) =>
+       inside(item.workspace, file)
+@@ -130,7 +291,13 @@
+       if (dependency) edge(workspaceNode(item), workspaceNode(dependency))
+     }
+   }
+-  function reference(file, node, specifier, typeDirective = false) {
++  function reference(
++    file,
++    node,
++    specifier,
++    typeDirective = false,
++    mode = 'types'
++  ) {
+     const location = `${path.relative(root, file)}:${ts.getLineAndCharacterOfPosition(node.getSourceFile(), node.getStart()).line + 1}`
+     if (!specifier) {
+       diagnostics.push({
+@@ -151,8 +318,24 @@
+           compilerOptions,
+           ts.sys
+         ).resolvedTypeReferenceDirective
+-      : ts.resolveModuleName(specifier, file, compilerOptions, ts.sys)
+-          .resolvedModule
++      : ts.resolveModuleName(
++          specifier,
++          file,
++          compilerOptions,
++          ts.sys,
++          undefined,
++          undefined,
++          mode === 'import'
++            ? ts.ModuleKind.ESNext
++            : mode === 'require'
++              ? ts.ModuleKind.CommonJS
++              : ts.getImpliedNodeFormatForFile(
++                  file,
++                  undefined,
++                  ts.sys,
++                  compilerOptions
++                )
++        ).resolvedModule
+     let resolvedFile = resolved?.resolvedFileName
+     // TypeScript deliberately does not resolve stylesheet side-effect imports.
+     // Resolve an existing asset rather than exempting an unresolved specifier.
+@@ -163,7 +346,15 @@
+         resolvedFile = undefined
+       }
+     }
+-    if (!resolvedFile) {
++    if (mode !== 'types')
++      runtimeReferences.push({
++        file,
++        location,
++        specifier,
++        mode,
++        typeTarget: resolvedFile
++      })
++    if (!resolvedFile && mode === 'types') {
+       diagnostics.push({
+         file: location,
+         specifier,
+@@ -171,42 +362,17 @@
+       })
+       return
+     }
+-    const target = fs.realpathSync(path.resolve(resolvedFile))
+-    if (!inside(root, target)) {
+-      diagnostics.push({
+-        file: location,
+-        specifier,
+-        reason: 'MODULE_OUTSIDE_REPOSITORY'
+-      })
+-      return
+-    }
+-    if (!inside(root, target)) {
+-      diagnostics.push({
+-        file: location,
+-        specifier,
+-        reason: 'MODULE_OUTSIDE_REPOSITORY'
+-      })
+-      return
+-    }
+-    if (!target.includes(`${path.sep}node_modules${path.sep}`)) {
+-      edge(file, target)
+-      // Walk the complete local closure, including scripts and declarations.
+-      // A resolved intermediate outside the initial discovery roots is not a leaf.
+-      if (
+-        extensions.has(path.extname(target)) &&
+-        !discoveredSources.has(target)
+-      ) {
+-        discoveredSources.add(target)
+-        sourceFiles.push(target)
+-      }
+-      const targetOwner = owner(target)
+-      if (targetOwner && inside(productRoot, targetOwner.workspace))
+-        edge(file, workspaceNode(targetOwner))
+-    }
++    if (resolvedFile) localTarget(file, location, specifier, resolvedFile)
+   }
+   const literal = (node) =>
+     node && (ts.isStringLiteralLike(node) ? node.text : undefined)
+-  for (const file of sourceFiles) {
++  let sourceIndex = 0
++  while (sourceIndex < sourceFiles.length || runtimeReferences.length) {
++    if (sourceIndex === sourceFiles.length) {
++      resolveRuntime()
++      continue
++    }
++    const file = sourceFiles[sourceIndex++]
+     const source = ts.createSourceFile(
+       file,
+       fs.readFileSync(file, 'utf8'),
+@@ -218,9 +384,23 @@
+         file: path.relative(root, file),
+         reason: 'SOURCE_PARSE_ERROR'
+       })
++    const typeOnly = (node) => {
++      if (declaration(file) || node.isTypeOnly || node.importClause?.isTypeOnly)
++        return true
++      const bindings = ts.isImportDeclaration(node)
++        ? node.importClause?.namedBindings
++        : node.exportClause
++      return (
++        !node.importClause?.name &&
++        bindings?.elements?.length > 0 &&
++        bindings.elements.every((item) => item.isTypeOnly)
++      )
++    }
+     const factories = new Set()
+     const moduleNamespaces = new Set()
+     const loaders = new Set(['require'])
++    const moduleHosts = new Set(['module'])
++    const resolvers = new Set()
+     const nodes = []
+     const collect = (node) => {
+       nodes.push(node)
+@@ -249,8 +429,7 @@
+         node &&
+         ((ts.isIdentifier(node) && moduleNamespaces.has(node.text)) ||
+           (ts.isCallExpression(node) &&
+-            ts.isIdentifier(node.expression) &&
+-            node.expression.text === 'require' &&
++            isLoader(node.expression) &&
+             ['module', 'node:module'].includes(literal(node.arguments[0]))))
+       )
+     }
+@@ -270,14 +449,26 @@
+         ((ts.isIdentifier(node) && loaders.has(node.text)) ||
+           (property(node) === 'require' &&
+             ((ts.isIdentifier(node.expression) &&
+-              ['module', 'global', 'globalThis'].includes(
+-                node.expression.text
+-              )) ||
++              (moduleHosts.has(node.expression.text) ||
++                ['global', 'globalThis'].includes(node.expression.text))) ||
+               isModuleNamespace(node.expression))) ||
+           (ts.isCallExpression(node) && isFactory(node.expression)))
+       )
+     }
++    const isHost = (node) => {
++      node = unwrap(node)
++      return node && ts.isIdentifier(node) && moduleHosts.has(node.text)
++    }
++    const isResolver = (node) => {
++      node = unwrap(node)
++      return (
++        node &&
++        ((ts.isIdentifier(node) && resolvers.has(node.text)) ||
++          (property(node) === 'resolve' && isLoader(node.expression)))
++      )
++    }
+     for (const node of nodes) {
++      if (typeOnly(node)) continue
+       if (
+         ts.isImportEqualsDeclaration(node) &&
+         ts.isExternalModuleReference(node.moduleReference) &&
+@@ -298,7 +489,10 @@
+         moduleNamespaces.add(bindings.name.text)
+       if (bindings && ts.isNamedImports(bindings))
+         for (const item of bindings.elements)
+-          if ((item.propertyName?.text ?? item.name.text) === 'createRequire')
++          if (
++            !item.isTypeOnly &&
++            (item.propertyName?.text ?? item.name.text) === 'createRequire'
++          )
+             factories.add(item.name.text)
+     }
+     // Resolve local aliases to a fixed point; escaping loaders are rejected below.
+@@ -309,7 +503,9 @@
+         for (const [set, matches] of [
+           [factories, isFactory],
+           [moduleNamespaces, isModuleNamespace],
+-          [loaders, isLoader]
++          [loaders, isLoader],
++          [moduleHosts, isHost],
++          [resolvers, isResolver]
+         ]) {
+           if (matches(expression) && !set.has(name)) {
+             set.add(name)
+@@ -356,6 +552,7 @@
+     for (const node of nodes) {
+       if (
+         !ts.isImportDeclaration(node) ||
++        typeOnly(node) ||
+         !['module', 'node:module'].includes(literal(node.moduleSpecifier))
+       )
+         continue
+@@ -363,6 +560,7 @@
+       if (bindings && ts.isNamedImports(bindings))
+         for (const item of bindings.elements)
+           if (
++            !item.isTypeOnly &&
+             !safeModuleProperties.includes(
+               item.propertyName?.text ?? item.name.text
+             )
+@@ -424,6 +622,7 @@
+       }
+       if (
+         ts.isExportDeclaration(node) &&
++        !typeOnly(node) &&
+         ['module', 'node:module'].includes(literal(node.moduleSpecifier))
+       )
+         loaderDiagnostic(node, 'UNVERIFIED_MODULE_LOADER_EXPORT')
+@@ -479,7 +678,13 @@
+         )
+       )
+         continue
+-      if (!isFactory(node) && !isLoader(node) && !isModuleNamespace(node))
++      if (
++        !isFactory(node) &&
++        !isLoader(node) &&
++        !isModuleNamespace(node) &&
++        !isHost(node) &&
++        !isResolver(node)
++      )
+         continue
+       if (isDeclarationName(node)) continue
+       const parent = node.parent
+@@ -496,13 +701,32 @@
+         (ts.isPropertyAccessExpression(parent) ||
+           ts.isElementAccessExpression(parent)) &&
+         parent.expression === node &&
+-        (isModuleNamespace(node) || property(parent) === 'resolve')
++        (isModuleNamespace(node) ||
++          isHost(node) ||
++          property(parent) === 'resolve')
+       ) {
+-        if (isModuleNamespace(node) && property(parent) === undefined)
++        if (
++          (isModuleNamespace(node) || isHost(node)) &&
++          property(parent) === undefined
++        )
+           loaderDiagnostic(parent, 'UNVERIFIED_MODULE_LOADER_PROPERTY')
+         else if (
+           isModuleNamespace(node) &&
+           ![...safeModuleProperties, 'require'].includes(property(parent))
++        )
++          loaderDiagnostic(parent, 'UNVERIFIED_MODULE_LOADER_PRIMITIVE')
++        else if (
++          isHost(node) &&
++          ![
++            'require',
++            'exports',
++            'id',
++            'filename',
++            'loaded',
++            'parent',
++            'children',
++            'paths'
++          ].includes(property(parent))
+         )
+           loaderDiagnostic(parent, 'UNVERIFIED_MODULE_LOADER_PRIMITIVE')
+         continue
+@@ -542,17 +766,38 @@
+       )
+     for (const directive of source.typeReferenceDirectives)
+       reference(file, source, directive.fileName, true)
++    const importMode =
++      ts.getImpliedNodeFormatForFile(
++        file,
++        undefined,
++        ts.sys,
++        compilerOptions
++      ) === ts.ModuleKind.CommonJS
++        ? 'require'
++        : 'import'
+     const visit = (node) => {
+       if (
+         (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+         node.moduleSpecifier
+       )
+-        reference(file, node, literal(node.moduleSpecifier))
++        reference(
++          file,
++          node,
++          literal(node.moduleSpecifier),
++          false,
++          typeOnly(node) ? 'types' : importMode
++        )
+       if (
+         ts.isImportEqualsDeclaration(node) &&
+         ts.isExternalModuleReference(node.moduleReference)
+       )
+-        reference(file, node, literal(node.moduleReference.expression))
++        reference(
++          file,
++          node,
++          literal(node.moduleReference.expression),
++          false,
++          typeOnly(node) ? 'types' : 'require'
++        )
+       if (ts.isImportTypeNode(node))
+         reference(
+           file,
+@@ -565,10 +810,20 @@
+         ts.isCallExpression(node) &&
+         (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+           isLoader(node.expression) ||
+-          (property(node.expression) === 'resolve' &&
+-            isLoader(node.expression.expression)))
+-      )
+-        reference(file, node, literal(node.arguments[0]))
++          isResolver(node.expression))
++      ) {
++        if (isResolver(node.expression) && node.arguments.length !== 1)
++          loaderDiagnostic(node, 'UNVERIFIED_MODULE_RESOLVER_OPTIONS')
++        reference(
++          file,
++          node,
++          literal(node.arguments[0]),
++          false,
++          node.expression.kind === ts.SyntaxKind.ImportKeyword
++            ? 'import'
++            : 'require'
++        )
++      }
+       if (
+         (ts.isIdentifier(node) || ts.isStringLiteralLike(node)) &&
+         node.text.startsWith('SHIFT_')

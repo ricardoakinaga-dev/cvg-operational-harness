@@ -1,0 +1,1 @@
+/// <reference path="../../../products/shift/src/types.d.ts" />

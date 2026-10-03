@@ -4,32 +4,34 @@
 
 Estado `OPEN / HUMAN_DECISION_REQUIRED`, decisão B3 de 03/10/2026. Manter `NO_MODEL`: notas clínicas recebem `policy_denied` antes de budget/provider, com zero chamadas. A revisão da D2 pertence ao responsável e não é approval da SPEC 0180 nem novo critério PISO. Organização clínica por modelo permanece fora enquanto a decisão estiver aberta; o impedimento se limita à parte clínica do D009, sem bloquear preparações e fatias independentes autorizadas. Não implementar grant/exceção ou mudar classificação para contornar a política. Os dez cartões originais abaixo preservam seus aceites.
 
+BUILD local aprovado por hashes separados, [recibo](../../../docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/audit-actions/human-t3-approval.json). PISO-001–004 estão em implementação **somente no candidato privado**, sem promoção ao checkout ou aceite. Fundação PISO-004: 40 testes próprios PASS; fluxo legado27PASS/10FAIL, com lacuna real de correção de drafts. [Preservação isolada](../../../docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/audit-actions/piso004-isolation.json); texto webhook→preview→confirmação→tarefa→restart em andamento. HISO-005 permanece FAIL/encaminhamento semanal; estas fatias independentes não o encerram. Piloto, D2, provider real e produção continuam fora da autorização.
+
 Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](../../../docs/03_build/0370_harness_product_isolation_backlog.md), por HISO-008. IDs, dependências, aceites e status foram preservados. As tarefas HISO permanecem no backlog do harness. Contratos [SPEC](spec.md) e procedimentos [operação local](operacao-local.md).
 
 ### PISO-001 — Ativar tarefas somente após confirmação humana
 
-- Estado: `TODO`. Prioridade: P1. Dono: engenharia do consumidor. Risco/gate: T3 / G3. Dependências: HISO-004, HISO-008.
+- Estado: `IN_PROGRESS`. Prioridade: P1. Dono: engenharia do consumidor. Risco/gate: T3 / G3. Dependências: HISO-004, HISO-008.
 - WHAT/WHERE/HOW: corrigir `assistant`/`store`/comandos para manter organização como rascunho até confirmação exata do responsável. Lembretes não podem disparar de tarefa não confirmada; correções invalidam confirmação anterior.
 - Aceite: P01 fechado; rascunho não ativa tarefa, confirmação válida ativa uma vez, duplicata não duplica efeito e correção exige nova confirmação. Preservar condições aprovadas dos comandos/D1–D4 e AP-009–AP-011.
 - Evidência: regressões de confirmação/correção/replay e estados persistidos sintéticos. Encaminha F01.
 
 ### PISO-002 — Preservar fidelidade e identidade do paciente
 
-- Estado: `TODO`. Prioridade: P1. Dono: engenharia do consumidor, com validação de requisitos pelo owner do produto. Risco/gate: T3 / G3. Dependências: HISO-004, HISO-008.
+- Estado: `IN_PROGRESS`. Prioridade: P1. Dono: engenharia do consumidor, com validação de requisitos pelo owner do produto. Risco/gate: T3 / G3. Dependências: HISO-004, HISO-008.
 - WHAT/WHERE/HOW: validar associação dos valores à fonte e paciente, exigir seleção inequívoca em homônimos e impedir IDs não verificados de entrarem na memória confirmada. Substituir seleção ambígua do primeiro `.find` por vínculo explícito suportado no contrato.
 - Aceite: P07/P08/P09 fechados; troca de valores entre pacientes é sinalizada mesmo com os mesmos números; dois nomes iguais não escolhem automaticamente um ID; rascunho não contamina memória confirmada. Mudança de schema de tarefa/ID tem migração e revisão próprias.
 - Evidência: casos negativos/positivos com homônimos, números e memória sintéticos. Encaminha F06/F07.
 
 ### PISO-003 — Recuperar processamento e envio com estado durável
 
-- Estado: `TODO`. Prioridade: P1. Dono: engenharia do consumidor. Risco/gate: T3 / G3. Dependências: HISO-004, HISO-008, PISO-004.
+- Estado: `IN_PROGRESS`. Prioridade: P1. Dono: engenharia do consumidor. Risco/gate: T3 / G3. Dependências: HISO-004, HISO-008, PISO-004.
 - WHAT/WHERE/HOW: separar recebido/processando/processado/falha recuperável/resposta entregue em `assistant`/`store`; retries limitados por mensagem e disponibilidade da fila. Falha de append não pode rejeitar permanentemente a cadeia global de processamento.
 - Aceite: P02/P03/P11 fechados; falha transitória de transcrição/envio permite recuperação sem perder entrada e sem duplicar ativação. Resultado externo incerto usa idempotency key quando suportada ou estado explícito de revisão; não prometer exactly-once do provedor.
 - Evidência: falhas injetadas, reinício, replay, fila recuperada e efeitos por ID. Encaminha F02/F08.
 
 ### PISO-004 — Recuperar journal truncado sem perder histórico válido
 
-- Estado: `TODO`. Prioridade: P1. Dono: engenharia do consumidor. Risco/gate: T3 / G3. Dependências: HISO-004, HISO-008.
+- Estado: `IN_PROGRESS`. Prioridade: P1. Dono: engenharia do consumidor. Risco/gate: T3 / G3. Dependências: HISO-004, HISO-008.
 - WHAT/WHERE/HOW: especificar durabilidade e recuperação JSONL/media em `store`, incluindo escrita, sync, prefixo válido, registro incompleto final e relação entre evento/arquivo. Preservar D4 e cópia original antes de qualquer migração.
 - Aceite: P04 fechado; cauda incompleta pode ser isolada com evidência e prefixo recuperado; corrupção no meio exige diagnóstico sem descarte silencioso. Reconstrução mantém tarefas/notas/confirmação/pausa. Teste de queda de processo não é prova de queda elétrica física.
 - Evidência: fixtures de truncamento/corrupção, recuperação/restart e hashes de originais. Encaminha F03 e pré-requisito de restore.

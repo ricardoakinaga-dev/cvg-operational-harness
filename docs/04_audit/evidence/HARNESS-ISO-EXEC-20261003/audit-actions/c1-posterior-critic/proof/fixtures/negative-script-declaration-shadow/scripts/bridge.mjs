@@ -1,0 +1,1 @@
+import p from '../products/shift/src/index.cjs';export const marker=p.marker;

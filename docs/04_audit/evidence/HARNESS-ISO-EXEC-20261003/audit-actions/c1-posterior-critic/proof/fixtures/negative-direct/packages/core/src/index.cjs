@@ -1,0 +1,1 @@
+console.log(require('../../../products/shift/src/index.cjs').marker)

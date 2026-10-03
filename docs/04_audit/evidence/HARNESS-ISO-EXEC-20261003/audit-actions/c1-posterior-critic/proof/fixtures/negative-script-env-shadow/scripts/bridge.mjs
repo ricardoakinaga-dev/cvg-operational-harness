@@ -1,0 +1,1 @@
+export const marker=process.env.SHIFT_PORT ?? 'SHIFT_ENV_READ';

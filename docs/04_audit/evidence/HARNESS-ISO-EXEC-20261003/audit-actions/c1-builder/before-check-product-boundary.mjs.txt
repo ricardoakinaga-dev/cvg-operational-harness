@@ -1,0 +1,642 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { builtinModules, createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
+
+const require = createRequire(import.meta.url)
+const ts = require('typescript')
+const extensions = new Set([
+  '.ts',
+  '.tsx',
+  '.mts',
+  '.cts',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs'
+])
+const excluded = new Set(['node_modules', 'dist', 'coverage', '.git', 'build'])
+const builtin = new Set([
+  ...builtinModules,
+  ...builtinModules.map((name) => `node:${name}`)
+])
+const inside = (parent, file) => {
+  const relative = path.relative(parent, file)
+  return (
+    relative === '' ||
+    (!relative.startsWith(`..${path.sep}`) &&
+      relative !== '..' &&
+      !path.isAbsolute(relative))
+  )
+}
+
+function files(directory, result = []) {
+  if (!fs.existsSync(directory)) return result
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (entry.isSymbolicLink())
+      throw new Error(
+        `unverified_source_symlink:${path.join(directory, entry.name)}`
+      )
+    if (excluded.has(entry.name)) continue
+    const file = path.join(directory, entry.name)
+    if (entry.isDirectory()) files(file, result)
+    else if (extensions.has(path.extname(file))) result.push(file)
+  }
+  return result
+}
+
+export function auditProductBoundary(directory = process.cwd()) {
+  const root = fs.realpathSync(directory)
+  const productRoot = path.join(root, 'products')
+  const sourceRoots = ['packages', 'apps', 'legacy', 'products']
+  const sourceFiles = sourceRoots.flatMap((name) =>
+    files(path.join(root, name))
+  )
+  const discoveredSources = new Set(sourceFiles)
+  const coreFiles = sourceFiles.filter(
+    (file) =>
+      inside(path.join(root, 'packages'), file) ||
+      inside(path.join(root, 'apps'), file)
+  )
+  const graph = new Map()
+  const diagnostics = []
+  const consumerEnvReferences = new Map()
+  const workspaces = new Map()
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(root, 'package.json'), 'utf8')
+  )
+  const configFile = path.join(root, 'tsconfig.base.json')
+  let compilerOptions = {
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    module: ts.ModuleKind.NodeNext,
+    allowJs: true
+  }
+  if (fs.existsSync(configFile)) {
+    const parsed = ts.readConfigFile(configFile, ts.sys.readFile)
+    if (parsed.error)
+      throw new Error(
+        `invalid_boundary_config:${ts.flattenDiagnosticMessageText(parsed.error.messageText, '\n')}`
+      )
+    const configuration = ts.parseJsonConfigFileContent(
+      parsed.config,
+      ts.sys,
+      root
+    )
+    // TS18003 means a source-less fixture; option parse errors still fail closed.
+    const errors = configuration.errors.filter((error) => error.code !== 18003)
+    if (errors.length)
+      throw new Error(
+        `invalid_boundary_config:${errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, '\n')).join(';')}`
+      )
+    compilerOptions = configuration.options
+  }
+  for (const pattern of manifest.workspaces ?? []) {
+    if (!pattern.endsWith('/*'))
+      throw new Error(`unsupported_workspace_pattern:${pattern}`)
+    const parent = path.join(root, pattern.slice(0, -2))
+    if (!fs.existsSync(parent)) continue
+    for (const entry of fs.readdirSync(parent, { withFileTypes: true })) {
+      if (entry.isSymbolicLink())
+        throw new Error(`unverified_workspace_symlink:${entry.name}`)
+      if (!entry.isDirectory()) continue
+      const workspace = path.join(parent, entry.name)
+      const pkgFile = path.join(workspace, 'package.json')
+      if (!fs.existsSync(pkgFile)) continue
+      const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'))
+      if (workspaces.has(pkg.name))
+        throw new Error(`duplicate_workspace:${pkg.name}`)
+      workspaces.set(pkg.name, { workspace, pkg })
+    }
+  }
+  const edge = (from, to) => {
+    if (!graph.has(from)) graph.set(from, new Set())
+    graph.get(from).add(to)
+  }
+  const owner = (file) =>
+    [...workspaces.values()].find((item) => inside(item.workspace, file))
+  const workspaceNode = (item) => path.join(item.workspace, 'package.json')
+  for (const item of workspaces.values()) {
+    for (const file of sourceFiles.filter((file) =>
+      inside(item.workspace, file)
+    ))
+      edge(workspaceNode(item), file)
+    for (const name of Object.keys({
+      ...item.pkg.dependencies,
+      ...item.pkg.devDependencies,
+      ...item.pkg.optionalDependencies,
+      ...item.pkg.peerDependencies
+    })) {
+      const dependency = workspaces.get(name)
+      if (dependency) edge(workspaceNode(item), workspaceNode(dependency))
+    }
+  }
+  function reference(file, node, specifier, typeDirective = false) {
+    const location = `${path.relative(root, file)}:${ts.getLineAndCharacterOfPosition(node.getSourceFile(), node.getStart()).line + 1}`
+    if (!specifier) {
+      diagnostics.push({
+        file: location,
+        reason: 'NON_LITERAL_MODULE_REFERENCE'
+      })
+      return
+    }
+    if (builtin.has(specifier)) return
+    const dependency = [...workspaces.entries()].find(
+      ([name]) => specifier === name || specifier.startsWith(`${name}/`)
+    )?.[1]
+    if (dependency) edge(file, workspaceNode(dependency))
+    const resolved = typeDirective
+      ? ts.resolveTypeReferenceDirective(
+          specifier,
+          file,
+          compilerOptions,
+          ts.sys
+        ).resolvedTypeReferenceDirective
+      : ts.resolveModuleName(specifier, file, compilerOptions, ts.sys)
+          .resolvedModule
+    let resolvedFile = resolved?.resolvedFileName
+    // TypeScript deliberately does not resolve stylesheet side-effect imports.
+    // Resolve an existing asset rather than exempting an unresolved specifier.
+    if (!resolvedFile && specifier.endsWith('.css')) {
+      try {
+        resolvedFile = createRequire(file).resolve(specifier)
+      } catch {
+        resolvedFile = undefined
+      }
+    }
+    if (!resolvedFile) {
+      diagnostics.push({
+        file: location,
+        specifier,
+        reason: 'UNRESOLVED_MODULE_REFERENCE'
+      })
+      return
+    }
+    const target = fs.realpathSync(path.resolve(resolvedFile))
+    if (!inside(root, target)) {
+      diagnostics.push({
+        file: location,
+        specifier,
+        reason: 'MODULE_OUTSIDE_REPOSITORY'
+      })
+      return
+    }
+    if (!inside(root, target)) {
+      diagnostics.push({
+        file: location,
+        specifier,
+        reason: 'MODULE_OUTSIDE_REPOSITORY'
+      })
+      return
+    }
+    if (!target.includes(`${path.sep}node_modules${path.sep}`)) {
+      edge(file, target)
+      // Walk the complete local closure, including scripts and declarations.
+      // A resolved intermediate outside the initial discovery roots is not a leaf.
+      if (
+        extensions.has(path.extname(target)) &&
+        !discoveredSources.has(target)
+      ) {
+        discoveredSources.add(target)
+        sourceFiles.push(target)
+      }
+      const targetOwner = owner(target)
+      if (targetOwner && inside(productRoot, targetOwner.workspace))
+        edge(file, workspaceNode(targetOwner))
+    }
+  }
+  const literal = (node) =>
+    node && (ts.isStringLiteralLike(node) ? node.text : undefined)
+  for (const file of sourceFiles) {
+    const source = ts.createSourceFile(
+      file,
+      fs.readFileSync(file, 'utf8'),
+      ts.ScriptTarget.Latest,
+      true
+    )
+    if (source.parseDiagnostics.length)
+      diagnostics.push({
+        file: path.relative(root, file),
+        reason: 'SOURCE_PARSE_ERROR'
+      })
+    const factories = new Set()
+    const moduleNamespaces = new Set()
+    const loaders = new Set(['require'])
+    const nodes = []
+    const collect = (node) => {
+      nodes.push(node)
+      ts.forEachChild(node, collect)
+    }
+    collect(source)
+    const unwrap = (node) => {
+      while (
+        node &&
+        (ts.isParenthesizedExpression(node) ||
+          ts.isAsExpression(node) ||
+          ts.isNonNullExpression(node))
+      )
+        node = node.expression
+      return node
+    }
+    const property = (node) =>
+      ts.isPropertyAccessExpression(node)
+        ? node.name.text
+        : ts.isElementAccessExpression(node)
+          ? literal(node.argumentExpression)
+          : undefined
+    const isModuleNamespace = (node) => {
+      node = unwrap(node)
+      return (
+        node &&
+        ((ts.isIdentifier(node) && moduleNamespaces.has(node.text)) ||
+          (ts.isCallExpression(node) &&
+            ts.isIdentifier(node.expression) &&
+            node.expression.text === 'require' &&
+            ['module', 'node:module'].includes(literal(node.arguments[0]))))
+      )
+    }
+    const isFactory = (node) => {
+      node = unwrap(node)
+      return (
+        node &&
+        ((ts.isIdentifier(node) && factories.has(node.text)) ||
+          (property(node) === 'createRequire' &&
+            isModuleNamespace(node.expression)))
+      )
+    }
+    const isLoader = (node) => {
+      node = unwrap(node)
+      return (
+        node &&
+        ((ts.isIdentifier(node) && loaders.has(node.text)) ||
+          (property(node) === 'require' &&
+            ((ts.isIdentifier(node.expression) &&
+              ['module', 'global', 'globalThis'].includes(
+                node.expression.text
+              )) ||
+              isModuleNamespace(node.expression))) ||
+          (ts.isCallExpression(node) && isFactory(node.expression)))
+      )
+    }
+    for (const node of nodes) {
+      if (
+        ts.isImportEqualsDeclaration(node) &&
+        ts.isExternalModuleReference(node.moduleReference) &&
+        ['module', 'node:module'].includes(
+          literal(node.moduleReference.expression)
+        )
+      )
+        moduleNamespaces.add(node.name.text)
+      if (
+        !ts.isImportDeclaration(node) ||
+        !['module', 'node:module'].includes(literal(node.moduleSpecifier))
+      )
+        continue
+      const clause = node.importClause
+      if (clause?.name) moduleNamespaces.add(clause.name.text)
+      const bindings = clause?.namedBindings
+      if (bindings && ts.isNamespaceImport(bindings))
+        moduleNamespaces.add(bindings.name.text)
+      if (bindings && ts.isNamedImports(bindings))
+        for (const item of bindings.elements)
+          if ((item.propertyName?.text ?? item.name.text) === 'createRequire')
+            factories.add(item.name.text)
+    }
+    // Resolve local aliases to a fixed point; escaping loaders are rejected below.
+    let changed = true
+    while (changed) {
+      changed = false
+      const bind = (name, expression) => {
+        for (const [set, matches] of [
+          [factories, isFactory],
+          [moduleNamespaces, isModuleNamespace],
+          [loaders, isLoader]
+        ]) {
+          if (matches(expression) && !set.has(name)) {
+            set.add(name)
+            changed = true
+          }
+        }
+      }
+      for (const node of nodes) {
+        if (ts.isVariableDeclaration(node) && node.initializer) {
+          if (ts.isIdentifier(node.name)) bind(node.name.text, node.initializer)
+          else if (
+            ts.isObjectBindingPattern(node.name) &&
+            isModuleNamespace(node.initializer)
+          )
+            for (const item of node.name.elements)
+              if (
+                ts.isIdentifier(item.name) &&
+                (item.propertyName?.getText(source) ?? item.name.text) ===
+                  'createRequire' &&
+                !factories.has(item.name.text)
+              ) {
+                factories.add(item.name.text)
+                changed = true
+              }
+        }
+        if (
+          ts.isBinaryExpression(node) &&
+          node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          ts.isIdentifier(node.left)
+        )
+          bind(node.left.text, node.right)
+      }
+    }
+    const loaderDiagnostic = (node, reason) =>
+      diagnostics.push({
+        file: `${path.relative(root, file)}:${ts.getLineAndCharacterOfPosition(source, node.getStart()).line + 1}`,
+        reason
+      })
+    const safeModuleProperties = [
+      'createRequire',
+      'builtinModules',
+      'isBuiltin'
+    ]
+    for (const node of nodes) {
+      if (
+        !ts.isImportDeclaration(node) ||
+        !['module', 'node:module'].includes(literal(node.moduleSpecifier))
+      )
+        continue
+      const bindings = node.importClause?.namedBindings
+      if (bindings && ts.isNamedImports(bindings))
+        for (const item of bindings.elements)
+          if (
+            !safeModuleProperties.includes(
+              item.propertyName?.text ?? item.name.text
+            )
+          )
+            loaderDiagnostic(item, 'UNVERIFIED_MODULE_LOADER_PRIMITIVE')
+    }
+    const isDeclarationName = (node) => {
+      const parent = node.parent
+      return (
+        parent &&
+        (ts.isImportSpecifier(parent) ||
+          ts.isImportClause(parent) ||
+          ts.isNamespaceImport(parent) ||
+          ts.isBindingElement(parent) ||
+          (ts.isVariableDeclaration(parent) && parent.name === node) ||
+          ((ts.isMethodDeclaration(parent) ||
+            ts.isMethodSignature(parent) ||
+            ts.isPropertyDeclaration(parent) ||
+            ts.isPropertySignature(parent) ||
+            ts.isPropertyAssignment(parent)) &&
+            parent.name === node))
+      )
+    }
+    for (const node of nodes) {
+      if (
+        ts.isCallExpression(node) &&
+        node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        ['module', 'node:module'].includes(literal(node.arguments[0]))
+      )
+        loaderDiagnostic(node, 'UNVERIFIED_DYNAMIC_MODULE_NAMESPACE')
+      if (ts.isCallExpression(node) && isModuleNamespace(node)) {
+        const parent = node.parent
+        if (
+          parent &&
+          ts.isVariableDeclaration(parent) &&
+          parent.initializer === node &&
+          !parent.parent?.parent?.modifiers?.some(
+            (m) => m.kind === ts.SyntaxKind.ExportKeyword
+          )
+        ) {
+          if (ts.isObjectBindingPattern(parent.name))
+            for (const item of parent.name.elements)
+              if (
+                !safeModuleProperties.includes(
+                  item.propertyName?.getText(source) ??
+                    item.name.getText(source)
+                )
+              )
+                loaderDiagnostic(item, 'UNVERIFIED_MODULE_LOADER_PRIMITIVE')
+        } else if (
+          parent &&
+          (ts.isPropertyAccessExpression(parent) ||
+            ts.isElementAccessExpression(parent)) &&
+          parent.expression === node &&
+          safeModuleProperties.includes(property(parent))
+        ) {
+          // A known property is inspected by the loader/factory visitor.
+        } else loaderDiagnostic(node, 'UNVERIFIED_MODULE_LOADER_ESCAPE')
+      }
+      if (
+        ts.isExportDeclaration(node) &&
+        ['module', 'node:module'].includes(literal(node.moduleSpecifier))
+      )
+        loaderDiagnostic(node, 'UNVERIFIED_MODULE_LOADER_EXPORT')
+      if (ts.isCallExpression(node) && isFactory(node.expression)) {
+        const base = unwrap(node.arguments[0])
+        if (
+          !(
+            base &&
+            (base.getText(source) === 'import.meta.url' ||
+              (ts.isIdentifier(base) && base.text === '__filename'))
+          )
+        )
+          loaderDiagnostic(node, 'UNVERIFIED_MODULE_LOADER_BASE')
+        let value = node
+        while (
+          value.parent &&
+          (ts.isParenthesizedExpression(value.parent) ||
+            ts.isAsExpression(value.parent) ||
+            ts.isNonNullExpression(value.parent))
+        )
+          value = value.parent
+        const parent = value.parent
+        const localBinding =
+          parent &&
+          ts.isVariableDeclaration(parent) &&
+          parent.initializer === value &&
+          ts.isIdentifier(parent.name) &&
+          !parent.parent?.parent?.modifiers?.some(
+            (m) => m.kind === ts.SyntaxKind.ExportKeyword
+          )
+        const localAssignment =
+          parent &&
+          ts.isBinaryExpression(parent) &&
+          parent.right === value &&
+          parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          ts.isIdentifier(parent.left)
+        const immediateCall =
+          parent && ts.isCallExpression(parent) && parent.expression === value
+        const resolveCall =
+          parent &&
+          (ts.isPropertyAccessExpression(parent) ||
+            ts.isElementAccessExpression(parent)) &&
+          parent.expression === value &&
+          property(parent) === 'resolve'
+        if (!localBinding && !localAssignment && !immediateCall && !resolveCall)
+          loaderDiagnostic(node, 'UNVERIFIED_MODULE_LOADER_ESCAPE')
+      }
+      if (
+        !(
+          ts.isIdentifier(node) ||
+          ts.isPropertyAccessExpression(node) ||
+          ts.isElementAccessExpression(node)
+        )
+      )
+        continue
+      if (!isFactory(node) && !isLoader(node) && !isModuleNamespace(node))
+        continue
+      if (isDeclarationName(node)) continue
+      const parent = node.parent
+      // A property's spelling is not a variable reference. The whole expression
+      // is classified independently, including namespace/computed factory access.
+      if (
+        parent &&
+        ts.isPropertyAccessExpression(parent) &&
+        parent.name === node
+      )
+        continue
+      if (
+        parent &&
+        (ts.isPropertyAccessExpression(parent) ||
+          ts.isElementAccessExpression(parent)) &&
+        parent.expression === node &&
+        (isModuleNamespace(node) || property(parent) === 'resolve')
+      ) {
+        if (isModuleNamespace(node) && property(parent) === undefined)
+          loaderDiagnostic(parent, 'UNVERIFIED_MODULE_LOADER_PROPERTY')
+        else if (
+          isModuleNamespace(node) &&
+          ![...safeModuleProperties, 'require'].includes(property(parent))
+        )
+          loaderDiagnostic(parent, 'UNVERIFIED_MODULE_LOADER_PRIMITIVE')
+        continue
+      }
+      if (parent && ts.isCallExpression(parent) && parent.expression === node)
+        continue
+      if (
+        parent &&
+        ts.isVariableDeclaration(parent) &&
+        parent.initializer === node &&
+        ts.isIdentifier(parent.name)
+      ) {
+        const statement = parent.parent?.parent
+        if (
+          !statement?.modifiers?.some(
+            (m) => m.kind === ts.SyntaxKind.ExportKeyword
+          )
+        )
+          continue
+      }
+      if (
+        parent &&
+        ts.isBinaryExpression(parent) &&
+        parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isIdentifier(parent.left)
+      )
+        continue
+      loaderDiagnostic(node, 'UNVERIFIED_MODULE_LOADER_ESCAPE')
+    }
+    for (const directive of source.referencedFiles)
+      reference(
+        file,
+        source,
+        directive.fileName.startsWith('.')
+          ? directive.fileName
+          : `./${directive.fileName}`
+      )
+    for (const directive of source.typeReferenceDirectives)
+      reference(file, source, directive.fileName, true)
+    const visit = (node) => {
+      if (
+        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        node.moduleSpecifier
+      )
+        reference(file, node, literal(node.moduleSpecifier))
+      if (
+        ts.isImportEqualsDeclaration(node) &&
+        ts.isExternalModuleReference(node.moduleReference)
+      )
+        reference(file, node, literal(node.moduleReference.expression))
+      if (ts.isImportTypeNode(node))
+        reference(
+          file,
+          node,
+          ts.isLiteralTypeNode(node.argument)
+            ? literal(node.argument.literal)
+            : undefined
+        )
+      if (
+        ts.isCallExpression(node) &&
+        (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+          isLoader(node.expression) ||
+          (property(node.expression) === 'resolve' &&
+            isLoader(node.expression.expression)))
+      )
+        reference(file, node, literal(node.arguments[0]))
+      if (
+        (ts.isIdentifier(node) || ts.isStringLiteralLike(node)) &&
+        node.text.startsWith('SHIFT_')
+      ) {
+        if (!consumerEnvReferences.has(file))
+          consumerEnvReferences.set(file, [])
+        consumerEnvReferences.get(file).push({
+          file: path.relative(root, file),
+          reason: 'CONSUMER_ENV_IN_CORE'
+        })
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(source)
+  }
+  const violations = []
+  const starts = [
+    ...coreFiles,
+    ...[...workspaces.values()]
+      .filter(
+        (item) =>
+          inside(path.join(root, 'packages'), item.workspace) ||
+          inside(path.join(root, 'apps'), item.workspace)
+      )
+      .map(workspaceNode)
+  ]
+  // Multi-source traversal reports a witness path for every reachable product.
+  const seen = new Set(starts)
+  const queue = starts.map((file) => ({ file, trail: [file] }))
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index]
+    for (const target of graph.get(current.file) ?? []) {
+      if (inside(productRoot, target)) {
+        violations.push({
+          reason: 'CORE_DEPENDS_ON_PRODUCT',
+          trail: [...current.trail, target].map((file) =>
+            path.relative(root, file)
+          )
+        })
+      } else if (!seen.has(target)) {
+        seen.add(target)
+        queue.push({ file: target, trail: [...current.trail, target] })
+      }
+    }
+  }
+  for (const [file, references] of consumerEnvReferences)
+    if (seen.has(file)) diagnostics.push(...references)
+  return {
+    sourceFiles: sourceFiles.length,
+    coreFiles: coreFiles.length,
+    workspaceCount: workspaces.size,
+    edgeCount: [...graph.values()].reduce((sum, set) => sum + set.size, 0),
+    violations,
+    diagnostics,
+    passed: violations.length === 0 && diagnostics.length === 0
+  }
+}
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+) {
+  try {
+    const result = auditProductBoundary(process.argv[2] ?? process.cwd())
+    console.log(JSON.stringify(result, null, 2))
+    process.exitCode = result.passed ? 0 : 1
+  } catch (error) {
+    console.error(error.message)
+    process.exitCode = 2
+  }
+}
