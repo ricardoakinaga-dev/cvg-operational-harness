@@ -1,0 +1,15 @@
+# Primeira fatia do produto — rework local congelado
+
+Estado `FROZEN / VERIFIED_LOCAL / REVIEW_IN_PROGRESS / NOT_INTEGRATED`; veredito integral **FAIL**. Aprovações das SPECs 0179/0180 já recebidas; sem nova pergunta de aprovação. Build somente sintético no consumidor privado.
+
+O validador real exige campo completo e unidade integral com evidência literal localizada; confirmação simples exige único rascunho elegível do autor, último preview aceito e nenhuma entrada anterior relevante pendente. Falha permanente de correção preserva a nota em substituição pendente, suspende tarefas e registra notificação durável. Novo pedido explícito pode corrigir uma substituição terminal. Metadados de criação da outbox recebem o ID real da transição.
+
+Dois writers em paths disjuntos: Builder fonte em dois arquivos; Lead em seis arquivos de aplicação/reducer/testes. Ambos congelados; R1 original e seus anexos preservados. [Freeze91](product-r2-source-freeze.json), [patch reproduzido](product-r2-patch-integrity.json), [ZIP de fonte](product-r2-source.zip) e [bundle](product-r2-bundle.zip).
+
+[Capturas atuais](gates-final.json): Node22, 194 testes do produto/7 arquivos e suíte completa com PostgreSQL 2837 testes/340 arquivos, zero skips; tipos/lint/build público/smoke PASS, E2E12 PASS sem retry. Os194 são subconjunto dos2837; PostgreSQL dedicado288PASS/35files, também subconjunto. Os 40 testes físicos de fundação e os 37 nomes originais continuam presentes. As 61 regressões novas de fonte e 11 de confirmação/correção incluem falhas e positivos; os41 numerais/139 comparações e21 quotes permanecem inalterados.
+
+Primeira captura integrada187PASS/7FAIL e typecheckFAIL preservados: testes novos tentavam reabrir um store ainda aberto, e o evento retry com outbox opcional exigia guarda de presença ao computar revisões. Fechamento explícito no fixture e guarda de tipo corrigidos; segunda captura194PASS e typecheckPASS. Falhas de desenvolvimento do Builder também preservadas. Nenhum assert foi retirado.
+
+O cenário original de JSON agora executa parsing puro V2 positivo, fenced e inválido; continua comprovando policy_denied e zero chamadas do provider. Esse teste não executa o caminho clínico positivo antigo. O inventário de37 nomes é estático e não demonstra preservação de toda intenção original; PV13 permanece para julgamento independente, e a parte clínica do provider está BLOCKED por D2/NO_MODEL.
+
+R2 está em andamento, como segunda e última revisão independente deste conjunto, em identidade/contexto novos, contra os14 critérios originais da primeira fatia. C1 está fora de escopo e sua única revisão já encerrou REJECT. Nada promovido ao root; nenhum cartão HISO/PISO encerrado. Áudio, Whisper, fidelidade clínica humana, migração operacional completa, lembretes/controle completos, hardening, backup/restore e piloto continuam pendentes. Ledgers compartilhados aguardam owner; proposta atual em ../../ledger-handoff-current.md.

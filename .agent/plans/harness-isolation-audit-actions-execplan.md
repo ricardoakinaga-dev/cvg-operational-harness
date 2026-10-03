@@ -14,7 +14,7 @@ Executar o plano anexado pelo usuário e as decisões B1/B2/B3 registradas em `d
 - [x] C2/C3/C5/C6/C8: emendas T1/SPEC aprovadas pelos hashes concretos; contratos T3 ainda não implementados.
 - [x] C4: suporte documental WAHA/Evolution registrado; qualificação operacional ainda pendente.
 - [x] C7: diffs/hashes/packet conferidos; aprovações separadas 0179/0180 recebidas.
-- [ ] D: BUILD T3 autorizado; fundação PISO00440PASS preservada em candidato privado (legado27PASS/10FAIL), rootbaseline própria restaurada por hash. Primeira fatia vertical em BUILD privado, sem promover até validação/revisão dos callers. D009/D011 aguardam aceite C1 antes da integração. Piloto/release/dados reais fora da autorização atual.
+- [ ] D: BUILD T3 autorizado; primeira fatia congelada IMPLEMENTED_NOT_INTEGRATED:122PASS (40 físicos intactos+37 cenários+45 novos), build/typecheck/lint/smoke do construtor verdes. Integridade Lead90fontes/ZIPs/patches MATCH; crítico fresh-context em andamento. Lead achou divergência de contrato: ok simples sempre recusado, apesar da elegibilidade permitida pela0179; corrigir só após retorno selado. Suíte Lead2765casos PASS/339files, gate FAIL por12clones de testes em dist sem tsconfig; nova cópia de fontes idênticas preparada, sem mudar Vitest/coverage. Rootbaseline própria preservada; nenhuma promoção até revisão/rework e regressões. D009/D011 aguardam aceite C1 antes da integração. Piloto/release/dados reais fora da autorização atual.
 
 ## Surprises & Discoveries
 
@@ -51,3 +51,9 @@ Baseline e cópias anteriores das SPECs preservadas em arquivos .txt para não c
 ## Outcomes & Retrospective
 
 Em execução. Próxima ação: concluir/verificar primeira fatia vertical independente no candidato do produto; C1 retorna à sessão semanal. D009/D011 não integram antes do aceite HISO005. Objetivo active; progresso de preservação confirmado. Veredito integral anterior FAIL preservado até evidência suficiente para alteração.
+
+## Checkpoint — rework da primeira fatia, 03/10/2026
+
+R1 do produto encerrada REJECT por quatro defeitos reproduzidos: fonte/campo, unidade abreviada, confirmação simples e falha permanente de correção. Sentinels/89 provas conferidos pelo Lead; artefato R1 preservado. Rework em product-verification, paths disjuntos e devolvidos ao Lead após congelamento. Fonte65PASS (61 novos + quatro oráculos intactos), suíte integrada194PASS/7files/zero skips, tipos e lint PASS, build público PASS. Primeira execução187PASS/7FAIL por testes sem fechamento do store e typecheck FAIL por outbox opcional preservados; correções verificadas na segunda execução, sem enfraquecer os asserts. Suíte completa com PostgreSQL em andamento. Inventário estático mantém os37 nomes originais; não demonstra a execução original do provider clínico. ParseV2 positivo/negativo foi restaurado de forma pura, zero chamadas de modelo; comportamento clínico positivo permanece BLOCKED por D2/NO_MODEL, e PV13 não será declarado PASS por contagem de nomes. R2 fresh-context será a segunda e última revisão desta mudança, após gates/freeze. Root ainda sem promoção; nenhum critério original alterado. C1 continua REJECT/sessão semanal, sem nova correção autorizada.
+
+Gates finais do rework:2837PASS/340files/zero skips em invocação única com PG exigido, test:postgres288PASS/35files e E2E12PASS/zero retries; produto194 é subconjunto, não somar. R2 fresh-context Arendt01a1024f-431b-7c10-8af9-43f71727a108 em andamento, packetSHA967795bdc29efbc5c0cb211b316bf5120b0e5ffe8ea9e18e8c0c50361bf46a4b. Patch preparado contra os27caminhos atuais próprios do root, preimages coincidem com baselineT2 de código e reprodução hash-bound PASS; NÃO aplicado. Rootbacklog, ledgers/core/lock/coord excluídos do patch. Fonte91 congelada e R1 intacta.

@@ -1,0 +1,782 @@
+diff --git a/products/shift-assistant/src/source-evidence.ts b/products/shift-assistant/src/source-evidence.ts
+--- a/products/shift-assistant/src/source-evidence.ts
++++ b/products/shift-assistant/src/source-evidence.ts
+@@ -328,6 +328,214 @@
+     blocks.push({ patientRef: null, start: 0, end: raw.length })
+   return blocks
+ }
++interface BoundField {
++  field: string
++  start: number
++  end: number
++  literal: string
++}
++// Values are extracted from the complete persisted block, never from a potentially
++// shortened quote. Only surrounding field separators are removed; units, signs,
++// scale, negation and all free prose remain literal.
++function fieldRange(
++  raw: string,
++  field: string,
++  start: number,
++  end: number
++): BoundField {
++  while (start < end && /\s/u.test(raw[start]!)) start++
++  while (end > start && /\s/u.test(raw[end - 1]!)) end--
++  if (/[.,;]/u.test(raw[end - 1] ?? '')) end--
++  while (end > start && /\s/u.test(raw[end - 1]!)) end--
++  return { field, start, end, literal: raw.slice(start, end) }
++}
++function boundFields(raw: string, block: SourceBlock): BoundField[] {
++  const result: BoundField[] = []
++  const text = raw.slice(block.start, block.end)
++  const anchor = /^(?:Novo paciente:|Paciente)\s+([^,.;\n]+)[,.;]/i.exec(text)
++  let bodyStart = block.start
++  if (anchor) {
++    const nameAt = block.start + anchor[0].indexOf(anchor[1]!)
++    result.push(fieldRange(raw, 'nome', nameAt, nameAt + anchor[1]!.length))
++    const stop = /\.\s|\.$|\n/.exec(text)
++    const headerEnd = block.start + (stop?.index ?? text.length)
++    // Header values consume their complete comma/semicolon-delimited scalar.
++    // An ID or bed is never selected from a numeric occurrence elsewhere.
++    const headerStart = block.start + anchor[0].length
++    const header = raw.slice(headerStart, headerEnd)
++    for (const item of header.matchAll(/[^,;\n]+/g)) {
++      const segmentStart = headerStart + item.index!
++      const segment = item[0]
++      const named =
++        /^\s*(ID|ficha|prontuário|leito|espécie|tutor|tutora)\s*:?\s+(.+)$/i.exec(
++          segment
++        )
++      if (named) {
++        const label = named[1]!.toLocaleLowerCase('pt-BR')
++        const field = ['id', 'ficha', 'prontuário'].includes(label)
++          ? 'id'
++          : label === 'espécie'
++            ? 'especie'
++            : label === 'tutora'
++              ? 'tutor'
++              : label
++        const valueAt = segmentStart + named[0].length - named[2]!.length
++        result.push(
++          fieldRange(raw, field, valueAt, segmentStart + segment.length)
++        )
++      } else if (
++        /^\s*(?:canino|felino|cão|cadela|gato|gata)\s*$/u.test(segment)
++      ) {
++        // Explicit unlabelled species literals used by the existing corpus;
++        // no semantic species classifier or alias is introduced.
++        result.push(
++          fieldRange(
++            raw,
++            'especie',
++            segmentStart,
++            segmentStart + segment.length
++          )
++        )
++      }
++    }
++    bodyStart = stop ? headerEnd + stop[0].length : block.end
++  }
++  const body = raw.slice(bodyStart, block.end)
++  const markers = [
++    ...body.matchAll(
++      /(?<![\p{L}\p{N}_])(?:Motivo(?: da internação informado)?:|Evolução(?: anotada)?:|Evolucao:|Exames:|Condutas:|Pendência(?: geral| da equipe)?:|Pendencia:|Geral:|Tutor:|Tutora:|Espécie:|Temperatura anotada|Frequência cardíaca|Frequência respiratória|Peso|glicemia|Volume anotado|O valor fornecido agora|a anotação anterior dizia|ID\s+|ficha\s+|prontuário\s+|leito\s+|pedi\s+|solicitar\s+|recebeu\s+|vou\s+|promessa(?: da equipe)?:|prometeu\s+)/giu
++    )
++  ].filter((m) => {
++    const previous = body.slice(0, m.index).trimEnd()
++    return /^(?:ID|ficha|prontuário|leito)\s+$/iu.test(m[0])
++      ? /[,;.\n]\s*$/u.test(body.slice(0, m.index))
++      : !previous || /[,;.:\n]\s*$/u.test(body.slice(0, m.index))
++  })
++  const fieldFor = (marker: string) => {
++    const m = marker.toLocaleLowerCase('pt-BR').trim()
++    if (m.startsWith('motivo')) return 'motivo'
++    if (
++      /^(?:evolução|evolucao|temperatura|frequência|peso|glicemia|volume|o valor)/u.test(
++        m
++      )
++    )
++      return 'evolucao'
++    if (/^(?:exames|pedi|solicitar)/u.test(m)) return 'exames_pedidos'
++    if (/^(?:condutas|recebeu)/u.test(m)) return 'condutas'
++    if (/^(?:pendência|pendencia|geral|vou|promessa|prometeu)/u.test(m))
++      return 'descricao'
++    if (/^tutor/u.test(m)) return 'tutor'
++    if (m.startsWith('espécie')) return 'especie'
++    // Historical values and header mentions still terminate the previous field,
++    // but are not grants for a current clinical field or a header identity.
++    return null
++  }
++  for (const [index, marker] of markers.entries()) {
++    const label = marker[0]
++    const field = fieldFor(label)
++    if (!field) continue
++    const markerAt = bodyStart + marker.index!
++    const previous = raw.slice(bodyStart, markerAt).trimEnd()
++    const parent = markers[index - 1]
++    const nested =
++      parent &&
++      /^(?:Evolução:|Evolucao:)$/iu.test(parent[0]) &&
++      body.slice(parent.index! + parent[0].length, marker.index!).trim() === ''
++    // A marker embedded in arbitrary/negated prose supplies no field grant.
++    // It nevertheless bounds the preceding field, so values cannot leak past it.
++    if (
++      previous &&
++      !/[.,;:\n]\s*$/u.test(raw.slice(bodyStart, markerAt)) &&
++      !nested
++    )
++      continue
++    let next = markers[index + 1]
++    if (
++      next &&
++      /^(?:Evolução:|Evolucao:)$/iu.test(label) &&
++      body.slice(marker.index! + label.length, next.index!).trim() === '' &&
++      fieldFor(next[0]) === 'evolucao'
++    )
++      next = markers[index + 2]
++    const end = next ? bodyStart + next.index! : block.end
++    const value = fieldRange(raw, field, markerAt + label.length, end)
++    if (!value.literal) continue
++    if (field === 'exames_pedidos' || field === 'condutas') {
++      for (const item of value.literal.matchAll(/[^;]+/g))
++        result.push(
++          fieldRange(
++            raw,
++            field,
++            value.start + item.index!,
++            value.start + item.index! + item[0].length
++          )
++        )
++    } else if (field === 'descricao') {
++      const time = /(?:^|\s)(?:às|as)\s+(.+)$/u.exec(value.literal)
++      const clock = time && numeralValue(time[1]!)
++      if (time && clock && /^\d{2}:\d{2}$/u.test(clock)) {
++        const clockStart =
++          value.start + time.index + time[0].length - time[1]!.length
++        result.push(fieldRange(raw, 'quando', clockStart, value.end))
++        result.push(
++          fieldRange(raw, field, value.start, value.start + time.index)
++        )
++      } else result.push(value)
++    } else {
++      result.push(value)
++      // Literal corpus labels may be retained in the proposed evolution. The
++      // complete labelled span is another exact representation, not a substring.
++      if (!label.endsWith(':'))
++        result.push(fieldRange(raw, field, markerAt, end))
++    }
++  }
++  return [
++    ...new Map(
++      result.map((f) => [JSON.stringify([f.field, f.start, f.end]), f])
++    ).values()
++  ]
++}
++function fieldEquivalent(
++  source: string,
++  output: string,
++  field: string
++): boolean {
++  if (source === output) return true
++  if (field === 'id' || field === 'leito' || field === 'quando') {
++    const a = numeralValue(source),
++      b = numeralValue(output)
++    return (
++      a !== undefined && a === b && (field === 'quando' || !a.includes(':'))
++    )
++  }
++  const fieldNumericPattern = new RegExp(
++    numericPattern.source.replace('(?: (?:', '(?: +(?:'),
++    'giu'
++  )
++  const canonicalField = (text: string) =>
++    text.replace(fieldNumericPattern, (literal, at: number) => {
++      const value = numeralValue(literal)
++      const before = text.slice(0, at),
++        after = text.slice(at + literal.length)
++      // Do not partially canonicalize signed quantities, fractions, intervals,
++      // percentages, exponents or decimals outside C2 by converting their pieces.
++      const compound =
++        /[-+/%^.,]\s*$/u.test(before) ||
++        /^\s*[-+/%^.,]\s*[\p{L}\p{N}]/u.test(after) ||
++        /^\s*[/%^]/u.test(after) ||
++        /(?:menos|mais|a|até)\s$/iu.test(before) ||
++        /^\s+(?:por cento|a|até)\s?/iu.test(after)
++      // C2 clock syntax requires explicit clock context; duration is not a clock.
++      if (
++        value === undefined ||
++        compound ||
++        (value.includes(':') && !/(?:às|as)\s$/u.test(before))
++      )
++        return literal
++      return '⟦' + value + '⟧'
++    })
++  return canonicalField(source) === canonicalField(output)
++}
+ export function validateOrganization(
+   raw: string,
+   o: OrganizedV2,
+@@ -357,12 +565,10 @@
+       outputValue: value,
+       severity: 'blocking'
+     })
+-  const verify = (
+-    path: string,
+-    ref: string | null,
+-    value: string,
+-    context?: RegExp
+-  ) => {
++  const fieldsByBlock = new Map(
++    blocks.map((b) => [b.patientRef, boundFields(raw, b)])
++  )
++  const verify = (path: string, ref: string | null, value: string) => {
+     const es = o.evidence.filter((e) => e.path === path && e.patientRef === ref)
+     if (es.length !== 1) {
+       issue('SOURCE_QUOTE_MISSING', path, ref, value)
+@@ -375,22 +581,36 @@
+     }
+     const ev = located.serviceEvidence
+     evidence.push(ev)
+-    const marker = context?.exec(ev.quote)
+-    if (context && !marker) {
++    const field = path.split('.')[2]!
++    const candidates = (fieldsByBlock.get(ref) ?? []).filter(
++      (f) => f.field === field
++    )
++    if (!candidates.length) {
+       issue('VALUE_FIELD_MISMATCH', path, ref, value, ev)
+       return
+     }
+-    let local = marker ? ev.quote.slice(marker.index) : ev.quote
+-    if (context) {
+-      // A quote covering several fields does not grant values from later fields.
+-      const boundary =
+-        /(?:Motivo:|Evolução:|Evolucao:|Exames:|Condutas:|Pendência:|Pendencia:|Tutor:)/i.exec(
+-          local.slice(1)
+-        )
+-      if (boundary) local = local.slice(0, boundary.index + 1)
+-    }
+-    if (!numericText(local).includes(numericText(value)))
+-      issue('UNSOURCED_VALUE', path, ref, value, ev)
++    // Header scalars must have one complete source value in their own block.
++    if (
++      ['id', 'leito', 'nome', 'tutor', 'especie'].includes(field) &&
++      candidates.length !== 1
++    ) {
++      issue('SOURCE_ASSOCIATION_AMBIGUOUS', path, ref, value, ev)
++      return
++    }
++    const matching = candidates.filter(
++      (f) =>
++        ev.start <= f.start &&
++        ev.end >= f.end &&
++        fieldEquivalent(f.literal, value, field)
++    )
++    if (matching.length !== 1)
++      issue(
++        matching.length ? 'SOURCE_ASSOCIATION_AMBIGUOUS' : 'UNSOURCED_VALUE',
++        path,
++        ref,
++        value,
++        ev
++      )
+   }
+   for (const p of o.pacientes) {
+     const prefix = 'pacientes.' + p.localRef + '.'
+@@ -427,8 +647,7 @@
+       issue('UNSOURCED_ID', prefix + 'id', p.localRef, p.id ?? '')
+     }
+     verify(prefix + 'nome', p.localRef, p.nome)
+-    if (p.id)
+-      verify(prefix + 'id', p.localRef, p.id, /(?:ID|id|ficha|prontuário)\s/)
++    if (p.id) verify(prefix + 'id', p.localRef, p.id)
+     for (const field of [
+       'leito',
+       'especie',
+@@ -436,28 +655,11 @@
+       'motivo',
+       'evolucao'
+     ] as const)
+-      if (p[field])
+-        verify(
+-          prefix + field,
+-          p.localRef,
+-          p[field]!,
+-          field === 'leito'
+-            ? /leito\s/
+-            : field === 'motivo'
+-              ? /motivo:/i
+-              : field === 'evolucao'
+-                ? /(?:evolução:|evolucao:|Temperatura anotada|Frequência cardíaca|Frequência respiratória|Peso|glicemia|Volume anotado|O valor fornecido agora)/i
+-                : undefined
+-        )
++      if (p[field]) verify(prefix + field, p.localRef, p[field]!)
+     for (const [i, v] of p.exames_pedidos.entries())
+-      verify(
+-        prefix + 'exames_pedidos.' + i,
+-        p.localRef,
+-        v,
+-        /(?:exames:|pedi|solicitar)/i
+-      )
++      verify(prefix + 'exames_pedidos.' + i, p.localRef, v)
+     for (const [i, v] of p.condutas.entries())
+-      verify(prefix + 'condutas.' + i, p.localRef, v, /(?:condutas:|recebeu)/i)
++      verify(prefix + 'condutas.' + i, p.localRef, v)
+     bindings.push({
+       localRef: p.localRef,
+       name: p.nome,
+@@ -507,12 +709,7 @@
+         t.pacienteRef,
+         t.pacienteId ?? ''
+       )
+-    verify(
+-      prefix + 'descricao',
+-      t.pacienteRef,
+-      t.descricao,
+-      /(?:pendência:|pendencia:|vou|promessa|prometeu|pendência geral:|geral:)/i
+-    )
++    verify(prefix + 'descricao', t.pacienteRef, t.descricao)
+     const ids = [
+       ...t.descricao.matchAll(/(?:ID|ficha|prontuário)\s+([^,.;\s]+)/g)
+     ].map((m) => m[1])
+diff --git a/products/shift-assistant/src/__tests__/source-validator-regressions.test.ts b/products/shift-assistant/src/__tests__/source-validator-regressions.test.ts
+new file mode 100644
+--- /dev/null
++++ b/products/shift-assistant/src/__tests__/source-validator-regressions.test.ts
+@@ -0,0 +1,436 @@
++// @vitest-environment node
++import { describe, expect, it } from 'vitest'
++import { validateOrganization } from '../source-evidence.ts'
++import { parseOrganizerResponse } from '../organizer.ts'
++import {
++  applyVertical,
++  emptyVertical,
++  revisionToken
++} from '../vertical-state.ts'
++import { canonical, sha256 } from '../journal.ts'
++import type { NoteV2, OrganizedV2 } from '../domain.ts'
++import { RAW, RESPONSE } from './vertical-test-fixture.ts'
++import { ADMISSION, THOR_AUDIO, BOB_AUDIO } from './e2e-v2-fixtures.ts'
++import { LEGACY_RAW, LEGACY_RESPONSE } from './legacy-v2-fixture.ts'
++
++const at = '2026-10-03T18:00:00Z'
++function check(raw: string, response: OrganizedV2) {
++  return validateOrganization(
++    raw,
++    parseOrganizerResponse(JSON.stringify(response)),
++    [],
++    at
++  )
++}
++function evolution(
++  source: string,
++  output = source,
++  quote = 'Evolução: ' + source
++) {
++  const response = structuredClone(RESPONSE)
++  response.pacientes[0]!.evolucao = output
++  response.evidence[3]!.quote = quote
++  return { raw: RAW.replace('alerta', source), response }
++}
++function bed(source: string, output: string, quote = 'leito ' + source) {
++  const response = structuredClone(RESPONSE)
++  response.pacientes[0]!.id = '2'
++  response.pacientes[0]!.leito = output
++  response.pendencias[0]!.pacienteId = '2'
++  response.evidence[0]!.quote = 'Paciente Rex, leito ' + source + ', ID 2'
++  response.evidence[1]!.quote = 'ID 2'
++  response.evidence[2]!.quote = quote
++  return {
++    raw: RAW.replace('ID 20202, leito 4', 'leito ' + source + ', ID 2'),
++    response
++  }
++}
++function blocked(raw: string, response: OrganizedV2, field: string) {
++  const result = check(raw, response)
++  expect(
++    result.issues.some((i) => i.path === field && i.severity === 'blocking')
++  ).toBe(true)
++  return result
++}
++function replay(raw: string, response: OrganizedV2, forgeIssues = false) {
++  const organized = parseOrganizerResponse(response)
++  const validation = validateOrganization(raw, organized, [], at)
++  // This reducer is the real journal caller; no store/app mutation, model or HTTP seam.
++  // Empty pending list makes the test focus on recomputation of field provenance.
++  const state = emptyVertical()
++  const key = JSON.stringify(['waha', 'source-regression', 'note'])
++  const phone = '5511900000001'
++  state.inbox.set(key, {
++    key,
++    digest: '0'.repeat(64),
++    provider: 'waha',
++    session: 'source-regression',
++    messageId: 'note',
++    memberPhone: phone,
++    kind: 'text',
++    text: raw,
++    receivedAt: at,
++    state: 'processing',
++    stage: 'organize',
++    attempt: 1
++  })
++  const note: NoteV2 = {
++    id: 'source-note',
++    messageKey: key,
++    authorPhone: phone,
++    revision: 1,
++    createdAt: at,
++    rawText: raw,
++    rawTextSha256: sha256(raw),
++    organized,
++    organizedSha256: sha256(canonical(organized)),
++    token: '',
++    state: 'draft',
++    replacementPending: false,
++    evidence: validation.evidence,
++    bindings: validation.bindings,
++    issues: forgeIssues ? [] : validation.issues,
++    warnings: [],
++    tasks: [],
++    previewIds: ['source-preview']
++  }
++  note.token = revisionToken(note)
++  applyVertical(
++    state,
++    {
++      v: 2,
++      type: 'draft_prepared',
++      at,
++      actor: { kind: 'member', memberPhone: phone },
++      key,
++      note,
++      outboxes: [
++        {
++          id: 'source-preview',
++          purpose: 'preview',
++          sourceTransitionId: 'source-draft',
++          recipientMemberId: phone,
++          noteId: note.id,
++          noteRevision: 1,
++          payloadText: 'synthetic preview',
++          payloadSha256: sha256('synthetic preview'),
++          state: 'queued',
++          attempt: 0
++        }
++      ]
++    },
++    0,
++    false
++  )
++  return state
++}
++describe('R1 source validator runtime regressions', () => {
++  it('F01 rejects bed 2 borrowed from ID 2 in leito 1, ID 2', () => {
++    const c = bed('1', '2', 'leito 1, ID 2')
++    blocked(c.raw, c.response, 'pacientes.p1.leito')
++  })
++  it('F02 rejects full unit suffix loss mg/kg to mg', () => {
++    const c = evolution('dose 1 mg/kg', 'dose 1 mg')
++    blocked(c.raw, c.response, 'pacientes.p1.evolucao')
++  })
++  it.each(['20', '2A', '2-3', 'dois e três'])(
++    'rejects scalar bed substring %s to 2',
++    (source) => {
++      const c = bed(source, '2')
++      blocked(c.raw, c.response, 'pacientes.p1.leito')
++    }
++  )
++  it.each([
++    ['dose 1 mg/kg/h', 'dose 1 mg/kg'],
++    ['volume 1 mL/kg/h', 'volume 1 mL'],
++    ['dose 1 miligramas por quilograma', 'dose 1 miligramas'],
++    ['dose 1 mg', 'dose 1 g'],
++    ['glicemia 92 mg/dL', 'glicemia 92 mg'],
++    ['dose 1,0 mg', 'dose 1 mg'],
++    ['dose -2 mg', 'dose 2 mg'],
++    ['dose 1/2 mg', 'dose 2 mg'],
++    ['dose 2.5 mg', 'dose 2,5 mg'],
++    ['não alerta', 'alerta'],
++    ['alerta, não estável', 'alerta'],
++    ['dose 1 mg; não repetir', 'dose 1 mg'],
++    ['dose 1 mg e dose 2 mg', 'dose 2 mg'],
++    ['observar por quinze horas', 'observar por 15:00']
++  ])('rejects prefix/suffix/negation/conversion %s -> %s', (source, output) => {
++    const c = evolution(source, output)
++    blocked(c.raw, c.response, 'pacientes.p1.evolucao')
++  })
++  it.each([
++    'dose 1 mg/kg',
++    'dose 1 mg/kg/h',
++    'volume 1 mL/kg/h',
++    'dose 1 miligramas por quilograma',
++    'não alerta',
++    'alerta, não estável',
++    'dose -2 mg',
++    'dose 1/2 mg',
++    'dose 2.5 mg',
++    'dose 1 mg; não repetir'
++  ])('accepts correctly identical complete clinical field %s', (source) => {
++    const c = evolution(source)
++    expect(check(c.raw, c.response).issues).toEqual([])
++  })
++  it.each([
++    ['dose um mg/kg', 'dose 1 mg/kg'],
++    ['dose um vírgula zero mg/kg/h', 'dose 1,0 mg/kg/h'],
++    ['Volume anotado dois mililitros', 'Volume anotado 2 mililitros'],
++    ['vomitou duas vezes', 'vomitou 2 vezes']
++  ])(
++    'accepts finite numeral equivalence with entire unit/prose %s',
++    (source, output) => {
++      const c = evolution(source, output)
++      expect(check(c.raw, c.response).issues).toEqual([])
++    }
++  )
++  it('accepts exact bed and by-extenso bed without borrowing ID, preserving literal ID', () => {
++    for (const source of ['1', 'um']) {
++      const c = bed(source, '1', 'leito ' + source + ', ID 2')
++      const result = check(c.raw, c.response)
++      expect(result.issues).toEqual([])
++      expect(result.bindings[0]?.idLiteral).toBe('2')
++    }
++    const response = structuredClone(RESPONSE)
++    response.pacientes[0]!.id = '101'
++    response.pendencias[0]!.pacienteId = '101'
++    response.evidence[0]!.quote = 'Paciente Rex, ficha cento e um'
++    response.evidence[1]!.quote = 'ficha cento e um'
++    const result = check(RAW.replace('ID 20202', 'ficha cento e um'), response)
++    expect(result.issues).toEqual([])
++    expect(result.bindings[0]?.idLiteral).toBe('cento e um')
++  })
++  it.each(['ID 202', 'ID 2020'])('rejects ID substring %s', (id) => {
++    const response = structuredClone(RESPONSE)
++    response.pacientes[0]!.id = id.slice(3)
++    response.evidence[1]!.quote = id
++    blocked(RAW, response, 'pacientes.p1.id')
++  })
++  it('rejects field borrowing even with a full multi-field quote', () => {
++    const response = structuredClone(RESPONSE)
++    response.pacientes[0]!.evolucao = 'dose 2 mg'
++    response.evidence[3]!.quote = 'Evolução: dose 1 mg. Condutas: dose 2 mg'
++    blocked(
++      RAW.replace(
++        'Evolução: alerta',
++        'Evolução: dose 1 mg. Condutas: dose 2 mg'
++      ),
++      response,
++      'pacientes.p1.evolucao'
++    )
++  })
++  it('rejects truncated literal quote hiding full unit or negation outside the quote', () => {
++    for (const source of ['dose 1 mg/kg', 'dose 1 mg, não repetir']) {
++      const c = evolution(source, 'dose 1 mg', 'Evolução: dose 1 mg')
++      blocked(c.raw, c.response, 'pacientes.p1.evolucao')
++    }
++  })
++  it('accepts complete array items, rejects partial and negated items', () => {
++    const response = structuredClone(RESPONSE)
++    response.pacientes[0]!.exames_pedidos = ['hemograma', 'bioquímico']
++    response.evidence.push(
++      ...response.pacientes[0]!.exames_pedidos.map((_, i) => ({
++        path: 'pacientes.p1.exames_pedidos.' + i,
++        patientRef: 'p1',
++        quote: 'Exames: hemograma; bioquímico'
++      }))
++    )
++    const raw = RAW.replace(
++      'Pendência:',
++      'Exames: hemograma; bioquímico. Pendência:'
++    )
++    expect(check(raw, response).issues).toEqual([])
++    response.pacientes[0]!.exames_pedidos[0] = 'hemog'
++    blocked(raw, response, 'pacientes.p1.exames_pedidos.0')
++    response.pacientes[0]!.exames_pedidos[0] = 'hemograma'
++    for (const e of response.evidence.filter((e) =>
++      e.path.includes('exames_pedidos')
++    ))
++      e.quote = 'Exames: hemograma; não bioquímico'
++    blocked(
++      raw.replace('; bioquímico', '; não bioquímico'),
++      response,
++      'pacientes.p1.exames_pedidos.1'
++    )
++  })
++  it('rejects negation lost in task descriptions, accepts exact task plus finite time', () => {
++    const response = structuredClone(RESPONSE)
++    for (const e of response.evidence.filter((e) =>
++      e.path.startsWith('pendencias.')
++    ))
++      e.quote = 'Pendência: não conferir ficha às 16:00'
++    const raw = RAW.replace(
++      'Pendência: conferir ficha',
++      'Pendência: não conferir ficha'
++    )
++    blocked(raw, response, 'pendencias.t1.descricao')
++    response.pendencias[0]!.descricao = 'não conferir ficha'
++    expect(check(raw, response).issues).toEqual([])
++    for (const e of response.evidence.filter((e) =>
++      e.path.startsWith('pendencias.')
++    ))
++      e.quote = 'Pendência: não conferir ficha às dezesseis horas'
++    expect(
++      check(raw.replace('16:00', 'dezesseis horas'), response).issues
++    ).toEqual([])
++  })
++  it('does not borrow a clock from another field in a broad quote', () => {
++    const response = structuredClone(RESPONSE)
++    response.evidence[5]!.quote =
++      'Evolução: alerta às 16:00. Pendência: conferir ficha'
++    response.evidence[4]!.quote = 'Pendência: conferir ficha'
++    const raw = RAW.replace(
++      'Evolução: alerta',
++      'Evolução: alerta às 16:00'
++    ).replace('conferir ficha às 16:00', 'conferir ficha')
++    response.pacientes[0]!.evolucao = 'alerta às 16:00'
++    response.evidence[3]!.quote = 'Evolução: alerta às 16:00'
++    blocked(raw, response, 'pendencias.t1.quando')
++  })
++  it('rejects cross-patient source despite the same unit and valid literal quote elsewhere', () => {
++    const c = evolution(
++      'dose 1 mg/kg',
++      'dose 2 mg/kg',
++      'Evolução: dose 2 mg/kg'
++    )
++    blocked(
++      c.raw + '\nPaciente Lua, ID 3. Evolução: dose 2 mg/kg.',
++      c.response,
++      'pacientes.p1.evolucao'
++    )
++  })
++  it('preserves absolute literal UTF16 evidence with non-BMP and complete units', () => {
++    const c = evolution('dose 1 mg/kg')
++    c.raw = '🧪 treinamento sintético. ' + c.raw
++    const result = check(c.raw, c.response)
++    expect(result.issues).toEqual([])
++    for (const e of result.evidence)
++      expect(c.raw.slice(e.start, e.end)).toBe(e.quote)
++    expect(result.evidence[0]!.start).toBe(c.raw.indexOf('Paciente Rex'))
++  })
++  it('real reducer recomputes F01/F02 and rejects falsely empty issues', () => {
++    for (const c of [
++      bed('1', '2', 'leito 1, ID 2'),
++      evolution('dose 1 mg/kg', 'dose 1 mg')
++    ]) {
++      c.response.pendencias = []
++      c.response.evidence = c.response.evidence.filter(
++        (e) => !e.path.startsWith('pendencias.')
++      )
++      expect(() => replay(c.raw, c.response, true)).toThrow('STATE_CONFLICT')
++      const state = replay(c.raw, c.response)
++      expect(state.notes.get('source-note')?.issues.length).toBeGreaterThan(0)
++      expect(state.tasks.size).toBe(0)
++    }
++  })
++  it('real reducer accepts valid complete compound unit and equivalent numeral provenance', () => {
++    const c = evolution('dose um mg/kg/h', 'dose 1 mg/kg/h')
++    c.response.pendencias = []
++    c.response.evidence = c.response.evidence.filter(
++      (e) => !e.path.startsWith('pendencias.')
++    )
++    const state = replay(c.raw, c.response)
++    expect(state.notes.get('source-note')?.issues).toEqual([])
++    expect(
++      state.notes
++        .get('source-note')
++        ?.evidence.some((e) => e.quote === 'Evolução: dose um mg/kg/h')
++    ).toBe(true)
++  })
++  it('retains existing complete admission/audio-text fixture fields without a provider', () => {
++    for (const fixture of [
++      ADMISSION,
++      THOR_AUDIO,
++      BOB_AUDIO,
++      { raw: LEGACY_RAW, response: LEGACY_RESPONSE }
++    ]) {
++      const response = structuredClone(fixture.response)
++      for (const t of response.pendencias)
++        if (t.quando)
++          t.quando = t.quando.replace(/^2026-\d{2}-\d{2}/, '2026-10-03')
++      expect(check(fixture.raw, response).issues, fixture.raw).toEqual([])
++    }
++  })
++  it('does not truncate free prose at incidental words received or peso', () => {
++    for (const source of [
++      'não recebeu dose 1 mg/kg',
++      'alerta sem peso anotado',
++      'peso corporal informado 4 kg'
++    ]) {
++      const c = evolution(source)
++      expect(check(c.raw, c.response).issues).toEqual([])
++      c.response.pacientes[0]!.evolucao = source.split(' ')[0]!
++      blocked(c.raw, c.response, 'pacientes.p1.evolucao')
++    }
++  })
++  it('a negated marker in arbitrary prose cannot grant a field', () => {
++    const response = structuredClone(RESPONSE)
++    response.evidence[3]!.quote = 'Evolução: alerta'
++    blocked(
++      RAW.replace('Evolução:', 'não Evolução:'),
++      response,
++      'pacientes.p1.evolucao'
++    )
++  })
++  it('a next named/header field bounds the clinical value without lending numeric values', () => {
++    for (const next of [
++      'Condutas: dose 2 mg',
++      'ID 2',
++      'leito 2',
++      'a anotação anterior dizia dose 2 mg'
++    ]) {
++      const c = evolution('dose 1 mg. ' + next, 'dose 2 mg')
++      blocked(c.raw, c.response, 'pacientes.p1.evolucao')
++      c.response.pacientes[0]!.evolucao = 'dose 1 mg'
++      c.response.evidence[3]!.quote = 'Evolução: dose 1 mg'
++      expect(check(c.raw, c.response).issues, next).toEqual([])
++    }
++  })
++
++  it.each([
++    ['dose -dois mg', 'dose -2 mg'],
++    ['dose menos dois mg', 'dose -2 mg'],
++    ['dose um/dois mg', 'dose 1/2 mg'],
++    ['dose um / dois mg', 'dose 1 / 2 mg'],
++    ['dose um a dois mg', 'dose 1 a 2 mg'],
++    ['dose um até dois mg', 'dose 1 até 2 mg'],
++    ['concentração vinte por cento', 'concentração 20 por cento'],
++    ['concentração vinte%', 'concentração 20%']
++  ])(
++    'C2 forbids converting pieces of unsupported compound %s -> %s',
++    (source, output) => {
++      const c = evolution(source, output)
++      blocked(c.raw, c.response, 'pacientes.p1.evolucao')
++      c.response.pacientes[0]!.evolucao = source
++      expect(check(c.raw, c.response).issues).toEqual([])
++    }
++  )
++  it('newline bounds explicit fields and never lets an ID lend its scalar', () => {
++    const c = evolution('dose 1 mg\nCondutas: dose 2 mg', 'dose 2 mg')
++    blocked(c.raw, c.response, 'pacientes.p1.evolucao')
++    c.response.pacientes[0]!.evolucao = 'dose 1 mg'
++    c.response.evidence[3]!.quote = 'Evolução: dose 1 mg'
++    expect(check(c.raw, c.response).issues).toEqual([])
++  })
++
++  it('comma-separated next header field is a boundary, not a number pool', () => {
++    const c = evolution('dose 1 mg, ID 2', 'dose 2 mg')
++    blocked(c.raw, c.response, 'pacientes.p1.evolucao')
++    c.response.pacientes[0]!.evolucao = 'dose 1 mg'
++    c.response.evidence[3]!.quote = 'Evolução: dose 1 mg'
++    expect(check(c.raw, c.response).issues).toEqual([])
++  })
++  it('C2 folds case/spaces only inside finite numerals, preserving full literal units and prose', () => {
++    for (const [source, output] of [
++      ['dose DOIS mg/kg', 'dose 2 mg/kg'],
++      ['dose trinta  e oito mg/kg', 'dose 38 mg/kg']
++    ]) {
++      const c = evolution(source!, output!)
++      expect(check(c.raw, c.response).issues).toEqual([])
++      c.response.pacientes[0]!.evolucao = output!.replace('mg/kg', 'MG/kg')
++      blocked(c.raw, c.response, 'pacientes.p1.evolucao')
++    }
++  })
++})

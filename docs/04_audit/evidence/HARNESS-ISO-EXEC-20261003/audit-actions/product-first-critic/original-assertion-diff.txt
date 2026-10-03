@@ -1,0 +1,380 @@
+--- original/products/shift-assistant/src/__tests__/shift-assistant.test.ts
++++ candidate/products/shift-assistant/src/__tests__/shift-assistant.test.ts
+@@ -1,3 +1,6 @@
++import { LEGACY_RAW, LEGACY_RESPONSE } from './legacy-v2-fixture.ts'
++import { inputDigest } from '../vertical-state.ts'
++import type { Inbox } from '../domain.ts'
+ // @vitest-environment node
+ import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
+ import type { AddressInfo } from 'node:net'
+@@ -122,7 +125,7 @@
+       organize: async (text) => {
+         organizerCalls.push(text)
+         if (options.organized instanceof Error) throw options.organized
+-        return options.organized ?? THOR
++        return options.organized ?? LEGACY_RESPONSE
+       }
+     },
+     clock
+@@ -250,22 +253,18 @@
+ describe('ShiftAssistant', () => {
+   it('turns a text note into paste-ready text and a timed task', async () => {
+     const env = setup()
+-    expect(
+-      await env.receive(
+-        wahaPayload(
+-          'm1',
+-          ANA,
+-          'Thor leito 3 vomitou 2 vezes, pedi hemograma, ligo pro tutor 16h'
+-        )
+-      )
+-    ).toBe(true)
++    expect(await env.receive(wahaPayload('m1', ANA, LEGACY_RAW))).toBe(true)
+     const [reply] = env.waha.textsTo(ANA)
+-    expect(reply).toContain('Thor · ID não informado · canino · leito 3')
++    expect(reply).toContain('Thor · ID 101 · canino · leito 3')
+     expect(reply).toContain('Evolução: Vomitou 2 vezes, piora clínica')
+     expect(reply).toContain(
+       'Exames solicitados: hemograma; bioquímico (lançar na comanda)'
+     )
+-    expect(reply).toContain('#1 — Ligar para o tutor (Thor)')
++    expect(reply).toContain('#1 — Ligar para o tutor')
++    expect(env.store.openTasks(ANA)).toHaveLength(0)
++    await env.receive(
++      wahaPayload('confirm', ANA, 'ok nota ' + env.store.notesV2()[0]!.token)
++    )
+     const [task] = env.store.openTasks(ANA)
+     expect(task).toMatchObject({ number: 1, dueAt: '2026-09-30T19:00:00.000Z' })
+   })
+@@ -306,30 +305,52 @@
+ 
+   it('transcribes audio and keeps the media file as a document', async () => {
+     const dataDir = mkdtempSync(join(tmpdir(), 'shift-audio-'))
+-    const env = setup({ dataDir, transcript: 'Thor leito 3 vomitou 2 vezes' })
++    const env = setup({ dataDir, transcript: LEGACY_RAW })
+     await env.receive(
+       wahaPayload('a1', ANA, '', {
+         hasMedia: true,
+         media: { url: `${WAHA}/api/files/a1.oga`, mimetype: 'audio/ogg' }
+       })
+     )
+-    expect(env.organizerCalls).toEqual(['Thor leito 3 vomitou 2 vezes'])
+-    expect(readdirSync(join(dataDir, 'media'))).toHaveLength(1)
+-    expect(readFileSync(join(dataDir, 'events.jsonl'), 'utf8')).toContain(
+-      'note_created'
+-    )
++    expect(env.organizerCalls).toEqual([LEGACY_RAW])
++    expect(readdirSync(join(dataDir, 'media'))).toHaveLength(2)
++    expect(
++      readFileSync(
++        join(
++          dataDir,
++          'journal',
++          JSON.parse(
++            readFileSync(join(dataDir, 'journal/manifest.json'), 'utf8')
++          )
++            .segments.at(-1)
++            .path.split('/')
++            .at(-1)
++        ),
++        'utf8'
++      )
++    ).toContain('draft_prepared')
++    env.store.close()
+   })
+ 
+   it('keeps the raw text when the organizer fails', async () => {
+     const env = setup({ organized: new Error('provider down') })
+     await env.receive(wahaPayload('m1', ANA, 'Bob leito 2 estável'))
++    expect(env.store.inboxes()[0]?.state).toBe('retry_wait')
++    for (const minutes of [0.5, 2, 10, 30]) {
++      env.advance(minutes)
++      env.assistant.resumePending()
++      await env.assistant.idle()
++    }
+     expect(env.waha.textsTo(ANA).at(0)).toContain('não consegui organizá-la')
+     expect(env.waha.textsTo(ANA).at(0)).toContain('Bob leito 2 estável')
+   })
+ 
+   it('lists, snoozes and completes only the member own tasks', async () => {
+     const env = setup()
+-    await env.receive(wahaPayload('m1', ANA, 'nota com pendência'))
++    await env.receive(wahaPayload('m1', ANA, LEGACY_RAW))
++    await env.receive(
++      wahaPayload('confirm', ANA, 'ok nota ' + env.store.notesV2()[0]!.token)
++    )
+     await env.receive(wahaPayload('c1', BRUNO, 'feito 1'))
+     expect(env.waha.textsTo(BRUNO).at(-1)).toContain(
+       'Não encontrei a pendência 1'
+@@ -345,7 +366,11 @@
+ 
+   it('reminds at the due time, repeats on an interval and stops after the limit', async () => {
+     const env = setup()
+-    await env.receive(wahaPayload('m1', ANA, 'nota'))
++    await env.receive(wahaPayload('m1', ANA, LEGACY_RAW))
++    expect(env.store.openTasks()).toHaveLength(0)
++    await env.receive(
++      wahaPayload('confirm', ANA, 'ok nota ' + env.store.notesV2()[0]!.token)
++    )
+     expect(await env.assistant.tick()).toBe(0) // due at 16:00 local, now 15:00
+     env.advance(60)
+     expect(await env.assistant.tick()).toBe(1)
+@@ -370,16 +395,50 @@
+       text: 'Thor leito 3',
+       receivedAt: '2026-09-30T18:00:00.000Z'
+     }
+-    first.append({ type: 'message_received', at: message.receivedAt, message })
+-
++    const key = JSON.stringify(['waha', 'default', message.messageId])
++    const inbox: Inbox = {
++      key,
++      digest: '0'.repeat(64),
++      provider: 'waha',
++      session: 'default',
++      messageId: message.messageId,
++      memberPhone: ANA,
++      kind: 'text',
++      text: LEGACY_RAW,
++      receivedAt: message.receivedAt,
++      state: 'received',
++      stage: 'organize',
++      attempt: 0
++    }
++    inbox.digest = inputDigest(inbox)
++    first.commit({
++      transitionId: 'admit-before-crash',
++      expected: { inbox: { [key]: 0 }, operation: { state: 0 } },
++      changes: [
++        {
++          v: 2,
++          type: 'inbound_recorded',
++          at: message.receivedAt,
++          actor: { kind: 'member', memberPhone: ANA },
++          inbox
++        }
++      ]
++    })
++    first.close()
+     const env = setup({ dataDir })
+     expect(env.assistant.resumePending()).toBe(1)
+     await env.assistant.idle()
+     expect(env.waha.textsTo(ANA)).toHaveLength(1)
+-
++    await env.receive(
++      wahaPayload('confirm', ANA, 'ok nota ' + env.store.notesV2()[0]!.token)
++    )
++    env.store.close()
+     const reopened = new ShiftStore(dataDir)
+-    expect(reopened.unprocessedMessages()).toHaveLength(0)
++    expect(
++      reopened.inboxes().filter((i) => i.state !== 'processed')
++    ).toHaveLength(0)
+     expect(reopened.openTasks(ANA)).toHaveLength(1)
++    reopened.close()
+   })
+ 
+   it('lets only the manager pause; paused messages are stored and processed on resume', async () => {
+@@ -398,11 +457,11 @@
+ 
+   it('corrects the last note, cancelling the tasks it created', async () => {
+     const env = setup()
+-    await env.receive(wahaPayload('m1', ANA, 'Thor leito 3'))
+-    await env.receive(wahaPayload('m2', ANA, 'corrigir Thor leito 4'))
++    await env.receive(wahaPayload('m1', ANA, LEGACY_RAW))
++    await env.receive(wahaPayload('m2', ANA, 'corrigir ' + LEGACY_RAW))
+     expect(env.store.task(1)?.status).toBe('cancelled')
+-    expect(env.store.task(2)?.status).toBe('open')
+-    expect(env.waha.textsTo(ANA).at(-1)).toContain('Nota anterior substituída')
++    expect(env.store.task(2)?.status).toBe('draft')
++    expect(env.waha.textsTo(ANA).at(-1)).toContain('RASCUNHO')
+   })
+ })
+ 
+@@ -540,9 +599,7 @@
+     const fenced = '```json\n' + JSON.stringify(THOR) + '\n```'
+     await expect(
+       new ModelOrganizer(reply(fenced), 'm').organize('x', now)
+-    ).resolves.toMatchObject({
+-      pacientes: [{ nome: 'Thor' }]
+-    })
++    ).rejects.toMatchObject({ code: 'policy_denied' })
+     await expect(
+       new ModelOrganizer(reply('{"pacientes": "nao"}'), 'm').organize('x', now)
+     ).rejects.toThrow()
+
+--- original/products/shift-assistant/src/__tests__/shift-assistant-e2e.test.ts
++++ candidate/products/shift-assistant/src/__tests__/shift-assistant-e2e.test.ts
+@@ -1,3 +1,14 @@
++import {
++  THOR_AUDIO,
++  BOB_AUDIO,
++  ADMISSION,
++  REX_ONE,
++  REX_TWO,
++  REX_HISTORY,
++  REX_AMBIGUOUS,
++  THOR_UNKNOWN,
++  fixtureOrganizer
++} from './e2e-v2-fixtures.ts'
+ // @vitest-environment node
+ import { mkdtempSync } from 'node:fs'
+ import { tmpdir } from 'node:os'
+@@ -46,7 +57,7 @@
+     LLM_MODEL: 'sandbox',
+     LLM_LOCATION: 'local'
+   })
+-  app = composeShiftApp(config, { clock })
++  app = composeShiftApp(config, { clock, organizer: fixtureOrganizer })
+   const port = await app.start()
+   const webhook = async (payload: unknown) => {
+     const response = await fetch(
+@@ -72,10 +83,7 @@
+     const { services, app, webhook } = await boot('waha', () => now)
+     const audio = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 1])
+     services.media.set('a1.oga', audio)
+-    services.transcripts.set(
+-      Buffer.from(audio).toString('hex'),
+-      'Thor do leito 3 vomitou duas vezes, pedi hemograma e bioquímico, vou ligar pro tutor às 16h'
+-    )
++    services.transcripts.set(Buffer.from(audio).toString('hex'), THOR_AUDIO.raw)
+ 
+     expect(
+       await webhook({
+@@ -96,9 +104,18 @@
+ 
+     const reply = services.sent.at(-1)!
+     expect(reply.to).toBe(ANA)
+-    expect(reply.text).toContain('Thor · ID não informado · leito 3')
++    expect(reply.text).toContain('Thor · ID 30303 · leito 3')
+     expect(reply.text).toContain('Exames solicitados: hemograma; bioquímico')
+-    expect(reply.text).toContain('#1 — Ligar pro tutor (Thor)')
++    expect(reply.text).toContain('#1 — Ligar pro tutor')
++    expect(app.store.openTasks(ANA)).toHaveLength(0)
++    await webhook({
++      event: 'message',
++      payload: {
++        id: 'confirm-audio',
++        from: ANA + '@c.us',
++        body: 'ok nota ' + app.store.notesV2()[0]!.token
++      }
++    })
+     expect(app.store.openTasks(ANA)).toHaveLength(1)
+ 
+     now = new Date('2026-10-01T19:00:00.000Z') // 16:00 local
+@@ -120,10 +137,7 @@
+     )
+     const audio = new Uint8Array([9, 9, 9])
+     services.media.set('e1', audio)
+-    services.transcripts.set(
+-      Buffer.from(audio).toString('hex'),
+-      'Bob do leito 2 estável, vou trocar o curativo às 18h'
+-    )
++    services.transcripts.set(Buffer.from(audio).toString('hex'), BOB_AUDIO.raw)
+     await webhook({
+       event: 'messages.upsert',
+       instance: 'cvg',
+@@ -136,9 +150,16 @@
+       provider: 'evolution',
+       to: ANA
+     })
+-    expect(services.sent.at(-1)?.text).toContain(
+-      'Bob · ID não informado · leito 2'
+-    )
++    expect(services.sent.at(-1)?.text).toContain('Bob · ID 20202 · leito 2')
++    expect(app.store.openTasks(ANA)).toHaveLength(0)
++    await webhook({
++      event: 'messages.upsert',
++      instance: 'cvg',
++      data: {
++        key: { id: 'confirm-bob', remoteJid: ANA + '@s.whatsapp.net' },
++        message: { conversation: 'ok nota ' + app.store.notesV2()[0]!.token }
++      }
++    })
+     expect(app.store.openTasks(ANA).at(0)?.description).toBe(
+       'Trocar o curativo'
+     )
+@@ -167,7 +188,7 @@
+         id: 't2',
+         from: `${ANA}@c.us`,
+         fromMe: false,
+-        body: 'Novo paciente: Rex, ID 48213, canino, leito 4, tutor João Silva. Motivo: atropelamento. Evolução: consciente, com dor. Pedi raio-x e hemograma. Vou reavaliar a dor às 22h.'
++        body: ADMISSION.raw
+       }
+     })
+     const reply = services.sent.at(-1)!.text
+@@ -176,7 +197,15 @@
+     expect(reply).toContain('Motivo da internação: atropelamento')
+     expect(reply).toContain('Evolução: consciente, com dor')
+     expect(reply).toContain('Exames solicitados: raio-x; hemograma')
+-    expect(reply).toContain('#1 — Reavaliar a dor (Rex · ID 48213)')
++    expect(reply).toContain('#1 — Reavaliar a dor')
++    await webhook({
++      event: 'message',
++      payload: {
++        id: 'confirm-admission',
++        from: ANA + '@c.us',
++        body: 'ok nota ' + app.store.notesV2()[0]!.token
++      }
++    })
+     expect(app.store.openTasks(ANA).at(0)).toMatchObject({
+       patientId: '48213',
+       description: 'Reavaliar a dor',
+@@ -196,30 +225,25 @@
+       })
+       return services.sent.at(-1)!.text
+     }
+-    await say(
+-      'r1',
+-      'Novo paciente: Rex, ID 111, canino, leito 4. Motivo: atropelamento.'
+-    )
+-    await say(
+-      'r2',
+-      'Novo paciente: Rex, ID 222, canino, leito 7. Motivo: vômito.'
+-    )
+-
+-    const byBed = await say(
+-      'r3',
+-      'Rex do leito 4 comeu bem, vou medicar às 18h'
+-    )
+-    expect(byBed).toContain('Rex · ID 111 · leito 4')
++    await say('r1', REX_ONE.raw)
++    await say('confirm-r1', 'ok nota ' + app.store.notesV2().at(-1)!.token)
++    await say('r2', REX_TWO.raw)
++
++    await say('confirm-r2', 'ok nota ' + app.store.notesV2().at(-1)!.token)
++    const byBed = await say('r3', REX_HISTORY.raw)
++    expect(byBed).toContain('Rex · ID não informado · leito 4')
+     expect(byBed).toContain(
+       '🔎 ID 111 do Rex veio de uma nota anterior (leito 4); confira.'
+     )
++    expect(app.store.openTasks(ANA)).toHaveLength(0)
++    await say('confirm-history', 'ok nota ' + app.store.notesV2().at(-1)!.token)
+     expect(app.store.openTasks(ANA).at(-1)).toMatchObject({ patientId: '111' })
+ 
+-    const ambiguous = await say('r4', 'paciente Rex comeu bem')
++    const ambiguous = await say('r4', REX_AMBIGUOUS.raw)
+     expect(ambiguous).toContain('Rex · ID não informado')
+-    expect(ambiguous).toContain('Há mais de um Rex:')
+-    expect(ambiguous).toContain('ID 111 (leito 4)')
+-    expect(ambiguous).toContain('ID 222 (leito 7)')
++    expect(ambiguous).toContain('UNSOURCED_ID')
++    expect(ambiguous).toContain('RASCUNHO')
++    expect(ambiguous).toContain('fonte sem trecho inequívoco')
+   })
+ 
+   it('asks for the ID of a patient it has never seen', async () => {
+@@ -233,10 +257,10 @@
+         id: 'n1',
+         from: `${ANA}@c.us`,
+         fromMe: false,
+-        body: 'Thor do leito 3 estável'
+-      }
+-    })
+-    expect(services.sent.at(-1)?.text).toContain('Qual é o ID do Thor?')
++        body: THOR_UNKNOWN.raw
++      }
++    })
++    expect(services.sent.at(-1)?.text).toContain('UNSOURCED_ID')
+   })
+ 
+   it('asks for the patient name when it cannot tell who the note is about', async () => {
