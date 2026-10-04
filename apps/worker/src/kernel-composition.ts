@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
   createGovernedRuntimeComposition,
@@ -15,7 +16,11 @@ import {
   PromptRegistry,
   type ModelProfile
 } from '@cvg/model-gateway'
-import { HashChainedAuditLedger, InMemoryTelemetry } from '@cvg/observability'
+import {
+  HashChainedAuditLedger,
+  InMemoryTelemetry,
+  type AuditLedgerRecord
+} from '@cvg/observability'
 import {
   PostgresApprovalAuthority,
   PostgresEffectJournal,
@@ -43,6 +48,7 @@ import {
   RoleSchema
 } from '@cvg/shared'
 import type { ControlledWorkerHandlers } from './controlled-worker.ts'
+import { NonRetryableOutboxError } from './jobs/process-outbox-event.ts'
 
 export const WORKER_RUNTIME_ENV = 'CVG_WORKER_RUNTIME'
 export const KERNEL_WORKER_RUNTIME = 'kernel'
@@ -168,7 +174,7 @@ export function parseKernelTurnEnvelope(body: string): KernelTurnEnvelope {
   try {
     decoded = JSON.parse(body)
   } catch {
-    throw new Error(
+    throw new NonRetryableOutboxError(
       'kernel_turn_envelope_invalid: inbound body is not a JSON turn envelope'
     )
   }
@@ -181,7 +187,7 @@ export function parseKernelTurnEnvelope(body: string): KernelTurnEnvelope {
     const issues = parsed.error.issues
       .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
       .join('; ')
-    throw new Error(`kernel_turn_envelope_invalid: ${issues}`)
+    throw new NonRetryableOutboxError(`kernel_turn_envelope_invalid: ${issues}`)
   }
   return parsed.data
 }
@@ -198,7 +204,7 @@ export interface PostgresKernelRuntime {
   agentId: AgentId
   policy: PolicyEngine
   approvals: PostgresApprovalAuthority
-  audit: HashChainedAuditLedger
+  readonly audit: HashChainedAuditLedger
   telemetry: InMemoryTelemetry
   conversations: TenantScopedPostgresRuntimeRepository
   toolInvocations: readonly ToolInvocation[]
@@ -312,7 +318,11 @@ export function createPostgresKernelRuntime(
   })
   const approvals = new PostgresApprovalAuthority(pool)
   const telemetry = new InMemoryTelemetry()
-  const audit = new HashChainedAuditLedger()
+  // The in-memory ledger is the runtime's working chain; every record a turn
+  // appends is also persisted to `audit_events` before the turn is reported.
+  // The ledger rotates so a long-running worker does not grow without bound.
+  let audit = new HashChainedAuditLedger()
+  let ledgerId = randomUUID()
   const modelGateway = createControlledModelGateway()
   const conversations = new TenantScopedPostgresRuntimeRepository(pool)
 
@@ -321,13 +331,20 @@ export function createPostgresKernelRuntime(
   const toolExecutor = async (
     invocation: ToolInvocation
   ): Promise<{ result: unknown }> => {
-    toolInvocations.push(invocation)
+    retainRecent(toolInvocations, invocation)
     return { result: { synthetic: true, invocation } }
   }
 
   const runTurn = async (
     turnInput: GovernedTurnInput
   ): Promise<GovernedTurnResult> => {
+    if (audit.size() >= KERNEL_AUDIT_LEDGER_ROTATE_AT) {
+      audit = new HashChainedAuditLedger()
+      ledgerId = randomUUID()
+    }
+    const ledger = audit
+    const turnLedgerId = ledgerId
+    const firstRecord = ledger.size()
     const result = await withTenantContext(pool, tenantId, async (client) => {
       const effectJournal = new PostgresEffectJournal(client)
       const outbox = async (
@@ -357,7 +374,7 @@ export function createPostgresKernelRuntime(
         approvals,
         modelGateway,
         telemetry,
-        audit,
+        audit: ledger,
         toolExecutor,
         outbox,
         effectJournal,
@@ -367,7 +384,16 @@ export function createPostgresKernelRuntime(
       })
       return composition.runtime.runTurn(turnInput)
     })
-    turnResults.push(result)
+    await persistKernelAudit(
+      conversations,
+      tenantId,
+      turnLedgerId,
+      ledger
+        .records()
+        .slice(firstRecord)
+        .filter((record) => record.correlationId === turnInput.correlationId)
+    )
+    retainRecent(turnResults, result)
     return result
   }
 
@@ -376,7 +402,9 @@ export function createPostgresKernelRuntime(
     agentId,
     policy,
     approvals,
-    audit,
+    get audit() {
+      return audit
+    },
     telemetry,
     conversations,
     toolInvocations,
@@ -384,6 +412,70 @@ export function createPostgresKernelRuntime(
     runTurn,
     preflight: () => assertPostgresKernelPrerequisites(pool, tenantId)
   }
+}
+
+/** In-memory inspection history kept per worker process. */
+export const KERNEL_RUNTIME_HISTORY_LIMIT = 1_000
+/** Records after which the working audit ledger starts a new chain. */
+export const KERNEL_AUDIT_LEDGER_ROTATE_AT = 10_000
+
+function retainRecent<T>(list: T[], item: T): void {
+  list.push(item)
+  if (list.length > KERNEL_RUNTIME_HISTORY_LIMIT) {
+    list.splice(0, list.length - KERNEL_RUNTIME_HISTORY_LIMIT)
+  }
+}
+
+/**
+ * Persists the governed-runtime audit records of one turn. Each row keeps the
+ * ledger id, sequence and hashes so the chain can be re-verified from the
+ * database. A failure propagates: the outbox event is retried and the replay
+ * is idempotent, so no turn is reported without its durable audit.
+ */
+async function persistKernelAudit(
+  conversations: TenantScopedPostgresRuntimeRepository,
+  tenantId: TenantId,
+  ledgerId: string,
+  records: readonly AuditLedgerRecord[]
+): Promise<void> {
+  for (const record of records) {
+    await conversations.appendAudit(
+      {
+        type: 'policy_decision',
+        actorType: 'System',
+        actorId: KERNEL_AUDIT_ACTOR_ID,
+        correlationId: record.correlationId,
+        policyVersion: CONTROLLED_KERNEL_POLICY_VERSION,
+        payload: {
+          tenantId,
+          kernelAudit: {
+            ledgerId,
+            sequence: record.sequence,
+            eventId: record.eventId,
+            eventType: record.type,
+            actor: record.actor,
+            timestamp: record.timestamp,
+            previousHash: auditHashRef(record.previousHash),
+            payloadHash: auditHashRef(record.payloadHash),
+            eventHash: auditHashRef(record.eventHash),
+            payload: record.payload ?? null
+          }
+        }
+      },
+      tenantId
+    )
+  }
+}
+
+export const KERNEL_AUDIT_ACTOR_ID = 'kernel-runtime'
+
+/**
+ * Hashes are stored as `sha256-<hex>`: the audit sanitizer redacts long
+ * all-digit tokens (the genesis hash is 64 zeros), and the prefix keeps every
+ * hash byte-exact so the chain stays verifiable from the database.
+ */
+export function auditHashRef(hash: string): string {
+  return `sha256-${hash}`
 }
 
 function resolveKernelAgentId(env: NodeJS.ProcessEnv): AgentId | undefined {
@@ -480,7 +572,9 @@ export function createPostgresKernelHandlers(
   return {
     inboundProcess: async (event) => {
       if (!event.conversationId || !event.inboundMessageId) {
-        throw new Error('Inbound outbox event is missing runtime identifiers')
+        throw new NonRetryableOutboxError(
+          'Inbound outbox event is missing runtime identifiers'
+        )
       }
       const conversationId = event.conversationId
       const inboundMessageId = event.inboundMessageId

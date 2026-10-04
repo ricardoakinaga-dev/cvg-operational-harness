@@ -258,6 +258,11 @@ export interface ModelRequest {
   readonly correlationId: CorrelationId
   /** Phase 3 accounting hint; providers may ignore it. */
   readonly purpose?: ModelCallPurpose
+  /**
+   * Aborted by the runtime when the execution deadline passes, so a provider
+   * can stop the in-flight request instead of spending connection and cost.
+   */
+  readonly signal?: AbortSignal
 }
 
 export interface ModelResult {

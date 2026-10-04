@@ -615,6 +615,35 @@ describe('AAA-21 composed kernel path over API → outbox → worker (PostgreSQL
         )
       ).toBe(true)
 
+      // ENG-013: every ledger record of the turn is durable, with its chain.
+      const durableAudit = await queryRows<{
+        payload: {
+          kernelAudit: {
+            eventId: string
+            eventHash: string
+            previousHash: string
+            sequence: number
+          }
+        }
+      }>(
+        kernelPool1,
+        "SELECT payload FROM audit_events WHERE tenant_id = $1 AND actor_id = 'kernel-runtime' ORDER BY created_at",
+        [TENANT]
+      )
+      const durableByEvent = new Map(
+        durableAudit.map((row) => [
+          row.payload.kernelAudit.eventId,
+          row.payload.kernelAudit
+        ])
+      )
+      for (const record of auditRecords) {
+        expect(durableByEvent.get(record.eventId)).toMatchObject({
+          eventHash: `sha256-${record.eventHash}`,
+          previousHash: `sha256-${record.previousHash}`,
+          sequence: record.sequence
+        })
+      }
+
       const outboundRows = await queryRows<OutboxRow>(
         kernelPool1,
         "SELECT id, idempotency_key, status FROM outbox_events WHERE tenant_id = $1 AND type = 'message.outbound'",

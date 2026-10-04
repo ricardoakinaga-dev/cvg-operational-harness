@@ -394,7 +394,7 @@ describe('published worker runtime boundary', () => {
     ).toEqual({
       code: 'production_controlled_worker_forbidden',
       message:
-        'Controlled PostgreSQL worker is disabled in production pending external gates'
+        'Controlled PostgreSQL worker is disabled in production unless CVG_WORKER_PRODUCTION_ENABLED=true'
     })
   })
 

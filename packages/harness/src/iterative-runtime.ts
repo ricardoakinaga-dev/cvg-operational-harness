@@ -43,6 +43,7 @@ import { DefaultContextEngine } from './context-engine.ts'
 import { DeterministicCompletionEvaluator } from './completion.ts'
 import { decisionSignature, detectDecisionCycle } from './loop-detection.ts'
 import { sealCheckpoint } from './step-store.ts'
+import { agentExposesTool } from './runtime.ts'
 import {
   applyResume,
   composeResponse,
@@ -83,17 +84,7 @@ export interface IterativeGovernedRuntimeOptions {
 
 export const DEADLINE_EXCEEDED = Symbol('iterative-deadline-exceeded')
 
-const BUDGET_STOP_REASONS = new Set<StopReason>([
-  'MAX_STEPS',
-  'MAX_COST',
-  'MAX_DURATION',
-  'MAX_TOKENS',
-  'MAX_MODEL_CALLS',
-  'MAX_TOOL_CALLS',
-  'MAX_REPLANS',
-  'MAX_KNOWLEDGE_CALLS',
-  'MAX_VERIFICATION_CALLS'
-])
+const AUDIT_GRACE_MS = 200
 
 const TERMINAL_STOPS = new Set<StopReason>([
   'COMPLETED',
@@ -733,7 +724,7 @@ export class IterativeGovernedRuntime {
       stepNumber,
       goal: run.state.goal,
       state: stateForContext,
-      capabilities: this.availableTools(),
+      capabilities: this.availableTools(run),
       knowledgeAvailable: Boolean(this.options.knowledge),
       completionStrategy: run.input.agent.completionStrategy ?? 'DETERMINISTIC',
       allowedDecisionTypes: this.allowedDecisionTypes(run),
@@ -748,11 +739,16 @@ export class IterativeGovernedRuntime {
           }
         : {})
     })
+    const decisionAbortController = new AbortController()
     const decisionOrDeadline = await this.withDeadline(
-      this.options.orchestrator.decide({ context }),
+      this.options.orchestrator.decide({
+        context,
+        signal: decisionAbortController.signal
+      }),
       remaining
     )
     if (decisionOrDeadline === DEADLINE_EXCEEDED) {
+      decisionAbortController.abort()
       return {
         outcome: this.stop(
           'MAX_DURATION',
@@ -801,7 +797,7 @@ export class IterativeGovernedRuntime {
 
   private allowedDecisionTypes(run: LoopRun): LoopDecision['decisionType'][] {
     const allowed: LoopDecision['decisionType'][] = ['RESPOND', 'ASK_USER']
-    if (this.availableTools().length > 0) {
+    if (this.availableTools(run).length > 0) {
       allowed.push('CALL_TOOL', 'REQUEST_APPROVAL')
     }
     if (this.options.knowledge && this.remaining(run, 'knowledge') > 0) {
@@ -841,8 +837,11 @@ export class IterativeGovernedRuntime {
     )
   }
 
-  private availableTools(): readonly ToolDescriptor[] {
-    return this.options.tools.list().map(describeTool)
+  private availableTools(run: LoopRun): readonly ToolDescriptor[] {
+    return this.options.tools
+      .list()
+      .filter((tool) => agentExposesTool(run.input.agent.tools, tool.id))
+      .map(describeTool)
   }
 
   private async dispatch(
@@ -1347,13 +1346,11 @@ export class IterativeGovernedRuntime {
             stopReason === 'APPROVAL_REQUIRED'
           ? 'runtime.paused'
           : 'runtime.stopped'
-    const remaining = this.remainingDuration(run)
-    // A budget stop has no remaining time; grant a bounded audit grace so the
-    // deterministic stop reason survives, and keep the result honest if even
-    // that grace cannot record the audit event.
-    const budgetStop = BUDGET_STOP_REASONS.has(stopReason) || remaining <= 0
+    // Audit always gets at least a bounded grace window, so a budget stop
+    // (possibly after an effect) is still recorded. If even that fails, the
+    // result is degraded like any other unaudited outcome (ENG-008).
     try {
-      const deadlineMs = remaining > 0 ? remaining : 200
+      const deadlineMs = Math.max(this.remainingDuration(run), AUDIT_GRACE_MS)
       const auditOrDeadline = await this.withDeadline(
         this.options.audit.append({
           actor: run.input.agent.id,
@@ -1375,9 +1372,6 @@ export class IterativeGovernedRuntime {
       }
       return result
     } catch {
-      if (budgetStop) {
-        return result
-      }
       return {
         ...result,
         response:

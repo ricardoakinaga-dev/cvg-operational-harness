@@ -3,6 +3,7 @@ import type {
   AgentProfile,
   ApprovalDecision,
   ApprovalEngine,
+  ApprovalExecutionPort,
   ApprovalRequest,
   AuditEvent,
   AuditSink,
@@ -336,9 +337,37 @@ export class RecordingTelemetrySink implements TelemetrySink {
 
 export class InMemoryApprovalEngine implements ApprovalEngine {
   private readonly decisions = new Map<string, ApprovalDecision>()
+  private readonly executionStates = new Map<
+    string,
+    'RESERVED' | 'CONSUMED' | 'UNCERTAIN'
+  >()
 
   public readonly requests: ApprovalRequest[] = []
   public approveOnRequest = false
+
+  /** Single-use execution lifecycle, mirroring the durable authority. */
+  public execution: ApprovalExecutionPort = {
+    begin: async (request) => {
+      const state = this.executionStates.get(request.approvalId)
+      if (state !== undefined) {
+        throw new Error(`Approval execution is ${state.toLowerCase()}`)
+      }
+      this.executionStates.set(request.approvalId, 'RESERVED')
+      return {
+        approvalId: request.approvalId,
+        reservationId: `reservation_${request.approvalId}`
+      }
+    },
+    complete: async ({ request }) => {
+      this.executionStates.set(request.approvalId, 'CONSUMED')
+    },
+    fail: async ({ request }) => {
+      this.executionStates.delete(request.approvalId)
+    },
+    uncertain: async ({ request }) => {
+      this.executionStates.set(request.approvalId, 'UNCERTAIN')
+    }
+  }
 
   public async request(request: ApprovalRequest): Promise<ApprovalDecision> {
     this.requests.push(request)

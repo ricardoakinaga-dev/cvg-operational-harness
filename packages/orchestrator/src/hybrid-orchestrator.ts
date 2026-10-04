@@ -108,6 +108,21 @@ function addUsage(left: ModelUsage, result: ModelResult): ModelUsage {
   }
 }
 
+/**
+ * A structurally valid decision outside the step's allowed types is sent back
+ * through the bounded repair loop instead of failing the whole step.
+ */
+function disallowedTypeErrors(
+  decision: LoopDecision,
+  context: StepContext
+): readonly string[] {
+  return context.allowedDecisionTypes.includes(decision.decisionType)
+    ? []
+    : [
+        `decisionType ${decision.decisionType} is not allowed in this step; use one of ${context.allowedDecisionTypes.join(', ')}`
+      ]
+}
+
 function resultToUsage(usage: ModelUsage): ModelUsage {
   return usage
 }
@@ -161,6 +176,12 @@ export class HybridOrchestrator implements IterativeOrchestrator {
     let lastErrors: readonly string[] = []
     let repairAttempt = 0
     while (true) {
+      if (input.signal?.aborted) {
+        throw new OrchestratorDecisionError(
+          'orchestrator_unavailable',
+          'Decision was cancelled by the runtime deadline'
+        )
+      }
       const prompt = buildDecisionPrompt({
         ...context,
         ...(repairAttempt > 0
@@ -184,7 +205,8 @@ export class HybridOrchestrator implements IterativeOrchestrator {
         },
         budget: context.budget,
         correlationId: context.correlationId,
-        purpose: repairAttempt > 0 ? 'REPAIR' : 'ORCHESTRATION'
+        purpose: repairAttempt > 0 ? 'REPAIR' : 'ORCHESTRATION',
+        ...(input.signal ? { signal: input.signal } : {})
       })
       usage = addUsage(usage, modelResult)
       let parsed: unknown
@@ -201,7 +223,10 @@ export class HybridOrchestrator implements IterativeOrchestrator {
         continue
       }
       const validation = validateLoopDecision(parsed)
-      if (validation.valid) {
+      const errors = validation.valid
+        ? disallowedTypeErrors(sanitizeLoopDecision(parsed), context)
+        : validation.errors
+      if (errors.length === 0) {
         return {
           decision: sanitizeLoopDecision(parsed),
           usage: resultToUsage(usage)
@@ -210,11 +235,11 @@ export class HybridOrchestrator implements IterativeOrchestrator {
       if (repairAttempt >= this.maxDecisionRepairs) {
         throw new OrchestratorDecisionError(
           'decision_invalid',
-          `Orchestrator decision stayed invalid after ${repairAttempt} repairs: ${validation.errors.join('; ')}`
+          `Orchestrator decision stayed invalid after ${repairAttempt} repairs: ${errors.join('; ')}`
         )
       }
       repairAttempt += 1
-      lastErrors = validation.errors
+      lastErrors = errors
     }
   }
 }

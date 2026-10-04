@@ -101,11 +101,26 @@ function hasValidBoundaryInput(input: RuntimeInput): boolean {
 }
 
 const DEADLINE_EXCEEDED = Symbol('harness-deadline-exceeded')
+const AUDIT_GRACE_MS = 200
 
 function describeTool(tool: ToolDefinition): ToolDescriptor {
   const { execute, ...descriptor } = tool
   void execute
   return descriptor
+}
+
+/** Wildcard that explicitly exposes every registered tool to a profile. */
+export const ALL_AGENT_TOOLS = '*'
+
+/**
+ * Tool exposure is deny-by-default: an empty list exposes nothing and only
+ * the explicit wildcard exposes the whole registry (ENG-004).
+ */
+export function agentExposesTool(
+  allowed: readonly string[],
+  toolId: string
+): boolean {
+  return allowed.includes(ALL_AGENT_TOOLS) || allowed.includes(toolId)
 }
 
 function bindCapabilityFingerprint(
@@ -370,8 +385,10 @@ export class SinglePassGovernedRuntime implements HarnessRuntime {
         )
       }
 
+      const modelAbortController = new AbortController()
       const modelResultOrDeadline = await this.withDeadline(
         this.options.modelGateway.complete({
+          signal: modelAbortController.signal,
           messages: [
             {
               role: 'system',
@@ -387,6 +404,7 @@ export class SinglePassGovernedRuntime implements HarnessRuntime {
       )
 
       if (modelResultOrDeadline === DEADLINE_EXCEEDED) {
+        modelAbortController.abort()
         return this.finish(
           input,
           this.result({
@@ -551,7 +569,7 @@ export class SinglePassGovernedRuntime implements HarnessRuntime {
       )
     }
 
-    if (input.agent.tools.length > 0 && !input.agent.tools.includes(tool.id)) {
+    if (!agentExposesTool(input.agent.tools, tool.id)) {
       return this.finish(
         input,
         this.result({
@@ -827,6 +845,23 @@ export class SinglePassGovernedRuntime implements HarnessRuntime {
     }
 
     const approvalExecutionPort = this.options.approvals.execution
+    if (approvalExecutionRequest && !approvalExecutionPort) {
+      // Without the execution port an approval cannot be consumed once, so
+      // the same approval could authorize the effect again (ENG-002).
+      return this.finish(
+        input,
+        this.result({
+          response:
+            'Approved execution requires a single-use approval execution port.',
+          stopReason: 'INSUFFICIENT_EVIDENCE',
+          approvalId: approvalExecutionRequest.approvalId,
+          modelCalls: 0,
+          toolCalls: 0
+        }),
+        metadata,
+        startedAt
+      )
+    }
     if (approvalExecutionRequest && approvalExecutionPort) {
       const remainingMs = this.remainingMs(input, startedAt)
       if (remainingMs <= 0) {
@@ -886,11 +921,29 @@ export class SinglePassGovernedRuntime implements HarnessRuntime {
     try {
       const remainingMs = this.remainingMs(input, startedAt)
       if (remainingMs <= 0) {
+        if (
+          approvalExecution &&
+          approvalExecutionRequest &&
+          approvalExecutionPort
+        ) {
+          // The tool never started, so the reservation can be released as a
+          // certain failure instead of leaving the approval held.
+          await approvalExecutionPort
+            .fail({
+              request: approvalExecutionRequest,
+              reservationId: approvalExecution.reservationId,
+              evidenceRef: `${approvalExecutionRequest.executionRef}:tool_not_started`
+            })
+            .catch(() => undefined)
+        }
         return this.finish(
           input,
           this.result({
             response: 'Duration budget exhausted before tool execution.',
             stopReason: 'MAX_DURATION',
+            ...(approvalExecutionRequest
+              ? { approvalId: approvalExecutionRequest.approvalId }
+              : {}),
             modelCalls: 0,
             toolCalls: 0
           }),
@@ -1070,7 +1123,7 @@ export class SinglePassGovernedRuntime implements HarnessRuntime {
     const allowed = input.agent.tools
     return this.options.tools
       .list()
-      .filter((tool) => allowed.length === 0 || allowed.includes(tool.id))
+      .filter((tool) => agentExposesTool(allowed, tool.id))
       .map(describeTool)
   }
 
@@ -1123,11 +1176,12 @@ export class SinglePassGovernedRuntime implements HarnessRuntime {
   ): Promise<RuntimeResult> {
     let finalResult = result
     try {
-      const remainingMs = this.remainingMs(input, startedAt)
-      if (remainingMs <= 0) {
-        throw new Error('audit deadline exceeded')
-      }
-
+      // Audit gets its own minimum window: a budget that ran out during an
+      // effect must still leave a record of that effect.
+      const auditMs = Math.max(
+        this.remainingMs(input, startedAt),
+        AUDIT_GRACE_MS
+      )
       const auditResult = await this.withDeadline(
         this.options.audit.append({
           actor: input.agent.id,
@@ -1142,7 +1196,7 @@ export class SinglePassGovernedRuntime implements HarnessRuntime {
           traceId: input.traceId,
           correlationId: input.correlationId
         }),
-        remainingMs
+        auditMs
       )
 
       if (auditResult === DEADLINE_EXCEEDED) {

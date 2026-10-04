@@ -126,8 +126,8 @@ describe('single-pass governed runtime boundaries', () => {
         input({ budget: { ...input().budget, maxDurationMs: 0 } })
       )
     ).resolves.toMatchObject({
-      stopReason: 'INSUFFICIENT_EVIDENCE',
-      response: expect.stringContaining('audit recording failed')
+      stopReason: 'MAX_DURATION',
+      response: 'Execution duration budget is not available.'
     })
   })
 

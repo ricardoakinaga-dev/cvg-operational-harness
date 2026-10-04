@@ -1103,19 +1103,6 @@ export class GovernedAgentRuntime {
       })
       return finish('denied', 'policy_changed', decision)
     }
-    if (record.status === 'EXECUTED') {
-      if (effectJournal !== undefined) {
-        const replayed = await this.#replayConfirmedEffect(
-          input,
-          record,
-          decision,
-          context
-        )
-        if (replayed !== undefined) return replayed
-      }
-      appendAudit('runtime.denied', { code: 'already_executed' })
-      return finish('denied', 'already_executed', decision)
-    }
     if (record.tenantId !== input.tenantId) {
       appendAudit('runtime.denied', { code: 'tenant_mismatch' })
       return finish('denied', 'tenant_mismatch', decision)
@@ -1178,6 +1165,22 @@ export class GovernedAgentRuntime {
     if (recomputedHash !== record.proposalHash) {
       appendAudit('runtime.denied', { code: 'payload_mismatch' })
       return finish('denied', 'payload_mismatch', decision)
+    }
+
+    // A replay may only answer for the exact operation the approval bound, so
+    // it runs after every binding check above (ENG-012).
+    if (record.status === 'EXECUTED') {
+      if (effectJournal !== undefined) {
+        const replayed = await this.#replayConfirmedEffect(
+          input,
+          record,
+          decision,
+          context
+        )
+        if (replayed !== undefined) return replayed
+      }
+      appendAudit('runtime.denied', { code: 'already_executed' })
+      return finish('denied', 'already_executed', decision)
     }
 
     if (record.status === 'UNCERTAIN') {

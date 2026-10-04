@@ -5,6 +5,7 @@ import type {
   AgentVersion,
   ApprovalDecision,
   ApprovalEngine,
+  ApprovalExecutionPort,
   ApprovalId,
   AuditEvent,
   AuditSink,
@@ -168,7 +169,10 @@ export function createBasicAgentFixture(
       }
 
       return { status, reason: `demo approval ${status.toLowerCase()}` }
-    }
+    },
+    // Approved effects need a single-use execution lifecycle; production
+    // composes the durable authority adapter here instead.
+    execution: createSingleUseApprovalExecution()
   }
 
   const audit: AuditSink = {
@@ -220,4 +224,33 @@ export async function runBasicAgentDemo(): Promise<{
   )
 
   return { greeting, echo }
+}
+
+/**
+ * Minimal single-use approval execution for the demo: an approval can start
+ * one effect, is consumed when it completes and released when it fails.
+ */
+function createSingleUseApprovalExecution(): ApprovalExecutionPort {
+  const states = new Map<string, 'RESERVED' | 'CONSUMED' | 'UNCERTAIN'>()
+  return {
+    async begin(request) {
+      if (states.has(request.approvalId)) {
+        throw new Error('demo approval was already used')
+      }
+      states.set(request.approvalId, 'RESERVED')
+      return {
+        approvalId: request.approvalId,
+        reservationId: `demo-reservation-${request.approvalId}`
+      }
+    },
+    async complete({ request }) {
+      states.set(request.approvalId, 'CONSUMED')
+    },
+    async fail({ request }) {
+      states.delete(request.approvalId)
+    },
+    async uncertain({ request }) {
+      states.set(request.approvalId, 'UNCERTAIN')
+    }
+  }
 }

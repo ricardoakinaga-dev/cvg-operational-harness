@@ -136,9 +136,61 @@ const outboxSafeStringKeys = new Set([
   'inboundmessageid',
   'messageid',
   'policy',
+  'reason',
+  'runtimestatus',
   'sessionid',
+  'status',
   'tenantid',
   'type'
+])
+
+/**
+ * Governed-runtime outcomes are a closed vocabulary, not content, so they stay
+ * observable for alerting (ENG-017). Reasons pass only as known runtime
+ * codes; any other text stays redacted.
+ */
+const outboxOutcomeStatuses = new Set([
+  'already_completed',
+  'approval_required',
+  'completed',
+  'controlled_outbound_suppressed',
+  'denied',
+  'executed',
+  'paused_human_takeover',
+  'shadowed'
+])
+
+const outboxOutcomeReasons = new Set([
+  'action_mismatch',
+  'already_executed',
+  'already_reserved',
+  'approval_confirm_failed',
+  'approval_invalid',
+  'durability_required',
+  'effect_uncertain',
+  'expired',
+  'human_takeover_active',
+  'idempotent_replay',
+  'invalid_state',
+  'loop_cost_exceeded',
+  'loop_deadline_exceeded',
+  'not_found',
+  'operation_in_progress',
+  'operation_uncertain',
+  'outbox_failed',
+  'outbox_pending',
+  'payload_mismatch',
+  'policy_changed',
+  'policy_denied',
+  'proposal_expired',
+  'proposal_mismatch',
+  'proposal_missing',
+  'published_version_missing',
+  'resource_mismatch',
+  'self_approval_denied',
+  'shadow_mode',
+  'structured_output_invalid',
+  'tenant_mismatch'
 ])
 
 const outboxOpaqueTextKeys = new Set([
@@ -363,6 +415,13 @@ function outboxReplacementForKey(key: string, value: unknown): string | null {
   }
   const direct = outboxFieldRedactions.get(normalized)
   if (direct) return direct
+  if (
+    normalized === 'reason' &&
+    typeof value === 'string' &&
+    outboxOutcomeReasons.has(value)
+  ) {
+    return null
+  }
   if (outboxOpaqueTextKeys.has(normalized)) {
     return '[redacted-outbox-text]'
   }
@@ -382,6 +441,10 @@ function isSafeOutboxString(key: string, value: string): boolean {
   if (!outboxSafeStringKeys.has(key)) return false
   if (key === 'channel') return /^(?:internal|web|whatsapp)$/.test(value)
   if (key === 'policy') return /^outbox-r[0-9]{1,3}$/.test(value)
+  if (key === 'status' || key === 'runtimestatus') {
+    return outboxOutcomeStatuses.has(value)
+  }
+  if (key === 'reason') return outboxOutcomeReasons.has(value)
   if (key === 'type' || key === 'eventtype') {
     return /^[a-z][a-z0-9_.:-]{1,127}$/.test(value)
   }

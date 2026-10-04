@@ -622,6 +622,8 @@ export interface ContextEngine {
 
 export interface IterativeOrchestratorInput {
   readonly context: StepContext
+  /** Aborted by the runtime when the decision deadline passes. */
+  readonly signal?: AbortSignal
 }
 
 export interface ModelUsage {

@@ -6,6 +6,67 @@
 - Vale para qualquer agente. Em conflito entre este arquivo e uma instrução
   direta do usuário, vale a instrução do usuário.
 
+## ENGINE-PROD-FIX — correção integral da carteira 0371 — 04/10/2026
+
+- Task `ENGINE-PROD-FIX-20261004`: Claude Code, `CONCLUÍDO_LOCAL / SEM_COMMIT`.
+  Suíte completa com PostgreSQL: 342 arquivos / 2.725 PASS / 1 SKIP; typecheck,
+  lint e formato dos arquivos próprios PASS; `npm audit` 0 vulnerabilidades;
+  pilha real em `production` validada (ver `0371`). PostgreSQL e processos
+  encerrados, portas livres. `examples/basic-agent/index.ts` também ajustado
+  (porta de execução de uso único). Pedido explícito do
+  usuário: “pode corrigir tudo, preciso que esse programa fique pronto para
+  produção” (autoriza os itens T3 da `0371` atribuídos abaixo).
+- Não assumidos, por estarem em frentes aprovadas e ativas do Codex: ENG-005
+  (recepção limitada, GREEN/D011) e ENG-014 (bootstrap de sessão, `main.ts` +
+  `production-bootstrap.ts`).
+- Escrita: `packages/agent-runtime/src/runtime.ts` (somente o trecho de vínculo
+  da aprovação, ENG-012 — o arquivo tem alterações não commitadas do Codex, que
+  são preservadas) e novo teste próprio em `packages/agent-runtime/src/__tests__/`;
+  `packages/harness/src/**`; `packages/contracts/src/contracts.ts` (campo
+  opcional `signal`); `packages/model-gateway/src/gateway.ts` só para repassar
+  o `signal`, se necessário; `packages/orchestrator/src/__tests__/**`;
+  `apps/worker/src/{kernel-composition,continuous-worker,controlled-worker,postgres-controlled,main}.ts`
+  e testes próprios; `packages/shared/src/{env,audit-governance}.ts`;
+  `apps/api/src/server.ts` só no nível de log do webhook recusado;
+  `package.json`/`package-lock.json` restritos a `fastify`/`fast-uri`
+  (ENG-006); `docs/03_build/0371_*` e esta seção. PostgreSQL descartável
+  próprio em 55710. Sem push, deploy ou dado real.
+- Arquivos acrescentados durante a execução: `packages/contracts/src/execution-v2.ts`
+  (`signal` opcional do orquestrador), `packages/orchestrator/src/hybrid-orchestrator.ts`,
+  novo `apps/worker/src/production-gate.ts`, `apps/api/package.json` (fastify),
+  ajustes de asserção em `apps/api/src/__tests__/execution-spine.test.ts` e
+  `apps/worker/src/__tests__/published-worker-runtime.test.ts`, testes novos
+  próprios em `packages/{shared,orchestrator,agent-runtime,harness}/src/__tests__`
+  e `apps/{api,worker}/src/__tests__`. Delta do lockfile: somente fastify,
+  fast-uri (2), undici e brace-expansion.
+
+## ENGINE-PROD — prontidão do motor para produção — 04/10/2026
+
+- Task `ENGINE-PROD-20261004`: Claude Code, `CONCLUÍDO_LOCAL / SEM_COMMIT`
+  (ENG-001 corrigido e testado; ENG-002–011 em `0371`, T3 aguardando decisão
+  humana). Ledgers compartilhados não atualizados: estão sujos com trabalho do
+  Codex. Pedido do usuário: avaliar a
+  entrega e corrigir/construir/melhorar o motor (runtime, orquestrador e anexos)
+  até nível de produção. Esta fatia corrige dois defeitos T2 que violam
+  invariantes já documentados (reserva de aprovação vazada quando a ferramenta
+  não chega a rodar; auditoria pulada no single-pass após efeito quando o
+  orçamento de tempo esgota) e registra a carteira do motor. Mudanças de
+  contrato/política (T3) ficam no backlog aguardando aprovação humana.
+- Escrita exclusiva: `packages/harness/src/runtime.ts`,
+  `packages/harness/src/iterative-dispatch.ts`, novo
+  `packages/harness/src/__tests__/engine-prod-lifecycle.test.ts`, uma asserção
+  de `packages/harness/src/__tests__/runtime.test.ts` (orçamento 0 ms agora é
+  auditado como `MAX_DURATION`), novo
+  `docs/03_build/0371_engine_production_backlog.md` e somente esta seção. Sem
+  lockfile, ledgers compartilhados, `packages/agent-runtime/**`,
+  `packages/model-gateway/**`, certify, push ou deploy.
+- Continuação 04/10/2026 (“testes reais”): PostgreSQL 16 descartável próprio
+  `claude-engine-prod-pg` em 127.0.0.1:55710, dados sintéticos, removido ao
+  final; API/worker locais em portas 3710–3719, somente loopback. Concluído:
+  processos encerrados, contêiner removido, portas livres. ENG-012 (defeito de
+  vínculo de aprovação) está em `packages/agent-runtime/src/runtime.ts`, arquivo
+  com alterações não commitadas do Codex — não editado; ver `0371`.
+
 ## Regras
 
 1. **Claim antes de trabalhar.** Antes de alterar código ou documento, o

@@ -22,7 +22,10 @@ import { buildServer } from '../server.ts'
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000601'
 const tenantB = 'tenant_00000000-0000-4000-8000-000000000602'
 
-function runtime(tenantId: string): RuntimeInput {
+function runtime(
+  tenantId: string,
+  tools: readonly string[] = []
+): RuntimeInput {
   return {
     agent: {
       id: 'agent.http.synthetic' as RuntimeInput['agent']['id'],
@@ -30,7 +33,7 @@ function runtime(tenantId: string): RuntimeInput {
       objective: 'synthetic HTTP execution',
       instructions: ['synthetic only'],
       skills: [],
-      tools: [],
+      tools,
       policies: []
     },
     tenantId: tenantId as RuntimeInput['tenantId'],
@@ -385,7 +388,7 @@ describe('canonical execution HTTP boundary', () => {
       headers: { 'x-tenant-id': tenantA },
       payload: {
         idempotencyKey: 'approval-restart-1',
-        runtime: runtime(tenantA)
+        runtime: runtime(tenantA, ['synthetic.approval.tool'])
       }
     })
     const executionId = accepted.json().data.execution.id as string

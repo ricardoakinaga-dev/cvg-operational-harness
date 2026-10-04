@@ -1378,20 +1378,13 @@ describe('P3-BOUNDARY — iterative runtime rejection paths', () => {
 
   it('covers approval execution lifecycle failures without replaying the tool', async () => {
     const approvalExecutionEvents: string[] = []
-    const approvals = new InMemoryApprovalEngine() as InMemoryApprovalEngine & {
-      execution: {
-        begin: () => Promise<{ approvalId: string; reservationId: string }>
-        complete: () => Promise<void>
-        fail: () => Promise<void>
-        uncertain: () => Promise<void>
-      }
-    }
+    const approvals = new InMemoryApprovalEngine()
     approvals.approveOnRequest = true
     approvals.execution = {
       begin: async () => {
         approvalExecutionEvents.push('begin')
         return {
-          approvalId: 'approval-execution',
+          approvalId: 'approval-execution' as never,
           reservationId: 'reservation-1'
         }
       },

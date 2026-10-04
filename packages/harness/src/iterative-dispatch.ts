@@ -28,6 +28,7 @@ import {
   type IterativeGovernedRuntimeOptions,
   type LoopRun
 } from './iterative-runtime.ts'
+import { agentExposesTool } from './runtime.ts'
 
 /**
  * Explicit dependency surface for the extracted dispatch domain. The runtime
@@ -129,7 +130,7 @@ export function validateDecision(
       }
     }
     const profileTools = run.input.agent.tools
-    if (profileTools.length > 0 && !profileTools.includes(tool.id)) {
+    if (!agentExposesTool(profileTools, tool.id)) {
       return {
         valid: false,
         errors: [
@@ -483,6 +484,14 @@ export async function dispatchTool(
       operationKey,
       executionRef: run.executionId
     }
+    if (!ctx.options.approvals.execution) {
+      // Without the execution port an approval cannot be consumed once, so
+      // the same approval could authorize the effect again (ENG-002).
+      return ctx.stop(
+        'INSUFFICIENT_EVIDENCE',
+        'Approved execution requires a single-use approval execution port.'
+      )
+    }
   }
 
   // Budget accounting is committed with the in-flight decision so a crash
@@ -537,6 +546,29 @@ export async function dispatchTool(
   try {
     const toolRemaining = ctx.remainingDuration(run)
     if (toolRemaining <= 0) {
+      if (
+        approvalExecution &&
+        approvalExecutionRequest &&
+        ctx.options.approvals.execution
+      ) {
+        // The tool never started, so the reservation is released as a certain
+        // failure instead of leaving the approval held.
+        await ctx.options.approvals.execution
+          .fail({
+            request: approvalExecutionRequest,
+            reservationId: approvalExecution.reservationId,
+            evidenceRef: `${run.executionId}:tool_not_started`
+          })
+          .catch(() => undefined)
+      }
+      await ctx.recordStep(run, {
+        stepNumber,
+        stepType: 'TOOL',
+        status: 'FAILED',
+        sideEffecting: true,
+        reasonCode: decision.reasonCode,
+        errorCode: 'deadline'
+      })
       return ctx.stop(
         'MAX_DURATION',
         'Duration budget exhausted before tool execution.'
@@ -965,9 +997,11 @@ export async function composeResponse(
       response: 'Duration budget exhausted before the response was composed.'
     }
   }
+  const modelAbortController = new AbortController()
   try {
     const modelOrDeadline = await ctx.withDeadline(
       ctx.options.modelGateway.complete({
+        signal: modelAbortController.signal,
         messages: [
           {
             role: 'system',
@@ -988,6 +1022,7 @@ export async function composeResponse(
       remaining
     )
     if (modelOrDeadline === DEADLINE_EXCEEDED) {
+      modelAbortController.abort()
       return {
         stopReason: 'MAX_DURATION',
         response: 'Duration budget exhausted during response composition.'

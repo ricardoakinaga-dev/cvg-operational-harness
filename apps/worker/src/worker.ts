@@ -9,6 +9,7 @@ import {
   parseContinuousWorkerSettings
 } from './continuous-worker.ts'
 import { parseOperationalFaultPoint } from './operational-harness-worker.ts'
+import { postgresProductionOptInFailure } from './production-gate.ts'
 
 export type WorkerRuntimeDependencies = PublishedAgentJobDependencies
 
@@ -178,11 +179,11 @@ export function getWorkerStartupFailure(
   }
 
   if (adapter === 'postgres-controlled' || adapter === 'postgres') {
-    if (env.NODE_ENV === 'production') {
+    const productionFailure = postgresProductionOptInFailure(env)
+    if (productionFailure) {
       return {
         code: 'production_controlled_worker_forbidden',
-        message:
-          'Controlled PostgreSQL worker is disabled in production pending external gates'
+        message: productionFailure
       }
     }
     if (!env.DATABASE_URL?.trim()) {

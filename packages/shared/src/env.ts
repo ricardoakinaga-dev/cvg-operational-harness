@@ -49,7 +49,11 @@ export const EnvSchema = z.object({
   OUTBOX_DURABLE_INBOUND: EnvBooleanSchema,
   PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   CVG_API_PORT: z.coerce.number().int().min(1).max(65_535).default(3100),
-  OPENAI_API_KEY: z.string().min(1).default('replace_me'),
+  /**
+   * Optional: the neutral core composes no external model provider. When a
+   * deployment sets it, a placeholder is still refused in production.
+   */
+  OPENAI_API_KEY: z.string().optional(),
   ENABLE_REAL_CHANNELS: EnvBooleanSchema,
   ENABLE_REAL_RAG: EnvBooleanSchema,
   ENABLE_REAL_PAYMENTS: EnvBooleanSchema,
@@ -62,7 +66,9 @@ export function parseEnv(input: NodeJS.ProcessEnv): AppEnv {
   const env = EnvSchema.parse(input)
   if (
     env.NODE_ENV === 'production' &&
-    (env.OPENAI_API_KEY === 'replace_me' || env.OPENAI_API_KEY.trim() === '')
+    env.OPENAI_API_KEY !== undefined &&
+    (env.OPENAI_API_KEY.trim() === '' ||
+      /replace[_-]?me|change[_-]?me|example/i.test(env.OPENAI_API_KEY))
   ) {
     throw new Error('A production provider secret must be configured')
   }

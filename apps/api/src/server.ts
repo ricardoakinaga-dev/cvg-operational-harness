@@ -679,7 +679,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   })
   const emitRuntimeLog = (entry: RuntimeLogEntry) => {
     safeTelemetry(() =>
-      telemetry.log(entry.status === 'error' ? 'error' : 'info', entry.event, {
+      telemetry.log(runtimeLogLevel(entry), entry.event, {
         correlationId: entry.correlationId,
         route: entry.route,
         status: entry.status,
@@ -4513,6 +4513,20 @@ async function appendPlatformAudit(
     },
     tenantId
   )
+}
+
+/**
+ * Client-caused refusals (4xx such as a rejected webhook signature) are
+ * warnings; only server-side failures are logged as errors (ENG-018).
+ */
+export function runtimeLogLevel(
+  entry: Pick<RuntimeLogEntry, 'status' | 'errorCode'>
+): 'info' | 'warn' | 'error' {
+  if (entry.status !== 'error') return 'info'
+  return entry.errorCode !== undefined &&
+    statusCodeForError(entry.errorCode) < 500
+    ? 'warn'
+    : 'error'
 }
 
 function statusCodeForError(code: string): number {

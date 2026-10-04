@@ -12,6 +12,27 @@ export const CONTROLLED_OUTBOX_EVENT_TYPES = [
   'message.outbound'
 ] as const
 
+/**
+ * A handler failure that no retry can fix (for example a malformed inbound
+ * envelope). It goes straight to dead-letter instead of spending the retry
+ * budget; an operator can still requeue it after correcting the cause.
+ */
+export class NonRetryableOutboxError extends Error {
+  readonly nonRetryable = true as const
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'NonRetryableOutboxError'
+  }
+}
+
+export function isNonRetryableOutboxError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as { nonRetryable?: unknown }).nonRetryable === true
+  )
+}
+
 export interface ProcessOutboxEventInput {
   tenantId: TenantId
   workerId: string
@@ -135,12 +156,13 @@ export async function completeClaimedOutboxEvent(
   } catch (error) {
     // The adapter owns the durable ack boundary. If the handler or final
     // journal transition fails, the same lease is sent through the
-    // repository's retry policy.
+    // repository's retry policy, unless the failure is known to be permanent.
     try {
       return await input.adapter.fail({
         tenantId: input.tenantId,
         eventId: event.id,
         workerId: input.workerId,
+        ...(isNonRetryableOutboxError(error) ? { terminal: true } : {}),
         error
       })
     } catch {

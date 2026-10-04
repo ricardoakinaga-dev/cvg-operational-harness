@@ -39,6 +39,7 @@ import {
   type PostgresKernelRuntime
 } from './kernel-composition.ts'
 import type { WorkerTelemetry } from './worker-observability.ts'
+import { postgresProductionOptInFailure } from './production-gate.ts'
 
 export const POSTGRES_CONTROLLED_QUEUE_ADAPTER = 'postgres-controlled' as const
 
@@ -85,16 +86,16 @@ export interface PostgresControlledHandlerOptions {
 /**
  * Validates the controlled PostgreSQL configuration and opens the shared
  * pool/adapter/control-plane resources. It never activates an external effect
- * path: production is rejected and controlled mode is mandatory.
+ * path: production requires the explicit durable kernel opt-in and controlled
+ * mode is mandatory.
  */
 export function openPostgresControlledConnection(
   env: NodeJS.ProcessEnv,
   handlers?: ControlledWorkerHandlers
 ): PostgresControlledConnection {
-  if (env.NODE_ENV === 'production') {
-    throw new Error(
-      'Controlled PostgreSQL worker is disabled in production pending external gates'
-    )
+  const productionFailure = postgresProductionOptInFailure(env)
+  if (productionFailure) {
+    throw new Error(productionFailure)
   }
   const databaseUrl = env.DATABASE_URL?.trim()
   if (!databaseUrl) {
