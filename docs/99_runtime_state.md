@@ -1,3 +1,11 @@
+# HARNESS-ISO-GREEN — correções isoladas em execução — 04/10/2026
+
+- Task: `HARNESS_ISO_GREEN_20261004`. `status: IN_PROGRESS`; veredito global **FAIL**, produção **NO_GO**. Nenhuma promoção de runtime ao root, push, implantação ou chamada OpenAI.
+- `last_completed_action`: gateway R9 integrado e 1.207 regressões focadas PASS; motor publicado em `73669b8` reconciliado na cópia privada, 1.406 testes com PostgreSQL PASS, zero skips, tipos/lint PASS. São recortes sobrepostos, não somáveis à suíte completa.
+- Suíte completa anterior com PostgreSQL e cobertura: 3.944 testes, 3.937 PASS, sete FAIL e zero skips. Duas falhas próprias de configuração corrigidas; cinco deadlines de CI corrigidos em scratch sem ampliar prazo. 234 controles instrumentados do Builder PASS; reteste integrado em curso.
+- `next_action`: concluir custo/modelo e sessões/ingresso aprovados, repetir gates completos e obter revisões independentes do candidato final. HISO-005 instalado segue INCOMPLETE com 306 diagnósticos; zero violações encontradas não equivale a aceite. Os 24 critérios continuam exigidos.
+- [Checkpoint 21](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-21-full-suite-r9-and-approved-cost-model.json), [aprovação de custo/modelo](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/gateway-cost-model-user-approval.json), [aprovação de sessões/ingresso](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/inbound-session-tenant-user-approval.json). NO_MODEL, somente dados sintéticos, gates T4 e promoção condicionada mantidos; nenhum DONE novo inferido.
+
 # PR-301-WEBHOOK-CLOCK-GUARD — SPEC 0162 draft — 28/09/2026
 
 - status: `SPEC_DRAFT / INDEPENDENT_CRITIQUE_BLOCKED / HUMAN_T3_REVIEW_NOT_REQUESTED / BUILD_NOT_AUTHORIZED`; programa `IN_PROGRESS`; produção `NO_GO`.

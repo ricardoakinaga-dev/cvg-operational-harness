@@ -1,3 +1,11 @@
+# HARNESS-ISO-GREEN — fechamento de gates em andamento — 04/10/2026
+
+- Carteira de 24 critérios em [0370](03_build/0370_harness_product_isolation_backlog.md), sem novo DONE nesta rodada. Harness e produto mantêm fontes, processos, evidências e barras separados; NO_MODEL e promoção condicionada permanecem.
+- Custo/modelo: BUILD local autorizado, implementação isolada ativa. Sessões/ingresso: emenda aprovada, BUILD isolado ativo para independência de cookie e recusa de tenant divergente antes da fila, PostgreSQL e processo compilado obrigatórios.
+- CI: cinco deadlines corrigidos mantendo 15 segundos, 234 controles instrumentados PASS no Builder; integração concluída, reteste em curso. Segurança: disposições individuais Gitleaks e dois avisos API CodeQL preservados; fechamento com compilação real e crítico novo pendente. HISO-005 instalado continua INCOMPLETE/306, sem aceite automático por testes unitários.
+- Última suíte completa com PostgreSQL: 3.937 PASS/sete FAIL/zero skips entre 3.944; duas falhas próprias corrigidas e cinco de CI em reteste. Motor integrado privadamente: 1.406 testes focados PASS, zero skips, tipos/lint PASS. Gates completos/neutral/E2E/imagens/critic/certificação final ainda pendentes.
+- `status: IN_PROGRESS`, global **FAIL**, produção **NO_GO**. Próxima ação: terminar frentes ativas e congelar candidato para gates/revisões; publicação externa/T4, provider real, push, piloto e produção permanecem decisões separadas. [Checkpoint 21](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-21-full-suite-r9-and-approved-cost-model.json).
+
 # PR-301-WEBHOOK-CLOCK-GUARD — SPEC 0162 draft — 28/09/2026
 
 - `SPEC_DRAFT / INDEPENDENT_CRITIQUE_BLOCKED / BUILD_NOT_AUTHORIZED / NO_GO`: [SPEC 0162](02_spec/0162_webhook_clock_highwater_marker.md) delimita o high-water PostgreSQL ausente de 0160, sem ampliar migration 0027. Proposta 0028 é global singleton sem payload, update monotônico, grants mínimos e verificação antes de reserve/receipt; ferramenta recusou crítico independente por limite de threads. Aprovação humana T3 não solicitada; não editar código/schema. [Evidência](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/proof.json).
