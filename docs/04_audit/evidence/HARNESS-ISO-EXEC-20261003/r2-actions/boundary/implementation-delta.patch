@@ -1,0 +1,755 @@
+--- a/scripts/check-product-boundary.mjs
++++ b/scripts/check-product-boundary.mjs
+@@ -195,19 +195,24 @@
+       })
+       return
+     }
+-    if (!target.includes(`${path.sep}node_modules${path.sep}`)) {
+-      edge(file, target)
+-      if (
+-        extensions.has(path.extname(target)) &&
+-        !discoveredSources.has(target)
+-      ) {
++    // Discovery skips vendor trees, but every resolved physical destination is
++    // part of the closure. A declaration is never evidence about different JS.
++    edge(file, target)
++    if (extensions.has(path.extname(target))) {
++      if (!discoveredSources.has(target)) {
+         discoveredSources.add(target)
+         sourceFiles.push(target)
+       }
+-      const targetOwner = owner(target)
+-      if (targetOwner && inside(productRoot, targetOwner.workspace))
+-        edge(file, workspaceNode(targetOwner))
+-    }
++    } else if (!['.json', '.css'].includes(path.extname(target))) {
++      diagnostics.push({
++        file: location,
++        specifier,
++        reason: 'UNVERIFIED_MODULE_FORMAT'
++      })
++    }
++    const targetOwner = owner(target)
++    if (targetOwner && inside(productRoot, targetOwner.workspace))
++      edge(file, workspaceNode(targetOwner))
+   }
+   // Ask Node for physical runtime targets without importing/executing them.
+   // Batch the frontier so a repository scan does not spawn once per import.
+@@ -403,6 +408,11 @@
+     const loaders = new Set(['require'])
+     const moduleHosts = new Set(['module'])
+     const resolvers = new Set()
++    const processNamespaces = new Set(['process'])
++    const builtinGetters = new Set()
++    const importResolvers = new Set()
++    const globalNamespaces = new Set(['global', 'globalThis'])
++    const metaNamespaces = new Set()
+     const nodes = []
+     const collect = (node) => {
+       nodes.push(node)
+@@ -425,13 +435,49 @@
+         : ts.isElementAccessExpression(node)
+           ? literal(node.argumentExpression)
+           : undefined
++    const bindingProperty = (item) => {
++      const name = item.propertyName ?? item.name
++      return ts.isIdentifier(name) ? name.text : literal(name)
++    }
++    const isGlobal = (node) => {
++      node = unwrap(node)
++      return node && ts.isIdentifier(node) && globalNamespaces.has(node.text)
++    }
++    const isMeta = (node) => {
++      node = unwrap(node)
++      return (
++        node &&
++        ((ts.isIdentifier(node) && metaNamespaces.has(node.text)) ||
++          (ts.isMetaProperty(node) &&
++            node.keywordToken === ts.SyntaxKind.ImportKeyword))
++      )
++    }
++    const isProcess = (node) => {
++      node = unwrap(node)
++      return (
++        node &&
++        ((ts.isIdentifier(node) && processNamespaces.has(node.text)) ||
++          (property(node) === 'process' && isGlobal(node.expression)) ||
++          (ts.isCallExpression(node) &&
++            (isLoader(node.expression) || isBuiltinGetter(node.expression)) &&
++            ['process', 'node:process'].includes(literal(node.arguments[0]))))
++      )
++    }
++    const isBuiltinGetter = (node) => {
++      node = unwrap(node)
++      return (
++        node &&
++        ((ts.isIdentifier(node) && builtinGetters.has(node.text)) ||
++          (property(node) === 'getBuiltinModule' && isProcess(node.expression)))
++      )
++    }
+     const isModuleNamespace = (node) => {
+       node = unwrap(node)
+       return (
+         node &&
+         ((ts.isIdentifier(node) && moduleNamespaces.has(node.text)) ||
+           (ts.isCallExpression(node) &&
+-            isLoader(node.expression) &&
++            (isLoader(node.expression) || isBuiltinGetter(node.expression)) &&
+             ['module', 'node:module'].includes(literal(node.arguments[0]))))
+       )
+     }
+@@ -450,16 +496,19 @@
+         node &&
+         ((ts.isIdentifier(node) && loaders.has(node.text)) ||
+           (property(node) === 'require' &&
+-            ((ts.isIdentifier(node.expression) &&
+-              (moduleHosts.has(node.expression.text) ||
+-                ['global', 'globalThis'].includes(node.expression.text))) ||
++            (isHost(node.expression) ||
++              isGlobal(node.expression) ||
+               isModuleNamespace(node.expression))) ||
+           (ts.isCallExpression(node) && isFactory(node.expression)))
+       )
+     }
+     const isHost = (node) => {
+       node = unwrap(node)
+-      return node && ts.isIdentifier(node) && moduleHosts.has(node.text)
++      return (
++        node &&
++        ((ts.isIdentifier(node) && moduleHosts.has(node.text)) ||
++          (property(node) === 'mainModule' && isProcess(node.expression)))
++      )
+     }
+     const isResolver = (node) => {
+       node = unwrap(node)
+@@ -469,8 +518,41 @@
+           (property(node) === 'resolve' && isLoader(node.expression)))
+       )
+     }
++    const isImportResolver = (node) => {
++      node = unwrap(node)
++      return (
++        node &&
++        ((ts.isIdentifier(node) && importResolvers.has(node.text)) ||
++          (property(node) === 'resolve' && isMeta(node.expression)))
++      )
++    }
+     for (const node of nodes) {
+       if (typeOnly(node)) continue
++      if (
++        ts.isImportEqualsDeclaration(node) &&
++        ts.isExternalModuleReference(node.moduleReference) &&
++        ['process', 'node:process'].includes(
++          literal(node.moduleReference.expression)
++        )
++      )
++        processNamespaces.add(node.name.text)
++      if (
++        ts.isImportDeclaration(node) &&
++        ['process', 'node:process'].includes(literal(node.moduleSpecifier))
++      ) {
++        const clause = node.importClause
++        if (clause?.name) processNamespaces.add(clause.name.text)
++        const bindings = clause?.namedBindings
++        if (bindings && ts.isNamespaceImport(bindings))
++          processNamespaces.add(bindings.name.text)
++        if (bindings && ts.isNamedImports(bindings))
++          for (const item of bindings.elements) {
++            if (item.isTypeOnly) continue
++            const name = item.propertyName?.text ?? item.name.text
++            if (name === 'getBuiltinModule') builtinGetters.add(item.name.text)
++            if (name === 'mainModule') moduleHosts.add(item.name.text)
++          }
++      }
+       if (
+         ts.isImportEqualsDeclaration(node) &&
+         ts.isExternalModuleReference(node.moduleReference) &&
+@@ -507,7 +589,12 @@
+           [moduleNamespaces, isModuleNamespace],
+           [loaders, isLoader],
+           [moduleHosts, isHost],
+-          [resolvers, isResolver]
++          [resolvers, isResolver],
++          [processNamespaces, isProcess],
++          [builtinGetters, isBuiltinGetter],
++          [importResolvers, isImportResolver],
++          [globalNamespaces, isGlobal],
++          [metaNamespaces, isMeta]
+         ]) {
+           if (matches(expression) && !set.has(name)) {
+             set.add(name)
+@@ -518,20 +605,18 @@
+       for (const node of nodes) {
+         if (ts.isVariableDeclaration(node) && node.initializer) {
+           if (ts.isIdentifier(node.name)) bind(node.name.text, node.initializer)
+-          else if (
+-            ts.isObjectBindingPattern(node.name) &&
+-            isModuleNamespace(node.initializer)
+-          )
++          else if (ts.isObjectBindingPattern(node.name))
+             for (const item of node.name.elements)
+-              if (
+-                ts.isIdentifier(item.name) &&
+-                (item.propertyName?.getText(source) ?? item.name.text) ===
+-                  'createRequire' &&
+-                !factories.has(item.name.text)
+-              ) {
+-                factories.add(item.name.text)
+-                changed = true
+-              }
++              if (ts.isIdentifier(item.name) && !item.dotDotDotToken)
++                bind(
++                  item.name.text,
++                  ts.factory.createPropertyAccessExpression(
++                    node.initializer,
++                    ts.isIdentifier(item.propertyName ?? item.name)
++                      ? (item.propertyName ?? item.name).text
++                      : (literal(item.propertyName) ?? '__unknown__')
++                  )
++                )
+         }
+         if (
+           ts.isBinaryExpression(node) &&
+@@ -552,6 +637,41 @@
+       'isBuiltin'
+     ]
+     for (const node of nodes) {
++      if (
++        (isHost(node) && !ts.isIdentifier(node)) ||
++        (ts.isVariableDeclaration(node) &&
++          ts.isObjectBindingPattern(node.name) &&
++          isProcess(node.initializer) &&
++          node.name.elements.some(
++            (item) => bindingProperty(item) === 'mainModule'
++          )) ||
++        (ts.isImportSpecifier(node) &&
++          !node.isTypeOnly &&
++          !typeOnly(node.parent.parent.parent) &&
++          (node.propertyName?.text ?? node.name.text) === 'mainModule' &&
++          ['process', 'node:process'].includes(
++            literal(node.parent?.parent?.parent?.moduleSpecifier)
++          ))
++      )
++        // mainModule.require is anchored to the process entry, which need not
++        // be the inspected file. Until that entry is known, refuse a green gate.
++        loaderDiagnostic(node, 'UNVERIFIED_MAIN_MODULE_BASE')
++      if (ts.isCallExpression(node) && isBuiltinGetter(node.expression)) {
++        if (
++          node.arguments.length !== 1 ||
++          !builtin.has(literal(node.arguments[0]))
++        )
++          loaderDiagnostic(node, 'UNVERIFIED_BUILTIN_MODULE_TARGET')
++      }
++      if (
++        (ts.isPropertyAccessExpression(node) ||
++          ts.isElementAccessExpression(node)) &&
++        (isProcess(node.expression) ||
++          isGlobal(node.expression) ||
++          isMeta(node.expression)) &&
++        property(node) === undefined
++      )
++        loaderDiagnostic(node, 'UNVERIFIED_PROCESS_CAPABILITY_PROPERTY')
+       if (
+         !ts.isImportDeclaration(node) ||
+         typeOnly(node) ||
+@@ -593,7 +713,10 @@
+         ['module', 'node:module'].includes(literal(node.arguments[0]))
+       )
+         loaderDiagnostic(node, 'UNVERIFIED_DYNAMIC_MODULE_NAMESPACE')
+-      if (ts.isCallExpression(node) && isModuleNamespace(node)) {
++      if (
++        ts.isCallExpression(node) &&
++        (isModuleNamespace(node) || isProcess(node))
++      ) {
+         const parent = node.parent
+         if (
+           parent &&
+@@ -603,21 +726,18 @@
+             (m) => m.kind === ts.SyntaxKind.ExportKeyword
+           )
+         ) {
+-          if (ts.isObjectBindingPattern(parent.name))
++          if (ts.isObjectBindingPattern(parent.name) && isModuleNamespace(node))
+             for (const item of parent.name.elements)
+-              if (
+-                !safeModuleProperties.includes(
+-                  item.propertyName?.getText(source) ??
+-                    item.name.getText(source)
+-                )
+-              )
++              if (!safeModuleProperties.includes(bindingProperty(item)))
+                 loaderDiagnostic(item, 'UNVERIFIED_MODULE_LOADER_PRIMITIVE')
+         } else if (
+           parent &&
+           (ts.isPropertyAccessExpression(parent) ||
+             ts.isElementAccessExpression(parent)) &&
+           parent.expression === node &&
+-          safeModuleProperties.includes(property(parent))
++          (isProcess(node)
++            ? property(parent) !== undefined
++            : safeModuleProperties.includes(property(parent)))
+         ) {
+           // A known property is inspected by the loader/factory visitor.
+         } else loaderDiagnostic(node, 'UNVERIFIED_MODULE_LOADER_ESCAPE')
+@@ -628,6 +748,21 @@
+         ['module', 'node:module'].includes(literal(node.moduleSpecifier))
+       )
+         loaderDiagnostic(node, 'UNVERIFIED_MODULE_LOADER_EXPORT')
++      if (
++        ts.isExportDeclaration(node) &&
++        !typeOnly(node) &&
++        ['process', 'node:process'].includes(literal(node.moduleSpecifier)) &&
++        (!node.exportClause ||
++          !ts.isNamedExports(node.exportClause) ||
++          node.exportClause.elements.some(
++            (item) =>
++              !item.isTypeOnly &&
++              ['getBuiltinModule', 'mainModule', 'default'].includes(
++                item.propertyName?.text ?? item.name.text
++              )
++          ))
++      )
++        loaderDiagnostic(node, 'UNVERIFIED_PROCESS_CAPABILITY_EXPORT')
+       if (ts.isCallExpression(node) && isFactory(node.expression)) {
+         const base = unwrap(node.arguments[0])
+         if (
+@@ -676,7 +811,8 @@
+         !(
+           ts.isIdentifier(node) ||
+           ts.isPropertyAccessExpression(node) ||
+-          ts.isElementAccessExpression(node)
++          ts.isElementAccessExpression(node) ||
++          ts.isMetaProperty(node)
+         )
+       )
+         continue
+@@ -685,7 +821,12 @@
+         !isLoader(node) &&
+         !isModuleNamespace(node) &&
+         !isHost(node) &&
+-        !isResolver(node)
++        !isResolver(node) &&
++        !isBuiltinGetter(node) &&
++        !isImportResolver(node) &&
++        !isProcess(node) &&
++        !isGlobal(node) &&
++        !isMeta(node)
+       )
+         continue
+       if (isDeclarationName(node)) continue
+@@ -694,7 +835,7 @@
+       // is classified independently, including namespace/computed factory access.
+       if (
+         parent &&
+-        ts.isPropertyAccessExpression(parent) &&
++        (ts.isPropertyAccessExpression(parent) || ts.isMetaProperty(parent)) &&
+         parent.name === node
+       )
+         continue
+@@ -705,13 +846,32 @@
+         parent.expression === node &&
+         (isModuleNamespace(node) ||
+           isHost(node) ||
++          isProcess(node) ||
++          isGlobal(node) ||
++          isMeta(node) ||
+           property(parent) === 'resolve')
+       ) {
+         if (
+-          (isModuleNamespace(node) || isHost(node)) &&
++          (isModuleNamespace(node) ||
++            isHost(node) ||
++            isGlobal(node) ||
++            isMeta(node)) &&
+           property(parent) === undefined
+         )
+           loaderDiagnostic(parent, 'UNVERIFIED_MODULE_LOADER_PROPERTY')
++        else if (
++          (isMeta(node) &&
++            !['url', 'filename', 'dirname', 'resolve', 'main'].includes(
++              property(parent)
++            )) ||
++          (isGlobal(node) && !['process', 'require'].includes(property(parent)))
++        )
++          loaderDiagnostic(parent, 'UNVERIFIED_MODULE_LOADER_PROPERTY')
++        else if (
++          isProcess(node) &&
++          ['dlopen', 'binding', '_linkedBinding'].includes(property(parent))
++        )
++          loaderDiagnostic(parent, 'UNVERIFIED_PROCESS_LOADER_PRIMITIVE')
+         else if (
+           isModuleNamespace(node) &&
+           ![...safeModuleProperties, 'require'].includes(property(parent))
+@@ -719,18 +879,54 @@
+           loaderDiagnostic(parent, 'UNVERIFIED_MODULE_LOADER_PRIMITIVE')
+         else if (
+           isHost(node) &&
+-          ![
+-            'require',
+-            'exports',
+-            'id',
+-            'filename',
+-            'loaded',
+-            'parent',
+-            'children',
+-            'paths'
+-          ].includes(property(parent))
++          !['require', 'exports', 'id', 'filename', 'loaded', 'paths'].includes(
++            property(parent)
++          )
+         )
+           loaderDiagnostic(parent, 'UNVERIFIED_MODULE_LOADER_PRIMITIVE')
++        continue
++      }
++      if (
++        parent &&
++        ts.isVariableDeclaration(parent) &&
++        parent.initializer === node &&
++        ts.isObjectBindingPattern(parent.name) &&
++        (isModuleNamespace(node) ||
++          isHost(node) ||
++          isProcess(node) ||
++          isLoader(node) ||
++          isGlobal(node) ||
++          isMeta(node))
++      ) {
++        for (const item of parent.name.elements) {
++          const name = bindingProperty(item)
++          if (
++            item.dotDotDotToken ||
++            (item.propertyName &&
++              !ts.isIdentifier(item.propertyName) &&
++              !ts.isStringLiteralLike(item.propertyName)) ||
++            (isModuleNamespace(node) &&
++              ![...safeModuleProperties, 'require'].includes(name)) ||
++            (isHost(node) &&
++              ![
++                'require',
++                'exports',
++                'id',
++                'filename',
++                'loaded',
++                'paths'
++              ].includes(name)) ||
++            (isLoader(node) && name !== 'resolve') ||
++            (isMeta(node) &&
++              !['url', 'filename', 'dirname', 'resolve', 'main'].includes(
++                name
++              )) ||
++            (isGlobal(node) && !['process', 'require'].includes(name)) ||
++            (isProcess(node) &&
++              ['dlopen', 'binding', '_linkedBinding'].includes(name))
++          )
++            loaderDiagnostic(item, 'UNVERIFIED_MODULE_LOADER_PROPERTY')
++        }
+         continue
+       }
+       if (parent && ts.isCallExpression(parent) && parent.expression === node)
+@@ -812,16 +1008,21 @@
+         ts.isCallExpression(node) &&
+         (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+           isLoader(node.expression) ||
+-          isResolver(node.expression))
++          isResolver(node.expression) ||
++          isImportResolver(node.expression))
+       ) {
+-        if (isResolver(node.expression) && node.arguments.length !== 1)
++        if (
++          (isResolver(node.expression) || isImportResolver(node.expression)) &&
++          node.arguments.length !== 1
++        )
+           loaderDiagnostic(node, 'UNVERIFIED_MODULE_RESOLVER_OPTIONS')
+         reference(
+           file,
+           node,
+           literal(node.arguments[0]),
+           false,
+-          node.expression.kind === ts.SyntaxKind.ImportKeyword
++          node.expression.kind === ts.SyntaxKind.ImportKeyword ||
++            isImportResolver(node.expression)
+             ? 'import'
+             : 'require'
+         )
+--- a/tests/product-boundary.test.js
++++ b/tests/product-boundary.test.js
+@@ -60,6 +60,280 @@
+ })
+ 
+ describe('harness product boundary', () => {
++  it.each(['import', 'require'])(
++    'visits transitive physical npm runtime and types with %s conditions',
++    (mode) => {
++      const { root, write } = fixture()
++      write(
++        'node_modules/bridge/package.json',
++        JSON.stringify({
++          name: 'bridge',
++          type: 'module',
++          exports: {
++            '.': {
++              types: './index.d.mts',
++              import: './index.mjs',
++              require: './index.cjs'
++            }
++          }
++        })
++      )
++      write(
++        'node_modules/bridge/index.d.mts',
++        'export declare const value:number'
++      )
++      write('node_modules/bridge/index.mjs', "import 'leaf'")
++      write('node_modules/bridge/index.cjs', "require('leaf')")
++      write(
++        'node_modules/leaf/package.json',
++        JSON.stringify({ name: 'leaf', main: 'index.cjs' })
++      )
++      write('node_modules/leaf/index.cjs', 'module.exports=1')
++      write(
++        'packages/core/src/entry.mjs',
++        mode === 'import'
++          ? "import 'bridge'"
++          : "import {createRequire} from 'node:module';createRequire(import.meta.url)('bridge')"
++      )
++      let audit = auditProductBoundary(root)
++      expect(audit.status).toBe('PASS')
++      expect(cli(root).audit).toEqual(audit)
++      write(
++        'node_modules/leaf/index.cjs',
++        "require('../../products/shift/src/index.ts')"
++      )
++      audit = auditProductBoundary(root)
++      expect(audit.status).toBe('FAIL')
++      expect(
++        audit.violations.some(
++          (issue) =>
++            issue.trail.includes('node_modules/leaf/index.cjs') &&
++            issue.trail.includes(
++              `node_modules/bridge/index.${mode === 'import' ? 'mjs' : 'cjs'}`
++            )
++        )
++      ).toBe(true)
++      expect(cli(root).audit).toEqual(audit)
++      // Neutral runtime must not hide a product reference in physical types.
++      write('node_modules/leaf/index.cjs', 'module.exports=1')
++      write(
++        'node_modules/bridge/index.d.mts',
++        "export * from '../../products/shift/src/index.ts'"
++      )
++      audit = auditProductBoundary(root)
++      expect(
++        audit.violations.some((issue) =>
++          issue.trail.includes('node_modules/bridge/index.d.mts')
++        )
++      ).toBe(true)
++      expect(cli(root).audit).toEqual(audit)
++    }
++  )
++  it('walks transitive physical type-only npm closure without loading its runtime', () => {
++    const { root, write } = fixture()
++    write(
++      'node_modules/bridge/package.json',
++      JSON.stringify({
++        name: 'bridge',
++        types: 'index.d.ts',
++        main: 'missing.cjs'
++      })
++    )
++    write('node_modules/bridge/index.d.ts', "export type {Value} from 'leaf'")
++    write(
++      'node_modules/leaf/package.json',
++      JSON.stringify({ name: 'leaf', types: 'index.d.ts' })
++    )
++    write('node_modules/leaf/index.d.ts', 'export interface Value {id:string}')
++    write('packages/core/src/entry.ts', "import type {Value} from 'bridge'")
++    expect(auditProductBoundary(root).status).toBe('PASS')
++    write(
++      'node_modules/leaf/index.d.ts',
++      "export type {Value} from '../../products/shift/src/types.d.ts'"
++    )
++    write('products/shift/src/types.d.ts', 'export interface Value {id:string}')
++    const audit = auditProductBoundary(root)
++    expect(
++      audit.violations.some(
++        (issue) =>
++          issue.trail.includes('node_modules/bridge/index.d.ts') &&
++          issue.trail.includes('node_modules/leaf/index.d.ts')
++      )
++    ).toBe(true)
++    expect(cli(root).audit).toEqual(audit)
++  })
++  it.each([
++    ['require(target)', 'NON_LITERAL_MODULE_REFERENCE'],
++    ["require('./missing.cjs')", 'UNRESOLVED_MODULE_REFERENCE'],
++    ["require('./native.node')", 'UNVERIFIED_MODULE_FORMAT'],
++    [
++      "const api=process.getBuiltinModule('module');api.registerHooks({})",
++      'UNVERIFIED_MODULE_LOADER_PRIMITIVE'
++    ]
++  ])('refuses unknown physical npm closures: %s', (source, reason) => {
++    const { root, write } = fixture()
++    write(
++      'node_modules/bridge/package.json',
++      JSON.stringify({
++        name: 'bridge',
++        main: 'index.cjs',
++        types: 'index.d.cts'
++      })
++    )
++    write(
++      'node_modules/bridge/index.d.cts',
++      'export declare const value:number'
++    )
++    write('node_modules/bridge/index.cjs', source)
++    write(
++      'node_modules/bridge/native.node',
++      'synthetic native module; never executed'
++    )
++    write('packages/core/src/entry.cjs', "require('bridge')")
++    const audit = auditProductBoundary(root)
++    expect(audit.status).toBe('INCOMPLETE')
++    expect(
++      audit.diagnostics.some(
++        (issue) =>
++          issue.reason === reason &&
++          issue.file.startsWith('node_modules/bridge/')
++      )
++    ).toBe(true)
++    expect(cli(root).audit).toEqual(audit)
++  })
++  it('deduplicates cycles in physical npm closure and still finds a product witness', () => {
++    const { root, write } = fixture()
++    write(
++      'node_modules/bridge/package.json',
++      JSON.stringify({ name: 'bridge', main: 'index.cjs' })
++    )
++    write('node_modules/bridge/index.cjs', "require('./cycle.cjs')")
++    write('node_modules/bridge/cycle.cjs', "require('./index.cjs')")
++    write('packages/core/src/entry.cjs', "require('bridge')")
++    expect(auditProductBoundary(root).status).toBe('PASS')
++    write(
++      'node_modules/bridge/cycle.cjs',
++      "require('./index.cjs');require('../../products/shift/src/index.ts')"
++    )
++    const audit = auditProductBoundary(root)
++    expect(audit.status).toBe('FAIL')
++    expect(
++      audit.violations.some((issue) =>
++        issue.trail.includes('node_modules/bridge/cycle.cjs')
++      )
++    ).toBe(true)
++    expect(cli(root).audit).toEqual(audit)
++  })
++  it.each([
++    "const api=process.getBuiltinModule('module'); const make=api.createRequire; const load=make(__filename);const again=load;again(TARGET)",
++    "const p=process;const get=p.getBuiltinModule;const api=get('module');const {createRequire:make}=api;make(__filename)(TARGET)",
++    "const {getBuiltinModule:get}=process; const api=get('module');const load=api['createRequire'](__filename);const {resolve:find}=load;find(TARGET)",
++    "const p=globalThis.process;const api=p['getBuiltinModule']('module');const load=api.createRequire(__filename);const find=load.resolve;find(TARGET)",
++    "const p=process.getBuiltinModule('process');const api=p.getBuiltinModule('module');api.createRequire(__filename)(TARGET)",
++    "const g=globalThis;const p=g.process;const api=p.getBuiltinModule('module');api.createRequire(__filename)(TARGET)",
++    "const {process:p}=globalThis;const api=p.getBuiltinModule('module');api.createRequire(__filename)(TARGET)",
++    "const p=require('node:process');const api=p.getBuiltinModule('module');api.createRequire(__filename)(TARGET)",
++    "const {'getBuiltinModule':get}=process;const {'createRequire':make}=get('module');make(__filename)(TARGET)",
++    "import p from 'node:process';const api=p.getBuiltinModule('module');api.createRequire(import.meta.url)(TARGET)",
++    "import {getBuiltinModule as get} from 'node:process';get('module').createRequire(import.meta.url).resolve(TARGET)",
++    "import * as p from 'node:process';const {createRequire:make}=p.getBuiltinModule('module');make(import.meta.url)(TARGET)",
++    'const {require:load}=module;load(TARGET)',
++    'const {resolve:find}=require;find(TARGET)',
++    'import.meta.resolve(TARGET)',
++    'const find=import.meta.resolve;const alias=find;alias(TARGET)',
++    'const meta=import.meta;const find=meta.resolve;find(TARGET)',
++    'const {resolve:find}=import.meta;find(TARGET)',
++    'const meta=import.meta;const {resolve:find}=meta;find(TARGET)'
++  ])(
++    'propagates Node22 capabilities and preserves neutral targets: %s',
++    (source) => {
++      const { root, write } = fixture()
++      const entry =
++        source.includes('import ') || source.includes('import.meta')
++          ? 'entry.mjs'
++          : 'entry.cjs'
++      write('packages/core/src/data.cjs', 'module.exports=1')
++      write(
++        `packages/core/src/${entry}`,
++        source.replace('TARGET', "'./data.cjs'")
++      )
++      expect(auditProductBoundary(root).status).toBe('PASS')
++      expect(cli(root).status).toBe(0)
++      write(
++        `packages/core/src/${entry}`,
++        source.replace('TARGET', "'../../../products/shift/src/index.ts'")
++      )
++      const audit = auditProductBoundary(root)
++      expect(audit.status).toBe('FAIL')
++      expect(audit.violations.length).toBeGreaterThan(0)
++      expect(cli(root).audit).toEqual(audit)
++    }
++  )
++  it.each([
++    'const get=process.getBuiltinModule;get(name)',
++    "const p=process;p[key]('module')",
++    "const api=process.getBuiltinModule('module');const key=getProperty();api[key](base)",
++    "const api=process.getBuiltinModule('module');api.register('bridge',import.meta.url)",
++    "const api=process.getBuiltinModule('module');api._load('bridge')",
++    "const api=process.getBuiltinModule('module');const {createRequire:make}=api;const load=make(base);load('node:fs')",
++    "const api=process.getBuiltinModule('module');const load=api.createRequire(import.meta.url);load(target)",
++    'const get=process.getBuiltinModule;forward(get)',
++    "const api=process.getBuiltinModule('module');export {api}",
++    "export {getBuiltinModule as get} from 'node:process'",
++    "export * from 'node:process'",
++    "export * as capabilities from 'node:process'",
++    "forward(require('node:process'))",
++    'const p=process;forward(p)',
++    'process.dlopen(module, target)',
++    "const {binding:load}=process;load('module_wrap')",
++    "const {['mainModule']:entry}=process;entry.require('node:fs')",
++    "const api=process.getBuiltinModule('module');const load=api.createRequire(import.meta.url);forward(load.resolve)",
++    "process.mainModule.require('node:fs')",
++    "const {mainModule:entry}=process;const {require:load}=entry;load('node:fs')",
++    "import {mainModule as entry} from 'node:process';entry.require('node:fs')",
++    "module.parent.require('node:fs')",
++    "const {...unknown}=process;unknown.getBuiltinModule('module')",
++    'const find=import.meta.resolve;find(target)',
++    "import.meta.resolve('node:fs',anotherParent)",
++    'const find=import.meta.resolve;forward(find)',
++    'forward(import.meta)',
++    'const meta=import.meta;meta[property](target)',
++    'const g=globalThis;g[property](target)',
++    "forward(process.getBuiltinModule('process'))"
++  ])('returns INCOMPLETE for unsupported Node22 capabilities: %s', (source) => {
++    const { root, write } = fixture()
++    write('packages/core/src/entry.mjs', source)
++    const audit = auditProductBoundary(root)
++    expect(audit.status).toBe('INCOMPLETE')
++    expect(audit.diagnostics.length).toBeGreaterThan(0)
++    expect(cli(root).audit).toEqual(audit)
++  })
++  it('checks a real Node22 getBuiltinModule load without executing packages during audit', () => {
++    const { root, write } = fixture()
++    write(
++      'node_modules/bridge/package.json',
++      JSON.stringify({ name: 'bridge', main: 'index.cjs' })
++    )
++    write(
++      'node_modules/bridge/index.cjs',
++      "throw new Error('AUDIT_MUST_NOT_EXECUTE')"
++    )
++    write(
++      'packages/core/src/entry.cjs',
++      "const api=process.getBuiltinModule('module');const load=api.createRequire(__filename);console.log(load.resolve('bridge'))"
++    )
++    expect(auditProductBoundary(root).status).toBe('PASS')
++    const run = spawnSync(
++      process.execPath,
++      [path.join(root, 'packages/core/src/entry.cjs')],
++      { encoding: 'utf8' }
++    )
++    expect(run.status).toBe(0)
++    expect(run.stdout.trim()).toBe(
++      path.join(root, 'node_modules/bridge/index.cjs')
++    )
++    expect(cli(root).status).toBe(0)
++  })
+   it.each([
+     "const delegate=require; const api=delegate('node:module'); const fetch=api.createRequire(__filename); fetch('../../../products/shift/src/index.ts')",
+     "const {createRequire: make}=module.require('module'); const fetch=make(__filename); fetch('../../../products/shift/src/index.ts')",

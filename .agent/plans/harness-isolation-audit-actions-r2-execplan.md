@@ -7,6 +7,7 @@ Autoridade: R2-D1/D2/D3 no handoff de rodada2. NO_MODEL mantido.
 - [ ] C1: corrigir fechamento runtime/types/loaders em scratch; bateria histórica e positivos; freeze; uma crítica fresh-context.
 - [ ] P1–P3/P5: identidade, asserções originais e SIGKILL organizador em scratch; gates atuais; freeze.
 - [ ] P4: novo crítico PV01–PV14 sem ledgers/coordenação.
+- [ ] Preparar candidato de integração a partir de HEAD + somente mudanças próprias; comparar inventário com baseline, sem capturar arquivos alheios.
 - [ ] M1/M2 condicionados: full Node22/PG, E2E e neutro PASS; promover apenas own paths e20deleções, commit local; verificar SHA final.
 - [ ] M3: somente aceitar cartão com todos critérios provados; registrar limitações e próximos passos.
 

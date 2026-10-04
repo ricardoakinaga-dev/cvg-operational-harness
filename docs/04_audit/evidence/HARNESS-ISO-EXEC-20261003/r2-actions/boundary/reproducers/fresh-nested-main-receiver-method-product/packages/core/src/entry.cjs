@@ -1,0 +1,1 @@
+const {process:{mainModule:host}}=globalThis;console.log(host.require("../../../products/shift/src/index.cjs").marker)
