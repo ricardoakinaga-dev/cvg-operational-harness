@@ -115,3 +115,9 @@ Continuidade checkpoint 20: segurança27paths e bootstrapR3 trêspaths integrado
 Continuidade checkpoint 21: suíte completa PG+cobertura 3.944 testes, 3.937 PASS/sete FAIL/zero skips. Duas falhas próprias de configuração corrigidas (39 regressões PASS); cinco deadlines CI preservados, otimização isolada ativa. Gateway R9 integrado e 1.207 controles focados PASS; custo/modelo aprovado e BUILD isolado ativo. Bootstrap revisão nova FAIL por dois P2 de sessão/ingresso, emenda humana pendente. Motor externo concluído no commit73669b8; integração ainda não executada. HISO-005 instalado INCOMPLETE306. Global FAIL/produção NO_GO; sem promoção Root ou chamadas OpenAI, 24 critérios intactos.
 
 last_completed_action: integração R9 e regressões focadas sem skips; recibo humano de custo/modelo persistido. next_action: concluir CI-R4 e custo/modelo, revisar emenda de ingresso, reconciliar commit do motor e executar gates/críticos no candidato final. status: IN_PROGRESS. Entradas próprias para99/20/30 mantêm estes valores, com FAIL/NO_GO explícitos; nenhuma certificação final inferida.
+
+## Continuidade — checkpoint 22
+
+Checkpoint 22: motor reconciliado privadamente, 1.406 testes PG focados PASS; CI-R4 integrado, reteste em curso após atualizar contagem para280. Compilação real18projetos765inputs/703arquivos exclui446históricos. Scanner6574disposições individuais I0, crítico pendente. Custo/modelo e sessões/ingresso aprovados, BUILD isolado ativo. Ledgers99/20/30 receberam somente blocos próprios em c0de4c1, conteúdo dirty anterior preservado. HISO-005 instalado INCOMPLETE306; global FAIL/produção NO_GO,24critérios intactos.
+
+Falha de contagem CI-R1 preservada; CI-R2 repetido sem ampliar15000ms nem reduzirdenominador. O commit c0de4c1 integra apenas blocos próprios nos três ledgers, com conteúdo anterior byte-preservado.
