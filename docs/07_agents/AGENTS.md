@@ -7,7 +7,7 @@ continua sendo a fonte de verdade dos estados CVG e do processo operacional.
 
 ## Proposito
 
-Este repositorio segue o padrao CVG de engenharia orientada por documentacao, gates e execucao controlada. O Codex deve operar como agente de engenharia disciplinado para construir a Esmeralda V2, nao como gerador solto de codigo.
+Este repositorio segue o padrao CVG de engenharia orientada por documentacao, gates e execucao controlada para manter o Operational Harness como infraestrutura reutilizavel. Pela [ADR-010](../architecture/adrs/ADR-010-harness-product-isolation.md), produtos como o Assistente de Plantao sao consumidores isolados, com dominio, processo, dados, testes, deploy e backlog proprios. O nucleo nao importa os produtos; suas barras de piloto/producao nao certificam o harness inteiro. A Esmeralda V2 permanece origem historica, nao a identidade atual deste repositorio.
 
 ## Working Agreements
 

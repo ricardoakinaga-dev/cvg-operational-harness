@@ -1,6 +1,13 @@
-# AGENTS.md — cvg-agent-secretary-v2
+# AGENTS.md — CVG Operational Harness
 
 Este repositorio opera pelo pipeline CVG documentado em `docs/07_agents/AGENTS.md`.
+
+Direção vigente: `docs/architecture/adrs/ADR-010-harness-product-isolation.md`.
+O harness é infraestrutura reutilizável; o Assistente de Plantão é consumidor
+em `products/shift-assistant`, com domínio, dados, processo, testes, deploy e
+backlog próprios. Núcleo e hosts genéricos não importam o consumidor. A barra
+0368 e decisões D1–D4 pertencem ao produto; nenhum release é concedido pela
+separação. Carteira de transição: `docs/03_build/0370_harness_product_isolation_backlog.md`.
 
 Antes de qualquer alteracao, o agente deve ler:
 
