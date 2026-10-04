@@ -1,0 +1,244 @@
+diff --git ascripts/check-product-boundary.mjs bscripts/check-product-boundary.mjs
+index 595d7d4..74133d7 100644
+--- ascripts/check-product-boundary.mjs
++++ bscripts/check-product-boundary.mjs
+@@ -437,7 +437,9 @@ export function auditProductBoundary(directory = process.cwd()) {
+           : undefined
+     const bindingProperty = (item) => {
+       const name = item.propertyName ?? item.name
+-      return ts.isIdentifier(name) ? name.text : literal(name)
++      return ts.isIdentifier(name)
++        ? name.text
++        : literal(ts.isComputedPropertyName(name) ? name.expression : name)
+     }
+     const isGlobal = (node) => {
+       node = unwrap(node)
+@@ -579,23 +581,45 @@ export function auditProductBoundary(directory = process.cwd()) {
+           )
+             factories.add(item.name.text)
+     }
++    // Visit bindings with their full source path, including nested namespaces.
++    // Keep the original BindingElement for diagnostics: synthesized accesses
++    // have no source position and must never be used as diagnostic locations.
++    const walkBinding = (pattern, expression, visit) => {
++      if (!ts.isObjectBindingPattern(pattern)) return
++      for (const item of pattern.elements) {
++        const name = bindingProperty(item)
++        const selected =
++          !item.dotDotDotToken && name !== undefined
++            ? ts.factory.createElementAccessExpression(
++                expression,
++                ts.factory.createStringLiteral(name)
++              )
++            : undefined
++        visit(item, expression, selected)
++        if (selected && ts.isObjectBindingPattern(item.name))
++          walkBinding(item.name, selected, visit)
++      }
++    }
++    const capabilities = [
++      [factories, isFactory],
++      [moduleNamespaces, isModuleNamespace],
++      [loaders, isLoader],
++      [moduleHosts, isHost],
++      [resolvers, isResolver],
++      [processNamespaces, isProcess],
++      [builtinGetters, isBuiltinGetter],
++      [importResolvers, isImportResolver],
++      [globalNamespaces, isGlobal],
++      [metaNamespaces, isMeta]
++    ]
++    const hasCapability = (expression) =>
++      expression && capabilities.some(([, matches]) => matches(expression))
+     // Resolve local aliases to a fixed point; escaping loaders are rejected below.
+     let changed = true
+     while (changed) {
+       changed = false
+       const bind = (name, expression) => {
+-        for (const [set, matches] of [
+-          [factories, isFactory],
+-          [moduleNamespaces, isModuleNamespace],
+-          [loaders, isLoader],
+-          [moduleHosts, isHost],
+-          [resolvers, isResolver],
+-          [processNamespaces, isProcess],
+-          [builtinGetters, isBuiltinGetter],
+-          [importResolvers, isImportResolver],
+-          [globalNamespaces, isGlobal],
+-          [metaNamespaces, isMeta]
+-        ]) {
++        for (const [set, matches] of capabilities) {
+           if (matches(expression) && !set.has(name)) {
+             set.add(name)
+             changed = true
+@@ -606,17 +630,10 @@ export function auditProductBoundary(directory = process.cwd()) {
+         if (ts.isVariableDeclaration(node) && node.initializer) {
+           if (ts.isIdentifier(node.name)) bind(node.name.text, node.initializer)
+           else if (ts.isObjectBindingPattern(node.name))
+-            for (const item of node.name.elements)
+-              if (ts.isIdentifier(item.name) && !item.dotDotDotToken)
+-                bind(
+-                  item.name.text,
+-                  ts.factory.createPropertyAccessExpression(
+-                    node.initializer,
+-                    ts.isIdentifier(item.propertyName ?? item.name)
+-                      ? (item.propertyName ?? item.name).text
+-                      : (literal(item.propertyName) ?? '__unknown__')
+-                  )
+-                )
++            walkBinding(node.name, node.initializer, (item, base, selected) => {
++              if (selected && ts.isIdentifier(item.name))
++                bind(item.name.text, selected)
++            })
+         }
+         if (
+           ts.isBinaryExpression(node) &&
+@@ -636,6 +653,44 @@ export function auditProductBoundary(directory = process.cwd()) {
+       'builtinModules',
+       'isBuiltin'
+     ]
++    const unsafeBindingProperty = (base, name) =>
++      (isModuleNamespace(base) &&
++        ![...safeModuleProperties, 'require'].includes(name)) ||
++      (isHost(base) &&
++        !['require', 'exports', 'id', 'filename', 'loaded', 'paths'].includes(
++          name
++        )) ||
++      (isLoader(base) && name !== 'resolve') ||
++      ((isFactory(base) ||
++        isBuiltinGetter(base) ||
++        isResolver(base) ||
++        isImportResolver(base)) &&
++        !['name', 'length'].includes(name)) ||
++      (isMeta(base) &&
++        !['url', 'filename', 'dirname', 'resolve', 'main'].includes(name)) ||
++      (isGlobal(base) && !['process', 'require'].includes(name)) ||
++      (isProcess(base) &&
++        ['dlopen', 'binding', '_linkedBinding'].includes(name))
++    for (const node of nodes) {
++      if (!ts.isVariableDeclaration(node) || !node.initializer) continue
++      if (
++        ts.isArrayBindingPattern(node.name) &&
++        hasCapability(node.initializer)
++      )
++        loaderDiagnostic(node, 'UNVERIFIED_MODULE_LOADER_BINDING')
++      walkBinding(node.name, node.initializer, (item, base, selected) => {
++        if (!hasCapability(base)) return
++        if (
++          !selected ||
++          item.initializer ||
++          ts.isArrayBindingPattern(item.name) ||
++          unsafeBindingProperty(base, bindingProperty(item))
++        )
++          loaderDiagnostic(item, 'UNVERIFIED_MODULE_LOADER_BINDING')
++        if (selected && isHost(selected))
++          loaderDiagnostic(item, 'UNVERIFIED_MAIN_MODULE_BASE')
++      })
++    }
+     for (const node of nodes) {
+       if (
+         (isHost(node) && !ts.isIdentifier(node)) ||
+@@ -902,9 +957,7 @@ export function auditProductBoundary(directory = process.cwd()) {
+           const name = bindingProperty(item)
+           if (
+             item.dotDotDotToken ||
+-            (item.propertyName &&
+-              !ts.isIdentifier(item.propertyName) &&
+-              !ts.isStringLiteralLike(item.propertyName)) ||
++            bindingProperty(item) === undefined ||
+             (isModuleNamespace(node) &&
+               ![...safeModuleProperties, 'require'].includes(name)) ||
+             (isHost(node) &&
+diff --git atests/product-boundary.test.js btests/product-boundary.test.js
+index cd9fcf6..28a08e5 100644
+--- atests/product-boundary.test.js
++++ btests/product-boundary.test.js
+@@ -60,6 +60,88 @@ afterEach(() => {
+ })
+ 
+ describe('harness product boundary', () => {
++  it.each([
++    "const {process:{getBuiltinModule:get}}=globalThis;get('module').createRequire(__filename)(TARGET)",
++    "const host=globalThis;const {process:{getBuiltinModule:get}}=host;const api=get('node:module');const make=api.createRequire;make(__filename)(TARGET)",
++    "const {'process':{'getBuiltinModule':get}}=globalThis;const api=get('module');api.createRequire(__filename)(TARGET)",
++    "const {['process']:{['getBuiltinModule']:get}}=globalThis;get('module').createRequire(__filename)(TARGET)"
++  ])('propagates nested bindings for neutral and product paths: %s', (body) => {
++    const { root, write } = fixture()
++    write(
++      'products/shift/src/marker.cjs',
++      'module.exports="SYNTHETIC_PRODUCT_EXECUTED"'
++    )
++    const target = '../../../products/shift/src/marker.cjs'
++    write('packages/core/src/entry.cjs', body.replace('TARGET', "'node:fs'"))
++    const neutral = auditProductBoundary(root)
++    expect(neutral.status).toBe('PASS')
++    expect(cli(root).audit).toEqual(neutral)
++    // Exercise the original statements without changing their bindings.
++    const executable = body.replace('TARGET', JSON.stringify(target))
++    const last = executable.lastIndexOf(';')
++    write(
++      'packages/core/src/entry.cjs',
++      `${executable.slice(0, last + 1)}console.log(${executable.slice(last + 1)})`
++    )
++    const oracle = spawnSync(
++      process.execPath,
++      [path.join(root, 'packages/core/src/entry.cjs')],
++      { encoding: 'utf8' }
++    )
++    expect(oracle.status).toBe(0)
++    expect(oracle.stdout.trim()).toBe('SYNTHETIC_PRODUCT_EXECUTED')
++    const rejected = auditProductBoundary(root)
++    expect(rejected.status).toBe('FAIL')
++    expect(cli(root).audit).toEqual(rejected)
++  })
++  it.each([
++    "const {process:{getBuiltinModule:get}}=globalThis;get('module').createRequire(__filename)(target)",
++    "const {process:{mainModule:host}}=globalThis;host.require('node:fs')",
++    'const {process:{mainModule:{require:load}}}=globalThis;load(target)',
++    "const {process:{getBuiltinModule:get=unknown}}=globalThis;get('module').createRequire(__filename)('node:fs')",
++    "const {process:{...host}}=globalThis;host.getBuiltinModule('module')",
++    "const key='getBuiltinModule';const {process:{[key]:get}}=globalThis;get('module')",
++    'const {process:[first]}=globalThis;first(target)',
++    'const {process:{binding:get}}=globalThis;get(target)',
++    "const {process:{getBuiltinModule:{call:invoke}}}=globalThis;invoke(process,'module').createRequire(__filename)(target)",
++    "const {process:{getBuiltinModule:{bind:bindGetter}}}=globalThis;bindGetter(process)('module').createRequire(__filename)(target)"
++  ])('refuses unknown nested capability semantics: %s', (source) => {
++    const { root, write } = fixture()
++    write('packages/core/src/entry.cjs', source)
++    const audit = auditProductBoundary(root)
++    expect(audit.status).toBe('INCOMPLETE')
++    expect(audit.diagnostics.length).toBeGreaterThan(0)
++    expect(cli(root).audit).toEqual(audit)
++  })
++  it('visits a nested capability inside a physical npm dependency', () => {
++    const { root, write } = fixture()
++    write(
++      'node_modules/bridge/package.json',
++      JSON.stringify({
++        name: 'bridge',
++        main: 'index.cjs',
++        types: 'index.d.cts'
++      })
++    )
++    write(
++      'node_modules/bridge/index.d.cts',
++      'export declare const value: unknown'
++    )
++    write(
++      'node_modules/bridge/index.cjs',
++      "const {process:{getBuiltinModule:get}}=globalThis;get('module').createRequire(__filename)('../../products/shift/src/marker.cjs')"
++    )
++    write('products/shift/src/marker.cjs', 'module.exports=1')
++    write('packages/core/src/entry.cjs', "require('bridge')")
++    const audit = auditProductBoundary(root)
++    expect(audit.status).toBe('FAIL')
++    expect(
++      audit.violations.some((issue) =>
++        issue.trail.includes('node_modules/bridge/index.cjs')
++      )
++    ).toBe(true)
++    expect(cli(root).audit).toEqual(audit)
++  })
+   it.each(['import', 'require'])(
+     'visits transitive physical npm runtime and types with %s conditions',
+     (mode) => {
