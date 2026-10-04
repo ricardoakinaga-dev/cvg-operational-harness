@@ -8,9 +8,9 @@ Executar a concessão explícita do usuário para corrigir C1 e PV10 em novas c�
 
 - [x] Pedido, packet, skills, constituição, coordenação, ledgers e artefatos R2 recuperados; claim antes de novas escritas.
 - [x] Concessão explícita preservada em `next-exec-20261004/human-cycle-approval.json`.
-- [ ] Congelar baseline e barra; demonstrar controle conhecido ruim antes das alterações.
-- [ ] C1: propagação/recusa de bindings aninhados, positivos e 14 históricos + 11 negativos R2.
-- [ ] PV10: estados finais duráveis sem perder registro bruto NO_MODEL; transientes/erro/reopen/replay/SIGKILL.
+- [x] Congelar baseline e barra; demonstrar controle conhecido ruim antes das alterações.
+- [x] C1: propagação/recusa de bindings aninhados, positivos e 14 históricos + 11 negativos R2.
+- [x] PV10: estados finais duráveis sem perder registro bruto NO_MODEL; transientes/erro/reopen/replay/SIGKILL.
 - [ ] Gates locais por frente e integração Node 22/PG/E2E/neutro, com inventário da baseline.
 - [ ] Uma crítica nova por frente, sem contexto herdado, artefato congelado e sentinel antes/depois.
 - [ ] Confrontar os reprodutores/manifestos dos críticos; aplicar a decisão sem ciclo adicional automático.
@@ -48,3 +48,5 @@ Destinos novos recusam sobrescrita; preservar primeiro failure e logs. Só repet
 ## Outcomes / Remaining Work
 
 IN_PROGRESS. Resultado final depende de execução e das duas críticas. Sucesso local não conclui o objetivo integral nem autoriza piloto/produção. Próximo passo ativo: baseline, C1 e PV10 nas cópias novas.
+
+04/10/2026 — C1 congelado com151/151 testes e116/116 controles, mas revisão nova INVALID por desvios de escopo e REJECT técnico. Lead reproduziu12/12 falsos PASS (10 cargas de produto e2 closures neutras desconhecidas). Sem novo BUILD/crítico autorizado neste ciclo. PV10 Builder congelou290 testes/9arquivos; crítica única em andamento. Integração typecheck/lint/build público/API/smoke PASS; E2E11/12 PASS,1FAIL preservado, zero retries. Suíte PG e neutra ainda pendentes.

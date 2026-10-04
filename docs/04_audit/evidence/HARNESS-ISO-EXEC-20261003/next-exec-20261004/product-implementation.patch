@@ -1,0 +1,724 @@
+--- a/products/shift-assistant/src/assistant.ts
++++ b/products/shift-assistant/src/assistant.ts
+@@ -9,6 +9,7 @@
+   samePhone
+ } from './domain.ts'
+ import {
++  ModelOrganizer,
+   type Organizer,
+   parseOrganizerResponse,
+   formatLocalTime
+@@ -417,8 +418,36 @@
+           return
+         }
+         i = store.inbox(key)!
++        // Transcript persistence resets the new stage's budget to zero. Start
++        // organization through the existing queue transition so attempt 1 is
++        // durable before the organizer runs, including after an audio restart.
++        if (i.attempt === 0) {
++          this.#commit('organize-stage:' + sha256(key), [
++            {
++              v: 2,
++              type: 'processing_retry_scheduled',
++              at: this.#now(),
++              actor,
++              key,
++              state: 'received',
++              attempt: 0,
++              error: 'organize_stage_pending'
++            }
++          ])
++          return
++        }
+       }
+       const raw = i.transcript ?? i.replacementText ?? i.text
++      // The unmodified default deliberately operates in NO_MODEL mode. Register
++      // its source as a document without calling organization; an injected or
++      // overridden organizer's policy denial remains an actual failure.
++      if (
++        Object.getPrototypeOf(this.#o.organizer) === ModelOrganizer.prototype &&
++        this.#o.organizer.organize === ModelOrganizer.prototype.organize
++      ) {
++        this.#draft(i, undefined, ['policy_denied'])
++        return
++      }
+       let response: unknown
+       try {
+         response = await abortable(
+@@ -444,14 +473,14 @@
+             'response_too_large'
+           ].includes(code)
+         ) {
+-          this.#draft(i, undefined, [code])
++          this.#retry(i, code, true)
+           return
+         }
+-        if (i.attempt < 5) {
+-          this.#retry(i, 'organizer_transient', false)
+-          return
+-        }
+-        this.#draft(i, undefined, ['organizer_failed'])
++        this.#retry(
++          i,
++          i.attempt < 5 ? 'organizer_transient' : 'organizer_failed',
++          false
++        )
+         return
+       }
+       if (controller.signal.aborted)
+@@ -463,7 +492,11 @@
+           return undefined
+         }
+       })()
+-      this.#draft(i, parsed, parsed ? [] : ['schema_invalid'])
++      if (!parsed) {
++        this.#retry(i, 'schema_invalid', true)
++        return
++      }
++      this.#draft(i, parsed, [])
+     } catch {
+       if (store.storageAvailable) {
+         const i = store.inbox(key)
+@@ -500,6 +533,16 @@
+   }
+   #retry(i: Inbox, error: string, permanent: boolean): void {
+     const exhausted = permanent || i.attempt >= 5
++    const raw = i.transcript ?? i.replacementText ?? i.text
++    const failure = `Guardei a fonte; não consegui organizá-la. Zero tarefas derivadas.\nRevisão necessária: ${error}.\nFonte:\n${raw}`
++    // The complete source is already durable in the inbox. A notification must
++    // fit the existing single-outbox byte limit, even for multibyte sources.
++    const notice = i.replacementOf
++      ? 'Correção pendente de revisão. A nota anterior permanece em substituição pendente e suas pendências continuam suspensas.'
++      : Buffer.byteLength(failure) <= 32768
++        ? failure
++        : `Guardei a fonte; não consegui organizá-la. Zero tarefas derivadas.\nRevisão necessária: ${error}. Fonte completa preservada para revisão.`
++    const notify = exhausted && (i.replacementOf || i.stage === 'organize')
+     this.#commit(
+       'retry:' + sha256(i.key) + ':' + this.#o.store.revision('inbox', i.key),
+       [
+@@ -512,12 +555,14 @@
+           state: exhausted ? 'review_required' : 'retry_wait',
+           attempt: i.attempt,
+           error,
+-          ...(exhausted && i.replacementOf
++          ...(notify
+             ? {
+                 outbox: this.#box(
+-                  'replacement-failure:' + sha256(i.key),
++                  (i.replacementOf
++                    ? 'replacement-failure:'
++                    : 'processing-failure:') + sha256(i.key),
+                   i.memberPhone,
+-                  'Correção pendente de revisão. A nota anterior permanece em substituição pendente e suas pendências continuam suspensas.'
++                  notice
+                 )
+               }
+             : {}),
+@@ -532,7 +577,7 @@
+       ]
+     )
+     this.#failureCount++
+-    if (exhausted && i.replacementOf) this.#startDispatch()
++    if (notify) this.#startDispatch()
+   }
+   #draft(
+     i: Inbox,
+--- a/products/shift-assistant/src/__tests__/first-vertical.test.ts
++++ b/products/shift-assistant/src/__tests__/first-vertical.test.ts
+@@ -238,7 +238,7 @@
+     const response = e.store.outboxes().at(-1)
+     expect(response?.payloadText).toContain('já confirmada')
+   })
+-  it('keeps V1/raw JSON/extra flags as raw drafts with zero derived tasks, explicit raw confirmation remains document-only', async () => {
++  it('keeps V1/raw JSON/extra flags as durable review sources with zero derived tasks and refuses confirmation', async () => {
+     for (const output of [
+       '{invalid}',
+       { pacientes: [], pendencias: [], duvidas: [] },
+@@ -257,10 +257,16 @@
+       })
+       await e.say('n', RAW)
+       expect(e.store.tasksV2()).toHaveLength(0)
+-      expect(e.store.notesV2()[0]!.rawText).toBe(RAW)
+-      expect(e.store.notesV2()[0]!.warnings).toContain('schema_invalid')
+-      await e.say('c', 'ok nota ' + e.token())
+-      expect(e.store.notesV2()[0]!.state).toBe('confirmed')
++      expect(e.store.inboxes()[0]?.text).toBe(RAW)
++      expect(e.store.inboxes()[0]?.state).toBe('review_required')
++      expect(e.store.inboxes()[0]?.error).toBe('schema_invalid')
++      expect(e.store.notesV2()).toEqual([])
++      expect(e.store.outboxes()[0]?.payloadText).toContain(RAW)
++      await e.say('c', 'ok')
++      expect(e.store.notesV2()).toEqual([])
++      expect(e.store.outboxes().at(-1)?.payloadText).toContain(
++        'CONFIRMATION_NOT_ELIGIBLE'
++      )
+       expect(e.store.openTasks()).toEqual([])
+     }
+   })
+@@ -394,8 +400,11 @@
+       await e.assistant.idle()
+     }
+     expect(e.store.inboxes()[0]?.attempt).toBe(5)
+-    expect(e.store.inboxes()[0]?.state).toBe('processed')
+-    expect(e.store.notesV2()[0]?.warnings).toContain('organizer_failed')
++    expect(e.store.inboxes()[0]?.state).toBe('review_required')
++    expect(e.store.inboxes()[0]?.error).toBe('organizer_failed')
++    expect(e.store.inboxes()[0]?.text).toBe(RAW)
++    expect(e.store.notesV2()).toEqual([])
++    expect(e.store.outboxes()[0]?.payloadText).toContain(RAW)
+     expect(e.store.tasksV2()).toEqual([])
+     await e.say('help', 'ajuda')
+     expect(e.store.inboxes().at(-1)?.state).toBe('processed')
+--- /dev/null
++++ b/products/shift-assistant/src/__tests__/pv10-processing-reliability.test.ts
+@@ -0,0 +1,550 @@
++// @vitest-environment node
++import * as fs from 'node:fs'
++import { createServer, type Server } from 'node:http'
++import type { AddressInfo } from 'node:net'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import { ShiftAssistant } from '../assistant.ts'
++import { ShiftStore } from '../store.ts'
++import { ModelOrganizer, type Organizer } from '../organizer.ts'
++import { WahaClient, EvolutionClient } from '../whatsapp.ts'
++import { buildShiftServer } from '../server.ts'
++import { canonical, sha256 } from '../journal.ts'
++import { RAW, RESPONSE } from './vertical-test-fixture.ts'
++
++const PHONE = '5511900000001'
++const SECRET = 'synthetic-pv10-webhook-12345'
++const AT = '2026-10-03T18:00:00.000Z'
++const DELAYS = [30000, 120000, 600000, 1800000]
++const closers: (() => Promise<void> | void)[] = []
++afterEach(async () => {
++  for (const close of closers.splice(0).reverse()) await close()
++})
++const bind = (server: Server) =>
++  new Promise<string>((resolve) =>
++    server.listen(0, '127.0.0.1', () =>
++      resolve('http://127.0.0.1:' + (server.address() as AddressInfo).port)
++    )
++  )
++const closeServer = (server: Server) =>
++  new Promise<void>((resolve) => {
++    server.closeAllConnections()
++    server.close(() => resolve())
++  })
++async function setup(
++  provider: 'waha' | 'evolution',
++  organizer: Organizer,
++  dir = fs.mkdtempSync(join(tmpdir(), 'cvg-pv10-'))
++) {
++  let now = new Date(AT)
++  const sent: unknown[] = []
++  const receiver = createServer((req, res) => {
++    void (async () => {
++      let body = ''
++      for await (const chunk of req) body += String(chunk)
++      sent.push(JSON.parse(body))
++      res.writeHead(201, { 'content-type': 'application/json' })
++      res.end(JSON.stringify({ id: 'receipt', key: { id: 'receipt' } }))
++    })()
++  })
++  const baseUrl = await bind(receiver)
++  closers.push(() => closeServer(receiver))
++  const options = {
++    baseUrl,
++    session: 'pv10',
++    instance: 'pv10',
++    apiKey: 'synthetic',
++    fetch: async (url: string, init?: RequestInit) => fetch(url, init)
++  }
++  const whatsapp =
++    provider === 'waha' ? new WahaClient(options) : new EvolutionClient(options)
++  const store = new ShiftStore(dir)
++  closers.push(() => store.close())
++  const transcribe = vi.fn(async () => RAW)
++  const assistant = new ShiftAssistant({
++    store,
++    whatsapp,
++    organizer,
++    members: [
++      { phone: PHONE, name: 'Ana', manager: false },
++      { phone: '5511900000009', name: 'Manager', manager: true }
++    ],
++    transcriber: { transcribe },
++    clock: () => now
++  })
++  closers.push(() => assistant.stop())
++  const server = buildShiftServer({
++    store,
++    assistant,
++    whatsapp,
++    webhookSecret: SECRET,
++    clock: () => now
++  })
++  const url = await bind(server)
++  closers.push(() => closeServer(server))
++  const post = async (id: string, text = RAW, audio = false) => {
++    const response = await fetch(url + '/webhooks/' + provider, {
++      method: 'POST',
++      headers: {
++        'content-type': 'application/json',
++        'x-cvg-webhook-secret': SECRET
++      },
++      body: JSON.stringify(
++        provider === 'waha'
++          ? {
++              event: 'message',
++              session: 'pv10',
++              payload: {
++                id,
++                from: PHONE + '@c.us',
++                body: audio ? '' : text,
++                ...(audio
++                  ? {
++                      hasMedia: true,
++                      media: { mimetype: 'audio/ogg', url: baseUrl + '/audio' }
++                    }
++                  : {})
++              }
++            }
++          : {
++              event: 'messages.upsert',
++              instance: 'pv10',
++              data: {
++                key: { id, remoteJid: PHONE + '@s.whatsapp.net' },
++                message: audio
++                  ? { audioMessage: { mimetype: 'audio/ogg' } }
++                  : { conversation: text }
++              }
++            }
++      )
++    })
++    return { status: response.status, ack: await response.json() }
++  }
++  const say = async (id: string, text = RAW) => {
++    const result = await post(id, text)
++    await assistant.idle()
++    return result
++  }
++  return {
++    dir,
++    store,
++    assistant,
++    whatsapp,
++    server,
++    sent,
++    transcribe,
++    post,
++    say,
++    advance(ms: number) {
++      now = new Date(+now + ms)
++    }
++  }
++}
++function events(dir: string) {
++  const manifest = JSON.parse(
++    fs.readFileSync(join(dir, 'journal/manifest.json'), 'utf8')
++  )
++  return manifest.segments.flatMap((segment: { path: string }) =>
++    fs
++      .readFileSync(join(dir, segment.path), 'utf8')
++      .split('\n')
++      .filter(Boolean)
++      .flatMap((line) => JSON.parse(line).changes)
++  )
++}
++function terminal(
++  e: Awaited<ReturnType<typeof setup>>,
++  error: string,
++  attempt = 1
++) {
++  const inbox = e.store.inboxes().at(-1)!
++  expect(inbox).toMatchObject({
++    state: 'review_required',
++    error,
++    attempt,
++    stage: 'organize',
++    draftAt: AT
++  })
++  expect(inbox.nextAttemptAt).toBeUndefined()
++  expect(e.store.tasksV2()).toEqual([])
++  expect(e.store.notesV2()).toEqual([])
++  const failure = events(e.dir).findLast(
++    (event: { type: string }) => event.type === 'processing_retry_scheduled'
++  )
++  expect(failure).toMatchObject({
++    key: inbox.key,
++    state: 'review_required',
++    error,
++    attempt
++  })
++  expect(failure.outbox).toMatchObject({ purpose: 'response' })
++  expect(e.store.outbox(failure.outbox.id)?.state).toBe('provider_accepted')
++  expect(
++    events(e.dir).some(
++      (event: { type: string }) => event.type === 'draft_prepared'
++    )
++  ).toBe(false)
++  return inbox
++}
++
++describe.each(['waha', 'evolution'] as const)(
++  'PV10 %s HTTP and durable recovery',
++  (provider) => {
++    it.each([
++      'invalid_request',
++      'schema_invalid',
++      'response_too_large',
++      'policy_denied'
++    ])(
++      '%s is terminal, durable, admitted once and never silently processed',
++      async (code) => {
++        const organize = vi.fn(async () => {
++          throw Object.assign(new Error('synthetic'), { code })
++        })
++        const e = await setup(provider, { organize })
++        expect(await e.say('permanent')).toEqual({
++          status: 200,
++          ack: { accepted: true }
++        })
++        const before = terminal(e, code)
++        expect(before.text).toBe(RAW)
++        expect(await e.say('permanent')).toEqual({
++          status: 200,
++          ack: { accepted: false }
++        })
++        expect(await e.say('permanent', RAW + ' conflict')).toEqual({
++          status: 409,
++          ack: { error: 'idempotency_conflict' }
++        })
++        expect(e.store.inboxes()[0]).toEqual(before)
++        expect(organize).toHaveBeenCalledTimes(1)
++        await e.assistant.stop()
++        e.store.close()
++        const reopened = await setup(provider, { organize }, e.dir)
++        expect(reopened.store.inboxes()[0]).toEqual(before)
++        reopened.advance(99999999)
++        reopened.assistant.recoverPending()
++        await reopened.assistant.idle()
++        expect(await reopened.say('permanent')).toEqual({
++          status: 200,
++          ack: { accepted: false }
++        })
++        expect(organize).toHaveBeenCalledTimes(1)
++        expect(reopened.sent).toEqual([])
++        expect(reopened.store.inboxes()[0]).toEqual(before)
++        expect((await reopened.say('help', 'ajuda')).ack).toEqual({
++          accepted: true
++        })
++        expect(reopened.store.inboxes().at(-1)?.state).toBe('processed')
++      }
++    )
++    it.each([
++      ['invalid JSON', '{invalid}'],
++      ['V1', { pacientes: [], pendencias: [], duvidas: [] }],
++      ['extra properties', { ...RESPONSE, confirmed: true }],
++      [
++        'invalid evidence schema',
++        { ...RESPONSE, evidence: [{ path: 'bad', start: 0, end: 1 }] }
++      ]
++    ])(
++      'returned %s is schema review, never a confirmable fallback',
++      async (_, output) => {
++        const organize = vi.fn(async () => structuredClone(output))
++        const e = await setup(provider, { organize })
++        expect((await e.say('malformed')).ack).toEqual({ accepted: true })
++        const inbox = terminal(e, 'schema_invalid')
++        expect(inbox.text).toBe(RAW)
++        e.advance(99999999)
++        e.assistant.resumePending()
++        await e.assistant.idle()
++        expect(organize).toHaveBeenCalledTimes(1)
++        await e.say('unsafe-confirm', 'ok')
++        expect(e.store.notesV2()).toEqual([])
++        expect(e.store.tasksV2()).toEqual([])
++        expect(e.store.outboxes().at(-1)?.payloadText).toContain(
++          'CONFIRMATION_NOT_ELIGIBLE'
++        )
++      }
++    )
++    it('intentional default NO_MODEL registers and confirms the raw document with zero model calls', async () => {
++      const execute = vi.fn()
++      const organizer = new ModelOrganizer(
++        { id: 'synthetic', location: 'local', execute } as never,
++        'fixture'
++      )
++      const e = await setup(provider, organizer)
++      expect((await e.say('raw')).ack).toEqual({ accepted: true })
++      expect(execute).not.toHaveBeenCalled()
++      const note = e.store.notesV2()[0]!
++      expect(note.rawText).toBe(RAW)
++      expect(note.rawTextSha256).toBe(sha256(RAW))
++      expect(note.organized).toBeUndefined()
++      expect(note.tasks).toEqual([])
++      expect(note.warnings).toEqual(['policy_denied'])
++      expect(e.store.inboxes()[0]?.state).toBe('processed')
++      await e.say('confirm', 'ok nota ' + note.token)
++      expect(e.store.noteV2(note.id)?.state).toBe('confirmed')
++      expect(e.store.tasksV2()).toEqual([])
++      await e.assistant.stop()
++      e.store.close()
++      const reopened = await setup(provider, organizer, e.dir)
++      reopened.assistant.recoverPending()
++      await reopened.assistant.idle()
++      expect(reopened.store.noteV2(note.id)?.state).toBe('confirmed')
++      expect(reopened.store.tasksV2()).toEqual([])
++      expect(execute).not.toHaveBeenCalled()
++    })
++    it.each(['subclass', 'instance override'])(
++      '%s policy denial is an organization failure',
++      async (variant) => {
++        class Denied extends ModelOrganizer {
++          override async organize(): Promise<unknown> {
++            throw Object.assign(new Error('synthetic denial'), {
++              code: 'policy_denied'
++            })
++          }
++        }
++        const organizer =
++          variant === 'subclass' ? new Denied() : new ModelOrganizer()
++        if (variant === 'instance override')
++          organizer.organize = new Denied().organize
++        const e = await setup(provider, organizer)
++        await e.say('denied')
++        terminal(e, 'policy_denied')
++      }
++    )
++    it('five failed attempts survive each reopen, preserve backoff and stop permanently at review', async () => {
++      const organize = vi.fn(async () => {
++        throw new Error('synthetic transient')
++      })
++      let e = await setup(provider, { organize })
++      expect((await e.say('exhausted')).ack).toEqual({ accepted: true })
++      let elapsed = 0
++      for (const [index, delay] of DELAYS.entries()) {
++        const before = e.store.inboxes()[0]!
++        expect(before).toMatchObject({
++          state: 'retry_wait',
++          attempt: index + 1,
++          draftAt: AT
++        })
++        expect(before.nextAttemptAt).toBe(
++          new Date(Date.parse(AT) + elapsed + delay).toISOString()
++        )
++        await e.assistant.stop()
++        e.store.close()
++        e = await setup(provider, { organize }, e.dir)
++        expect(e.store.inboxes()[0]).toEqual(before)
++        e.advance(elapsed + delay - 1)
++        e.assistant.recoverPending()
++        await e.assistant.idle()
++        expect(organize).toHaveBeenCalledTimes(index + 1)
++        e.advance(1)
++        elapsed += delay
++        e.assistant.resumePending()
++        await e.assistant.idle()
++        expect(organize).toHaveBeenCalledTimes(index + 2)
++      }
++      const before = terminal(e, 'organizer_failed', 5)
++      expect(before.text).toBe(RAW)
++      await e.assistant.stop()
++      e.store.close()
++      e = await setup(provider, { organize }, e.dir)
++      e.advance(99999999)
++      e.assistant.recoverPending()
++      await e.assistant.idle()
++      expect((await e.say('exhausted')).ack).toEqual({ accepted: false })
++      expect(e.store.inboxes()[0]).toEqual(before)
++      expect(organize).toHaveBeenCalledTimes(5)
++      expect(e.sent).toEqual([])
++    })
++    it('a transient retry may still succeed with the original elaboration time and one draft', async () => {
++      const organize = vi
++        .fn()
++        .mockRejectedValueOnce(new Error('synthetic'))
++        .mockResolvedValue(RESPONSE)
++      const e = await setup(provider, { organize })
++      await e.say('recoverable')
++      expect(e.store.inboxes()[0]?.state).toBe('retry_wait')
++      e.advance(DELAYS[0]!)
++      e.assistant.resumePending()
++      await e.assistant.idle()
++      expect(e.store.inboxes()[0]).toMatchObject({
++        state: 'processed',
++        attempt: 2,
++        draftAt: AT
++      })
++      expect(e.store.inboxes()[0]?.error).toBeUndefined()
++      expect(e.store.notesV2()).toHaveLength(1)
++      expect(e.store.notesV2()[0]?.createdAt).toBe(AT)
++      expect(e.store.tasksV2()[0]?.status).toBe('draft')
++      expect(organize).toHaveBeenCalledTimes(2)
++    })
++    it('HTTP ack is durable admission even while the eventual permanent failure is pending', async () => {
++      let reject!: (error: Error) => void
++      const organize = vi.fn(
++        () =>
++          new Promise<never>((_, r) => {
++            reject = r
++          })
++      )
++      const e = await setup(provider, { organize })
++      expect(await e.post('pending')).toEqual({
++        status: 200,
++        ack: { accepted: true }
++      })
++      expect(e.store.inboxes()[0]?.state).toBe('processing')
++      expect(events(e.dir)[0].type).toBe('inbound_recorded')
++      reject(Object.assign(new Error('synthetic'), { code: 'invalid_request' }))
++      await e.assistant.idle()
++      terminal(e, 'invalid_request')
++    })
++    it('a multibyte source larger than an outbox stays complete and terminal while its notice fits the byte ceiling', async () => {
++      const source = '界'.repeat(12000)
++      expect(Buffer.byteLength(source)).toBeGreaterThan(32768)
++      const e = await setup(provider, {
++        async organize() {
++          throw Object.assign(new Error('synthetic'), {
++            code: 'response_too_large'
++          })
++        }
++      })
++      expect((await e.say('large-source', source)).ack).toEqual({
++        accepted: true
++      })
++      const inbox = terminal(e, 'response_too_large')
++      expect(inbox.text).toBe(source)
++      const notice = e.store.outboxes()[0]!
++      expect(Buffer.byteLength(notice.payloadText)).toBeLessThanOrEqual(32768)
++      expect(notice.payloadText).toContain('Fonte completa preservada')
++      await e.assistant.stop()
++      e.store.close()
++      const reopened = new ShiftStore(e.dir)
++      closers.push(() => reopened.close())
++      expect(reopened.inboxes()[0]).toEqual(inbox)
++      expect(reopened.outboxes()[0]).toEqual(notice)
++    })
++    it('exhausted replacement remains pending and suspended across reopen and terminal replay', async () => {
++      let failing = false
++      const organize = vi.fn(async () => {
++        if (failing) throw new Error('synthetic')
++        return structuredClone(RESPONSE)
++      })
++      const e = await setup(provider, { organize })
++      await e.say('original')
++      const original = e.store.notesV2()[0]!
++      await e.say('confirm', 'ok nota ' + original.token)
++      failing = true
++      const correction = 'corrigir nota ' + original.token + ': ' + RAW
++      await e.say('correction', correction)
++      for (const delay of DELAYS) {
++        e.advance(delay)
++        e.assistant.resumePending()
++        await e.assistant.idle()
++      }
++      expect(organize).toHaveBeenCalledTimes(6)
++      expect(e.store.inboxes().at(-1)).toMatchObject({
++        state: 'review_required',
++        attempt: 5,
++        error: 'organizer_failed',
++        replacementText: RAW
++      })
++      expect(e.store.noteV2(original.id)).toMatchObject({
++        state: 'confirmed',
++        replacementPending: true,
++        rawText: RAW
++      })
++      expect(e.store.notesV2()).toHaveLength(1)
++      expect(e.store.tasksV2()[0]?.status).toBe('suspended')
++      const before = canonical([
++        e.store.notesV2(),
++        e.store.tasksV2(),
++        e.store.inboxes()
++      ])
++      await e.assistant.stop()
++      e.store.close()
++      const reopened = await setup(provider, { organize }, e.dir)
++      reopened.advance(99999999)
++      reopened.assistant.recoverPending()
++      await reopened.assistant.idle()
++      expect((await reopened.say('correction', correction)).ack).toEqual({
++        accepted: false
++      })
++      expect(organize).toHaveBeenCalledTimes(6)
++      expect(
++        canonical([
++          reopened.store.notesV2(),
++          reopened.store.tasksV2(),
++          reopened.store.inboxes()
++        ])
++      ).toBe(before)
++      expect(reopened.sent).toEqual([])
++    })
++    it.each(['invalid_request', 'exhausted'])(
++      'audio organization %s preserves transcript, media and a separate five-attempt budget',
++      async (failure) => {
++        const organize = vi.fn(async () => {
++          throw Object.assign(
++            new Error('synthetic'),
++            failure === 'exhausted' ? {} : { code: failure }
++          )
++        })
++        const e = await setup(provider, { organize })
++        const media = Buffer.from('synthetic-audio-bytes')
++        const download = vi.fn(async () => ({
++          bytes: media,
++          mimetype: 'audio/ogg'
++        }))
++        e.whatsapp.downloadMedia = download
++        expect(await e.post('audio', '', true)).toEqual({
++          status: 200,
++          ack: { accepted: true }
++        })
++        await e.assistant.idle()
++        expect(organize).toHaveBeenCalledTimes(1)
++        expect(e.store.inboxes()[0]?.attempt).toBe(1)
++        if (failure === 'exhausted') {
++          expect(e.store.inboxes()[0]?.state).toBe('retry_wait')
++          for (const delay of DELAYS) {
++            e.advance(delay)
++            e.assistant.resumePending()
++            await e.assistant.idle()
++          }
++        }
++        const inbox = terminal(
++          e,
++          failure === 'exhausted' ? 'organizer_failed' : failure,
++          failure === 'exhausted' ? 5 : 1
++        )
++        expect(inbox.text).toBe('')
++        expect(inbox.transcript).toBe(RAW)
++        expect(
++          events(e.dir).find(
++            (event: { type: string }) => event.type === 'transcript_recorded'
++          )
++        ).toMatchObject({ text: RAW, sha256: sha256(RAW) })
++        expect(inbox.mediaPath).toBeTruthy()
++        const mediaPath = join(e.dir, inbox.mediaPath!)
++        expect(fs.readFileSync(mediaPath)).toEqual(media)
++        expect(download).toHaveBeenCalledTimes(1)
++        expect(e.transcribe).toHaveBeenCalledTimes(1)
++        await e.assistant.stop()
++        e.store.close()
++        const reopened = await setup(provider, { organize }, e.dir)
++        reopened.advance(99999999)
++        reopened.assistant.recoverPending()
++        await reopened.assistant.idle()
++        expect(await reopened.post('audio', '', true)).toEqual({
++          status: 200,
++          ack: { accepted: false }
++        })
++        await reopened.assistant.idle()
++        expect(reopened.store.inboxes()[0]).toEqual(inbox)
++        expect(fs.readFileSync(mediaPath)).toEqual(media)
++        expect(organize).toHaveBeenCalledTimes(failure === 'exhausted' ? 5 : 1)
++        expect(reopened.transcribe).not.toHaveBeenCalled()
++        expect(reopened.sent).toEqual([])
++      }
++    )
++  }
++)
