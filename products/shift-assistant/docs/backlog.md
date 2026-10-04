@@ -1,5 +1,7 @@
 # Backlog do Assistente de Plantão
 
+> Rodada 2: R2-D2 autoriza P1–P5 em scratch; R2-D3 autoriza promoção local apenas com os gates e PV aprovados. D2 segue aberta/NO_MODEL. D009/D011 aguardam HISO-005 aceito. AP-011 tem [suporte documental de recibo](../../../docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/audit-actions/ap011-provider-delivery-receipt-r1.md), sem SLA ou provider qualificado; se nenhum provider satisfizer o recibo, exigir decisão separada do usuário. [Packet atual](../../../docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/r2-actions/t3-packet.md). Nenhum cartão encerrado nesta preparação.
+
 ## Decisão separada — revisão da D2 (organização por modelo)
 
 Estado `OPEN / HUMAN_DECISION_REQUIRED`, decisão B3 de 03/10/2026. Manter `NO_MODEL`: notas clínicas recebem `policy_denied` antes de budget/provider, com zero chamadas. A revisão da D2 pertence ao responsável e não é approval da SPEC 0180 nem novo critério PISO. Organização clínica por modelo permanece fora enquanto a decisão estiver aberta; o impedimento se limita à parte clínica do D009, sem bloquear preparações e fatias independentes autorizadas. Não implementar grant/exceção ou mudar classificação para contornar a política. Os dez cartões originais abaixo preservam seus aceites.

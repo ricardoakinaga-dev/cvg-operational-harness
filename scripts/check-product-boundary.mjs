@@ -1,3 +1,5 @@
+// R2-G1: gate REJECTED; PASS is not evidence of HISO-005 isolation until
+// the R2-C1 cycle and its independent posterior review are accepted.
 import fs from 'node:fs'
 import path from 'node:path'
 import { builtinModules, createRequire } from 'node:module'

@@ -1,5 +1,7 @@
 # 0370 — Backlog de isolamento do Operational Harness
 
+> Rodada 2 autorizada em 03/10/2026: C1 tem um ciclo e uma crítica posterior; produto tem correção limitada em scratch e promoção local condicionada. O checker vigente está REJECTED: seu PASS não comprova HISO-005. D009/D011 aguardam HISO-005 aceito. [Plano e decisões](../08_runtime/handoffs/harness_isolation_audit_actions_r2_20261003.md). Os 24 critérios continuam exigidos; status ainda sem aceite novo.
+
 Data: 03/10/2026. Task documental: `HARNESS-ISO-PLAN`. Direção: [ADR-010](../architecture/adrs/ADR-010-harness-product-isolation.md). Sequência: [roadmap 0369](0369_harness_product_isolation_roadmap.md). Origem dos defeitos: [AUD0594](../04_audit/0594_repository_score_audit_2026-10-02.md).
 
 **Execução integral iniciada em 03/10/2026 por pedido explícito do usuário.** Estado e evidências da rodada HARNESS-ISO-EXEC estão no handoff próprio; critérios originais preservados. São 14 tarefas do harness (HISO) e dez do consumidor (PISO). `READY` significa próxima tarefa documental executável; `TODO` significa pendente das dependências e gates. A autorização do usuário confirma a implementação local do plano; não constitui revisão de uma SPEC T3 futura ou autorização de uso real.
