@@ -11,11 +11,11 @@ Executar a concessão explícita do usuário para corrigir C1 e PV10 em novas c�
 - [x] Congelar baseline e barra; demonstrar controle conhecido ruim antes das alterações.
 - [x] C1: propagação/recusa de bindings aninhados, positivos e 14 históricos + 11 negativos R2.
 - [x] PV10: estados finais duráveis sem perder registro bruto NO_MODEL; transientes/erro/reopen/replay/SIGKILL.
-- [ ] Gates locais por frente e integração Node 22/PG/E2E/neutro, com inventário da baseline.
-- [ ] Uma crítica nova por frente, sem contexto herdado, artefato congelado e sentinel antes/depois.
-- [ ] Confrontar os reprodutores/manifestos dos críticos; aplicar a decisão sem ciclo adicional automático.
-- [ ] Avaliar R2-D3 somente com todas as condições; preservar fontes alheias se ownership não liberado.
-- [ ] Evidências compactas e handoff/backlogs próprios; ledgers via owner quando livres; commits locais por caminho, sem push.
+- [x] Gates locais por frente e integração Node 22/PG/E2E/neutro, com inventário da baseline.
+- [x] Uma crítica nova por frente, sem contexto herdado, artefato congelado e sentinel antes/depois.
+- [x] Confrontar os reprodutores/manifestos dos críticos; aplicar a decisão sem ciclo adicional automático.
+- [x] Avaliar R2-D3 somente com todas as condições; preservar fontes alheias se ownership não liberado.
+- [x] Evidências compactas e handoff/backlogs próprios; ledgers via owner quando livres; commits locais por caminho, sem push.
 
 ## Decision Log
 
@@ -47,6 +47,8 @@ Destinos novos recusam sobrescrita; preservar primeiro failure e logs. Só repet
 
 ## Outcomes / Remaining Work
 
-IN_PROGRESS. Resultado final depende de execução e das duas críticas. Sucesso local não conclui o objetivo integral nem autoriza piloto/produção. Próximo passo ativo: baseline, C1 e PV10 nas cópias novas.
+ENCERRADO / GLOBAL FAIL. Ambos os ciclos e reviews foram consumidos: C1 INVALID/REJECT, PV INVALID com 14 comportamentos observados PASS e zero aceites formais. Sem promoção de código, sem nova correção/review automático. Ledgers próprios preparados no handoff e compartilhados preservados. Próximo passo: coordenação de baseline/ledgers e nova decisão de ciclo/review, mantendo NO_MODEL.
 
-04/10/2026 — C1 congelado com151/151 testes e116/116 controles, mas revisão nova INVALID por desvios de escopo e REJECT técnico. Lead reproduziu12/12 falsos PASS (10 cargas de produto e2 closures neutras desconhecidas). Sem novo BUILD/crítico autorizado neste ciclo. PV10 Builder congelou290 testes/9arquivos; crítica única em andamento. Integração typecheck/lint/build público/API/smoke PASS; E2E11/12 PASS,1FAIL preservado, zero retries. Suíte PG e neutra ainda pendentes.
+04/10/2026 — C1 congelado com 151/151 testes e 116/116 controles, mas revisão nova INVALID por desvios de escopo e REJECT técnico. Lead reproduziu 12/12 falsos PASS (10 cargas de produto e 2 closures neutras desconhecidas). Sem novo BUILD/crítico autorizado neste ciclo. PV10 Builder congelou 290 testes/9 arquivos; crítica única em andamento. Integração typecheck/lint/build público/API/smoke PASS; E2E11/12 PASS,1FAIL preservado, zero retries. Suíte PG e neutra ainda pendentes.
+
+Encerramento: PG dedicado 288/35 PASS; ampla 2.978 PASS, 4 FAIL e 1 skip em 338 arquivos, recuperação 5/2 PASS. E2E 11/12 PASS e 1 FAIL sem retry. Neutra 2.684 PASS e 3 FAIL em 329 arquivos, 6 casos não coletados por anchor ausente; recuperação 71/3 PASS, typecheck/API público PASS. Primeiros failures mantidos. Ambos os críticos encerrados; PG próprio parado. Patches/evidências checkpoint 0caea00. Nenhum critério adicional DONE ou objetivo completo.

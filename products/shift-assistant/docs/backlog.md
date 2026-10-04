@@ -83,3 +83,9 @@ Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](.
 - WHAT/WHERE/HOW: apresentar candidato/hash e evidências da barra 0368 no escopo interno aprovado; só após decisão específica realizar piloto de duas semanas com dois plantonistas, com métricas por turno de completude, qualidade dos lembretes e necessidade de intervenção.
 - Aceite: critérios técnicos e administrativos aplicáveis comprovados; HIS da fase futura corretamente N/A, não fingido como integrado. Decisão continuar/ajustar/parar registrada pelo responsável, com canal de pausa/suporte. Sem consulta real automática, ação clínica/financeira/prontuário definitivo ou produção irrestrita.
 - Evidência: pacote de decisão e, se autorizado, registro de acompanhamento/resultados por turno. Encaminha F11/AP-016. Aprovações D1–D4 existentes não são solicitadas novamente; não substituem aprovação do candidato/piloto.
+
+## NEXT-D2 — PV10 em cópia isolada — 04/10/2026
+
+O usuário autorizou um ciclo local e uma revisão nova, mantendo NO_MODEL inclusive para dados sintéticos. O Builder congelou a correção dos estados terminais de falha, tentativas duráveis e registro bruto sem inferência, com 290 testes em nove arquivos passados. A revisão independente integral PV01–PV14 terminou INVALID por escrita de cache de dependências fora da área autorizada; os 14 comportamentos foram observados PASS, sem aceite formal. Resultado e provas no [handoff NEXT](../../../docs/08_runtime/handoffs/harness_isolation_next_execution_20261004.md). Esta nota registra implementação privada, sem aceitar PISO-003 ou promover fonte.
+
+A promoção R2-D3 permanece condicionada aos aceites e à suíte completa, PostgreSQL, E2E e regressão neutra, além de preservar a baseline. Na mesma rodada, C1 foi rejeitado tecnicamente, o E2E terminou com uma falha, e quatro arquivos alheios com 23 testes exigem coordenação de autoria. Nenhum cartão adicional foi encerrado e nenhum piloto foi autorizado.
