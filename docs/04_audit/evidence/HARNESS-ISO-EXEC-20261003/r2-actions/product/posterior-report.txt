@@ -1,0 +1,39 @@
+REJECT — revisão independente R2-P4 da fatia PRODUCT-FIRST-VERTICAL. Dos 14 PV congelados, 13 PASS e PV10 FAIL. Nenhum PV individual permanece sem prova. Esta entrega encerra a única revisão posterior autorizada; não concede release, piloto, PASS global ou PISO DONE.
+
+PV10 tem divergência reproduzida de estado terminal. A SPEC 0179 §6 exige `review_required` para falha permanente de schema/limite/autorização. Uma nota sintética por webhook HTTP, com organizador preparado que lança `code=invalid_request`, recebe ack 200; após uma tentativa, o rascunho conserva fonte e aviso, mas a inbox vira `processed`, sem `error`, e permanece assim após reopen. Não houve tarefa derivada nem perda da fonte. O defeito é classificar como processado um trabalho cuja falha permanente exige revisão. O ramo de `assistant.ts:443–447` cria rascunho; `vertical-state.ts:87–89,292` chama `finish()`, que marca processado e remove o erro. [Prova mínima](logs/pv10-reproducer.json), [log com assertion/exit 1](logs/pv10-reproducer.log).
+
+Reprodução suficiente, isolada e sem modelo:
+
+```bash
+cd /home/ricardo/.cache/cvg-harness-audit-actions-r2-20261003/product-critic/clone
+PATH=/home/ricardo/.nvm/versions/node/v22.23.2/bin:$PATH TMPDIR=/home/ricardo/.cache/cvg-harness-audit-actions-r2-20261003/product-critic/tmp node --import tsx ../probes/pv10-reproducer.mts
+```
+
+O teste espera `review_required` e termina com exit 1 ao observar `processed`. A sonda de cinco erros transitórios também reproduziu `processed`; a rejeição já é sustentada pelo contrato explícito da falha permanente. SIGKILL real em estágio organizer, nas tentativas 2 e 5, passou: processo morto por sinal, lock residual conservado até prova de exit, journal não modificado na reabertura, orçamento e `draftAt` preservados; tentativa 5 não reorganiza, tentativa 2 recupera uma vez e nova ajuda progride.
+
+| PV | Status | Prova atual |
+|---|---|---|
+| 01 | PASS | HTTP dos dois providers, journal no ack, dedup, 409, exclusões, sessões/reopen. |
+| 02 | PASS | Nove SIGKILL foundation; short writes/sync falho V2, chain/revisão e recovery. |
+| 03 | PASS | Preview real com fonte/token/propostas; zero open/memória; draft e schema V1/reopen. |
+| 04 | PASS | Autor/token/hash incorretos, ambiguidades, entrada anterior pendente e preview uncertain bloqueados. |
+| 05 | PASS | Ativação/bindings/receipt em uma transação; duplicatas e receipt perdido não duplicam tarefa. |
+| 06 | PASS | Replacement durable antes do organizer; suspensão/pending/reopen, done preservada, nova confirmação. |
+| 07 | PASS | Strict nested schema; issues em ID/ref/campo/unidade/quotes; zero ativação, fixtures estáticas. |
+| 08 | PASS | 41 casos/139 comparações e 21 quotes; novos UTF16 não-BMP e overlaps. |
+| 09 | PASS | Lookup público antes/depois/reopen, homônimos invertidos, identidade divergente/omitida bloqueada. |
+| 10 | FAIL | Falha permanente termina `processed`; reproducer mínimo e dois SIGKILL independentes. |
+| 11 | PASS | HTTP WAHA/Evolution, dispatch em disco; timeout/5xx/disconnect uncertain; sem resend, receipt I/O/revocation. |
+| 12 | PASS | Pausa durante socket bloqueado, segundo efeito suprimido, readiness I/O, stop/lock/reopen. |
+| 13 | PASS | 40 foundation + 37 originais, asserções comparadas; types da fatia, lint e public build. |
+| 14 | PASS | Bundle exato/default nos dois providers; policy_denied, zero HTTP de modelo, confirmação bruto sem tarefas. |
+
+[27 sondas próprias: 25 PASS / 2 FAIL em PV10](logs/independent-http-results.json). [254/254 testes fornecidos, zero skip](logs/product-tests.json), incluindo 40 foundation e as 37 instâncias originais. A comparação não se limitou aos nomes: [AST das 103 asserções originais e 120 atuais](logs/original-assertion-comparison.json), diffs dos dois arquivos e [disposições semânticas de cada cenário](logs/original-assertion-dispositions.json) preservam conteúdo, prazo, destinatário, ownership, contagem e efeitos. As adaptações ficam nas exceções explícitas V2 (fonte/evidência/ID, confirmação, journal/sidecar, retry) e NO_MODEL; nenhum enfraquecimento adicional foi encontrado.
+
+Node v22.23.2; npm ci offline na cópia própria, lock intacto. [Types da fatia](logs/typecheck-slice.log), [lint produto/closure](logs/lint.log) e [build público](logs/public-build.log) têm exit 0. Types incluem todos os fontes/testes/sandbox do produto e os fontes de produção da closure shared/model-gateway. O comando Root de typecheck na projeção tem exit 2 por um teste compartilhado importar `channel-gateway`, não fornecido; [falha preservada](logs/typecheck.log). Esse gate global não integra o PV13 restrito pelo usuário; nenhum arquivo fora dos inputs foi acessado para completá-lo. Não se infere resultado da suíte/gates Root.
+
+O default executou exatamente `0ddd6bbb3b9a0fbae9c26aa949947ec0947bfacd409928cbb972e6f4410691d0`, copiado da projeção, por Node22 em processo filho sem loader/aliases e sem organizer injetado. [Provas HTTP WAHA/Evolution](logs/exact-artifact-results.json): zero chamadas ao endpoint fake de modelo, source raw preservada, raw confirmada, zero tasks/bindings, receipt uncertain sem resend no restart. O rebuild foi somente gate de compilação pública; não foi usado como comparação byte do artefato aprovado.
+
+[Sentinels pre/post](sentinel-post.json): MATCH de todos os 144 arquivos da projeção e do packet inicial, incluindo SPECs, shared, config, lock e bundle; zero alterações nos inputs ou nas cópias seladas. Escritas somente neste diretório privado. Root/candidato canônico, ledgers, coordenação, histórico e reports Builder não foram acessados. Apenas dados sintéticos e simuladores loopback efêmeros; NO_MODEL preservado, sem provider real, mensagem externa, push, release ou deploy. Erros iniciais de duas sondas foram corrigidos exclusivamente no runner e [classificados com logs preservados](logs/probe-failure-classification.json).
+
+P07/P09 model-HTTP, áudio/Whisper operacional, SLA/transporte completo P06/P10, infraestrutura/restore/piloto e critérios HISO/PISO globais conservam as pendências seladas. A decisão detalhada está em [decision.json](decision.json); o [manifest](manifest.json) vincula os hashes dos novos logs, probes e volumes de prova.

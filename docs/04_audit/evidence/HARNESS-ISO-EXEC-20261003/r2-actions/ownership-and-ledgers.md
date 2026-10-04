@@ -14,3 +14,18 @@ Diff atual observado:
 ```
 
 Entradas para integração serão atualizadas no ledger-handoff desta rodada ao terminar gates/reviews. O owner deve integrar 99/20/30 preservando o histórico de outras frentes.
+
+## Dependência da integração M1
+
+Candidato HEAD + caminhos próprios tem quatro arquivos de regressão de outras frentes ausentes da baseline de 2.837: runtime-recovery (UP91-004-R3,8 testes), runtime-approval-request (UP91-004-R2,5 testes), execution-input-trajectory API (AUD-0588,2 testes) e operator-session-public-routes (AUD-0589,8 testes). Todos estão untracked no Root e foram preservados. Claims identificados na coordenação; não houve transferência de ownership nesta rodada. A soma 23 não pode desaparecer nem ser substituída pelos novos testes do produto.
+
+O teste próprio B-LINKS/doc-source-moves foi recolocado na cópia privada, 56/56 PASS. O snapshot full anterior permanece identificado como 2.818/336, não rebatizado como 2.874. Mesmo se a integração de ownership for resolvida, PV10 FAIL impede R2-D3.
+
+Diff dos ledgers ao fechar a crítica:
+
+```text
+ docs/20_master_execution_log.md | 64 +++++++++++++++++++++++++++++++++++++++--
+ docs/30_backlog_master.md       | 36 +++++++++++++++++++++--
+ docs/99_runtime_state.md        | 41 +++++++++++++++++++++-----
+ 3 files changed, 130 insertions(+), 11 deletions(-)
+```

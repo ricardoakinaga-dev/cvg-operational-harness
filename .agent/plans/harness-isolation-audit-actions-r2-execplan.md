@@ -12,3 +12,7 @@ Autoridade: R2-D1/D2/D3 no handoff de rodada2. NO_MODEL mantido.
 - [ ] M3: somente aceitar cartão com todos critérios provados; registrar limitações e próximos passos.
 
 Logs brutos privados duráveis. Manifest/digest/vereditos no repositório. Não reescrever commits anteriores.
+
+## Fechamento em 04/10/2026
+
+H/G/S documentais concluídos; H3 WAITING_LEDGER_OWNER registrado. C1 corrigido e revisado: FAIL, 11 novos casos, volta à sessão semanal. Produto P1/P2/P3/P5 verificados, P4 REJECT, 13 PASS / PV10 FAIL. M1/M2 promoção NOT_PERFORMED; pré-checagem neutral 2.643 PASS e integração 2.818 PASS não eliminam 23 casos alheios ausentes. M3 mantém cards IN_PROGRESS/TODO. Deltas/reprodutores compactos e manifests preservados, nenhum push. Revisões esgotadas conforme autoridade R2; não existe autorização para rework extra.

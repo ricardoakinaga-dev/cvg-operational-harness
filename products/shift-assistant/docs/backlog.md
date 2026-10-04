@@ -1,5 +1,7 @@
 # Backlog do Assistente de Plantão
 
+> Fechamento R2 em 04/10/2026: correções de identidade, assertions e SIGKILL aceitas no scratch; 13 PV PASS, PV10 FAIL (falha permanente termina processed em vez de review_required). R2-D3 não satisfeita: nenhum products retrabalhado ou deleção promovido. PISO-001–004 IN_PROGRESS, PISO-005–010 TODO; D2 aberta/NO_MODEL. Os registros abaixo são histórico anterior ao fechamento atual. [Relatório](../../../docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/r2-actions/final-status.md).
+
 > Rodada 2: R2-D2 autoriza P1–P5 em scratch; R2-D3 autoriza promoção local apenas com os gates e PV aprovados. D2 segue aberta/NO_MODEL. D009/D011 aguardam HISO-005 aceito. AP-011 tem [suporte documental de recibo](../../../docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/audit-actions/ap011-provider-delivery-receipt-r1.md), sem SLA ou provider qualificado; se nenhum provider satisfizer o recibo, exigir decisão separada do usuário. [Packet atual](../../../docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/r2-actions/t3-packet.md). Nenhum cartão encerrado nesta preparação.
 
 ## Decisão separada — revisão da D2 (organização por modelo)

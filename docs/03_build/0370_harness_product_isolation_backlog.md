@@ -1,5 +1,7 @@
 # 0370 — Backlog de isolamento do Operational Harness
 
+> Fechamento R2 em 04/10/2026: GLOBAL_FAIL. C1 revisão única FAIL por 11 novos falsos PASS; 14 históricos recusados não comprovam isolamento. Checker Root conserva aviso REJECTED, novo candidato não promovido. Produto 13 PV PASS/PV10 FAIL; promoção condicional negada. Os 24 critérios/status permanecem; sessão semanal é o próximo gate. [Execução e provas](../04_audit/evidence/HARNESS-ISO-EXEC-20261003/r2-actions/final-status.md).
+
 > Rodada 2 autorizada em 03/10/2026: C1 tem um ciclo e uma crítica posterior; produto tem correção limitada em scratch e promoção local condicionada. O checker vigente está REJECTED: seu PASS não comprova HISO-005. D009/D011 aguardam HISO-005 aceito. [Plano e decisões](../08_runtime/handoffs/harness_isolation_audit_actions_r2_20261003.md). Os 24 critérios continuam exigidos; status ainda sem aceite novo.
 
 Data: 03/10/2026. Task documental: `HARNESS-ISO-PLAN`. Direção: [ADR-010](../architecture/adrs/ADR-010-harness-product-isolation.md). Sequência: [roadmap 0369](0369_harness_product_isolation_roadmap.md). Origem dos defeitos: [AUD0594](../04_audit/0594_repository_score_audit_2026-10-02.md).

@@ -1,0 +1,889 @@
+--- a/products/shift-assistant/src/__tests__/first-vertical.test.ts
++++ b/products/shift-assistant/src/__tests__/first-vertical.test.ts
+@@ -4,7 +4,7 @@
+ import type { AddressInfo } from 'node:net'
+ import { tmpdir } from 'node:os'
+ import { join } from 'node:path'
+-import { spawnSync } from 'node:child_process'
++import { spawn, spawnSync } from 'node:child_process'
+ import { afterEach, describe, expect, it, vi } from 'vitest'
+ import { ShiftStore, type CommitExpected } from '../store.ts'
+ import { ShiftAssistant } from '../assistant.ts'
+@@ -892,6 +892,323 @@
+     }
+   )
+ })
++describe('R2 public identity omission regression', () => {
++  it.each(['waha', 'evolution'] as const)(
++    '%s HTTP confirmation and reopen reject explicit source ID omitted or contradicted by prepared output',
++    async (provider) => {
++      let output = structuredClone(RESPONSE)
++      const http: {
++        messageId: string
++        text: string
++        status: number
++        response: unknown
++      }[] = []
++      const e = await setup({
++        provider,
++        organizer: {
++          async organize() {
++            return structuredClone(output)
++          }
++        }
++      })
++      await e.say('history', RAW)
++      await e.say('confirm-history', 'ok nota ' + e.token())
++      expect(e.store.knownPatients('Rex').map((p) => p.id)).toEqual(['20202'])
++      for (const sourceId of ['99999', '20202']) {
++        for (const mode of ['null', 'omitted', 'present', 'contradictory']) {
++          const id = sourceId + '-' + mode
++          const raw = RAW.replaceAll('20202', sourceId)
++          output = structuredClone(RESPONSE)
++          output.pacientes[0]!.id =
++            mode === 'null' ? null : mode === 'present' ? sourceId : '88888'
++          if (mode === 'omitted') delete output.pacientes[0]!.id
++          output.evidence[0]!.quote = 'Paciente Rex, ID ' + sourceId
++          output.evidence = output.evidence.filter(
++            (v) => v.path !== 'pacientes.p1.id'
++          )
++          if (mode === 'present' || mode === 'contradictory')
++            output.evidence.push({
++              path: 'pacientes.p1.id',
++              patientRef: 'p1',
++              quote: 'ID ' + output.pacientes[0]!.id
++            })
++          // The exact critic repro retains the old task ID despite omitting p.id.
++          output.pendencias[0]!.pacienteId =
++            mode === 'present' ? sourceId : '20202'
++          const admission = await e.say(id, raw)
++          expect(admission.status).toBe(200)
++          http.push({
++            messageId: id,
++            text: raw,
++            status: admission.status,
++            response: await admission.json()
++          })
++          const n = e.store.notesV2().at(-1)!
++          expect(n.rawText).toBe(raw)
++          const confirmationText = 'ok nota ' + n.token
++          const confirmation = await e.say('confirm-' + id, confirmationText)
++          expect(confirmation.status).toBe(200)
++          http.push({
++            messageId: 'confirm-' + id,
++            text: confirmationText,
++            status: confirmation.status,
++            response: await confirmation.json()
++          })
++          if (mode === 'present') {
++            expect(n.issues).toEqual([])
++            expect(
++              e.store
++                .openTasks()
++                .filter((t) => t.noteId === n.id)
++                .map((t) => t.patientId)
++            ).toEqual([sourceId])
++          } else {
++            expect(
++              n.issues.some(
++                (v) => v.path === 'pacientes.p1.id' && v.severity === 'blocking'
++              )
++            ).toBe(true)
++            expect(
++              n.bindings.every(
++                (b) => b.provenance === 'unresolved' && !b.idLiteral
++              )
++            ).toBe(true)
++            expect(e.store.tasksV2().filter((t) => t.noteId === n.id)).toEqual(
++              []
++            )
++            expect(e.store.noteV2(n.id)?.state).toBe('draft')
++          }
++        }
++      }
++      const before = canonical([
++        e.store.notesV2(),
++        e.store.tasksV2(),
++        e.store.knownPatients('Rex')
++      ])
++      await e.assistant.stop()
++      e.store.close()
++      const reopened = new ShiftStore(e.dir)
++      closers.push(() => reopened.close())
++      expect(
++        canonical([
++          reopened.notesV2(),
++          reopened.tasksV2(),
++          reopened.knownPatients('Rex')
++        ])
++      ).toBe(before)
++      const blocked = reopened.notesV2().filter((n) => n.issues.length)
++      expect(blocked).toHaveLength(6)
++      for (const n of blocked) {
++        expect(n.bindings.every((b) => !b.confirmedBy && !b.idLiteral)).toBe(
++          true
++        )
++        expect(reopened.tasksV2().filter((t) => t.noteId === n.id)).toEqual([])
++      }
++      fs.writeFileSync(
++        join(e.dir, 'r2-identity-http-proof.json'),
++        JSON.stringify(
++          {
++            provider,
++            synthetic: true,
++            http,
++            sent: e.sent,
++            notes: reopened.notesV2(),
++            tasks: reopened.tasksV2(),
++            memory: reopened.knownPatients('Rex'),
++            reopenedMatches: true
++          },
++          null,
++          2
++        )
++      )
++    }
++  )
++})
++
++describe('R2-P3 real organizer processing SIGKILL', () => {
++  it.each([2, 5])(
++    'SIGKILL in organizer attempt %i reopens same journal/stage/source with five-attempt budget',
++    async (killAttempt) => {
++      const dir = volume()
++      const code = `
++      import fs from 'node:fs';
++      import {ShiftStore} from ${JSON.stringify(new URL('../store.ts', import.meta.url).href)};
++      import {ShiftAssistant} from ${JSON.stringify(new URL('../assistant.ts', import.meta.url).href)};
++      import {WahaClient} from ${JSON.stringify(new URL('../whatsapp.ts', import.meta.url).href)};
++      import {buildShiftServer} from ${JSON.stringify(new URL('../server.ts', import.meta.url).href)};
++      let now=new Date('2026-10-03T18:00:00Z');
++      const store=new ShiftStore(${JSON.stringify(dir)});
++      const whatsapp=new WahaClient({baseUrl:'http://127.0.0.1:1',session:'fixture',apiKey:'synthetic',fetch:async()=>{throw new Error('no send before draft')}});
++      const assistant=new ShiftAssistant({store,members:${JSON.stringify(members)},whatsapp,clock:()=>now,
++        transcriber:{async transcribe(){throw new Error('text only')}},
++        organizer:{async organize(text){
++          const inbox=store.inboxes()[0];
++          if(inbox.attempt===${killAttempt}){
++            fs.writeFileSync(${JSON.stringify(join(dir, 'kill-stage.json'))},JSON.stringify({pid:process.pid,text,inbox,notes:store.notesV2(),tasks:store.tasksV2(),outboxes:store.outboxes()}));
++            process.kill(process.pid,'SIGKILL');
++            await new Promise(()=>{});
++          }
++          throw new Error('synthetic transient');
++        }}});
++      const server=buildShiftServer({assistant,store,whatsapp,webhookSecret:${JSON.stringify(SECRET)},clock:()=>now});
++      server.listen(0,'127.0.0.1',()=>process.send({port:server.address().port}));
++      process.on('message',async()=>{
++        await assistant.idle();
++        for(const delay of [30000,120000,600000,1800000]){
++          now=new Date(+now+delay);assistant.resumePending();await assistant.idle();
++        }
++        process.exit(3);
++      });
++    `
++      const child = spawn(
++        process.execPath,
++        ['--import', 'tsx', '--input-type=module', '-e', code],
++        { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe', 'ipc'] }
++      )
++      let stderr = ''
++      child.stderr!.on('data', (chunk) => {
++        stderr += chunk
++      })
++      const exit = new Promise<{
++        code: number | null
++        signal: NodeJS.Signals | null
++      }>((resolve, reject) => {
++        child.once('error', reject)
++        child.once('exit', (code, signal) => resolve({ code, signal }))
++      })
++      const watchdog = setTimeout(() => child.kill('SIGTERM'), 10000)
++      try {
++        const port = await new Promise<number>((resolve, reject) => {
++          child.once('message', (m) => resolve((m as { port: number }).port))
++          child.once('exit', () =>
++            reject(new Error('child exited before HTTP ready: ' + stderr))
++          )
++        })
++        expect([3400, 3401]).not.toContain(port)
++        const r = await fetch('http://127.0.0.1:' + port + '/webhooks/waha', {
++          method: 'POST',
++          headers: {
++            'content-type': 'application/json',
++            'x-cvg-webhook-secret': SECRET
++          },
++          body: JSON.stringify({
++            event: 'message',
++            session: 'fixture',
++            payload: { id: 'kill-organizer', from: ANA + '@c.us', body: RAW }
++          })
++        })
++        expect(r.status).toBe(200)
++        expect(await r.json()).toEqual({ accepted: true })
++        child.send('drive-retries')
++        const result = await exit
++        expect(result, stderr).toEqual({ code: null, signal: 'SIGKILL' })
++        const checkpoint = JSON.parse(
++          fs.readFileSync(join(dir, 'kill-stage.json'), 'utf8')
++        )
++        expect(checkpoint.pid).toBe(child.pid)
++        expect(checkpoint.text).toBe(RAW)
++        expect(checkpoint.inbox).toMatchObject({
++          state: 'processing',
++          stage: 'organize',
++          attempt: killAttempt,
++          draftAt: '2026-10-03T18:00:00.000Z'
++        })
++        expect(checkpoint.notes).toEqual([])
++        expect(checkpoint.tasks).toEqual([])
++        expect(checkpoint.outboxes).toEqual([])
++        expect(() => new ShiftStore(dir)).toThrow('STORE_LOCKED')
++        // Synthetic operator recovery only after the owned child has demonstrably exited.
++        const manifest = JSON.parse(
++          fs.readFileSync(join(dir, 'journal/manifest.json'), 'utf8')
++        )
++        const journalBefore = manifest.segments.map((s: { path: string }) =>
++          sha256(fs.readFileSync(join(dir, s.path)))
++        )
++        fs.writeFileSync(
++          join(dir, 'operator-lock-recovery.json'),
++          JSON.stringify({
++            childPid: child.pid,
++            ...result,
++            childExited: true,
++            decision: 'release_owned_synthetic_lock'
++          })
++        )
++        fs.unlinkSync(join(dir, 'store.lock'))
++        let calls = 0
++        const e = await setup({
++          dir,
++          organizer: {
++            async organize(text) {
++              calls++
++              expect(text).toBe(RAW)
++              return structuredClone(RESPONSE)
++            }
++          }
++        })
++        expect(
++          manifest.segments.map((s: { path: string }) =>
++            sha256(fs.readFileSync(join(dir, s.path)))
++          )
++        ).toEqual(journalBefore)
++        expect(e.store.inboxes()[0]).toEqual(checkpoint.inbox)
++        e.assistant.recoverPending()
++        await e.assistant.idle()
++        expect(e.store.inboxes()[0]).toMatchObject({
++          key: checkpoint.inbox.key,
++          stage: 'organize',
++          attempt: killAttempt < 5 ? killAttempt + 1 : 5,
++          draftAt: checkpoint.inbox.draftAt,
++          text: RAW,
++          state: killAttempt < 5 ? 'processed' : 'review_required'
++        })
++        expect(calls).toBe(killAttempt < 5 ? 1 : 0)
++        if (killAttempt < 5) {
++          const n = e.store.notesV2()[0]!
++          expect(e.store.notesV2()).toHaveLength(1)
++          expect(n.id).toBe(sha256(JSON.stringify([checkpoint.inbox.key, 1])))
++          expect(n.messageKey).toBe(checkpoint.inbox.key)
++          expect(n.createdAt).toBe(checkpoint.inbox.draftAt)
++          expect(n.rawText).toBe(RAW)
++          expect(e.store.openTasks()).toEqual([])
++          await e.say('confirm-recovered', 'ok nota ' + n.token)
++          expect(e.store.openTasks()).toHaveLength(1)
++          expect(e.store.openTasks()[0]?.patientId).toBe('20202')
++        } else {
++          expect(e.store.notesV2()).toEqual([])
++          expect(e.store.tasksV2()).toEqual([])
++        }
++        e.advance(99999999)
++        e.assistant.resumePending()
++        await e.assistant.idle()
++        expect(calls).toBe(killAttempt < 5 ? 1 : 0)
++        await e.say('help-after-kill', 'ajuda')
++        expect(e.store.inboxes().at(-1)?.state).toBe('processed')
++        const expected = canonical([
++          e.store.notesV2(),
++          e.store.tasksV2(),
++          e.store.inboxes()
++        ])
++        await e.assistant.stop()
++        e.store.close()
++        const reopened = new ShiftStore(dir)
++        closers.push(() => reopened.close())
++        expect(
++          canonical([
++            reopened.notesV2(),
++            reopened.tasksV2(),
++            reopened.inboxes()
++          ])
++        ).toBe(expected)
++      } finally {
++        clearTimeout(watchdog)
++        if (child.exitCode === null && child.signalCode === null)
++          child.kill('SIGKILL')
++        await exit
++      }
++    }
++  )
++})
++
+ describe('bounded text preview parts', () => {
+   it('persists ordered UTF8-safe parts and requires acceptance of every part for raw confirmation', async () => {
+     const raw = '漢'.repeat(16000)
+--- /dev/null
++++ b/products/shift-assistant/src/__tests__/identity-omission-properties.test.ts
+@@ -0,0 +1,215 @@
++// @vitest-environment node
++import { describe, expect, it } from 'vitest'
++import type { NoteV2, OrganizedV2 } from '../domain.ts'
++import { canonical, sha256 } from '../journal.ts'
++import { parseOrganizerResponse } from '../organizer.ts'
++import { buildSourceBlocks, validateOrganization } from '../source-evidence.ts'
++import { revisionToken } from '../vertical-state.ts'
++import { RAW, RESPONSE } from './vertical-test-fixture.ts'
++
++const at = '2026-10-03T18:00:00Z'
++function confirmedHistory(): NoteV2 {
++  const validation = validateOrganization(RAW, RESPONSE, [], at)
++  const note: NoteV2 = {
++    id: 'confirmed-history',
++    messageKey: 'history-key',
++    authorPhone: '5511900000001',
++    revision: 1,
++    createdAt: at,
++    rawText: RAW,
++    rawTextSha256: sha256(RAW),
++    organized: RESPONSE,
++    organizedSha256: sha256(canonical(RESPONSE)),
++    token: '',
++    state: 'confirmed',
++    replacementPending: false,
++    ...validation,
++    warnings: [],
++    tasks: [],
++    previewIds: ['history-preview']
++  }
++  note.bindings = note.bindings.map((b) => ({
++    ...b,
++    confirmedBy: note.authorPhone,
++    confirmedAt: at
++  }))
++  note.token = revisionToken(note)
++  return note
++}
++
++const fields = ['id', 'leito', 'nome'] as const
++const relations = ['absent', 'coincident', 'divergent'] as const
++const outputs = ['omitted', 'null', 'coincident', 'divergent'] as const
++const rows = fields.flatMap((field) =>
++  relations.flatMap((source) =>
++    outputs.map((output) => ({ field, source, output }))
++  )
++)
++describe('R2-P5 finite property matrix: source-owned identity cannot borrow memory', () => {
++  it.each(['ID', 'id', 'ficha', 'prontuário'])(
++    'conflicting literal %s identifiers cannot fall back to memory when no unique block ID exists',
++    (label) => {
++      const raw = `Paciente Rex, registro ${label} 99999, registro ${label} 88888, leito 4. Evolução: alerta.`
++      const response = structuredClone(RESPONSE)
++      response.pacientes[0]!.id = null
++      response.pendencias = []
++      response.evidence = response.evidence.filter(
++        (e) => !e.path.startsWith('pendencias.') && e.path !== 'pacientes.p1.id'
++      )
++      response.evidence[0]!.quote = raw.split('. ')[0]!
++      expect(buildSourceBlocks(raw, response)).toEqual([])
++      const result = validateOrganization(
++        raw,
++        response,
++        [confirmedHistory()],
++        at
++      )
++      expect(result.issues.some((i) => i.path === 'pacientes.p1.id')).toBe(true)
++      expect(result.bindings[0]?.provenance).toBe('unresolved')
++      expect(result.bindings[0]?.idLiteral).toBeUndefined()
++    }
++  )
++  it.each(
++    ['ID', 'id', 'ficha', 'prontuário'].flatMap((label) =>
++      ['99999', '20202', 'cento e um', '00101'].map((literal) => ({
++        label,
++        literal
++      }))
++    )
++  )(
++    'literal source block $label $literal bars memory even outside the labelled field grammar',
++    ({ label, literal }) => {
++      const raw = `Paciente Rex, registro ${label} ${literal}, leito 4. Evolução: alerta.`
++      const response = structuredClone(RESPONSE)
++      response.pacientes[0]!.id = null
++      response.pendencias = []
++      response.evidence = [
++        {
++          path: 'pacientes.p1.nome',
++          patientRef: 'p1',
++          quote: raw.split('. ')[0]!
++        },
++        { path: 'pacientes.p1.leito', patientRef: 'p1', quote: 'leito 4' },
++        {
++          path: 'pacientes.p1.evolucao',
++          patientRef: 'p1',
++          quote: 'Evolução: alerta'
++        }
++      ]
++      expect(buildSourceBlocks(raw, response)[0]?.idLiteral).toBe(literal)
++      const result = validateOrganization(
++        raw,
++        response,
++        [confirmedHistory()],
++        at
++      )
++      expect(result.issues).toContainEqual(
++        expect.objectContaining({
++          code: 'UNSOURCED_ID',
++          path: 'pacientes.p1.id',
++          severity: 'blocking'
++        })
++      )
++      expect(result.bindings[0]).toMatchObject({ provenance: 'unresolved' })
++      expect(result.bindings[0]?.idLiteral).toBeUndefined()
++      expect(result.bindings[0]?.normalizedId).toBeUndefined()
++    }
++  )
++  it.each(rows)(
++    '$field / source $source / output $output',
++    ({ field, source, output }) => {
++      const history = confirmedHistory()
++      const sourceValues = { id: '20202', leito: '4', nome: 'Rex' }
++      const otherValues = { id: '99999', leito: '7', nome: 'Lua' }
++      const values: Record<string, string | undefined> = { ...sourceValues }
++      // For the bed/name properties, leave the ID genuinely absent, so the
++      // confirmed-history branch is exercised rather than masked by explicit ID.
++      if (field !== 'id') delete values.id
++      values[field] =
++        source === 'absent'
++          ? undefined
++          : source === 'coincident'
++            ? sourceValues[field]
++            : otherValues[field]
++      const raw =
++        (values.nome ? 'Paciente ' + values.nome : 'Paciente sem nome') +
++        (values.id ? ', ID ' + values.id : '') +
++        (values.leito ? ', leito ' + values.leito : '') +
++        '. Evolução: alerta.'
++      const response: OrganizedV2 = structuredClone(RESPONSE)
++      response.pendencias = []
++      const p = response.pacientes[0]!
++      p.id = values.id
++      p.leito = values.leito
++      p.nome = values.nome ?? 'Rex'
++      if (output === 'omitted') Reflect.deleteProperty(p, field)
++      else if (output === 'null') Object.assign(p, { [field]: null })
++      else
++        Object.assign(p, {
++          [field]:
++            output === 'coincident'
++              ? (values[field] ?? sourceValues[field])
++              : otherValues[field] === values[field]
++                ? sourceValues[field]
++                : otherValues[field]
++        })
++      const anchor = raw.split('. ')[0]!
++      response.evidence = [
++        { path: 'pacientes.p1.nome', patientRef: 'p1', quote: anchor },
++        {
++          path: 'pacientes.p1.evolucao',
++          patientRef: 'p1',
++          quote: 'Evolução: alerta'
++        }
++      ]
++      for (const f of ['id', 'leito'] as const)
++        if (p[f])
++          response.evidence.push({
++            path: 'pacientes.p1.' + f,
++            patientRef: 'p1',
++            quote: (f === 'id' ? 'ID ' : 'leito ') + p[f]
++          })
++      if (field === 'nome' && ['omitted', 'null'].includes(output)) {
++        // Name is required by the strict V2 schema, so omission never reaches memory.
++        expect(() => parseOrganizerResponse(response)).toThrow()
++        return
++      }
++      const result = validateOrganization(
++        raw,
++        parseOrganizerResponse(response),
++        [history],
++        at
++      )
++      const matching = output === 'coincident' && source !== 'absent'
++      const safeAbsent =
++        source === 'absent' &&
++        field !== 'nome' &&
++        ['omitted', 'null'].includes(output)
++      const expectedValid =
++        field === 'id'
++          ? matching || safeAbsent
++          : field === 'leito'
++            ? safeAbsent || (matching && source === 'coincident')
++            : matching && source === 'coincident'
++      if (expectedValid) {
++        expect(result.issues).toEqual([])
++        expect(result.bindings[0]?.idLiteral).toBe(
++          field === 'id' && matching ? values.id : '20202'
++        )
++        expect(result.bindings[0]?.provenance).toBe(
++          field === 'id' && matching
++            ? 'source_explicit'
++            : 'confirmed_history_candidate'
++        )
++      } else {
++        expect(result.issues.some((i) => i.severity === 'blocking')).toBe(true)
++        expect(
++          result.bindings.every(
++            (b) =>
++              b.provenance === 'unresolved' && !b.idLiteral && !b.normalizedId
++          )
++        ).toBe(true)
++      }
++    }
++  )
++})
+--- a/products/shift-assistant/src/__tests__/shift-assistant-e2e.test.ts
++++ b/products/shift-assistant/src/__tests__/shift-assistant-e2e.test.ts
+@@ -106,7 +106,7 @@
+     expect(reply.to).toBe(ANA)
+     expect(reply.text).toContain('Thor · ID 30303 · leito 3')
+     expect(reply.text).toContain('Exames solicitados: hemograma; bioquímico')
+-    expect(reply.text).toContain('#1 — Ligar pro tutor')
++    expect(reply.text).toContain('#1 — Ligar pro tutor (Thor · ID 30303)')
+     expect(app.store.openTasks(ANA)).toHaveLength(0)
+     await webhook({
+       event: 'message',
+@@ -197,7 +197,7 @@
+     expect(reply).toContain('Motivo da internação: atropelamento')
+     expect(reply).toContain('Evolução: consciente, com dor')
+     expect(reply).toContain('Exames solicitados: raio-x; hemograma')
+-    expect(reply).toContain('#1 — Reavaliar a dor')
++    expect(reply).toContain('#1 — Reavaliar a dor (Rex · ID 48213)')
+     await webhook({
+       event: 'message',
+       payload: {
+@@ -231,7 +231,7 @@
+ 
+     await say('confirm-r2', 'ok nota ' + app.store.notesV2().at(-1)!.token)
+     const byBed = await say('r3', REX_HISTORY.raw)
+-    expect(byBed).toContain('Rex · ID não informado · leito 4')
++    expect(byBed).toContain('Rex · ID 111 · leito 4')
+     expect(byBed).toContain(
+       '🔎 ID 111 do Rex veio de uma nota anterior (leito 4); confira.'
+     )
+@@ -241,6 +241,9 @@
+ 
+     const ambiguous = await say('r4', REX_AMBIGUOUS.raw)
+     expect(ambiguous).toContain('Rex · ID não informado')
++    expect(ambiguous).toContain('Há mais de um Rex:')
++    expect(ambiguous).toContain('ID 111 (leito 4)')
++    expect(ambiguous).toContain('ID 222 (leito 7)')
+     expect(ambiguous).toContain('UNSOURCED_ID')
+     expect(ambiguous).toContain('RASCUNHO')
+     expect(ambiguous).toContain('fonte sem trecho inequívoco')
+@@ -260,7 +263,7 @@
+         body: THOR_UNKNOWN.raw
+       }
+     })
+-    expect(services.sent.at(-1)?.text).toContain('UNSOURCED_ID')
++    expect(services.sent.at(-1)?.text).toContain('Qual é o ID do Thor?')
+   })
+ 
+   it('asks for the patient name when it cannot tell who the note is about', async () => {
+--- a/products/shift-assistant/src/__tests__/shift-assistant.test.ts
++++ b/products/shift-assistant/src/__tests__/shift-assistant.test.ts
+@@ -265,7 +265,7 @@
+     expect(reply).toContain(
+       'Exames solicitados: hemograma; bioquímico (lançar na comanda)'
+     )
+-    expect(reply).toContain('#1 — Ligar para o tutor')
++    expect(reply).toContain('#1 — Ligar para o tutor (Thor · ID 101)')
+     expect(env.store.openTasks(ANA)).toHaveLength(0)
+     await env.receive(
+       wahaPayload('confirm', ANA, 'ok nota ' + env.store.notesV2()[0]!.token)
+@@ -463,10 +463,26 @@
+   it('corrects the last note, cancelling the tasks it created', async () => {
+     const env = setup()
+     await env.receive(wahaPayload('m1', ANA, LEGACY_RAW))
++    await env.receive(
++      wahaPayload(
++        'confirm-original',
++        ANA,
++        'ok nota ' + env.store.notesV2()[0]!.token
++      )
++    )
+     await env.receive(wahaPayload('m2', ANA, 'corrigir ' + LEGACY_RAW))
+     expect(env.store.task(1)?.status).toBe('cancelled')
+     expect(env.store.task(2)?.status).toBe('draft')
+     expect(env.waha.textsTo(ANA).at(-1)).toContain('RASCUNHO')
++    expect(env.waha.textsTo(ANA).at(-1)).toContain('Nota anterior substituída')
++    await env.receive(
++      wahaPayload(
++        'confirm-replacement',
++        ANA,
++        'ok nota ' + env.store.notesV2().at(-1)!.token
++      )
++    )
++    expect(env.store.task(2)?.status).toBe('open')
+   })
+ })
+ 
+@@ -590,6 +606,11 @@
+     // Pure parsing of a prepared synthetic response; CLINICAL stays NO_MODEL.
+     expect(parseOrganizerResponse(JSON.stringify(RESPONSE))).toEqual(RESPONSE)
+     expect(
++      parseOrganizerResponse(JSON.stringify(LEGACY_RESPONSE))
++    ).toMatchObject({
++      pacientes: [{ nome: 'Thor' }]
++    })
++    expect(
+       parseOrganizerResponse('```json\n' + JSON.stringify(RESPONSE) + '\n```')
+     ).toEqual(RESPONSE)
+     for (const invalid of [
+@@ -624,6 +645,9 @@
+     ).rejects.toMatchObject({ code: 'policy_denied' })
+     await expect(
+       new ModelOrganizer(reply('{"pacientes": "nao"}'), 'm').organize('x', now)
++    ).rejects.toThrow()
++    await expect(
++      new ModelOrganizer(reply('{"pacientes": "nao"}'), 'm').organize('x', now)
+     ).rejects.toMatchObject({ code: 'policy_denied' })
+     expect(providerCalls).toBe(0)
+   })
+--- a/products/shift-assistant/src/assistant.ts
++++ b/products/shift-assistant/src/assistant.ts
+@@ -16,7 +16,10 @@
+ import { type ShiftStore, type CommitExpected } from './store.ts'
+ import { canonical, sha256, StoreError } from './journal.ts'
+ import { inputDigest, revisionToken, taskId } from './vertical-state.ts'
+-import { validateOrganization } from './source-evidence.ts'
++import {
++  confirmedPatientCandidates,
++  validateOrganization
++} from './source-evidence.ts'
+ import type { Transcriber } from './transcriber.ts'
+ import type { WhatsAppClient } from './whatsapp.ts'
+ 
+@@ -610,7 +613,8 @@
+         })
+       }
+     }
+-    let preview = formatNoteReply(n)
++    let preview = formatNoteReply(n, this.#o.store.notesV2())
++    if (previous) preview = 'Nota anterior substituída.\n' + preview
+     if (Buffer.byteLength(preview) > 131072) {
+       n.tasks = []
+       delete n.organized
+@@ -804,7 +808,7 @@
+             )
+             .map(
+               (t) =>
+-                `#${t.number} — ${t.description} · ${formatLocalTime(t.dueAt)}`
++                `#${t.number} — ${t.description}${taskPatientContext(store.noteV2(t.noteId)!, t.patientRef)} · ${formatLocalTime(t.dueAt)}`
+             )
+             .join('\n') || 'Você não tem pendências abertas.'
+         )
+@@ -1037,7 +1041,7 @@
+         ...this.#box(
+           `reminder:${t.id}:${t.generation}:${slot}`,
+           t.ownerPhone,
+-          `⏰ Lembrete #${t.number}: ${t.description}`,
++          `⏰ Lembrete #${t.number}: ${t.description}${taskPatientContext(n, t.patientRef)}`,
+           'reminder',
+           n
+         ),
+@@ -1082,17 +1086,26 @@
+     return this.#stopping
+   }
+ }
+-export function formatNoteReply(n: NoteV2): string {
++function taskPatientContext(n: NoteV2, patientRef: string | null): string {
++  const b = n.bindings.find((b) => b.localRef === patientRef)
++  return b ? ` (${b.name}${b.idLiteral ? ' · ID ' + b.idLiteral : ''})` : ''
++}
++export function formatNoteReply(
++  n: NoteV2,
++  history: readonly NoteV2[] = []
++): string {
+   const lines = ['RASCUNHO', `Fonte:\n${n.rawText}`]
+   if (!n.organized)
+     lines.push(
+       'Guardei a fonte; não consegui organizá-la. Zero tarefas derivadas.'
+     )
+   for (const p of n.organized?.pacientes ?? []) {
++    const binding = n.bindings.find((b) => b.localRef === p.localRef)
++    const proposedId = p.id ?? binding?.idLiteral
+     lines.push(
+       [
+         p.nome,
+-        p.id ? 'ID ' + p.id : 'ID não informado',
++        proposedId ? 'ID ' + proposedId : 'ID não informado',
+         p.especie,
+         p.leito ? 'leito ' + p.leito : null
+       ]
+@@ -1108,10 +1121,22 @@
+           p.exames_pedidos.join('; ') +
+           ' (lançar na comanda)'
+       )
++    if (n.issues.some((i) => i.path === 'pacientes.' + p.localRef + '.id')) {
++      const candidates = confirmedPatientCandidates(history, p.nome, p.leito)
++      if (candidates.length > 1) {
++        lines.push(
++          `Há mais de um ${p.nome}:`,
++          ...candidates.map(
++            (b) => `ID ${b.idLiteral}${b.bed ? ' (leito ' + b.bed + ')' : ''}`
++          )
++        )
++      }
++      lines.push(`Qual é o ID do ${p.nome}? Corrija a fonte e a revisão.`)
++    }
+   }
+   for (const t of n.tasks)
+     lines.push(
+-      `#${t.number} — ${t.description} · dono: autor · ${formatLocalTime(t.dueAt)} — pendência proposta, ainda sem lembrete`
++      `#${t.number} — ${t.description}${taskPatientContext(n, t.patientRef)} · dono: autor · ${formatLocalTime(t.dueAt)} — pendência proposta, ainda sem lembrete`
+     )
+   for (const issue of n.issues)
+     lines.push(
+--- a/products/shift-assistant/src/source-evidence.ts
++++ b/products/shift-assistant/src/source-evidence.ts
+@@ -307,7 +307,8 @@
+     if (matching.length === 1) {
+       const r = matching[0]!
+       const uniqueIds = [...new Set(r.ids)]
+-      if (patient.id && uniqueIds.length !== 1) continue
++      if (uniqueIds.length > 1 || (patient.id && uniqueIds.length !== 1))
++        continue
+       blocks.push({
+         patientRef: patient.localRef,
+         patientName: patient.nome,
+@@ -536,6 +537,42 @@
+     })
+   return canonicalField(source) === canonicalField(output)
+ }
++export function confirmedPatientCandidates(
++  history: readonly NoteV2[],
++  name: string,
++  bed?: string | null
++): PatientBinding[] {
++  const candidates = history
++    .filter(
++      (n) =>
++        n.state === 'confirmed' &&
++        !n.replacementPending &&
++        !n.issues.length &&
++        !n.organized?.duvidas.length
++    )
++    .flatMap((n) =>
++      n.bindings
++        .filter(
++          (b) =>
++            b.name === name &&
++            b.provenance !== 'unresolved' &&
++            b.confirmedBy &&
++            b.idLiteral &&
++            (!bed || bed === b.bed)
++        )
++        .map((b) => ({
++          ...b,
++          evidenceRefs: [
++            'history:' + n.id + ':' + n.revision + ':' + n.organizedSha256
++          ]
++        }))
++    )
++  return [
++    ...new Map(
++      candidates.map((b) => [JSON.stringify([b.idLiteral, b.bed]), b])
++    ).values()
++  ]
++}
+ export function validateOrganization(
+   raw: string,
+   o: OrganizedV2,
+@@ -615,32 +652,17 @@
+   for (const p of o.pacientes) {
+     const prefix = 'pacientes.' + p.localRef + '.'
+     const block = blocks.find((b) => b.patientRef === p.localRef)
++    const sourceFields = fieldsByBlock.get(p.localRef) ?? []
++    // Omission is not permission to replace a source-owned identifier with memory,
++    // even when the old and new values happen to coincide.
++    const sourceHasId =
++      block?.idLiteral !== undefined ||
++      sourceFields.some((f) => f.field === 'id')
++    const omittedBed = !p.leito && sourceFields.some((f) => f.field === 'leito')
++    if (omittedBed) issue('UNSOURCED_VALUE', prefix + 'leito', p.localRef, '')
+     let inherited: PatientBinding | undefined
+-    if (!p.id && block) {
+-      const candidates = history
+-        .filter((n) => n.state === 'confirmed' && !n.replacementPending)
+-        .flatMap((n) =>
+-          n.bindings
+-            .filter(
+-              (b) =>
+-                b.name === p.nome &&
+-                b.provenance !== 'unresolved' &&
+-                b.confirmedBy &&
+-                b.idLiteral &&
+-                (!p.leito || p.leito === b.bed)
+-            )
+-            .map((b) => ({
+-              ...b,
+-              evidenceRefs: [
+-                'history:' + n.id + ':' + n.revision + ':' + n.organizedSha256
+-              ]
+-            }))
+-        )
+-      const unique = [
+-        ...new Map(
+-          candidates.map((b) => [JSON.stringify([b.idLiteral, b.bed]), b])
+-        ).values()
+-      ]
++    if (!p.id && block && !sourceHasId && !omittedBed) {
++      const unique = confirmedPatientCandidates(history, p.nome, p.leito)
+       if (unique.length === 1) inherited = unique[0]
+     }
+     if (!block || (!p.id && !inherited)) {
+@@ -660,23 +682,29 @@
+       verify(prefix + 'exames_pedidos.' + i, p.localRef, v)
+     for (const [i, v] of p.condutas.entries())
+       verify(prefix + 'condutas.' + i, p.localRef, v)
++    const identityValid =
++      block &&
++      !issues.some((i) =>
++        ['id', 'leito', 'nome'].some((field) => i.path === prefix + field)
++      )
+     bindings.push({
+       localRef: p.localRef,
+       name: p.nome,
+-      ...(p.id
++      ...(identityValid && p.id
+         ? {
+             idLiteral: block?.idLiteral ?? p.id,
+             normalizedId: normalizePatientId(block?.idLiteral ?? p.id)
+           }
+-        : inherited?.idLiteral
++        : identityValid && inherited?.idLiteral
+           ? {
+               idLiteral: inherited.idLiteral,
+               normalizedId: normalizePatientId(inherited.idLiteral)
+             }
+           : {}),
+-      ...(p.leito ? { bed: p.leito } : {}),
+-      provenance:
+-        p.id && block
++      ...(identityValid && p.leito ? { bed: p.leito } : {}),
++      provenance: !identityValid
++        ? 'unresolved'
++        : p.id && block
+           ? 'source_explicit'
+           : inherited
+             ? 'confirmed_history_candidate'
