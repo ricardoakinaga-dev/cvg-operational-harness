@@ -69,6 +69,8 @@
 
 ## HARNESS-ISO — correção contínua até gates e revisão válidos — 04/10/2026
 
+- GREEN C1_REACHED_ACTOR_FRESH_REVIEW_R13 PREPARAÇÃO: packetc1-reached-actor-review-r13 completos558inertes, Source/deps/dist/metadata readonly/physicalruntime próprio. Depois811PASS(253+558), types/lint MATCH7805; installed1610INCOMPLETE/0violações. Sourceclosure/contextRecursive eRootmetadataScopeconferir sem ler narrativas/Root/env, guardsemrede/PG/evaluatorfixture/provider/descendentes, novaaceitação apenas scopednãoInstalled/produção.
+
 - GREEN CLOSED_STRESS_FIXTURE_HYGIENE Lead T1 ATIVO: gates/tmp/cvg-piso004-migration-* exclusivamentefixtures sintéticas encerradas, semcwd/fd ativo conferidovia/proc, 2.7GB de journals gigantes para testes de limite. Arquivarbytes/hash/paths emTARgzip determinístico antes de remover somenteessesdirs temporários; fontes/packets/RawReports/fixturesroot/corpus/key/Root/recursosoutros agentes preservados. Não usar gitclean/reset/stash ou purgarTMPs ativos.
 
 - GREEN C1_REACHED_ACTOR_CENSUS_R13 Lead PREPARAÇÃO: cópia c1-reached-actor-r13-candidate/output, somente checker localTarget census decontexto nãoRoot/append own536. R12 scopedREJECT1 P1/12falsePASS preservado, no successfulnetwork/Source/deps/mtimeMATCH; condiçãoRootglobal evita abrir arquivos documentais porancestralidade. Original253/prefix536/unknowns1610 nãoexcetuados, antes/depois/nativos/type/lint/installed/freshcrit. SemRoot/Main/provider/PG/rede/fixtureexecutável.
