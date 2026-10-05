@@ -1,0 +1,7 @@
+# CI10 — integração privada e positivo de contadores zero
+
+Implementação local sintética; revisão independente em andamento. Veredito global **FAIL**, produção **NO_GO**. Os resultados focados não aceitam a composição final nem os 24 critérios.
+
+- [Recibo](./ci-importer-counter-r10-lead-final.json).
+- [Artefatos nativos](./ci-importer-counter-r10-lead-final-raw-evidence.tar.gz), com [inventário e hashes](./ci-importer-counter-r10-lead-final-artifact-manifest.json).
+- [Estado atual](./checkpoint-37-native-contracts-and-mutation-kills.json).

@@ -1,0 +1,5 @@
+# CI R10 — paridade de importação, contadores e política existente
+
+Task `CI_IMPORTER_COUNTER_SKIP_PARITY_R10`, BUILD local sintético sob SPEC0180/autorização contínua. A revisão CI9 é formalmente INVALID por leitura inicial indevida do histórico de coordenação; três informações técnicas com reproduções nativas foram preservadas, sem inventar aceite.
+
+Em cópia privada do Source congelado, validar todos os casos unitários coletados antes da emissão pelo importador, recusar contadores de cobertura inválidos e somas fora dos inteiros seguros no produtor, e conservar skipPolicy governed existente no verificador unitário, mantendo PostgreSQL/chaos pass-only. Nenhum skip real novo autorizado; nenhum catálogo/config/limiar/schema/asserção original reduzido. Preservar146 casos próprios existentes e371 arquivos originais; novos controles JSON inertes, provas antes/depois, tipos/lint/formato e crítico novo. Main está em V8/Pg e permanece imutável; Root, rede, provider, dados reais, push e produção fora deste BUILD.

@@ -1,0 +1,822 @@
+{
+  "schemaVersion": 1,
+  "claim": "CI_RAW_CRITICAL_FRESH_REVIEW_R9",
+  "validity": "INVALID",
+  "verdict": "REJECT",
+  "judgment": "Local technical REJECT from independent reproductions; no valid fresh-review acceptance because initial forbidden historical-coordination read occurred. No Builder verdict or Lead counts used as technical evidence.",
+  "validityReasons": [
+    {
+      "claim": "CI_RAW_CRITICAL_FRESH_REVIEW_R9",
+      "validity": "INVALID",
+      "event": "Initial inspection read source/docs/08_runtime/agent_coordination.md in full despite fresh-review history prohibition; the document contains historical coordination/decision narrative.",
+      "toolAction": "cat source/AGENTS.md source/docs/07_agents/AGENTS.md source/docs/08_runtime/agent_coordination.md",
+      "path": "source/docs/08_runtime/agent_coordination.md",
+      "sha256": "b79ee229110f082205d6b99ebe9a6a3f8a06d2f7f3b8a63af3fad266c8eba11a",
+      "contentUsedForTechnicalVerdict": false,
+      "historicalLedgerWrites": false,
+      "rootReads": false,
+      "rootWrites": false,
+      "response": "Disclosure in commentary; no restart or validity relabel; technical reproduction retained as local observations.",
+      "additionalControlCorrection": "First extra-controls used colliding numeric/string Pg directory labels. All first-run evidence preserved; authoritative extra-controls-r2 uses type+value paths; invalid variants emit zero files there."
+    }
+  ],
+  "findings": [
+    {
+      "id": "R9-F01",
+      "severity": "P1",
+      "title": "Importador de transição emite snapshot/manifest PASS antes de validar membership unit completo",
+      "source": [
+        {
+          "path": "scripts/hiso-import-legacy.mjs",
+          "line": 135,
+          "sha256": "a69098efdecc4c62c6d584270b3cd8666334b2e18b79571cd263d3c8d29ea747"
+        },
+        {
+          "path": "scripts/ci-bar.mjs",
+          "line": 589,
+          "sha256": "39c8238b8e2c4c7bae7ac41779c052bea2234bfc609295fa0c617a8b86f9806b"
+        }
+      ],
+      "expected": "Com três casos coletados obrigatórios e recibo unit de dois, rejeitar membership antes de emitir o snapshot unit e um manifest PASS. Controle de três casos deve admitir a etapa unit.",
+      "observed": "Native CLI hiso-import-legacy retorna exit 0, status PASS e emite unit snapshot com 2/3 casos; verifySnapshots posteriormente lança hiso:required_case_inventory_snapshot:unit. Controle completo 3/3 retorna exit 0 e é admitido pelo consumidor unit. Os 34 seals de conteúdo da fixture passam no verificador nativo.",
+      "reproduction": "No runtime físico: python3 ../run.py legacy-emission ../controls/legacy-emission.mjs. Os diretórios devem ser novos numa reprodução; consultar os comandos absolutos preservados em observation.json.",
+      "impact": "A correção de admission-before-emission de hiso-ci não cobre o produtor de transição efetivamente usado no workflow. Consumidor posterior continua fechando a omissão; não foi demonstrado PASS global ou remoto.",
+      "limits": "Recibos/seals/runner metadata são fixtures JSON sintéticas; outros snapshots são placeholders inertes. Nenhum gate legado, E2E, PG, certificação ou workflow foi executado. A prova isola o importador e o consumidor unit.",
+      "raw": [
+        {
+          "path": "raw/legacy-emission/omitted-unit-case/observation.json",
+          "sha256": "7262f6e0cbf8ec3874b77d81e0f6957c9d8bb779de7532ed83d457e7a82369b8",
+          "bytes": 1021
+        },
+        {
+          "path": "raw/legacy-emission/complete-unit/observation.json",
+          "sha256": "784c5620dd03725b9f50618e3e14c328eb0adc52fadcd3576553b629f0b71b32",
+          "bytes": 945
+        },
+        {
+          "path": "raw/legacy-emission/omitted-unit-case/emitted/manifest.json",
+          "sha256": "a721b36f384f3c14b2610743684613963780dd63d653f6b9142d7849aa00d451",
+          "bytes": 151999
+        },
+        {
+          "path": "raw/legacy-emission/omitted-unit-case/emitted/gate-outputs/unit/certification/unit-test-report.json",
+          "sha256": "aa65b3ddec10c2022b5fd63bf5c642a4326b503e34f749517f6c22d44eaa06b3",
+          "bytes": 738
+        },
+        {
+          "path": "raw/legacy-emission/omitted-unit-case/expected.json",
+          "sha256": "e52ed18f6a7677016ab31c40eafd6d8f979e9749cd02378861325df0835f2804",
+          "bytes": 356263
+        },
+        {
+          "path": "raw/legacy-emission.execution.json",
+          "sha256": "6473802595aa7302bc1ea54a696c84e45a7ae864199e6dc02fad9abd4b9c74b6",
+          "bytes": 1640
+        }
+      ]
+    },
+    {
+      "id": "R9-F02",
+      "severity": "P2",
+      "title": "CLI público de coverage declara PASS para contadores inválidos ou soma insegura",
+      "source": [
+        {
+          "path": "scripts/lib/coverage-gate.mjs",
+          "line": 15,
+          "sha256": "31598117e210dfbcee416ffbcc76b15fb07e679b4e1203f2a57ed2bcf12310b9"
+        },
+        {
+          "path": "scripts/critical-coverage.mjs",
+          "line": 24,
+          "sha256": "958bbbb5bf4a524f065abc13fd9b7d5a1f25808b305bbc4665c84803b28d8d5d"
+        }
+      ],
+      "expected": "Contador covered > total, frações, inteiros fora da faixa segura e overflow de somas devem produzir FAIL/exit não zero. Não excluir silenciosamente um contador inválido do grupo nem conceder PASS acima de 100%.",
+      "observed": "CLI coverage:critical emite PASS/exit 0 nos vetores global-covered-exceeds-total, invalid-critical-file, fractional-counters, unsafe-integer-counters e safe-file-sum-overflow. snapshotSchema/verifySnapshots/hiso-ci validateReport rejeitam todos esses recibos. Zero e floating overflow 1e308 são corretamente FAIL; a fronteira raw 94.999/95 e o controle weighted são corretos.",
+      "reproduction": "python3 ../run.py controls ../controls/controls.mjs no runtime; cada raw/controls/coverage/<id> preserva summary.json, cli-report.json, stdout/stderr e observed.json.",
+      "impact": "Paridade quebrada entre produtor público/rota REM21 e admission HISO. Consumidores HISO mantêm fail-closed; esta evidência não é um bypass do agregado.",
+      "raw": [
+        {
+          "path": "raw/controls/coverage/global-covered-exceeds-total/observed.json",
+          "sha256": "6e0bb201125bc6bf36572a2cdad7de384757690a056d9c0e55af02dc000e4c2d",
+          "bytes": 1431
+        },
+        {
+          "path": "raw/controls/coverage/global-covered-exceeds-total/cli-report.json",
+          "sha256": "9a0edb1c04feb21b7b8be6d1cf4c6e7e23927fe62bcfae4e6dea25bd0be806b1",
+          "bytes": 22380
+        },
+        {
+          "path": "raw/controls/coverage/invalid-critical-file/observed.json",
+          "sha256": "dae6dd972c3a7ad1ffc0a461d3c92a303a70a86e76430f0861412cee49787eb3",
+          "bytes": 1500
+        },
+        {
+          "path": "raw/controls/coverage/safe-file-sum-overflow/observed.json",
+          "sha256": "0e2d395282e8145f4679959081f85155ec32982b1e431f4120be0d64f98d3489",
+          "bytes": 1608
+        },
+        {
+          "path": "raw/controls/results.json",
+          "sha256": "17876201c52745e0ea444b62883ec115a10cd02fa7b56100f948d93b181c5d35",
+          "bytes": 27497
+        },
+        {
+          "path": "raw/controls.execution.json",
+          "sha256": "b2bd4f07748444bc444cf19554e7b5992d177c529e6696e0d0f4f4b08554f825",
+          "bytes": 1619
+        }
+      ]
+    },
+    {
+      "id": "R9-F03",
+      "severity": "P2",
+      "title": "verifyScope transforma policy unit governed em pass-only incondicional",
+      "source": [
+        {
+          "path": "scripts/hiso-verifier.mjs",
+          "line": 154,
+          "sha256": "7562db1aa193c7f2ce9be72901ae0687db657b4054f3ac6082d8832748493846"
+        },
+        {
+          "path": "scripts/hiso-ci-scopes.json",
+          "line": 1,
+          "sha256": "67db6ed89080d461a265ee258392a464233c0e071afd9ba00d44ac675dbe5b03"
+        }
+      ],
+      "expected": "Preservar policy governed dos scopes harness-neutral/transition-regression; elegibilidade dos skips continua no gate de governança. A verificação unit não deve impor pass-only a um scope cuja policy permite skips governados. Pg/chaos continuam estritamente pass-only.",
+      "observed": "validateReport e verifySnapshots admitem os controles unit governed-pending/governed-todo completos. verifyScope rejeita ambos antes de verificar snapshots, em unit_execution_status, pois exige every(status === passed). O controle all-passed supera esse predicado e chega a postgres_version_binding de um snapshot placeholder. Todos os seis controles Pg/chaos admitem somente passed.",
+      "reproduction": "python3 ../run.py controls ../controls/controls.mjs; comparar raw/controls/unit/governed-pending/observed.json, raw/controls/results.json e os manifests/expected completos de raw/controls/scope-skip.",
+      "impact": "Falso negativo e mudança implícita da skipPolicy original no verificador do scope.",
+      "limits": "O controle isola o predicado unit após todos os content bindings. Outros snapshots são placeholders, portanto não é uma prova de full-scope PASS nem uma autorização dos skips sintéticos pelo catálogo.",
+      "raw": [
+        {
+          "path": "raw/controls/unit/governed-pending/observed.json",
+          "sha256": "90f527f9d975921d0319917571ff40a38b0e28454756161332ec90bab7dcab09",
+          "bytes": 482
+        },
+        {
+          "path": "raw/controls/unit/governed-todo/observed.json",
+          "sha256": "73bffc9bf14f75987fcaa4dcb997e0bef9d4707af98b263afabca5aa0ee19d6e",
+          "bytes": 476
+        },
+        {
+          "path": "raw/controls/scope-skip/pending/manifest.json",
+          "sha256": "7c853ba6a30a0d568034cffbe58c94f072cc595505a9b8200e693ca2ac09c800",
+          "bytes": 65196
+        },
+        {
+          "path": "raw/controls/scope-skip/pending-expected.json",
+          "sha256": "9892419afc6886e0cce21a2e3425b9cc39df0921f85bffd04aded4ae8ed279ef",
+          "bytes": 65511
+        },
+        {
+          "path": "raw/controls/results.json",
+          "sha256": "17876201c52745e0ea444b62883ec115a10cd02fa7b56100f948d93b181c5d35",
+          "bytes": 27497
+        }
+      ]
+    }
+  ],
+  "focusedRuns": {
+    "focused": {
+      "exitCode": 0,
+      "success": true,
+      "numTotalTests": 378,
+      "numPassedTests": 378,
+      "numFailedTests": 0,
+      "numPendingTests": 0,
+      "numTodoTests": 0,
+      "assertionResults": 378,
+      "files": [
+        {
+          "file": "tests/coverage-gate.test.js",
+          "assertionResults": 3,
+          "statuses": {
+            "passed": 3
+          }
+        },
+        {
+          "file": "tests/hiso-ci-scopes.test.js",
+          "assertionResults": 199,
+          "statuses": {
+            "passed": 199
+          }
+        },
+        {
+          "file": "tests/hiso-effective-inputs-own.test.js",
+          "assertionResults": 15,
+          "statuses": {
+            "passed": 15
+          }
+        },
+        {
+          "file": "tests/hiso-security.test.js",
+          "assertionResults": 3,
+          "statuses": {
+            "passed": 3
+          }
+        },
+        {
+          "file": "tests/hiso-snapshot-membership-own.test.js",
+          "assertionResults": 146,
+          "statuses": {
+            "passed": 146
+          }
+        },
+        {
+          "file": "tests/hiso-variant.test.js",
+          "assertionResults": 12,
+          "statuses": {
+            "passed": 12
+          }
+        }
+      ],
+      "nativePgIdentityCases": [
+        {
+          "title": "native Pg CLI validates 160000 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates 169999 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates 160000.5 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates 160000.5 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates 159999 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates 170000 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates NaN before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates Infinity before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates  before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates -1 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates 9007199254740993 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates null before output",
+          "status": "passed"
+        }
+      ]
+    },
+    "focused-seccomp": {
+      "exitCode": 0,
+      "success": true,
+      "numTotalTests": 378,
+      "numPassedTests": 378,
+      "numFailedTests": 0,
+      "numPendingTests": 0,
+      "numTodoTests": 0,
+      "assertionResults": 378,
+      "files": [
+        {
+          "file": "tests/coverage-gate.test.js",
+          "assertionResults": 3,
+          "statuses": {
+            "passed": 3
+          }
+        },
+        {
+          "file": "tests/hiso-ci-scopes.test.js",
+          "assertionResults": 199,
+          "statuses": {
+            "passed": 199
+          }
+        },
+        {
+          "file": "tests/hiso-effective-inputs-own.test.js",
+          "assertionResults": 15,
+          "statuses": {
+            "passed": 15
+          }
+        },
+        {
+          "file": "tests/hiso-security.test.js",
+          "assertionResults": 3,
+          "statuses": {
+            "passed": 3
+          }
+        },
+        {
+          "file": "tests/hiso-snapshot-membership-own.test.js",
+          "assertionResults": 146,
+          "statuses": {
+            "passed": 146
+          }
+        },
+        {
+          "file": "tests/hiso-variant.test.js",
+          "assertionResults": 12,
+          "statuses": {
+            "passed": 12
+          }
+        }
+      ],
+      "nativePgIdentityCases": [
+        {
+          "title": "native Pg CLI validates 160000 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates 169999 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates 160000.5 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates 160000.5 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates 159999 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates 170000 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates NaN before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates Infinity before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates  before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates -1 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates 9007199254740993 before output",
+          "status": "passed"
+        },
+        {
+          "title": "native Pg CLI validates null before output",
+          "status": "passed"
+        }
+      ]
+    }
+  },
+  "ownControls": {
+    "coverageVectors": 11,
+    "unitVectors": 12,
+    "passOnlyVectors": 6,
+    "scopeSkipPredicates": 3,
+    "legacyEmissionVectors": 2,
+    "forgedRoundedPassVectors": 1,
+    "pgJsonVersionVectors": 9,
+    "authoritativeExtraControls": {
+      "path": "raw/extra-controls-r2/results.json",
+      "sha256": "9533a4be62cf301cb63317cb1003eda04d0c3083e134ec1c11bd152ae6398bec",
+      "bytes": 3780
+    },
+    "supersededControl": "raw/extra-controls/results.json retained: numeric/string path collision caused one stale emitted-file count; corrected separate r2 vectors are authoritative."
+  },
+  "positives": {
+    "rawBoundary": "94.999 rejects; 95 and 95.001 admit; forged displayed-95 PASS rejects in producer/schema/verifier; weighted sums preserved; zero denominator fails",
+    "unitBeforeEmission": "hiso-ci producer rejects missing/renamed files, names, ids, occurrences and multiplicity with zero emitted files; complete/reordered admit",
+    "pg": "12 native supplied identity-guarded mocked Pg producer cases passed; 9 own JSON version cases agree in producer/schema/consumer, invalid variants emit zero files in corrected extra-controls-r2",
+    "passOnly": "Postgres and chaos own controls admit passed, deny pending/todo; no PG or chaos suite executed",
+    "publicClosure": {
+      "schemaVersion": 1,
+      "status": "PASS",
+      "publicExports": true,
+      "sourceAliases": false,
+      "provider": "DETERMINISTIC_FIXTURE_ONLY",
+      "providerCalls": 1,
+      "effects": 1,
+      "clinicalCalls": 0,
+      "unknownCalls": 0,
+      "budgetDenied": true,
+      "normalizer": true,
+      "product0179Integration": "SEPARATE_SHIFT_OWNER",
+      "classificationCases": [
+        {
+          "promptClass": "CLINICAL",
+          "requestClass": "CLINICAL",
+          "hasClassificationField": true,
+          "code": "policy_denied",
+          "calls": 0,
+          "budgetIO": 0,
+          "normalizerCalls": 0
+        },
+        {
+          "promptClass": "CLINICAL",
+          "requestClass": "UNKNOWN",
+          "hasClassificationField": true,
+          "code": "invalid_request",
+          "calls": 0,
+          "budgetIO": 0,
+          "normalizerCalls": 0
+        },
+        {
+          "promptClass": "CLINICAL",
+          "requestClass": "OMITTED",
+          "hasClassificationField": false,
+          "code": "policy_denied",
+          "calls": 0,
+          "budgetIO": 0,
+          "normalizerCalls": 0
+        },
+        {
+          "promptClass": "CLINICAL",
+          "requestClass": "INTERNAL",
+          "hasClassificationField": true,
+          "code": "policy_denied",
+          "calls": 0,
+          "budgetIO": 0,
+          "normalizerCalls": 0
+        },
+        {
+          "promptClass": "INTERNAL",
+          "requestClass": "CLINICAL",
+          "hasClassificationField": true,
+          "code": "policy_denied",
+          "calls": 0,
+          "budgetIO": 0,
+          "normalizerCalls": 0
+        },
+        {
+          "promptClass": "INTERNAL",
+          "requestClass": "UNKNOWN",
+          "hasClassificationField": true,
+          "code": "invalid_request",
+          "calls": 0,
+          "budgetIO": 0,
+          "normalizerCalls": 0
+        },
+        {
+          "promptClass": "INTERNAL",
+          "requestClass": "OMITTED",
+          "hasClassificationField": false,
+          "code": "SUCCEEDED",
+          "calls": 1,
+          "budgetIO": 4,
+          "normalizerCalls": 1
+        },
+        {
+          "promptClass": "INTERNAL",
+          "requestClass": "INTERNAL",
+          "hasClassificationField": true,
+          "code": "SUCCEEDED",
+          "calls": 1,
+          "budgetIO": 4,
+          "normalizerCalls": 1
+        }
+      ],
+      "sourceFree": true,
+      "declarations": true,
+      "node": "22.23.2",
+      "closure": "../public-closure",
+      "closureSha256": "baf44503d0ef7e1c30e9dd3e0de0780c26f37889f9d4d62501fc8934f661a8b9",
+      "packages": [
+        {
+          "name": "@cvg/model-gateway",
+          "version": "1.0.0",
+          "internal": true
+        },
+        {
+          "name": "@cvg/shared",
+          "version": "1.0.0",
+          "internal": true
+        },
+        {
+          "name": "zod",
+          "version": "4.3.6",
+          "internal": false
+        },
+        {
+          "name": "@cvg/harness",
+          "version": "0.1.0",
+          "internal": true
+        },
+        {
+          "name": "@cvg/harness-contracts",
+          "version": "0.1.0",
+          "internal": true
+        },
+        {
+          "name": "@cvg/harness-orchestrator",
+          "version": "0.1.0",
+          "internal": true
+        },
+        {
+          "name": "typescript",
+          "version": "6.0.3",
+          "internal": false
+        },
+        {
+          "name": "@types/node",
+          "version": "25.6.0",
+          "internal": false
+        },
+        {
+          "name": "undici-types",
+          "version": "7.19.2",
+          "internal": false
+        }
+      ],
+      "commands": {
+        "typecheck": [
+          "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+          [
+            "node_modules/typescript/bin/tsc",
+            "-p",
+            "tsconfig.json",
+            "--pretty",
+            "false",
+            "--traceResolution"
+          ]
+        ],
+        "runtime": [
+          "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+          [
+            "--loader",
+            "./loader.mjs",
+            "runtime.mjs"
+          ]
+        ]
+      },
+      "runtimeResolutionSha256": "2f3bd6c58f94c834b3908cb836a2f14134d06a0ec1ca428a6ef32d14c955b6c1",
+      "externalGates": "NOT_RUN",
+      "remoteCiPass": false
+    },
+    "contractValidation": {
+      "contractHash": "49eff4c320d1e23a959ba3ff2e5aa642f87785f1743c38ce5b8e0661a5a4c7a4",
+      "scopes": [
+        {
+          "id": "harness-neutral",
+          "gateCount": 32
+        },
+        {
+          "id": "consumer-contract",
+          "gateCount": 8
+        },
+        {
+          "id": "shift-product",
+          "gateCount": 12
+        },
+        {
+          "id": "transition-regression",
+          "gateCount": 37
+        }
+      ],
+      "legacySealedGateCount": 34
+    },
+    "preservation": {
+      "baselineTests": 371,
+      "newTestPaths": 43,
+      "testSourcePaths": 414,
+      "coverageSourcePaths": 281,
+      "coverageBaseline": 275,
+      "newCoveragePaths": 6,
+      "legacySealedGates": 34,
+      "barAndContractsUnchanged": "Entire frozen Source content and metadata unchanged; native validateContract checks exact original legacy gate inventory/source hashes, approved SPEC hash, baseline test hashes and additions."
+    }
+  },
+  "counts": {
+    "declaredNativeMainInputs": 8400,
+    "observedNativeSourceInputs": 8402,
+    "delta": 2,
+    "nativeSourceSha256": "8248cbc39f3c57f4d092bb781df360358845ca97b304a0f066cc75a9e08bfbb1",
+    "sourceAndInitialRuntimeMatch": true,
+    "frozenPhysicalEntries": 26405,
+    "regularFiles": 26357,
+    "symlinks": 48,
+    "dependencyEntries": 17394,
+    "nonDependencyPhysicalEntries": 9011,
+    "excludedGeneratedNonDependencyEntries": 609,
+    "directories": 2936,
+    "twoPreviouslyFrozenAuthorityCandidates": [
+      {
+        "path": "docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/production-bootstrap-user-approval.json",
+        "sha256": "fc047f7d16c0608dd1f7c09c373db3bcefdd300748d819dbff902b83be31a57a",
+        "inNativeSourceInventory": true,
+        "inFrozenInventoryBeforeReview": true,
+        "matchesFrozen": true,
+        "contentTreatment": "Opaque hash only; current Main origin not independently provable from a distinct Main inventory in the allowed inputs."
+      },
+      {
+        "path": "docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/authority.json",
+        "sha256": "c7b46c7520de755d678c6304efc8549c11e37762c498ebf2be3ef3e16c8e65fc",
+        "inNativeSourceInventory": true,
+        "inFrozenInventoryBeforeReview": true,
+        "matchesFrozen": true,
+        "contentTreatment": "Opaque hash only; current Main origin not independently provable from a distinct Main inventory in the allowed inputs."
+      }
+    ],
+    "mainEqualityStatus": "Declared Main 8400 and observed Source 8402 are distinct. Two preexisting authority inputs can reconcile the delta; no separate 8400-entry Main manifest supplied, so no Root/Main equality proof claimed."
+  },
+  "sourceIntegrity": {
+    "status": "MATCH",
+    "proof": {
+      "path": "integrity-after-summary.json",
+      "sha256": "5eba9dc3c755aa5b570512874182d540848f94a52783bb0d46a519d950c029b8",
+      "bytes": 287
+    },
+    "before": {
+      "path": "integrity-before.json",
+      "sha256": "417bb0973d8a59a29f7577ca4c2f2136f52c2416a327f9633ae1b389799e6307",
+      "bytes": 11687499
+    },
+    "after": {
+      "path": "integrity-after.json",
+      "sha256": "417bb0973d8a59a29f7577ca4c2f2136f52c2416a327f9633ae1b389799e6307",
+      "bytes": 11687499
+    },
+    "hashMetadataDirectoryMtimeDifferences": [],
+    "frozenInventorySha256": "d37a065977cc9073b6b86b5f0c876aedc98ff17a7aaee95f60d77dd818e73c8a",
+    "packetInputsUnchanged": true
+  },
+  "depsIntegrity": {
+    "status": "MATCH",
+    "entries": 17394,
+    "scope": "All Source node_modules file SHA, symlink target, lstat metadata and directory mtimes are included in before/after proofs."
+  },
+  "runtimeIsolation": {
+    "escapingSymlinks": [],
+    "hardlinkedFiles": [],
+    "sharedSourceInodes": [],
+    "physicalCopy": true,
+    "symlinkCount": 48,
+    "allSymlinkTargetsLocal": true
+  },
+  "networkAttempts": {
+    "jsDenyAttempts": 0,
+    "tracedNetworkAttempts": 0,
+    "inetFamilyCalls": 0,
+    "localUnixIpcSocketpairCalls": 114,
+    "traces": [
+      {
+        "path": "raw/controls.network.strace",
+        "sha256": "bbffdba57f83596b886aac03c5cb7d5a74f7202d2b218db360a6a2f888b477da",
+        "networkAttemptCount": 0,
+        "networkAttemptLines": [],
+        "inetFamilies": 0,
+        "localUnixSocketpairCalls": 33,
+        "localSocketOptions": 132,
+        "allTracedCalls": {
+          "socketpair": 33,
+          "setsockopt": 132,
+          "shutdown": 11,
+          "getsockname": 77,
+          "getsockopt": 77
+        }
+      },
+      {
+        "path": "raw/extra-controls-r2.network.strace",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "networkAttemptCount": 0,
+        "networkAttemptLines": [],
+        "inetFamilies": 0,
+        "localUnixSocketpairCalls": 0,
+        "localSocketOptions": 0,
+        "allTracedCalls": {}
+      },
+      {
+        "path": "raw/extra-controls.network.strace",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "networkAttemptCount": 0,
+        "networkAttemptLines": [],
+        "inetFamilies": 0,
+        "localUnixSocketpairCalls": 0,
+        "localSocketOptions": 0,
+        "allTracedCalls": {}
+      },
+      {
+        "path": "raw/focused-seccomp.network.strace",
+        "sha256": "70e33f6138b1be3e483191bee3308d7829feacf3e124af1fb0d5cab1c5146d17",
+        "networkAttemptCount": 0,
+        "networkAttemptLines": [],
+        "inetFamilies": 0,
+        "localUnixSocketpairCalls": 69,
+        "localSocketOptions": 276,
+        "allTracedCalls": {
+          "socketpair": 69,
+          "setsockopt": 276,
+          "getsockname": 153,
+          "getsockopt": 153,
+          "recvmsg": 417,
+          "sendfile": 147,
+          "shutdown": 27,
+          "2": 1
+        }
+      },
+      {
+        "path": "raw/legacy-emission.network.strace",
+        "sha256": "57546757ab5cc5b4b6be73b83f826a7cc7f71803378214737ede57e5317b3b49",
+        "networkAttemptCount": 0,
+        "networkAttemptLines": [],
+        "inetFamilies": 0,
+        "localUnixSocketpairCalls": 6,
+        "localSocketOptions": 24,
+        "allTracedCalls": {
+          "socketpair": 6,
+          "setsockopt": 24,
+          "shutdown": 2,
+          "getsockname": 10,
+          "getsockopt": 10,
+          "sendfile": 116
+        }
+      },
+      {
+        "path": "raw/native-inventory.network.strace",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "networkAttemptCount": 0,
+        "networkAttemptLines": [],
+        "inetFamilies": 0,
+        "localUnixSocketpairCalls": 0,
+        "localSocketOptions": 0,
+        "allTracedCalls": {}
+      },
+      {
+        "path": "raw/public-build.network.strace",
+        "sha256": "4057372f2107f834ce9d16f6bc85a4ce815eadcf02c7176b5b7af54ff72bea2f",
+        "networkAttemptCount": 0,
+        "networkAttemptLines": [],
+        "inetFamilies": 0,
+        "localUnixSocketpairCalls": 0,
+        "localSocketOptions": 0,
+        "allTracedCalls": {}
+      },
+      {
+        "path": "raw/public-smoke.network.strace",
+        "sha256": "e8e3daaee4abd734d890ca3e94a63258222ed278728ed3893993391dc20adb8b",
+        "networkAttemptCount": 0,
+        "networkAttemptLines": [],
+        "inetFamilies": 0,
+        "localUnixSocketpairCalls": 6,
+        "localSocketOptions": 24,
+        "allTracedCalls": {
+          "socketpair": 6,
+          "setsockopt": 24,
+          "shutdown": 2,
+          "getsockname": 12,
+          "getsockopt": 12
+        }
+      },
+      {
+        "path": "raw/readonly-source-inventory.network.strace",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "networkAttemptCount": 0,
+        "networkAttemptLines": [],
+        "inetFamilies": 0,
+        "localUnixSocketpairCalls": 0,
+        "localSocketOptions": 0,
+        "allTracedCalls": {}
+      }
+    ],
+    "initialFocusedGuard": "Node preload deny only; same 378 cases re-executed under inherited seccomp plus strace",
+    "seccomp": "Explicit ERRNO(EPERM) for socket/connect/bind/listen/accept/accept4/sendto/sendmsg/sendmmsg. AF_UNIX socketpair retained for trusted Node CLI IPC; these calls are reported separately, not hidden.",
+    "dns": "Node dns and dns/promises lookup/resolve/reverse denied; no DNS guard event or IP syscall observed",
+    "privateEnvironment": "Native commands started from explicit allowlist, no inherited credential/provider/PG/real-data variables",
+    "runtimeErrors": "No fatal runtime, mock-identity or network-denial errors; native TypeScript typeless-package warnings preserved in stderr"
+  },
+  "inspection": {
+    "path": "raw/inspection-map.json",
+    "sha256": "4471658533ffad0b6764399b7b630f21d9bf642f476ae4b9bcf7107f8bfcee41",
+    "bytes": 3880
+  },
+  "evidenceIndex": "artifact-index.md",
+  "artifactManifest": "artifact-manifest.json",
+  "exclusions": [
+    "No Root or another packet accessed",
+    "No actual network/DNS/IP socket/PG/Docker/provider/private env/real data/subagent work",
+    "No full coverage/E2E/PG/chaos/release execution",
+    "AF_UNIX socketpair CLI IPC counted separately; user socket wording is not silently represented as zero socket syscalls",
+    "No previous narrative verdict used; forbidden coordination history read explicitly invalidates formal freshness",
+    "No source fixes, commits, push, ledger updates or deployment"
+  ],
+  "nextAction": "Lead may use reproduced raw observations to correct the remaining contract paths; a new authorized critic with clean context is required for a VALID fresh review."
+}
