@@ -18,22 +18,22 @@ produção. A ausência de um gate obrigatório prevalece sobre a nota.
 
 Os critérios originais estão no [backlog do harness](../03_build/0370_harness_product_isolation_backlog.md).
 
-| Item                                        | Nota / 100 | Evidência e limitação que determina a nota                                                                                                                                                           |
-| ------------------------------------------- | ---------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| HISO-001 — baseline e donos                 |        100 | Único cartão canônico DONE. Fonte completa R19 preservada em partes reconstruíveis, com hashes.                                                                                                      |
-| HISO-002 — missão e ponteiros               |         60 | Ledgers, roadmap e handoff próprios atualizados por commits parciais; reconciliação integral do checkout compartilhado continua pendente.                                                            |
-| HISO-003 — contrato de extração             |         80 | SPECs aprovadas por hashes e contratos de consumo/regressão definidos; encerramento depende das etapas de extração/integração.                                                                       |
-| HISO-004 — workspace privado do consumidor  |         80 | Produto e interfaces públicas exercitados em cópias físicas; rework ainda sem promoção ao checkout compartilhado.                                                                                    |
-| HISO-005 — fronteira verificável            |         40 | Crítico aceitou soundness da R18 e negativos discriminantes; closure instalada permanece INCOMPLETE com 2.958 diagnósticos. Não equivale a PASS de isolamento.                                       |
-| HISO-006 — descoberta/build/testes/coverage |         60 | Inventário preserva 371 testes originais e cobertura 281. Parser OSC aceito. Certificação final R23 ainda em execução; catálogo teve quatro hashes stale recusados na R21.                           |
-| HISO-007 — artefatos separados              |         60 | API compilada sem imports privados do produto, 135 imports públicos conferidos e imagem sintética qualificada; pacote final integrado permanece pendente.                                            |
-| HISO-008 — docs e backlog do produto        |         60 | Backlog e requisitos próprios transferidos; documentação histórica do consumidor ainda requer reconciliação com a candidata final.                                                                   |
-| HISO-009 — interfaces públicas governadas   |         80 | Gateway e bootstrap/ingresso têm revisões independentes aceitas; consumo compilado exercitado. Dependências da fronteira e integração final continuam abertas.                                       |
-| HISO-010 — CI por variante                  |         60 | R19/r3 e R21 passaram os 16 comandos nativos; certificados recusados por problemas preservados. R23 verifica a remediação com candidato novo, sem reaproveitar um certificado aprovado inexistente.  |
-| HISO-011 — limites de transporte            |         80 | Controles locais e revisão do gateway aceitos; custo mínimo antes de I/O e identidade do modelo protegidos. Provider externo não executado.                                                          |
-| HISO-012 — advisories/exposição             |         80 | Audit atual prod/dev sem vulnerabilidades; SBOM/licenças verificadas. Disposições dos 6.578 achados atuais aceitas e três pendências históricas revisadas; histórico cobre somente o HEAD congelado. |
-| HISO-013 — regressão do núcleo independente |         60 | Variante física R19 sem produto passou 5.004 testes/382 arquivos com PostgreSQL/V8 e zero skips. Nova variante R23 preparada; execução final pendente.                                               |
-| HISO-014 — independência do harness         |         40 | Build e regressão neutros demonstrados; aceite integral bloqueado pelo gate da closure instalada e pela consolidação final. Piloto do produto não é dependência.                                     |
+| Item                                        | Nota / 100 | Evidência e limitação que determina a nota                                                                                                                                                                                                           |
+| ------------------------------------------- | ---------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HISO-001 — baseline e donos                 |        100 | Único cartão canônico DONE. Fonte completa R19 preservada em partes reconstruíveis, com hashes.                                                                                                                                                      |
+| HISO-002 — missão e ponteiros               |         60 | Ledgers, roadmap e handoff próprios atualizados por commits parciais; reconciliação integral do checkout compartilhado continua pendente.                                                                                                            |
+| HISO-003 — contrato de extração             |         80 | SPECs aprovadas por hashes e contratos de consumo/regressão definidos; encerramento depende das etapas de extração/integração.                                                                                                                       |
+| HISO-004 — workspace privado do consumidor  |         80 | Produto e interfaces públicas exercitados em cópias físicas; rework ainda sem promoção ao checkout compartilhado.                                                                                                                                    |
+| HISO-005 — fronteira verificável            |         40 | Crítico aceitou soundness da R18 e negativos discriminantes; R18 instalada registrou 2.958 diagnósticos; CLI R19 atual confirmou INCOMPLETE com 2.809. A correção da fila expôs estouro de pilha, ainda pendente. Não equivale a PASS de isolamento. |
+| HISO-006 — descoberta/build/testes/coverage |         60 | Inventário preserva 371 testes originais e cobertura 281. Parser OSC aceito. R23 local16PASS; correção linear R24 aceita. Regressão da candidata integrada final continua pendente.                                                                  |
+| HISO-007 — artefatos separados              |         60 | API compilada sem imports privados do produto, 135 imports públicos conferidos e imagem sintética qualificada; pacote final integrado permanece pendente.                                                                                            |
+| HISO-008 — docs e backlog do produto        |         60 | Backlog e requisitos próprios transferidos; documentação histórica do consumidor ainda requer reconciliação com a candidata final.                                                                                                                   |
+| HISO-009 — interfaces públicas governadas   |         80 | Gateway e bootstrap/ingresso têm revisões independentes aceitas; consumo compilado exercitado. Dependências da fronteira e integração final continuam abertas.                                                                                       |
+| HISO-010 — CI por variante                  |         60 | R23 passou os 16 gates e emitiu certificado local condicional, sem liberar produção. R24 fecha achado posterior do parser; consolidação final pendente.                                                                                              |
+| HISO-011 — limites de transporte            |         80 | Controles locais e revisão do gateway aceitos; custo mínimo antes de I/O e identidade do modelo protegidos. Provider externo não executado.                                                                                                          |
+| HISO-012 — advisories/exposição             |         80 | Audit atual prod/dev sem vulnerabilidades; SBOM/licenças verificadas. Disposições dos 6.578 achados atuais aceitas e três pendências históricas revisadas; histórico cobre somente o HEAD congelado.                                                 |
+| HISO-013 — regressão do núcleo independente |         60 | Variante física R19 sem produto passou 5.004 testes/382 arquivos com PostgreSQL/V8 e zero skips. Nova variante R24 preparada; execução PostgreSQL/V8 final pendente.                                                                                 |
+| HISO-014 — independência do harness         |         40 | Build e regressão neutros demonstrados; aceite integral bloqueado pelo gate da closure instalada e pela consolidação final. Piloto do produto não é dependência.                                                                                     |
 
 ## Consumidor: notas por item
 
@@ -70,9 +70,12 @@ sintético não qualifica áudio humano, fidelidade clínica ou uso por plantoni
 - R22: controles novos antes **16 PASS / 7 FAIL**, depois **258 PASS**; tipos
   e lint PASS. Crítico independente: **214 casos próprios e 26 testes PASS**,
   ACCEPT limitado à normalização/parser e ao delta de quatro caminhos.
-- R23: quatro hashes do catálogo religados à fonte efetiva, preservando todos
-  os 35 registros e demais campos. **231 controles focados PASS**. Revisão
-  específica e certificação completa em execução; sem resultado antecipado.
+- R23: **5.662 testes / 411 arquivos**, zero skips, e **16 gates nativos PASS**.
+  Certificado local `AAA_CONTROLLED / CONDITIONAL_GO`, com gates externos
+  pendentes. A revisão separada recusou o regex OSC por custo quadrático;
+  isso mantém o veredito global FAIL. R24 substitui o regex por varredura
+  linear: **261 controles focados PASS**, tipos/lint PASS, e ACCEPT independente
+  em 6.451 checks funcionais, 16 do caller e 128 parses de recurso.
 - Segurança: revisão corrente aceitou **6.578 disposições individuais**. O
   scanner histórico congelado contém **6.688 observações**: 6.685 classificadas
   no exame anterior e três aceitas pelo novo crítico. Não afirmar que o scan
@@ -97,10 +100,13 @@ canônicos. Esta ordem complementa os 24 cartões, sem substituí-los.
 
 ## Evidências
 
-- [Checkpoint 48](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-48-security-history-and-ci-parser.json).
+- [Checkpoint 50](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-50-local-cert-and-linear-parser.json).
 - [Fonte R19 reconstruível](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/final-r19-frozen-source-manifest.json).
 - [R21: comandos verdes, catálogo recusado](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/final-r21-native-certify-skip-hash-fail.json).
 - [Aceite OSC R22](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/ci-native-summary-fresh-review-r22.json).
+- [Certificado local R23](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/final-r23-native-certify-local-pass.json).
+- [Achado de disponibilidade CI](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/security-ci-delta-r23-rejected.json).
+- [Correção linear aceita R24](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/ci-osc-linear-fresh-review-r24.json).
 - [Segurança atual](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/final-security-fresh-review-r20.json).
 - [Três observações históricas](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/history-three-fresh-review-r21.json).
 - [Handoff contínuo](../08_runtime/handoffs/harness_isolation_green_20261004.md).
