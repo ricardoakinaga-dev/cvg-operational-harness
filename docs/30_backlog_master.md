@@ -1,8 +1,8 @@
 # HARNESS-ISO-GREEN — fechamento de gates em andamento — 04/10/2026
 
 - 24 critérios em [0370](03_build/0370_harness_product_isolation_backlog.md), sem novo DONE. Harness/produto separados, NO_MODEL e promoção condicionada mantidos.
-- Gateway/ingresso implementados e integrados privadamente; revisões independentes novas em andamento. Gateway1.532 PASS/zero falhas/skips e ingress112 PG PASS; não são suíte global. Segurança atual6.575 disposições individuais, CodeQL três avisos para revisão; runtime compilado18projetos.
-- Suíte completa PG/cobertura atual em execução; anterior3.937 PASS/sete FAIL/zero skips entre3.944. HISO-005 instalado INCOMPLETE/11.700 e crítica interrompida pela ferramenta, sem aceite. Neutralidade/E2E/imagens/OPS/CI/segurança/certificação final pendentes.
+- Gateway/ingresso implementados e integrados privadamente; revisões independentes novas em andamento. Gateway 1.532 PASS/zero falhas/skips e ingresso 112 PG PASS; não são suíte global. Segurança atual 6.575 disposições individuais, CodeQL três avisos para revisão; runtime compilado: 18 projetos.
+- Suíte completa PG/cobertura atual em execução; anterior 3.937 PASS/sete FAIL/zero skips entre 3.944. HISO-005 instalado INCOMPLETE/11.700 e crítica interrompida pela ferramenta, sem aceite. Neutralidade/E2E/imagens/OPS/CI/segurança/certificação final pendentes.
 - `status: IN_PROGRESS`, global **FAIL**, produção **NO_GO**. Próximo: concluir gates e críticas; T4/provider/push/piloto/produção separados. [Checkpoint 24](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-24-gateway-pricing-inbound-review-and-full-suite-running.json). Todo dirty anterior preservado.
 
 # PR-301-WEBHOOK-CLOCK-GUARD — SPEC 0162 draft — 28/09/2026

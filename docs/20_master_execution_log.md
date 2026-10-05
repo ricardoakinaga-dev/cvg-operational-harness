@@ -1,8 +1,8 @@
 # HARNESS-ISO-GREEN — integração e testes atuais — 04/10/2026
 
 - Gateway identity/pricing integrado por SHA em cinco fontes: 1.532 testes focados PASS, zero falhas/skips, MATCH. Sessões/ingresso: 112 controles PG integrados PASS. Críticas novas das duas frentes em andamento, sem autoverdict de aceite.
-- Scanner atual: 6.575 achados brutos com disposições individuais, zero desconhecidos/ausentes; achado novo HMAC de fixture sintética. CodeQL atual: três avisos para revisão. Guard histórico446/inputs59 intacto salvo dois bindings Fastify aprovados. Runtime compilado18/inputs766/maps210/contexto706.
-- Suíte completa PG/cobertura atual executando; anterior3.944/3.937 PASS/sete FAIL/zero skips. HISO-005 instalado INCOMPLETE11.700; revisão interrompida automaticamente, artefatos parciais sem aceite. Imagem neutra nova em qualificação.
+- Scanner atual: 6.575 achados brutos com disposições individuais, zero desconhecidos/ausentes; achado novo HMAC de fixture sintética. CodeQL atual: três avisos para revisão. Guard histórico 446/inputs 59 intacto salvo dois bindings Fastify aprovados. Runtime compilado: 18 projetos/766 inputs/210 mapas/706 arquivos.
+- Suíte completa PG/cobertura atual executando; anterior 3.944/3.937 PASS/sete FAIL/zero skips. HISO-005 instalado INCOMPLETE 11.700; revisão interrompida automaticamente, artefatos parciais sem aceite. Imagem neutra nova em qualificação.
 - `status: IN_PROGRESS`, global **FAIL**, produção **NO_GO**, zero OpenAI e sem promoção/push/deploy. Próximo: gates completos e revisões válidas. [Checkpoint 24](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-24-gateway-pricing-inbound-review-and-full-suite-running.json). Blocos anteriores dirty preservados byte a byte.
 
 # PR-301-WEBHOOK-CLOCK-GUARD — rascunho de SPEC T3 0162 — 28/09/2026
