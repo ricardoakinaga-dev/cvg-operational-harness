@@ -69,6 +69,18 @@
 
 ## HARNESS-ISO — correção contínua até gates e revisão válidos — 04/10/2026
 
+- Claim `SYNTHETIC_T4_FREEZE_R34`: preparar pacote concreto readonly via API existente prepareSyntheticPacket, 20 bindings/hash/model gpt-6-luna e evidências locais16PASS/neutral/I1, sem criar aprovação. Node22/tsx com config pública/env sanitizado; não ler .env/chave nem chamarprovider. Full closureINCOMPLETE e produçãoNO_GO declaradas; execução externa somente decisãoT4 específica/amenditem7/D12. Saída própria/Root docs próprios.
+
+- Claim `DECIMAL_FRONTIER_FRESH_REVIEW_R33`: revisão nova das propostas por linha dos 1.072 diagnósticos/two arquivos Decimal; I0 não tem tokenoffset original, portanto nenhum recibo de supressão/aceite do diagnóstico. Inspeção AST/caller/hash offlineNode22, Source/I0 readonly e output próprio; desconhecidos receiver/AMD/transfer retidos, sem vendorblanket/JSsandbox/Root/segredos/provider/PG/instalação/descendentes/payload.
+
+- Claim `PRODUCT_COMPILED_FRESH_REVIEW_R32`: crítico novo da imagem derivada do consumidor atual R31 e129 inputsruntime, Source R19/R25 readonly. Docker próprio cvg-r31-review-* explicitamente autorizado (rede none, rootfsreadonly/UID10001/capdrop/nnprivs/pids64/mem512/CPU1), mocksloopback/dados sintéticos próprios; output próprio, limpeza só própria. Sem Root/segredos/provider/PG/instalação/descendentes/portasalheias. Qualificação limitada, não Dockerfile completo/nft host/produção.
+
+- Claim `PRODUCT_COMPILED_CONTAINER_R31`: qualificar consumidor atual em container próprio cvg-r31*, bundle da Source R19 readonly com metafile/hashes, derivação declarada da imagem scratch Node22 existente. Rootfs readonly/UID10001/capdrop/no-new-privileges/pids64/mem512/CPU1/rede none e mocks loopback, dados sintéticos descartáveis; sem env/chave/provider/Root/canais/reais/firewallglobal. Outputs próprios, crítico novo posterior; não equivale ao Dockerfile completo ou nft hostqualificado.
+
+- Claim `FIRSTPARTY_DEPENDENCY_RESOLUTION_R30`: corrigir metadados descritivos de conditions do inventário R28: Node22 inclui node-addons/module-sync, default é fallback. R28 preservado; R30 readonlySource, resolução real54 CJS/ESM e controles próprios sem importar payload. Saída própria/env sanitizado/Node22, sem chave/provider/PG/rede/instalação/código Source; nenhum aceite de closure.
+
+- Claim `DECIMAL_FRONTIER_DISPOSITION_R29`: análise I0 finita de 1.072 diagnósticos reais em decimal.js CJS/ESM, dois arquivos runtime no perfil R22; AST/caller/producer/hash por ocorrência, sem importar payloads. Fonte readonly/output próprio/Node22, sem Root/governança anterior/key/provider/PG/rede/instalação/descendentes. Sem dispensa vendor ou PASS inferido; próximo aceite exige I1 novo.
+
 - Claim `FIRSTPARTY_DEPENDENCY_RESOLUTION_R28`: inventário readonly dos 54 edges declarados first-party pendentes; resolução CJS/ESM real Node22 sem importar payload, hashes físicos de entry/manifest/exports e links no perfil R22. Output próprio/sem Sourcewrites/env/provider/rede/PG/instalação; não adjudica closure transitiva ou dispensa vendor.
 
 - Claim `FIRSTPARTY_FRONTIER_FRESH_REVIEW_R27`: novo I1 dos 222 registros first-party R26 (140 positivos propostos/82 desconhecidos), Source e packet I0 readonly, somente output próprio. Inspecionar provas concretas/caller/hash/AST sem critério universal JS; Node22/offline, sem Root/governança anterior/chave/provider/PG/payload/descendentes. Não concede PASS da closure nem dispensa vendor.
