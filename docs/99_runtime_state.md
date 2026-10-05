@@ -1,11 +1,7 @@
-# HARNESS-ISO-GREEN — correções isoladas em execução — 04/10/2026
+# HARNESS-ISO-GREEN — checkpoint 28 — 04/10/2026
 
-- Task: `HARNESS_ISO_GREEN_20261004`. `status: IN_PROGRESS`; global **FAIL**, produção **NO_GO**. Zero chamadas OpenAI, sem promoção, push, implantação ou dado real.
-- `last_completed_action`: suíte completa PostgreSQL com cobertura global **4.348 PASS em 402 arquivos, zero falhas/skips, MATCH**. E2E 12 Chromium e recorte 15 nas três engines PASS, sem retries/skips; conjuntos sobrepostos. Tipos/lint/formato/audit 0 vulnerabilidades PASS.
-- Sessões/ingresso: revisão independente ACCEPT no escopo (220 existentes, 68 casos próprios, 238 HTTP, 15 processos main). Imagem neutra atual: build/shape/processo production PostgreSQL/auth separado PASS, somente rede privada sintética.
-- Gate crítico channel FAIL no Main por functions94,59/branches94,85 abaixo95; recorte isolado de 129 testes PASS atingiu95,94/95,12 sem mudar denominadores, integração/reteste completo pendentes. Gateway R9 válido REJECT por colisão de tupla; correção isolada ativa. HISO-005 instalado INCOMPLETE/11.700; crítica estática R2 INVALID, quatro achados informativos em correção lexical isolada.
-- Segurança: 6.575 disposições individuais/zero desconhecidos e três avisos CodeQL aguardam revisão. 371 paths originais/38 adições/281 coverage atuais; 24 critérios mantidos, sem novo DONE.
-- `next_action`: fechar critical95 e fronteira instalada, novas revisões válidas e gates finais neutros/PG/segurança/operação/certificação antes promoção condicionada. NO_MODEL/T4 separados. [Checkpoint 27](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-27-critical-focused-green-and-gateway-tuple-finding.json). Todo conteúdo dirty anterior preservado.
+- Task `HARNESS_ISO_GREEN_20261004`; `status: IN_PROGRESS`. Gateway R10 ACCEPT no escopo (1.335 regressões e 292 probes); correção de tupla integrada apenas na cópia. Channel integrado com 945 testes focados PASS; PostgreSQL dedicado 288 PASS, build-runtime/SBOM/licenças PASS, fonte MATCH de 7.806 inputs. Última suíte completa encerrada: 4.348 PASS em fonte anterior; repetição atual em execução. OPS R7 REJECT P1: raw contraditório vira entrega verificada; correção R8 isolada ativa. C1 privado 377 PASS e installed INCOMPLETE/1.706; revisão estática nova ativa, sem integração Main. Histórico Git strict: 6.693 alertas, propostas individuais com zero desconhecidos, sem aceite I0. Global FAIL, produção NO_GO; 24 critérios preservados, zero chamadas OpenAI, nenhum runtime promovido.
+- `last_completed_action`: gateway corrigido com revisão independente ACCEPT e gates focados/PG/build atuais; `next_action`: fechar os defeitos e gates finais. NO_MODEL e T4 separados. [Checkpoint 28](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-28-gateway-accepted-and-raw-receipt-finding.json).
 
 # PR-301-WEBHOOK-CLOCK-GUARD — SPEC 0162 draft — 28/09/2026
 

@@ -1,9 +1,7 @@
-# HARNESS-ISO-GREEN — fechamento de gates em andamento — 04/10/2026
+# HARNESS-ISO-GREEN — checkpoint 28 — 04/10/2026
 
-- 24 critérios em [0370](03_build/0370_harness_product_isolation_backlog.md), sem novo DONE. Harness/produto separados; NO_MODEL e promoção condicionada mantidos.
-- Suíte completa atual com PostgreSQL/cobertura global: **4.348 PASS em 402 arquivos, zero falhas/skips**. E2E 12 Chromium e recorte 15 em três engines PASS/zero retries/skips, não somar conjuntos. Sessões/ingresso crítico ACCEPT no escopo; imagem neutra production PG privada PASS.
-- Pendências técnicas: critical95 channel (recorte isolado 129 PASS/95,94 functions/95,12 branches, integração/reteste completo pendentes); gateway R9 válido REJECT colisão de tupla, correção isolada ativa; C1 instalado INCOMPLETE/11.700 com correção lexical baseada em quatro achados informativos de revisão formal INVALID. Novos críticos válidos CI/OPS/segurança, suíte neutra/PG dedicado/certificação/SBOM/licenças/mutação e restart final continuam abertos.
-- `status: IN_PROGRESS`, global **FAIL**, produção **NO_GO**, zero OpenAI. Próximo: integrar correções somente com provas e concluir gates, mantendo T4/provider/push/piloto/produção separados. [Checkpoint 27](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-27-critical-focused-green-and-gateway-tuple-finding.json). Todo dirty anterior preservado.
+- Task `HARNESS_ISO_GREEN_20261004`; `status: IN_PROGRESS`. Gateway R10 ACCEPT no escopo (1.335 regressões e 292 probes); correção de tupla integrada apenas na cópia. Channel integrado com 945 testes focados PASS; PostgreSQL dedicado 288 PASS, build-runtime/SBOM/licenças PASS, fonte MATCH de 7.806 inputs. Última suíte completa encerrada: 4.348 PASS em fonte anterior; repetição atual em execução. OPS R7 REJECT P1: raw contraditório vira entrega verificada; correção R8 isolada ativa. C1 privado 377 PASS e installed INCOMPLETE/1.706; revisão estática nova ativa, sem integração Main. Histórico Git strict: 6.693 alertas, propostas individuais com zero desconhecidos, sem aceite I0. Global FAIL, produção NO_GO; 24 critérios preservados, zero chamadas OpenAI, nenhum runtime promovido.
+- `last_completed_action`: gateway corrigido com revisão independente ACCEPT e gates focados/PG/build atuais; `next_action`: fechar os defeitos e gates finais. NO_MODEL e T4 separados. [Checkpoint 28](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-28-gateway-accepted-and-raw-receipt-finding.json).
 
 # PR-301-WEBHOOK-CLOCK-GUARD — SPEC 0162 draft — 28/09/2026
 
