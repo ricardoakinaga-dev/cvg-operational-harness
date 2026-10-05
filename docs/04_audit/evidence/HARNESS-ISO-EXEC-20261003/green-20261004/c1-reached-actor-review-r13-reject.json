@@ -1,0 +1,269 @@
+{
+  "verdict": "REJECT",
+  "claim": "C1_REACHED_ACTOR_FRESH_REVIEW_R13",
+  "createdUTC": "2026-10-05T09:22:57.407327+00:00",
+  "scope": "Fresh independent local synthetic review of this exact sealed checker and physical reached metadata/source closure. No installed/global/release acceptance; no source changes.",
+  "authority": {
+    "firstReads": [
+      "authority.json",
+      "freeze.json"
+    ],
+    "source": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-reached-actor-review-r13/source",
+    "inventorySha256": "3da20be3b1dc09758d5a62d9931f6ecf6f1f87559955be3a37a72bac7924edc8",
+    "sealedEntries": 19383,
+    "runtimeNode": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+    "rootContext": "Root/global manifest and explicitly known actors governed; Root ancestry alone does not census archives. Reached nonRoot contexts govern complete recursive physical metadata."
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "HIGH",
+      "title": "Reached recursive metadata dependencies never enter the isolation graph",
+      "location": {
+        "source": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-reached-actor-review-r13/source/scripts/check-product-boundary.mjs",
+        "line": 327,
+        "citation": "Source/scripts/check-product-boundary.mjs:327",
+        "sealedSha256": "b5f8bd712be1a8190258b83c4b8dee67a9c464b10bb2f0887a581778eb2a3645"
+      },
+      "relatedLocations": [
+        {
+          "source": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-reached-actor-review-r13/source/scripts/check-product-boundary.mjs",
+          "line": 330,
+          "citation": "Source/scripts/check-product-boundary.mjs:330",
+          "sealedSha256": "b5f8bd712be1a8190258b83c4b8dee67a9c464b10bb2f0887a581778eb2a3645"
+        },
+        {
+          "source": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-reached-actor-review-r13/source/scripts/boundary-manifests.mjs",
+          "line": 141,
+          "citation": "Source/scripts/boundary-manifests.mjs:141",
+          "sealedSha256": "241b96c575a593c29b115a3b51847d3be84ae1c05ef65e930e54f9fb2308a9dd"
+        }
+      ],
+      "description": "localTarget invokes the complete physical metadata census for a reached nonRoot package, but discards its returned manifest set. The graph loop then consults only metadata.cache.get(pkgFile), the nearest context manifest. Valid nested package.json actors and locally reached children are read and cached without an edge linking them to the reached actor or traversing their dependencies. A nested dist manifest can therefore declare a workspace product dependency and the native CLI reports PASS with no diagnostics or violations.",
+      "contract": "Each reached nonRoot physical actor governs recursive metadata, including dist; declared workspace/file/link/npm edges must retain the product boundary.",
+      "expected": "FAIL for known product dependency (at minimum blocking, never PASS).",
+      "observed": "16 distinct inert fixtures return PASS / native CLI exit 0 across all four dependency fields, direct workspace names, npm aliases, file URLs and transitive local metadata.",
+      "cases": [
+        "reached-nested-product-dependencies",
+        "reached-nested-alias-product-dependencies",
+        "reached-nested-local-product-dependencies",
+        "reached-nested-product-devDependencies",
+        "reached-nested-alias-product-devDependencies",
+        "reached-nested-local-product-devDependencies",
+        "reached-nested-product-optionalDependencies",
+        "reached-nested-alias-product-optionalDependencies",
+        "reached-nested-local-product-optionalDependencies",
+        "reached-nested-product-peerDependencies",
+        "reached-nested-alias-product-peerDependencies",
+        "reached-nested-local-product-peerDependencies",
+        "nested-transitive-dependencies",
+        "nested-transitive-devDependencies",
+        "nested-transitive-optionalDependencies",
+        "nested-transitive-peerDependencies"
+      ],
+      "example": {
+        "fixture": "discriminants/reached-nested-product-dependencies",
+        "entry": "packages/core/src/index.mts:1",
+        "nestedActor": "auxiliary/bridge/dist/nested/package.json:2",
+        "declaredDependency": "dependencies.@synthetic/consumer = 1.0.0",
+        "nativeOutput": "discriminants/reached-nested-product-dependencies.stdout",
+        "nativeStderr": "discriminants/reached-nested-product-dependencies.stderr"
+      },
+      "controls": "All 12 nearest-context workspace/alias/file product controls report FAIL. All corresponding opaque and Root-ancestor-only archives stay PASS; no proposal expands Root census.",
+      "requiredCorrection": "Connect every governed reached-context manifest to its actor; traverse its complete dependency closure using canonical physical identity, including nested and recursively followed local actors. Preserve Root documentary scope."
+    },
+    {
+      "id": "F2",
+      "severity": "HIGH",
+      "title": "Nested local metadata can erase an unknown dependency frontier",
+      "location": {
+        "source": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-reached-actor-review-r13/source/scripts/check-product-boundary.mjs",
+        "line": 344,
+        "citation": "Source/scripts/check-product-boundary.mjs:344",
+        "sealedSha256": "b5f8bd712be1a8190258b83c4b8dee67a9c464b10bb2f0887a581778eb2a3645"
+      },
+      "relatedLocations": [
+        {
+          "source": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-reached-actor-review-r13/source/scripts/boundary-manifests.mjs",
+          "line": 89,
+          "citation": "Source/scripts/boundary-manifests.mjs:89",
+          "sealedSha256": "241b96c575a593c29b115a3b51847d3be84ae1c05ef65e930e54f9fb2308a9dd"
+        },
+        {
+          "source": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-reached-actor-review-r13/source/scripts/check-product-boundary.mjs",
+          "line": 327,
+          "citation": "Source/scripts/check-product-boundary.mjs:327",
+          "sealedSha256": "b5f8bd712be1a8190258b83c4b8dee67a9c464b10bb2f0887a581778eb2a3645"
+        }
+      ],
+      "description": "The nearest-context path emits UNVERIFIED_LOCAL_DEPENDENCY for a valid physical local package outside declared workspaces. The identical local dependency in nested governed metadata is visited only by the manifest reader, so neither a dependency graph edge nor a blocking diagnostic is added. Native CLI returns PASS. This is the unknown-frontier consequence of the same disconnected actor set described in F1.",
+      "contract": "Every reachable unknown blocks INCOMPLETE; no broad omissions for nested or local dependency metadata.",
+      "expected": "INCOMPLETE until the nonworkspace local implementation closure is independently established.",
+      "observed": "Four nested local controls return PASS / exit 0; four otherwise identical nearest-context controls return INCOMPLETE / exit 1.",
+      "cases": [
+        "nested-nonworkspace-local-dependencies",
+        "nested-nonworkspace-local-devDependencies",
+        "nested-nonworkspace-local-optionalDependencies",
+        "nested-nonworkspace-local-peerDependencies"
+      ],
+      "example": {
+        "fixture": "discriminants/nested-nonworkspace-local-dependencies",
+        "nestedActor": "auxiliary/bridge/dist/package.json:1",
+        "localTarget": "auxiliary/target/package.json:1",
+        "nativeOutput": "discriminants/nested-nonworkspace-local-dependencies.stdout",
+        "nativeStderr": "discriminants/nested-nonworkspace-local-dependencies.stderr"
+      },
+      "requiredCorrection": "After connecting metadata actors, either fully audit a declared physical local target or retain its unknown diagnostic on the reachable actor. Shape validation alone cannot close its frontier."
+    }
+  ],
+  "validation": {
+    "suppliedInertStaticTests": {
+      "total": 558,
+      "passed": 558,
+      "failed": 0,
+      "unchanged": true,
+      "rawJSON": "supplied-static.vitest.json",
+      "artifactsPreservedUnder": "tmp/"
+    },
+    "newInertNativeCLI": {
+      "total": 134,
+      "expectedResults": 114,
+      "falsePASS": 20,
+      "fixturesExecuted": false,
+      "productEdgeFalsePASS": 16,
+      "unknownFrontierFalsePASS": 4,
+      "rawCases": "discriminants.json",
+      "rawResults": "all-discriminants-results.json",
+      "allNativeStdoutStderr": "discriminants/",
+      "allCasesRetained": true
+    },
+    "nativeRuntimeScan": {
+      "status": "INCOMPLETE",
+      "exitCode": 1,
+      "sourceFiles": 3082,
+      "coreFiles": 592,
+      "workspaceCount": 26,
+      "edgeCount": 15132,
+      "blockingDiagnostics": 1610,
+      "countsByReason": {
+        "UNVERIFIED_DYNAMIC_CODE_EXECUTION": 1382,
+        "UNVERIFIED_MODULE_LOADER_ESCAPE": 141,
+        "UNVERIFIED_MODULE_LOADER_PROPERTY": 54,
+        "UNRESOLVED_MODULE_REFERENCE": 2,
+        "UNVERIFIED_PROCESS_CAPABILITY_PROPERTY": 23,
+        "UNVERIFIED_MODULE_LOADER_BINDING": 1,
+        "NON_LITERAL_MODULE_REFERENCE": 3,
+        "UNVERIFIED_MODULE_LOADER_BASE": 1,
+        "UNVERIFIED_MODULE_LOADER_PRIMITIVE": 3
+      },
+      "rawJSON": "native-baseline.stdout",
+      "stderr": "native-baseline.stderr",
+      "independentlyAcceptedInstalledDiagnostics": 0,
+      "disposition": "All 1610 remain blocking. No waiver, broad exception or Installed acceptance. Their full literal file:line, specifier where present and reason are retained in native JSON. This is an additional unresolved acceptance condition, not a claim that each diagnostic is a demonstrated source defect.",
+      "examples": [
+        {
+          "source": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-reached-actor-review-r13/source/node_modules/@types/node/process.d.ts",
+          "line": 71,
+          "citation": "Source/node_modules/@types/node/process.d.ts:71",
+          "sealedSha256": "ce8653341224f8b45ff46d2a06f2cacb96f841f768a886c9d8dd8ec0878b11bd"
+        },
+        {
+          "source": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-reached-actor-review-r13/source/node_modules/pg/lib/native/client.js",
+          "line": 7,
+          "citation": "Source/node_modules/pg/lib/native/client.js:7",
+          "sealedSha256": "192e710e6fcf5e158e059ce88af323a7533180718ce66fcf9c28b5f592593477"
+        }
+      ]
+    }
+  },
+  "immutability": {
+    "unchanged": true,
+    "files": 19335,
+    "links": 48,
+    "directories": 1970,
+    "inventoryDifferences": 0,
+    "metadataDifferences": 0,
+    "rawPre": "pre.json",
+    "rawPost": "post.json",
+    "comparison": "immutability.json",
+    "properties": "Literal paths, exact bytes/hash or literal symlink target, lstat mode/size/mtime_ns/ctime_ns/dev/ino/nlink, including directories. atime intentionally not an immutability condition."
+  },
+  "runtime": {
+    "physicalRoot": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-reached-actor-review-r13/output/runtime",
+    "internalDependencyLinksOnly": true,
+    "links": "runtime-links.json",
+    "binding": "runtime-binding.json",
+    "mirroredEntries": 19303,
+    "allMirroredEntriesExact": true,
+    "opaqueEntriesNotCopied": 80,
+    "copiedScope": "Physical code/config/dependencies/dist, unchanged single inert static suite, and seven authorized machine fixtures. Opaque archive/procedural files and other repository-root tests omitted from runtime; they are outside checker source discovery. Every omission literal path is retained in runtime-binding.json.",
+    "preservationInstrumentation": "preserve-static.cjs only retains temporary static fixtures at afterAll cleanup; no reviewed checker or test bytes changed."
+  },
+  "network": {
+    "nativeSeccompGuard": true,
+    "reviewExternalAttempts": 0,
+    "reviewActualExternalIO": 0,
+    "guardSelftestsSeparate": true,
+    "guardSelftests": "guard-selftest.stdout",
+    "rawTracesAndCounts": "network-summary.json",
+    "qualifier": "Local files and runner/resolver IPC necessarily perform I/O; zero actual I/O means zero external network/DNS/PG/provider I/O."
+  },
+  "reviewCoverage": [
+    {
+      "module": "Source/scripts/check-product-boundary.mjs",
+      "lines": 1512,
+      "sealedSha256": "b5f8bd712be1a8190258b83c4b8dee67a9c464b10bb2f0887a581778eb2a3645",
+      "entireModuleRead": true
+    },
+    {
+      "module": "Source/scripts/boundary-manifests.mjs",
+      "lines": 148,
+      "sealedSha256": "241b96c575a593c29b115a3b51847d3be84ae1c05ef65e930e54f9fb2308a9dd",
+      "entireModuleRead": true
+    },
+    {
+      "module": "Source/scripts/boundary-lexical.mjs",
+      "lines": 492,
+      "sealedSha256": "290091b6e6dfbceff5217844c3190f59172d82d339bc0628b10caf4193b4adc0",
+      "entireModuleRead": true
+    },
+    {
+      "module": "Source/scripts/boundary-code-execution.mjs",
+      "lines": 509,
+      "sealedSha256": "4c750071ac1347ffa68e6c62e3082e5507cc94571e83089eb7bd21eb7435540a",
+      "entireModuleRead": true
+    },
+    {
+      "module": "Source/scripts/tsconfig-path-grammar.mjs",
+      "lines": 27,
+      "sealedSha256": "62f5791962360d1836c281b68758094abdd970412d7a5f2ad49e538352201f8f",
+      "entireModuleRead": true
+    }
+  ],
+  "coverageNotes": [
+    "Global manifest shape and actor census, workspace grammar/physical discovery, file/link URL identity and recursive metadata, npm alias identity, Root opacity and reached context closure were reviewed.",
+    "Source/effective closure, ESM/CommonJS resolver modes and fallback conditions, declarations/types/assets, native .js/.mjs/.cjs syntax parsing, .jsx/TS AST grammar, lexical binding/environment identity, loader propagation/escapes, evaluator capability classification and final reachable diagnostic filtering were reviewed.",
+    "Finite 134 independent inert discriminants include ordinary lexical positive controls, product negatives, unresolved/dynamic references, JS parse errors, asset context and physical symlink metadata. Passing finite tests do not establish exhaustive grammar or Installed acceptance."
+  ],
+  "accessAndActions": {
+    "sharedRootRead": false,
+    "priorJudgmentsHistoryBuildreportsRead": false,
+    "skillsOrCoordinationOrRuntimeLogsRead": false,
+    "excludedExecutingSuite": "tests/product-boundary-code-execution.test.js remained opaque/hash-only and was neither copied nor run",
+    "otherTestInspection": "Portions of tests/product-boundary.test.js were inspected before recognizing its executable oracle infrastructure; it was never copied/run. Only product-boundary-lexical-static.test.js was run. No fixture payload execution occurred.",
+    "newFixturePayloadsExecuted": false,
+    "otherAgentsOrCopiesTouched": false,
+    "sourceEdits": false,
+    "networkDNSPGProviderRealDataSecrets": false,
+    "push": false,
+    "subagents": 0,
+    "localClaims": "The supplied authority claim identifies this disjoint review. Lead owns Root claim registration and evidence persistence; this critic does not modify Root coordination."
+  },
+  "limits": [
+    "No inherited review narratives were used. Authority/freeze constitute the supplied scope; no Root procedural reads were performed.",
+    "The native scan is a bound physical runtime mirror, not execution in Source; opaque documentary omissions are explicit and do not qualify as exhaustive documentary validation.",
+    "No installed/global release decision is granted. The 1610 native unknowns are not independently accepted.",
+    "No fix to reviewed Source is made. Lead must address these graph obligations and request a fresh independent posterior review."
+  ],
+  "artifactIndex": "artifacts.json"
+}
