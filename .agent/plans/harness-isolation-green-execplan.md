@@ -121,3 +121,9 @@ last_completed_action: integração R9 e regressões focadas sem skips; recibo h
 Checkpoint 22: motor reconciliado privadamente, 1.406 testes PG focados PASS; CI-R4 integrado, reteste em curso após atualizar contagem para280. Compilação real18projetos765inputs/703arquivos exclui446históricos. Scanner6574disposições individuais I0, crítico pendente. Custo/modelo e sessões/ingresso aprovados, BUILD isolado ativo. Ledgers99/20/30 receberam somente blocos próprios em c0de4c1, conteúdo dirty anterior preservado. HISO-005 instalado INCOMPLETE306; global FAIL/produção NO_GO,24critérios intactos.
 
 Falha de contagem CI-R1 preservada; CI-R2 repetido sem ampliar15000ms nem reduzirdenominador. O commit c0de4c1 integra apenas blocos próprios nos três ledgers, com conteúdo anterior byte-preservado.
+
+## Continuidade — checkpoint 23
+
+Checkpoint 23: custo/modelo integrado, 1.532 controles focados PASS; crítica nova REJECT dois P2 de identidade HTTP e pricing, correção T2 ativa. Sessões/ingresso integrado, Builder388testes+36provascompiladas PASS e Lead112PG PASS, crítico pendente. CI234controles instrumentados PASS, cobertura global do recorte FAIL preservado. C1 corrigiu cinco falsos PASS com cargasNode reais,253controles PASS; instaladoINCOMPLETE11.700diagnósticos, nova crítica ativa. Inventário371originais38novos/281coverage. GlobalFAIL/produçãoNO_GO,24critérios intactos, zeroOpenAI.
+
+next_action: concluir pricing/identidade e crítica C1, abrir crítico novo de bootstrap/ingresso, requalificar scanners/closure e executar gates finais quando fonte estiver estável. status: IN_PROGRESS.
