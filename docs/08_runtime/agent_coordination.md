@@ -69,6 +69,14 @@
 
 ## HARNESS-ISO — correção contínua até gates e revisão válidos — 04/10/2026
 
+- Claim `FINAL_NEUTRAL_R24`: variante física sem produto da R24 com parser linear aceito; stage `neutral-staging-r24`, target `hiso-neutral-final-r24`, output `final-neutral-r24`. Preparação pública exata, dependências próprias movidas da R23 não executada; build SDK/API/worker e full PostgreSQL55598/V8. Não mistura C1 BUILD ainda não revisado. Sem chave/env privados/provider/push/Root code.
+
+- Claim `CI_OSC_LINEAR_FRESH_REVIEW_R24`: crítico novo na normalização linear de OSC e cinco deltas CI versus R19; packet/output próprio, probes/scan estrito offline e limites medidos declarados. Sem Sourcewrites/runtimeRoot/rede/PG/provider/descendentes; genericbootstrapreadonly permitido, execução efetiva Node22.
+
+- Claim `CI_OSC_LINEAR_R24`: corrigir R23-SEC-001 por varredura linear de OSC na cópia `candidate-ci-linear-r24`, derivada da R22 imutável mais catálogo R23; outputs `ci-osc-linear-r24`. Preservar first-summary/counts/SGR/BEL/ST/C1 e recusa de incompletos, sem novo sink. Original/R23 nativo readonly; regressões e novo crítico antes da próxima integração pesada. Sem Root code/provider/push.
+
+- Claim `C1_MANIFEST_RUNTIME_TRAVERSAL_R19`: BUILD T2 somente na cópia física `c1-manifest-runtime-traversal-r19/candidate`, checker fila de sucessores runtime de manifesto e teste novo/metadata próprio. Preservar UNVERIFIED_INSTALLED_DEPENDENCY e todas asserções originais; não adjudicar desconhecidos. Outputs/cache/TMP próprios, testes AST/CLI sem payloads, Node22/sem provider/PG/Root changes; crítico posterior por Lead. Autorização de correções contínuas já concedida.
+
 - Claim `SECURITY_CI_DELTA_FRESH_REVIEW_R23`: crítico novo apenas dos cinco deltas CI versus R19, com scanner estrito/probes offline em output `security-ci-delta-fresh-review-r23/output`. Sem CodeQL fullrescan inferido, sem assumir achados antigos; fontes imutáveis/rede/PG/provider/Root ausentes.
 
 - Claim `READINESS_SCORE_REPORT_20261005`: relatório documental próprio `docs/04_audit/0595_harness_product_local_readiness_2026-10-05.md`, notas 0–100 por cada um dos 24 cartões originais e sequência/backlog explícitos, sem trocar status canônico ou afirmar produção. Atualizar após execução final; somente docs/evidências próprias.
