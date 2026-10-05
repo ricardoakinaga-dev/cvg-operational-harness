@@ -1,0 +1,241 @@
+{
+  "verdict": "REJECT",
+  "role": "Fresh C1 independent critic",
+  "claim": "C1_METADATA_GRAPH_FRESH_REVIEW_R15",
+  "timeUTC": "2026-10-05T10:13:53.134407+00:00",
+  "scope": "Scoped static boundary checker and physical metadata graph; neither installed/global acceptance nor product/release/CI/PG approval.",
+  "source": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-metadata-graph-review-r15/source",
+  "inventory": {
+    "sha256": "ac11dd1b40e1dbadb24f632fc6e73d025581ed99f4b16c1a71dd2c7dc53e33ac",
+    "frozenEntries": 19385,
+    "files": 19337,
+    "links": 48,
+    "directories": 1972,
+    "freezeDifferences": [],
+    "extra": []
+  },
+  "findings": [
+    {
+      "id": "C1-R15-F01",
+      "severity": "P1",
+      "title": "Reached nonRoot manifest drops physically installed registry/alias dependency closures",
+      "location": "scripts/check-product-boundary.mjs:249-258",
+      "expected": "FAIL when declared dependency closure reaches products",
+      "actual": "PASS; passed=true; empty violations and diagnostics; native CLI exit 0",
+      "cases": [
+        "dependencies-installed-registry-closure",
+        "dependencies-installed-alias-closure",
+        "devDependencies-installed-registry-closure",
+        "devDependencies-installed-alias-closure",
+        "optionalDependencies-installed-registry-closure",
+        "optionalDependencies-installed-alias-closure",
+        "peerDependencies-installed-registry-closure",
+        "peerDependencies-installed-alias-closure",
+        "installed-source-dependency-transitive"
+      ],
+      "rootCause": "manifestEdges only consults workspaces.get(targetName) for every non-file/link specifier; if absent, no edge, physical package lookup, recursive governance or unknown diagnostic is emitted. A governed installed package can therefore lose its installed successor and the successor product dependency.",
+      "reproduction": "installed-source-dependency-transitive: core imports external-entry; its physical package.json declares external-next@1.0.0; physical external-next declares @inert/consumer. The native API and CLI report PASS (edgeCount=4). Eight further nested/dist registry and npmalias cases reproduce all four fields.",
+      "impact": "Manifest dependencies are specified graph edges; a complete and physically present declared core-to-product metadata path disappears, permitting false isolation certification.",
+      "remediation": "Resolve reached nonRoot registry and npmalias dependencies to canonical physical manifest identity in the correct declaring actor context, recursively preserve metadata edges/cycles, and block any unresolved frontier. Do not execute package entrypoints or add vendor/reflection exemptions.",
+      "raw": [
+        "raw/installed-source-dependency-transitive.json",
+        "raw/cli-installed-source-dependency-transitive.stdout",
+        "raw/cli-installed-source-dependency-transitive.stderr"
+      ],
+      "fixture": "cases/installed-source-dependency-transitive"
+    },
+    {
+      "id": "C1-R15-F02",
+      "severity": "P1",
+      "title": "Explicit workspace dependency with no target produces false PASS",
+      "location": "scripts/check-product-boundary.mjs:256-258",
+      "expected": "INCOMPLETE with reachable diagnostic bound to declaring manifest",
+      "actual": "PASS; passed=true; empty diagnostics; native CLI exit 0",
+      "cases": [
+        "dependencies-unknown-workspace",
+        "devDependencies-unknown-workspace",
+        "optionalDependencies-unknown-workspace",
+        "peerDependencies-unknown-workspace"
+      ],
+      "rootCause": "The same missing workspaces lookup has no negative branch. @inert/missing:workspace:* is accepted as a string, then discarded despite its absent workspace.",
+      "reproduction": "Reached auxiliary/actor/dist/package.json declares @inert/missing:workspace:* in each of dependencies/devDependencies/optionalDependencies/peerDependencies. All four API and CLI cases return PASS.",
+      "impact": "An explicitly local workspace frontier cannot be adjudicated as external/irrelevant; absence is unknown and must remain blocking.",
+      "remediation": "Diagnose unmatched explicit workspace references on reached manifests; retain declaring physical manifest provenance and mark INCOMPLETE. Preserve root-ancestry documentary limits.",
+      "raw": [
+        "raw/dependencies-unknown-workspace.json",
+        "raw/cli-dependencies-unknown-workspace.stdout",
+        "raw/cli-dependencies-unknown-workspace.stderr"
+      ],
+      "fixture": "cases/dependencies-unknown-workspace"
+    }
+  ],
+  "verification": {
+    "suppliedStatic": {
+      "total": 614,
+      "passed": 614,
+      "failed": 0,
+      "pending": 0,
+      "raw": "raw/supplied614-vitest.json",
+      "runner": "Physical output/runtime Vitest 4.1.11; trusted Node22 22.23.2; threads=1, synthetic TMPDIR/cache/HOME in output; copied static suite unmodified."
+    },
+    "independentInertProbes": {
+      "cases": 84,
+      "matched": 71,
+      "falsePass": 13,
+      "index": "probe-index.json",
+      "fixtureExecution": false
+    },
+    "nativeCLI": {
+      "exactCases": 25,
+      "apiAgreement": 25,
+      "index": "native-exactcases.json",
+      "falsePassExitZero": 13
+    },
+    "readonlyInstalled": {
+      "status": "INCOMPLETE",
+      "exitCode": 1,
+      "diagnostics": 1610,
+      "reasons": {
+        "UNVERIFIED_DYNAMIC_CODE_EXECUTION": 1382,
+        "UNVERIFIED_MODULE_LOADER_ESCAPE": 141,
+        "UNVERIFIED_MODULE_LOADER_PROPERTY": 54,
+        "UNRESOLVED_MODULE_REFERENCE": 2,
+        "UNVERIFIED_PROCESS_CAPABILITY_PROPERTY": 23,
+        "UNVERIFIED_MODULE_LOADER_BINDING": 1,
+        "NON_LITERAL_MODULE_REFERENCE": 3,
+        "UNVERIFIED_MODULE_LOADER_BASE": 1,
+        "UNVERIFIED_MODULE_LOADER_PRIMITIVE": 3
+      },
+      "coreFiles": 592,
+      "sourceFiles": 3082,
+      "workspaces": 26,
+      "edgeCount": 15151,
+      "productViolations": 0,
+      "acceptance": false,
+      "raw": "raw/installed.stdout"
+    },
+    "original253": {
+      "hashMetadataInvariant": true,
+      "readOrExecuted": false,
+      "status": "OPAQUE / NOT_RUN"
+    }
+  },
+  "scopeSources": [
+    {
+      "path": "docs/07_agents/AGENTS.md",
+      "sha256": "8306af1bb3a09658bcc9e08102184b78bbd91dd2075e016a8009026f1908bede"
+    },
+    {
+      "path": "docs/02_spec/0178_harness_consumer_extraction.md",
+      "sha256": "1ad7765c6cbabdd10936af9e01af15b00292e628d3e86eb3630059448ae03cd9"
+    },
+    {
+      "path": "docs/architecture/adrs/ADR-010-harness-product-isolation.md",
+      "sha256": "13554b485ccf0af22c2f85a728801c3ed52f9712cc6b0da6362e7ec9ab2c3abe"
+    },
+    {
+      "path": "docs/02_spec/0179_shift_consumer_reliability.md",
+      "sha256": "988192fe48737b4571ed659f051e22f3a9283d5c433e7c6c078e1dd0f7be86c3"
+    },
+    {
+      "path": "docs/02_spec/0180_shared_transport_ci_security.md",
+      "sha256": "7971771ca8e4a12be90e58536ea105c8399d844e28c47093b2a50575afff6dc2"
+    },
+    {
+      "path": "scripts/check-product-boundary.mjs",
+      "sha256": "15c54d6989cdd44539a781e7b8599cd8d4847f03ee60892d63b457e1b9ee502c"
+    },
+    {
+      "path": "scripts/boundary-manifests.mjs",
+      "sha256": "241b96c575a593c29b115a3b51847d3be84ae1c05ef65e930e54f9fb2308a9dd"
+    },
+    {
+      "path": "scripts/boundary-lexical.mjs",
+      "sha256": "290091b6e6dfbceff5217844c3190f59172d82d339bc0628b10caf4193b4adc0"
+    },
+    {
+      "path": "scripts/boundary-code-execution.mjs",
+      "sha256": "4c750071ac1347ffa68e6c62e3082e5507cc94571e83089eb7bd21eb7435540a"
+    },
+    {
+      "path": "scripts/tsconfig-path-grammar.mjs",
+      "sha256": "62f5791962360d1836c281b68758094abdd970412d7a5f2ad49e538352201f8f"
+    },
+    {
+      "path": "tests/product-boundary-lexical-static.test.js",
+      "sha256": "f724b7f47a2d6beeb9da15df4612775d097730e16920e3c4ce7c70341fc5010f"
+    },
+    {
+      "path": "package.json",
+      "sha256": "22757fb686ebffe8f8b4c31700483e992860f9a1746f7420ce6b97224cd66a7a"
+    }
+  ],
+  "exclusions": [
+    "Shared Root and coordination/99/20/30/README/.agent/history/handoffs/build reports opaque hash only",
+    "docs/03_build/hiso-ci-scopes-local.md never opened as narrative",
+    "Original253 executable test files hash only; never inspected/copied/executed",
+    "Other packets, private .env, skills, secrets, descendants/subagents",
+    "External network, DNS, PG, providers, real data, push, CI/neutral/source promotion/release"
+  ],
+  "invariance": {
+    "fullSourceFilesLinksDirectories": true,
+    "pre": "pre-invariance.json",
+    "post": "post-invariance.json",
+    "postSummary": {
+      "differences": []
+    },
+    "fields": [
+      "sha256",
+      "link target",
+      "mode",
+      "size",
+      "mtime_ns",
+      "ctime_ns",
+      "dev",
+      "ino",
+      "nlink"
+    ],
+    "SourceDependencyDistChanges": 0,
+    "physicalRuntimeLinks": "physical-runtime-links.json",
+    "copyHashes": "copy-index.json"
+  },
+  "io": {
+    "summary": {
+      "sourceContentReadCount": 3266,
+      "directoryMetadataCount": 979,
+      "prohibitedContentReads": 0,
+      "sourceWriteOpens": 0,
+      "persistentWriteOpensOutsideOutput": 0,
+      "systemNullDeviceOpens": 4,
+      "nonUnixSocketAttempts": 16,
+      "nonUnixSocketAttemptsAllSelftestEPERM": true,
+      "connectCalls": 0,
+      "fixtureExecution": false
+    },
+    "raw": "io-evidence.json",
+    "seccompRuns": [
+      "raw/supplied614.execution.json",
+      "raw/probes.execution.json",
+      "raw/installed.execution.json",
+      "raw/native-exactcases.execution.json"
+    ],
+    "rawTraces": [
+      "raw/supplied614.strace",
+      "raw/probes.strace",
+      "raw/installed.strace",
+      "raw/native-exactcases.strace"
+    ],
+    "nullDeviceExplanation": "Four /dev/null opens belong to trusted launcher/runner infrastructure; no persistent artifacts outside output."
+  },
+  "accessCompliance": {
+    "freshQualified": true,
+    "forbiddenNarrativeReads": 0,
+    "sourceWrites": 0,
+    "externalActions": 0,
+    "fixtureExecution": false,
+    "claims": "claim.json",
+    "actions": "access-actions.json",
+    "precedence": "Explicit user read/write boundary supersedes local requests to read/update ledgers, coordination, skills and prior narratives. Lead retains those responsibilities."
+  },
+  "artifactIndex": "evidence-index.json"
+}
