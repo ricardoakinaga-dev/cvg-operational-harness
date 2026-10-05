@@ -69,6 +69,10 @@
 
 ## HARNESS-ISO — correção contínua até gates e revisão válidos — 04/10/2026
 
+- Claim `FINAL_LOCAL_SANDBOX_FRESH_REVIEW_R19`: crítico novo somente dos wrappers de sandbox, replay preservado e prova browser R19, em `local-r19-fresh-review/**`. Autoridade específica externa ao Root; fonte R19 e provas locais somente leitura, GET3500/3501 e negativos sem efeito permitidos, nenhuma chamada externa, leitura de chave/.env, execução de payloads, PG, descendente ou aprovação de produção.
+
+- Claim `FINAL_LOCAL_SANDBOX_R19`: requalificar somente o sandbox próprio 3500/3501 com a fonte imutável R19 já validada, wrappers/browser/output novos em `/home/ricardo/.cache/cvg-harness-green-20261004/local-r19/**`. Validar PID 213225 antes de parada graciosa; preservar backup físico e journal existente `local/data/**`, sem limpar ou reescrever documentos. Modelo permanece NO_MODEL, serviços simulados locais e fixtures conferidas por hash; `.env` privado apenas no processo, sem cópia ou impressão de chave. Browser sintético e prova de replay/preservação após restart; portas e processos alheios 3400/3401 intocados. Não promove código Root nem concede provider externo/produção.
+
 - Claim `C1_BINDING_STACK_R20`: BUILD em cópia própria de C1 fila congelada para RangeError real do binder TypeScript; output `c1-binding-stack-r20/output`. Repro com arquivo/AST antesfix, preservar identidade lexical e todos controles originais; testemunhas sintéticas controladas Node autorizadas nesta lane. Unknown permaneceINCOMPLETE, sem confiança ampla/metadatasupressão; Node22/sem provider/PG/Root changes. Novo crítico posterior peloLead.
 
 - Claim `FINAL_NEUTRAL_R24`: variante física sem produto da R24 com parser linear aceito; stage `neutral-staging-r24`, target `hiso-neutral-final-r24`, output `final-neutral-r24`. Preparação pública exata, dependências próprias movidas da R23 não executada; build SDK/API/worker e full PostgreSQL55598/V8. Não mistura C1 BUILD ainda não revisado. Sem chave/env privados/provider/push/Root code.
