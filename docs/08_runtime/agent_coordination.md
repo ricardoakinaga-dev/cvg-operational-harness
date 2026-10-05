@@ -69,6 +69,16 @@
 
 ## HARNESS-ISO — correção contínua até gates e revisão válidos — 04/10/2026
 
+- Claim `CI_NATIVE_OSC_R22`: corrigir apenas normalização OSC completa e regressões do primeiro resumo em cópia física `candidate-ci-summary-r22`, derivada de R19 com os quatro caminhos R21. R21 continua imutável para a execução nativa ativa; saída `ci-native-osc-r22`, revisão nova e certificação posterior. Mantém 371 originais, inventário 47 e cobertura 281; sem mudança de runtime/produto, provider, Root code ou push. Autorização: correção contínua do usuário e SPEC 0180 aprovada.
+
+- Claim `HISTORY_THREE_FRESH_REVIEW_R21`: crítico novo para3observações históricasbrutas/blosexatos, semvereditosanteriores; outputpacketpróprio, gitshow produtor/consumidorreadonly,Node22somentehash/AST/cryptooffline. Semroothistoricalrewrite/provider/PG/realkey; critérioliteralfunçãofixture, semprova impossível de ausência de uso externo.
+
+- Claim `HISTORY_THREE_PROVENANCE_R21`: ligação mecânica dos3pendenteshistóricos a blobs exatos/escopo de fixtures HMAC e prosa; writecachepróprio, gitshowreadonly, semworking.env/julgamentoprévio comoautoridade/provider/reescritura. Aceiteexige crítico novo posterior; pacote `history-three-provenance-r21`.
+
+- Claim `FINAL_NATIVE_CERTIFY_R21` e `CI_NATIVE_SUMMARY_FRESH_REVIEW_R21`: nova certificação própriaSourceR21/GitHEAD válido e cacheuntracked, PG55599/E2E3268/4268; crítico novo em packet próprio/output, semRoot/julgamentosanteriores, executa apenas cópia própria;4pathsdiff/pisos281. Semprovider/push/Rootruntime.
+
+- Claim `CI_NATIVE_SUMMARY_R21`: parserANSI de summaries nativas e teste novo/metadata47 em cópia `candidate-ci-summary-r21`; saída `ci-native-summary-r21`. CorreçãoT2 sobSPEC0180aprovada; original371/pisoscoverage281 intactos; gitprivado respeitagitignore e HEADpróprio, sempush/provider/Rootruntime.
+
 - Claim `FINAL_SECURITY_FRESH_REVIEW_R20`: novo crítico independente sem Root/ledgers/vereditos anteriores; source/scans atuais readonly, runtimeAPI R19 e provaTCP2OS/PG report-r5; writes somente `security-final-fresh-review-r20/output`. Scope6575+3 individual, sem provider/release. Critério bootstrap explícito: tarefa fora do repositório, cwdpacket, não governança defaultworkspace.
 
 - Claim `CURRENT_COMPILED_HTTP_RATE_R19`: prova HTTP real sobre compiled runtime readonly de `final-api-qualification-r19`,2 filhosNode22/portasefêmerasloopback,PG55598/roles e schemas prefixadoscvg_r19_rate*/cvg_r19_auth*; escrita `security-rate-compiled-r19`. Provider/key0, semTSalias/Rootmutação.
