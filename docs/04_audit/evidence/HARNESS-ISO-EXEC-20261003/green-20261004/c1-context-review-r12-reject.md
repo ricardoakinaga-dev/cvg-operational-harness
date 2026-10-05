@@ -1,0 +1,31 @@
+Os links locais abaixo apontam para o arquivo compactado. Os caminhos originais e bytes exatos estão no [manifesto](c1-context-review-r12-reject-artifact-manifest.json); o relatório bruto e seus links relativos estão preservados dentro dele.
+
+# REJECT — C1_CONTEXT_FRESH_REVIEW_R12
+
+Scope: the entire supplied product-boundary checker and its owning manifest/context, source/dependency closure, recursive actors, canonical file/link identity, lexical stability, declaration/runtime projection and JS grammar. This is a local synthetic review of this packet, without installed/global or release acceptance.
+
+**P1 — reached physical package contexts omit recursive actor census.** Source `/home/ricardo/.cache/cvg-harness-green-20261004/c1-context-review-r12/source/scripts/check-product-boundary.mjs:323` calls `metadata.read(pkgFile)` without invoking the recursive census in `/home/ricardo/.cache/cvg-harness-green-20261004/c1-context-review-r12/source/scripts/boundary-manifests.mjs:129`. A core import into `auxiliary/bridge/index.mts` or `.mjs` validates only the owning manifest. An invalid `auxiliary/bridge/dist/nested/package.json` is ignored and the audit returns `PASS`, `passed:true`, no diagnostics and no violations.
+
+**Multiplicity: 12 independent false PASS discriminants.** Ten native actor controls cover two source formats × five nested faults (JSON array, malformed dependency map, invalid type, missing local dependency and symlink metadata); two additional discriminants cover auxiliary and documentary contexts entered through an explicit source reference. The same faults block under declared workspace and percent-decoded file-reference discovery. Unreferenced documentary/auxiliary controls correctly remain opaque and PASS.
+
+Representative fixture: `output/actor-controls/reached-mts-array/packages/core/src/index.mts` imports `../../../auxiliary/bridge/index.mts`; its owner manifest is valid; `auxiliary/bridge/dist/nested/package.json` is `[]`. Raw observation: `{"sourceFiles": 3, "coreFiles": 1, "workspaceCount": 2, "edgeCount": 4, "violations": [], "diagnostics": [], "status": "PASS", "passed": true}`. All fixtures are inert source/JSON/AST labels; none is executed.
+
+Run commands (cwd `/home/ricardo/.cache/cvg-harness-green-20261004/c1-context-review-r12`):
+
+```sh
+TMPDIR="$PWD/output/tmp" strace -ff -qq -e trace=network -o output/native-static-corrected.network python3 output/guard.py /home/ricardo/.nvm/versions/node/v22.23.2/bin/node output/runtime/node_modules/vitest/vitest.mjs run --root output/runtime --config critic-vitest.config.mjs > output/native-static.log 2>&1
+TMPDIR="$PWD/output/tmp" strace -ff -qq -e trace=network -o output/discriminants.network python3 output/guard.py /home/ricardo/.nvm/versions/node/v22.23.2/bin/node output/runtime/critic-discriminants.mjs > output/native-discriminants.log 2>&1
+TMPDIR="$PWD/output/tmp" strace -ff -qq -e trace=network -o output/actors.network python3 output/guard.py /home/ricardo/.nvm/versions/node/v22.23.2/bin/node output/runtime/critic-actor-controls.mjs > output/native-actor-controls.log 2>&1
+```
+
+Exit codes: 0, 1, 1 respectively. The supplied **536/536** static cases pass unchanged. **153** new discriminants give **134** strict expectation matches: 27 preserved neutral positives and 107 negative matches. Nineteen mismatches comprise twelve confirmed census false PASS cases, three sibling-source scope observations, and four safe legacy manifest-coverage exceptions. The sibling probes lack an explicit edge to the sibling itself and are not counted as a separate blocking finding.
+
+The initial guard incorrectly blocked Node's local `socketpair` parser channels, causing 33 infrastructure failures. After allowing local socketpair IPC, all 536 supplied cases pass. Both runs are retained; the initial result is not attributed to Source. Seccomp still blocks every socket/connect/network-send syscall. IPv4/IPv6/Unix socket probes return EPERM; 1,822 individual syscall traces contain no successful network operations. No DNS, PG, provider, real data, secrets, sharedRoot, push or deployment was used.
+
+Inventory verifies **19,383** entries against frozen SHA-256 `3ac42203440b2c808b0da65274103d994f8f8039001f141196a6e2e44597ada5`. Actual freeze SHA-256 is `1e20288f7b4b10ad02f962fc961ef5b5ef62ac92cd29ef6e9033a102af7c0714`. Pre/post Source inventories and all **21,353** recorded directory/file/link metadata entries match literally, including dependencies and dist. Original checker and supplied static-test hashes equal the physical runtime copy. Reads may change atime; mtime, ctime, mode, size, identity and ownership are compared literally. No Source/checker edits occurred.
+
+Evidence: [full report](c1-context-review-r12-reject-raw-evidence.tar.gz), [commands](c1-context-review-r12-reject-raw-evidence.tar.gz), [static controls](c1-context-review-r12-reject-raw-evidence.tar.gz), [native discriminants](c1-context-review-r12-reject-raw-evidence.tar.gz), [actor controls](c1-context-review-r12-reject-raw-evidence.tar.gz), [Source preservation](c1-context-review-r12-reject-raw-evidence.tar.gz), [no-egress proof](c1-context-review-r12-reject-raw-evidence.tar.gz), [individual artifact SHA-256 inventory](c1-context-review-r12-reject-raw-evidence.tar.gz). Full fixture JSON/source, trusted harnesses, raw logs and per-process syscall traces are retained under output. The 253 existing executing-payload cases were not read/run. No inherited narratives or subagents were used; no full-root release gate is claimed.
+
+Fix direction: apply the same recursive actor census when a reached physical owning package context becomes governed, retaining containment, canonical identity, cycle handling and documentary opacity until implementation references enter. Re-run the unchanged native controls and these discriminants after the builder's fix.
+
+Public CLI confirmation: `node output/runtime/scripts/check-product-boundary.mjs output/actor-controls/reached-mts-array` under the same seccomp/strace guard exits **0** with PASS; `workspace-mts-array` exits **2** for invalid manifest; `opaque-mts-array` exits **0**. Exact argv, stdout/stderr and logs: [public-cli-controls.json](c1-context-review-r12-reject-raw-evidence.tar.gz).
