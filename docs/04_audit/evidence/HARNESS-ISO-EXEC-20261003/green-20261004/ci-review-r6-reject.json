@@ -1,0 +1,292 @@
+{
+  "review": "CI_FRESH_REVIEW_R6",
+  "decision": "REJECT",
+  "validity": "VALID_SCOPED_REVIEW",
+  "valid": true,
+  "source": "/home/ricardo/.cache/cvg-harness-green-20261004/ci-review-r6-staging/source",
+  "output": "/home/ricardo/.cache/cvg-harness-green-20261004/ci-review-r6-staging/output",
+  "scope": "Local CI producer/verifier symmetry, required snapshots, effective source integrity, exact neutral/retained projection, importer pre-I/O and remote preflight controls only",
+  "findings": [
+    {
+      "id": "R6-CI-01",
+      "priority": "P1",
+      "title": "Public compiler build-info changes the sealed variant source hash",
+      "locations": [
+        {
+          "path": "scripts/hiso-contract.mjs",
+          "line": 104
+        },
+        {
+          "path": "scripts/build-public-workspace.mjs",
+          "line": 67
+        },
+        {
+          "path": "scripts/hiso-ci.mjs",
+          "line": 529
+        }
+      ],
+      "evidence": [
+        "raw/public-build.log",
+        "raw/neutral-before-build.json",
+        "raw/neutral-after-public-build.json",
+        "raw/public-build-source-diff.json"
+      ],
+      "observed": "Successful exact public build adds five tsconfig.public.tsbuildinfo leaves which sourceFiles does not exclude. No removed/changed effective inputs; five added inputs alone change the derived hash.",
+      "impact": "runScope sets variantSourceMatch=false and status=FAIL for a clean successful harness-neutral/consumer-contract public build. This verdict is inferred from the exact final predicate; the full CI runner was not executed.",
+      "requiredCorrection": "Bind the finite outputs of the actual public compiler configuration, including its exact build-info leaves, without excluding arbitrary dist/.gauntlet/certification inputs."
+    },
+    {
+      "id": "R6-CI-02",
+      "priority": "P2",
+      "title": "PostgreSQL version validation is asymmetric before snapshots",
+      "locations": [
+        {
+          "path": "scripts/hiso-ci.mjs",
+          "line": 143
+        },
+        {
+          "path": "scripts/hiso-reports.mjs",
+          "line": 393
+        },
+        {
+          "path": "scripts/hiso-snapshot-types.mjs",
+          "line": 406
+        }
+      ],
+      "evidence": [
+        "raw/independent-probes.json",
+        "probe-r6.mjs",
+        "raw/static-evidence.txt"
+      ],
+      "observed": "snapshotSchema accepts both string \"160000\" and fractional 160000.5. Exact pure-constant producer predicates accept both; verifySnapshots rejects both as postgres_version_binding.",
+      "impact": "Producer admission can mark a malformed version PASS and copy the snapshot before downstream verifier rejection. This is not a demonstrated remote trust bypass; real PostgreSQL was not called.",
+      "requiredCorrection": "Require Number.isSafeInteger(version) with the same schema and binding validation on producer, importer and verifier before successful artifact emission."
+    },
+    {
+      "id": "R6-CI-03",
+      "priority": "P2",
+      "title": "Producer validates Pg/chaos membership using the report itself",
+      "locations": [
+        {
+          "path": "scripts/hiso-ci.mjs",
+          "line": 125
+        },
+        {
+          "path": "scripts/hiso-reports.mjs",
+          "line": 248
+        },
+        {
+          "path": "scripts/hiso-reports.mjs",
+          "line": 340
+        }
+      ],
+      "evidence": [
+        "raw/collected-membership-probes.json",
+        "raw/collected-case-inventory.json",
+        "raw/membership/postgres_verifier_rejects_collected_case_omission.json",
+        "raw/membership/chaos_verifier_rejects_collected_case_omission.json",
+        "probe-membership.mjs"
+      ],
+      "observed": "Collected command-selected memberships: Pg 35 files/288 cases; chaos 3 files/20 cases. Removing one case from each inert native report still passes the exact testReport(report, report-derived-files) producer admission. The verifier, using frozen commands + collected manifest membership, rejects both omissions.",
+      "impact": "Producer can emit success snapshots missing command-required cases; asymmetric evidence is rejected only at aggregation. The downstream required member checks are correct, and neither native Pg nor chaos tests were executed.",
+      "requiredCorrection": "Pass the independently command-selected collected inventory into producer validation, checking complete case IDs, multiplicity, file membership and statuses before snapshotOutputs."
+    },
+    {
+      "id": "R6-CI-04",
+      "priority": "P1",
+      "title": "Eval validator admits outcomes impossible for native integer counts",
+      "locations": [
+        {
+          "path": "scripts/hiso-snapshot-types.mjs",
+          "line": 335
+        },
+        {
+          "path": "scripts/hiso-snapshot-types.mjs",
+          "line": 375
+        },
+        {
+          "path": "packages/agent-evals/src/metrics.ts",
+          "line": 28
+        }
+      ],
+      "evidence": [
+        "raw/eval-contradictions.json",
+        "raw/eval-adversarial_failure_without_failed_scenarios.json",
+        "raw/eval-fractional_schema_numerator.json",
+        "probe-eval-contradictions.mjs",
+        "raw/static-evidence.txt"
+      ],
+      "observed": "Starting from the hash-bound native 56-scenario report, snapshotSchema accepts (a) zero failed scenarios/taskSuccessRate=1 but adversarialPassRate=0.95, and (b) schemaFailureRate=hallucinationRate=0.001. Native computeMetrics yields adversarialPassRate=1 when every scenario succeeds, including an empty adversarial group; 56*0.001=0.056 is not a possible integer hallucinations count.",
+      "impact": "Contradictory eval PASS can pass both producer and snapshot validation; ranges and thresholds alone do not ensure actual numerator/denominator/group semantics. No evaluator or agent was instantiated by these probes.",
+      "requiredCorrection": "Bind integral scenario numerators/denominators and adversarial group membership to native collected outcomes or an exact native producer projection; reject impossible rates while preserving legitimate native tolerable failures."
+    }
+  ],
+  "checks": {
+    "contracts": {
+      "status": "PASS",
+      "contractHash": "49eff4c320d1e23a959ba3ff2e5aa642f87785f1743c38ce5b8e0661a5a4c7a4",
+      "legacySealedGates": 34,
+      "scopes": {
+        "harness-neutral": 32,
+        "consumer-contract": 8,
+        "shift-product": 12,
+        "transition-regression": 37
+      }
+    },
+    "protectedBaseline": {
+      "status": "PASS",
+      "originalTestPaths": 371,
+      "newTestPaths": 43,
+      "originalCoveragePaths": 275,
+      "newCoveragePaths": 6,
+      "fullCoveragePaths": 281,
+      "sourceTestEdits": 0,
+      "ownMeasurementRepairs": 0
+    },
+    "focused": {
+      "status": "PASS",
+      "files": 5,
+      "cases": 298,
+      "failures": 0,
+      "skips": 0,
+      "raw": "raw/focused.json"
+    },
+    "collection": {
+      "status": "COLLECTED_NOT_EXECUTED",
+      "files": 407,
+      "cases": 4510,
+      "declaredSkippedCases": 195,
+      "executedTests": 0,
+      "sevenE2eSpecPathsNotExecuted": true
+    },
+    "unitCanonicalOrder": {
+      "status": "PASS",
+      "requiredCaseOmissionRejected": true
+    },
+    "pgChaosVerifierMembership": {
+      "status": "PASS",
+      "postgresFiles": 35,
+      "postgresCollectedCases": 288,
+      "chaosFiles": 3,
+      "chaosCollectedCases": 20,
+      "completeReorderedInertReportsAccepted": true,
+      "missingCasesSuitesChangedIdentitiesRejected": true,
+      "nativeExecution": "NOT_RUN"
+    },
+    "criticalCoverage": {
+      "status": "PASS_SCOPED_PROBES",
+      "sameNativeBuildCoverageReportUsed": true,
+      "groupFileCountPctThresholdContradictionsRejected": true,
+      "realCoverageExecution": "NOT_RUN"
+    },
+    "evals": {
+      "status": "FAIL_SCOPED",
+      "nativeFrozenArtifactAccepted": true,
+      "unknownThresholdsMissingMetricZeroScenarioContradictionsRejected": true,
+      "impossibleNumeratorsAndAdversarialRatesAccepted": true,
+      "evaluatorExecution": "NOT_RUN"
+    },
+    "projection": {
+      "status": "PASS",
+      "retainedCoveragePaths": 281,
+      "neutralCoveragePaths": 250,
+      "configBindings": 7,
+      "physicalProductAbsenceRequired": true,
+      "arbitraryConfigDriftRejected": true,
+      "deletingProductsOnlyRejected": true
+    },
+    "ordinaryEffectiveInputs": {
+      "status": "PASS_EXERCISED_LOCATIONS",
+      "nestedDistGauntletCertificationBound": true,
+      "generatedPublicLeafAccounting": "FAIL_R6-CI-01"
+    },
+    "importer": {
+      "status": "PASS_EARLY_REJECTION_AND_STATIC_PG_CHECK",
+      "malformedExpectedCliCases": 4,
+      "legacyInputWasAbsent": true,
+      "legacyCopiesEmitted": false,
+      "pgSafeIntegerBeforeSuccessWritesVerifiedByInspection": true,
+      "successfulLegacyImport": "NOT_RUN"
+    },
+    "remoteTrust": {
+      "status": "LOCAL_CONTROLS_ONLY",
+      "focusedPreflightBeforeFetchAndSignatureCasesPassed": true,
+      "realRemoteAttestation": "NOT_RUN"
+    },
+    "publicBuild": {
+      "status": "PASS",
+      "sourceMatch": "FAIL"
+    },
+    "canonicalHarnessBuild": {
+      "status": "PASS"
+    },
+    "publicSmoke": {
+      "status": "PASS",
+      "sourceFree": true,
+      "declarations": true,
+      "clinicalCalls": 0,
+      "unknownCalls": 0,
+      "externalProvider": false
+    },
+    "supplementalPackageBuild": {
+      "status": "FAIL",
+      "exitCode": 2,
+      "cause": "TS6059/TS6307: shared package tests import model-gateway sources outside rootDir",
+      "contractualConsumerBuild": false
+    }
+  },
+  "integrityBefore": {
+    "inventorySha256": "369bafff2621899c10dbecba1fbc58d3d493fc191d7ecf0e0129459c7dfb8338",
+    "expectedSha256": "369bafff2621899c10dbecba1fbc58d3d493fc191d7ecf0e0129459c7dfb8338",
+    "files": 19385,
+    "diffs": [],
+    "errors": [],
+    "directoryCount": 1971,
+    "valid": true,
+    "inventoryVerifierNote": "Symlink inventory uses kind=link; initial local comparator corrected before executing anything."
+  },
+  "integrityAfter": {
+    "inventorySha256": "369bafff2621899c10dbecba1fbc58d3d493fc191d7ecf0e0129459c7dfb8338",
+    "expectedSha256": "369bafff2621899c10dbecba1fbc58d3d493fc191d7ecf0e0129459c7dfb8338",
+    "entries": 19385,
+    "directoryCount": 1971,
+    "inventoryDiffs": [],
+    "metadataDiffs": [],
+    "directoryMtimeDiffs": [],
+    "errors": [],
+    "valid": true
+  },
+  "cleanup": {
+    "sourceWrites": 0,
+    "removedOwnTemporaryEntries": [
+      "tmp/hiso-effective-inputs-HMzd2c",
+      "tmp/cvg-piso004-recovery-ie905F",
+      "tmp/cvg-piso004-migration-fMuw9L",
+      "tmp/node-compile-cache"
+    ],
+    "temporaryRootsEmpty": true,
+    "retained": [
+      "work physical copy",
+      "neutral-projection physical copy and generated outputs",
+      "retained-projection",
+      "public-closure with declaration/runtime logs",
+      "inert-fixtures and importer-inputs",
+      "raw artifacts and own pure probe programs"
+    ],
+    "sessionsCompleted": true,
+    "rootGitUsed": false,
+    "networkUsed": false
+  },
+  "commands": "raw/commands.json",
+  "limitations": [
+    "No actual remote CI, signatures, artifact API, production, deployments or any other-domain certification. Local trust sentinels/mock APIs in existing focused tests are not remote evidence.",
+    "No PG/Docker/native Pg-chaos/C1/E2E/load/restore/mutation/coverage/full-suite execution, network, real provider, real data, credentials, .env content, root Git, push, subagents or skills. Collection only loads declarations; ctx.start/run never called.",
+    "Successful full legacy importer with complete native seals/real PG version was not run. Four invalid expected envelopes exercised the real CLI; numeric pre-emission importer check inspected statically.",
+    "Private validateReport is not exported. Pg admission proof uses its exact pure constant predicate plus public snapshotSchema/verifySnapshots. Membership proof calls the exported testReport with exactly its producer-derived known-file operand; no replacement executor or evaluator was created.",
+    "Public build and source-free smoke ran on the exact physical neutral projection with copied private dependencies. Full runScope was not invoked, as its install/network/other gates exceed authority; final variant FAIL is the direct consequence of its inspected comparison.",
+    "Supplemental generic tsc package build failed and may generate outputs in the private copy. It ran after the isolated decisive before/after public-build capture and successful public smoke. The actual consumer-contract harness-build command subsequently passed. No repair or baseline edit was made.",
+    "Native frozen eval artifact is consumed as bytes from the authorized current measurement fixture. Its original producer was not re-executed, and no historical narrative was read."
+  ],
+  "remoteCiPass": false,
+  "productionCertified": false
+}

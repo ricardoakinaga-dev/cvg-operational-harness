@@ -1,0 +1,225 @@
+{
+  "task": "C1_WRITE_TARGET_FRESH_STATIC_REVIEW_R5",
+  "verdict": "REJECT",
+  "verdictScope": "STATIC_FUNCTIONAL_ONLY",
+  "validity": "VALID_STATIC_REVIEW",
+  "findings": [
+    {
+      "id": "F1",
+      "priority": "P1",
+      "title": "writeIdentity atravessa o escopo var de blocos static de classe",
+      "locations": [
+        {
+          "file": "source/scripts/boundary-lexical.mjs",
+          "line": 269
+        },
+        {
+          "file": "source/scripts/check-product-boundary.mjs",
+          "line": 787
+        },
+        {
+          "file": "source/scripts/boundary-code-execution.mjs",
+          "line": 345
+        }
+      ],
+      "proofIds": [
+        "static-block-same:mjs",
+        "static-block-same:mts",
+        "static-block-nested-optional:mjs",
+        "static-block-nested-optional:mts",
+        "static-block-destructure-default:mjs",
+        "static-block-destructure-default:mts",
+        "static-block-array-default:mjs",
+        "static-block-array-default:mts"
+      ],
+      "expected": "A inicialização escreve na célula var do bloco static; catch externo tem identidade distinta.",
+      "observed": "identity(declaration) e identity(read) coincidem com a célula local confirmada pelo checker, mas writeIdentity(declaration) aponta para catch externo. Label seed não alcança a leitura. Nos quatro casos simples/optional, consumidor dinâmico não emite diagnóstico e checker do produto retorna PASS sob injeção simbólica neutra.",
+      "impact": "Perda de aquisição/uso na análise de ambos os consumidores; a distinção declaração/alvo está incorreta em sintaxe válida. A extensão destructuring confirma o desvio; nela o produto conserva INCOMPLETE por diagnóstico independente.",
+      "controls": [
+        "nested-function",
+        "arrow-boundary",
+        "method-boundary",
+        "static-block-local-catch",
+        "static-block-distinct",
+        "static-block-let-control"
+      ],
+      "runtimeProof": false,
+      "independentlyProved": true
+    },
+    {
+      "id": "F2",
+      "priority": "P2",
+      "title": "satisfies não é normalizado como wrapper apagado",
+      "locations": [
+        {
+          "file": "source/scripts/boundary-lexical.mjs",
+          "line": 436
+        },
+        {
+          "file": "source/scripts/boundary-code-execution.mjs",
+          "line": 59
+        },
+        {
+          "file": "source/scripts/check-product-boundary.mjs",
+          "line": 555
+        }
+      ],
+      "proofIds": [
+        "satisfies-alias:mts",
+        "satisfies-inline-scalar"
+      ],
+      "expected": "seed satisfies Label mantém o mesmo valor simbólico; acesso ao constructor próprio escalar de literal envolto em satisfies permanece neutro.",
+      "observed": "Alias token não recebe o label em nenhum dos dois consumidores. Literal próprio escalar envolto em satisfies produz INCOMPLETE, enquanto equivalente inline com as produz PASS.",
+      "impact": "Perda de precisão/propagação por sintaxe de tipo apagada. Não há PASS incorreto demonstrado neste finding: o produto mantém INCOMPLETE por referência direta não suprimida.",
+      "controls": [
+        "as-alias-control",
+        "nonnull-alias-control",
+        "as-inline-scalar-control",
+        "plain-scalar"
+      ],
+      "runtimeProof": false,
+      "independentlyProved": true
+    },
+    {
+      "id": "F3",
+      "priority": "P2",
+      "title": "Referência local envolta em as invalida prova de propriedade escalar",
+      "locations": [
+        {
+          "file": "source/scripts/boundary-code-execution.mjs",
+          "line": 144
+        },
+        {
+          "file": "source/scripts/boundary-code-execution.mjs",
+          "line": 161
+        }
+      ],
+      "proofIds": [
+        "plain-scalar",
+        "as-scalar",
+        "as-inline-scalar-control"
+      ],
+      "expected": "Objeto const local, sem mutação nem escape, mantém sua propriedade constructor escalar quando o acesso passa por as.",
+      "observed": "data.constructor retorna PASS; (data as {constructor:string}).constructor retorna INCOMPLETE. A lista de referências interpreta AsExpression como escape por examinar ref.parent antes de remover wrappers.",
+      "impact": "Rejeição conservadora de acesso escalar neutro. Nenhum efeito externo ou PASS incorreto demonstrado.",
+      "runtimeProof": false,
+      "independentlyProved": true
+    }
+  ],
+  "counts": {
+    "P1": 1,
+    "P2": 2
+  },
+  "authorization": {
+    "claim": "HARNESS_ISO_GREEN_20261004",
+    "leadClaimSuppliedByUser": true,
+    "localBuildApproved": true,
+    "writeScope": "output only"
+  },
+  "scope": {
+    "reviewed": [
+      "source/scripts/boundary-lexical.mjs",
+      "source/scripts/boundary-code-execution.mjs",
+      "source/scripts/check-product-boundary.mjs",
+      "source/tests/product-boundary-lexical-static.test.js"
+    ],
+    "categories": [
+      "declaration ownership versus initializer write target",
+      "simple/optional/nested catch",
+      "function, arrow, method and class static scope boundaries",
+      "lexical shadowing",
+      "destructuring and parameter/body environments",
+      "directed initial transfers and no body-to-parameter backflow",
+      "aliases, local/builtin reexports, scalar properties and type erasure"
+    ],
+    "mode": "fresh independent static AST/checker and neutral symbolic labels; no fix",
+    "consumerIntegration": "Actual copied functions used with explicit neutral seed injection. Supplied checker runtime resolver abstracted to null frontier. Own product proofs have no non-builtin module frontier and descendants are hard-blocked."
+  },
+  "tests": {
+    "supplied": {
+      "total": 212,
+      "passed": 212,
+      "failed": 0,
+      "unmodifiedSource": true,
+      "nativeVitest": false,
+      "runner": "In-process compatibility API implementing only used describe/it.each/afterAll and four matchers via node:assert/strict",
+      "abstractResolver": true,
+      "report": "raw/supplied-suite.json",
+      "auditObservations": "raw/supplied-new-static-results.json",
+      "bindingObservations": "raw/supplied-r4-neutral-proofs.json"
+    },
+    "own": {
+      "bindingRows": 57,
+      "conforming": 48,
+      "mismatchRows": 9,
+      "scalarRows": 5,
+      "report": "raw/own-proofs.json",
+      "validation": "raw/evidence-validation.json",
+      "note": "Mismatch rows are the demonstrated findings; evidence validation asserts their exact behavior and positive controls."
+    }
+  },
+  "integrity": {
+    "freezeSha256": "378ef74dd859116e0973b413409aec61221bae55cf0086b5e95d6dff6ff50bc3",
+    "before": "integrity-before.json",
+    "after": "integrity-after.json",
+    "wholeSource": true,
+    "depsIncluded": true,
+    "distIncluded": true,
+    "filesAndLinks": 19382,
+    "directories": 1970,
+    "fileContentsAndLinkTargetsUnchanged": true,
+    "fileMtimesAndModesUnchanged": true,
+    "directoryMtimesAndModesUnchanged": true,
+    "changes": [],
+    "copy": "copy-integrity.json",
+    "physicalCopy": true,
+    "sharedInodes": 0,
+    "externalCopyLinks": 0,
+    "snapshots": [
+      "source-before-snapshot.json",
+      "source-after-snapshot.json"
+    ],
+    "note": "Frozen inventory authenticates bytes/link targets, not historical mtimes. Mtime assurance is before/after this round; atimes are outside requested integrity comparison. Whole-tree hashing/copy is opaque integrity work, not semantic inspection of excluded files."
+  },
+  "execution": {
+    "node": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+    "nodeVersion": "v22.23.2",
+    "cleanEnv": true,
+    "home": "home",
+    "tmpdir": "tmp",
+    "cache": "cache",
+    "cwd": "output",
+    "runtimeCopy": "runtime",
+    "viteUsed": false,
+    "viteCacheSourceUsed": false,
+    "fixturesExecuted": false,
+    "evaluatorExecuted": false,
+    "processWorkerVmNativeFixturesExecuted": false,
+    "descendantsStarted": 0,
+    "networkUsed": false,
+    "providerUsed": false,
+    "pgUsed": false,
+    "dockerUsed": false,
+    "integrationUsed": false
+  },
+  "unknowns": [
+    "Native Vitest machinery and worker behavior were not run; supplied assertions ran through the documented compatible in-process API.",
+    "Real loader/evaluator/process/worker/vm/native execution and exploitability are untested and expressly outside scope.",
+    "Installed modules/global frontier, production and release readiness are not certified.",
+    "Whole repository product isolation is not inferred from these narrow static proofs; no full installed audit was run.",
+    "Operational coordination/runtime/execution-log/backlog documents are absent from the supplied source; continuation is recorded only in output under the user's write restriction.",
+    "No secret or .env content was semantically inspected or loaded; opaque inventory hashing/copy includes all frozen entries. No other cache, root repository, history/builder evidence or skills was consulted."
+  ],
+  "artifacts": {
+    "markdown": "report.md",
+    "json": "report.json",
+    "commands": "commands.json",
+    "manifest": "artifact-manifest.json",
+    "state": "runtime-state.json",
+    "executionLog": "execution-log.md",
+    "backlog": "review-backlog.json"
+  },
+  "certificationsGranted": [],
+  "fixesApplied": false,
+  "completedAt": "2026-10-05T04:21:36.377Z"
+}
