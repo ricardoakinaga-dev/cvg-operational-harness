@@ -69,6 +69,16 @@
 
 ## HARNESS-ISO — correção contínua até gates e revisão válidos — 04/10/2026
 
+- Claim `FIRSTPARTY_DEPENDENCY_RESOLUTION_R28`: inventário readonly dos 54 edges declarados first-party pendentes; resolução CJS/ESM real Node22 sem importar payload, hashes físicos de entry/manifest/exports e links no perfil R22. Output próprio/sem Sourcewrites/env/provider/rede/PG/instalação; não adjudica closure transitiva ou dispensa vendor.
+
+- Claim `FIRSTPARTY_FRONTIER_FRESH_REVIEW_R27`: novo I1 dos 222 registros first-party R26 (140 positivos propostos/82 desconhecidos), Source e packet I0 readonly, somente output próprio. Inspecionar provas concretas/caller/hash/AST sem critério universal JS; Node22/offline, sem Root/governança anterior/chave/provider/PG/payload/descendentes. Não concede PASS da closure nem dispensa vendor.
+
+- Claim `FINAL_NATIVE_CERTIFY_R26`: repetir cadeia nativa completa no mesmo código imutável R25 após encerrar e arquivar R25 FAIL de mutação por drift documental. Documento recuperado ao hash HEAD; conferir 1.816 candidate inputs e manter Source readonly durante todo R26. Node22/PG55599/E2E3268/4268, output certify-final-r26, run próprio; sem provider/push/Root código. Claim somente nesta Root coord, nunca na cópia candidata.
+
+- Claim `FINAL_R25_DOCUMENT_CLAIM_DRIFT`: corrigir somente documento agent_coordination.md da cópia própria candidate-final-r25 para bytes do HEAD/freeze, preservando antes/depois/diff e causa. Claim FINAL_NEUTRAL_R25 foi escrito indevidamente nessa cópia durante cadeia; Root claim legítimo permanece. Código/runtime/fixtures não alterados. Não ocultar drift intermediário; registrar limites de binding e repetir checagens documentais próprias após cadeia.
+
+- Claim `CLOSED_R5_R7_DEPENDENCY_RESOURCE_RELEASE`: liberar somente node_modules reproduzíveis de c1-write-target-r5-candidate e c1-write-wrappers-r7-candidate, cópias próprias encerradas. Conferir processos/cwd, manifesto exato e fonte intacta; fontes/evidências/resultados anteriores e Root preservados. Dependências detachadas explicitamente, reconstituição pelo lockfile; sem alteração de julgamento histórico.
+
 - Claim `CLOSED_R4_DEPENDENCY_RESOURCE_RELEASE`: liberar somente node_modules físico reproduzível da cópia própria encerrada c1-binding-r4-candidate, após conferir ausência de processo/cwd dependente. Manifesto SHA/tamanho/modo/link de dependências e sentinela de fonte preservados; não apagar fonte, logs, evidências, arquivos Root ou recursos alheios. Regeneração pelo lockfile exato; instalação antiga passa a dependências detachadas, sem alterar veredito histórico.
 
 - Claim `SECURITY_NINE_DELTA_FRESH_REVIEW_R26`: revisão independente dos nove deltas CI/checker congelados R25; packet `security-nine-delta-fresh-review-r26`, escrita exclusiva output, Source/scans readonly. Node22 e probes offline próprios; sem Root/env/provider/PG/instalação/descendentes, sem inferir CodeQL full, histórico ou liberação.
