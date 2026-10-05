@@ -69,6 +69,24 @@
 
 ## HARNESS-ISO — correção contínua até gates e revisão válidos — 04/10/2026
 
+- Claim `SECURITY_CI_DELTA_FRESH_REVIEW_R23`: crítico novo apenas dos cinco deltas CI versus R19, com scanner estrito/probes offline em output `security-ci-delta-fresh-review-r23/output`. Sem CodeQL fullrescan inferido, sem assumir achados antigos; fontes imutáveis/rede/PG/provider/Root ausentes.
+
+- Claim `READINESS_SCORE_REPORT_20261005`: relatório documental próprio `docs/04_audit/0595_harness_product_local_readiness_2026-10-05.md`, notas 0–100 por cada um dos 24 cartões originais e sequência/backlog explícitos, sem trocar status canônico ou afirmar produção. Atualizar após execução final; somente docs/evidências próprias.
+
+- Claim `FINAL_NEUTRAL_R23`: projeção pública física de Source R23 pelos mesmos 8.477 inputs, novo estágio `neutral-staging-r23`, target `hiso-neutral-final-r23`, output `final-neutral-r23`; mover apenas árvore física node_modules da preparação própria R22 encerrada para target novo, nenhum compartilhamento/hardlink. Build público e suíte PG55598/V8 após certificado R23; fontes originais/pisos/asserções preservados.
+
+- Claim `FINAL_NATIVE_CERTIFY_R23`: execução final com cinco deltas CI (OSC/teste/inventário/integer + catálogo com quatro hashes), Node22/PG55599/E2E3268/4268; saída `certify-final-r23`, código app/API/gateway/produto intacto. R21 encerrou e liberou recursos; R22 nativo NOT_RUN, substituído antes de iniciar. Revisão catálogo em paralelo readonly, sem mudança de política/pisos/skips ou provider/push/Root code.
+
+- Claim `CI_SKIP_HASH_REBIND_R23`: corrigir somente quatro sourceSha256 stale em scripts/skip-catalog.json, mantendo 35 registros e todos os owners/motivos/contagens/gates/expirações. Cópia física `candidate-ci-final-r23` derivada da R22 aceita; saída `ci-skip-hash-r23`, revisão independente limitada. Fonte original, asserções e política não alteradas; sem Root code/provider/push. R21 completos16PASS, certificadoNO_GO por hashdrift preservado.
+
+- Claim `FINAL_NATIVE_CERTIFY_R22`: parser OSC com ACCEPT independente, candidato 0a9716183eef1e1783ad71db0c1ba16f841d9e84c35a441e4e9df751844d3238 em `candidate-ci-summary-r22`, capturas `certify-final-r22`. Executar cadeia nativa de 16 comandos com Node22/PG55599/E2E3268/4268 após liberação pela R21; sem baixar pisos, skips ou asserts, provider/push/Root code ausentes.
+
+- Claim `SECURITY_DELTA_R22`: ligação exata dos quatro caminhos CI R22 à fonte R19 aceita e scan estrito desses quatro arquivos, com chave/env ausentes; output `security-delta-r22`. Sem transferir automaticamente aceites para nova fonte, sem alterar scanner, regra ou histórico.
+
+- Claim `INSTALLED_FRONTIER_PLAN_R22`: diagnóstico readonly da closure instalada R19 e proposta finita sem dispensa de desconhecidos, por agente novo em `installed-frontier-plan-r22/output`. AST/JSON offline em Node22; sem execução de payloads, provider, PG, mudança de fontes ou aceite inferido.
+
+- Claim `FINAL_NEUTRAL_R22`: preparação física pública da variante sem products a partir dos 8.477 inputs R19 mais os quatro caminhos CI R22; estágio `neutral-staging-r22`, cópia `hiso-neutral-final-r22`, saída `final-neutral-r22`. Dependências físicas internas, sem chave/env privada; build SDK/API/worker e suíte completa PostgreSQL55598/V8 após a certificação pesada atual. Não alterar variantes anteriores, pisos, asserts ou lockfile Root; sem provider/push.
+
 - Claim `CI_NATIVE_OSC_R22`: corrigir apenas normalização OSC completa e regressões do primeiro resumo em cópia física `candidate-ci-summary-r22`, derivada de R19 com os quatro caminhos R21. R21 continua imutável para a execução nativa ativa; saída `ci-native-osc-r22`, revisão nova e certificação posterior. Mantém 371 originais, inventário 47 e cobertura 281; sem mudança de runtime/produto, provider, Root code ou push. Autorização: correção contínua do usuário e SPEC 0180 aprovada.
 
 - Claim `HISTORY_THREE_FRESH_REVIEW_R21`: crítico novo para3observações históricasbrutas/blosexatos, semvereditosanteriores; outputpacketpróprio, gitshow produtor/consumidorreadonly,Node22somentehash/AST/cryptooffline. Semroothistoricalrewrite/provider/PG/realkey; critérioliteralfunçãofixture, semprova impossível de ausência de uso externo.
