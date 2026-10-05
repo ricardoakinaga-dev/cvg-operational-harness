@@ -1,0 +1,7 @@
+# C1 — ambiente de parâmetros e dados BigInt (T2)
+
+Task C1_PARAM_ENV_R2, continuidade local autorizada, dentro da SPEC de precisão lexical. Recon: revisão estática formal INVALID por mtime alterado do diretório Vite; informação reproduzível: binder TypeScript vincula default a função do corpo, mas a avaliação JS de parâmetros não enxerga declarações do corpo. Um global capaz pode receber falso PASS. BigInt literal próprio estável também recebe unknown indevido.
+
+Escopo privado nos dois helpers e teste estático próprio existente. Corrigir lookup de parâmetro/outer quando a declaração encontrada vive no corpo invisível; conservar símbolos reais de parâmetros, outer, closures e referências do corpo. BigInt estritamente literal pode ser dado escalar, sem remover refusas de mutação/escape/getter/spread/protótipo/valor desconhecido. Fonte Main/Root readonly, originais253/assertivas imutáveis.
+
+Teste próprio deve escrever somente em TMPDIR próprio e limpar seus fixtures; eliminar path absoluto ao builder e não diminuir controles. Novas fixtures somente texto inerte parseado, sem executar evaluator/process/worker/vm. Verificações: antes/depois estáticos, originais253, novos controles, tipos/lint/formato, instalado honesto e novo crítico isolado. Revisores usam cópia física para Vitest, prevenindo writes de Vite na fonte selada. Não qualifica produção/native/adversarial e INCOMPLETE nunca implica PASS. Sem provider real, dados reais, push/implantação.
