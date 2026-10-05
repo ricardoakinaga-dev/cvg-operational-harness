@@ -124,3 +124,8 @@ A variante física sem produto passou no build público e na suíte de 5.030 tes
 ## Atualização de evidência: sandbox local
 
 A versão imutável R19 está disponível na console sintética local 3501. O reinício preservou três arquivos anteriores e recuperou duas notas. Nove grupos browser passaram; crítico novo aceitou o escopo local, conferindo todos os 8.476 arquivos de fonte, corpus e sete pedidos negativos sem efeitos. Conversas visíveis ficam em memória; notas/eventos são duráveis. Os serviços permanecem simulados, sem chamadas OpenAI e com delivery NOT_QUALIFIED. As notas e estados canônicos não mudam por esse resultado. [Prova do reinício/browser](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/local-sandbox-r19-restart-browser.json) e [revisão independente](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/local-sandbox-r19-fresh-review.json).
+
+
+## Atualização de evidência: checker de fronteira
+
+A revisão R21 recusou o reparo anterior por uma consulta a uma chave sem binding lexical. A CLI independente preservou os 48 links e gerou INCOMPLETE/8.883 diagnósticos/zero violações. O novo BUILD R22 passou em 1.255 testes sem skips, tipos e lint; revisão nova e qualificação instalada estão em andamento. As notas e estados não mudam antes desse fechamento. [Rejeição e prova](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/c1-binding-stack-fresh-review-r21-rejected.json) e [correção/regressões](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/c1-nonbinding-label-r22-builder.json).
