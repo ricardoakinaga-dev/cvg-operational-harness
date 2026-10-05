@@ -69,6 +69,16 @@
 
 ## HARNESS-ISO — correção contínua até gates e revisão válidos — 04/10/2026
 
+- Claim `CLOSED_R4_DEPENDENCY_RESOURCE_RELEASE`: liberar somente node_modules físico reproduzível da cópia própria encerrada c1-binding-r4-candidate, após conferir ausência de processo/cwd dependente. Manifesto SHA/tamanho/modo/link de dependências e sentinela de fonte preservados; não apagar fonte, logs, evidências, arquivos Root ou recursos alheios. Regeneração pelo lockfile exato; instalação antiga passa a dependências detachadas, sem alterar veredito histórico.
+
+- Claim `SECURITY_NINE_DELTA_FRESH_REVIEW_R26`: revisão independente dos nove deltas CI/checker congelados R25; packet `security-nine-delta-fresh-review-r26`, escrita exclusiva output, Source/scans readonly. Node22 e probes offline próprios; sem Root/env/provider/PG/instalação/descendentes, sem inferir CodeQL full, histórico ou liberação.
+
+- Claim `FIRSTPARTY_FRONTIER_DISPOSITION_R26`: auditoria readonly/I0 dos 222 diagnósticos próprios na CLI R22 corrigida, em `firstparty-frontier-disposition-r26/**`. Vincular arquivo/hash/AST/caller/efeito por caso e separar reflexão de dados, lifecycle, executores de teste e metadata; sem dispensar vendor/unknowns, sem alterar Source ou regras. Proposta finita requer revisão independente posterior. Source R22 imutável, nenhuma chave/env, provider, PG, payload/testexec ou descendente.
+
+- Claim `FINAL_NATIVE_CERTIFY_R25`: candidato6422ac2f3cc05bc885b9cbbfd03bdf8fc95110c45d393f45fe780ce2f3545a7a, cadeia16gates Node22/PG55599/E2E3268/4268, output `certify-final-r25`; código app/API/gateway/produto permaneceR19, CI R24 e reparoC1R22 aceitos. Conferidos371testesoriginais e281pathscoverage/critical/mutation sem drift; nova metadata49. Sem .env privado/provider/Rootsource/push; persistir rawlogs e eventualdriftJUnit sem falsoMATCH, certificadoapenaslocal.
+
+- Claim `FINAL_SOURCE_R25`: integrar somente os deltas aceitos CI R24 e checker R22/R23 em cópia própria `candidate-final-r25`, outputs `final-integration-r25`. Copiar fonte própria R24 sem .git/caches gerados, mover apenas seu node_modules próprio já sem execução ativa e preservar 48 links internos. Dois novos arquivos de fronteira somados ao novo parser geram inventário49, sem tocar371originais/281coverage/skips35 além dos quatro hashes CI já aceitos. Candidato/Git privados novos, sem Root source/lock/provider/push; qualificação final e regressão neutra com recursos PG/E2E próprios após liberação do scan atual.
+
 - Qualificação `C1_NONBINDING_LABEL_R22`: executar CLI instalado exato na cópia própria com 48 links internos preservados, Node22 e fonte32/1.255testes validada; captura sanitizada/hashbeforeafter, nenhum payload de vendor executado. A revisão R23 continua independente em cópias pequenas; nenhum unknown vira PASS.
 
 - Claim `C1_NONBINDING_LABEL_FRESH_REVIEW_R23`: crítico novo em `c1-nonbinding-label-fresh-review-r23/**`, somente cópias pequenas próprias dos cinco módulos e ferramentas TypeScript/semver, AST/fixtures offline. Revisar fila/fallback e guard de propertyName, controles independentes de binding/loader/evaluator e prefixo22preservado; sem Source/Root writes, governança padrão, provider/PG/descendentes. Não adjudica a closure instalada nem produção.
