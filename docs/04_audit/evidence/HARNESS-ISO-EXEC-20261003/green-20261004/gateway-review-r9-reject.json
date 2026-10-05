@@ -1,0 +1,271 @@
+{
+  "claim": "GATEWAY_FRESH_REVIEW_R9",
+  "verdict": "REJECT",
+  "validity": "VALID",
+  "scope": "Revisão independente funcional local sintética de @cvg/model-gateway + closure @cvg/shared, SPEC0180/D009/D011 e emenda gateway-cost-model; regressão do consumidor shift-assistant.",
+  "scopeVerdicts": {
+    "costModelAdmissionAndIdentity": "ACCEPT",
+    "publicArtifactAndReadonlyDeclarations": "ACCEPT",
+    "regressionsGatewaySharedProduct": "ACCEPT",
+    "providerModelTupleIsolation": "REJECT",
+    "productionRelease": "NOT_EVALUATED"
+  },
+  "packet": "/home/ricardo/.cache/cvg-harness-green-20261004/gateway-review-r9",
+  "node": "v22.23.2",
+  "findings": [
+    {
+      "id": "F01",
+      "severity": "P2",
+      "status": "CONFIRMED",
+      "blockingScope": "functional tuple-key isolation explicitly requested",
+      "title": "Pares provider/model diferentes compartilham o mesmo circuito",
+      "location": {
+        "source": "source/packages/model-gateway/src/gateway.ts:421",
+        "executedFrozen": "source/packages/model-gateway/dist/gateway.js:268"
+      },
+      "trigger": [
+        [
+          "alpha",
+          "beta:gamma"
+        ],
+        [
+          "alpha:beta",
+          "gamma"
+        ]
+      ],
+      "actual": {
+        "key": "alpha:beta:gamma",
+        "secondOutcome": "circuit_open",
+        "secondProviderCalls": 0
+      },
+      "expected": "A falha do primeiro par não bloqueia o segundo par, que é diferente e está saudável.",
+      "impact": "Falha, reabertura e probe de um modelo podem bloquear ou alterar o estado de outro provider/model. Os identificadores usados são permitidos pelos contratos públicos atuais.",
+      "uniqueProof": "final-frozen/public-probes.json#circuit-tuple-observation",
+      "independentRebuildConfirmation": "final-rebuilt/public-probes.json#circuit-tuple-observation",
+      "reproducer": "final-frozen/consumer/probe.mjs (circuit-tuple-collision)",
+      "remediation": "Usar chave de tupla sem ambiguidade, por exemplo JSON.stringify([provider.id, profile.model]), e uma regressão pública com os dois pares."
+    }
+  ],
+  "observations": [
+    {
+      "id": "O01",
+      "blocking": false,
+      "title": "Cancelamento na espera de retry não publica model.call.failed",
+      "proof": "final-frozen/extra-public-probes.json#cancel-during-retry-wait",
+      "observedEvents": [
+        "model.call.started",
+        "model.retry.scheduled"
+      ],
+      "returnCode": "cancelled",
+      "sourceLocation": "source/packages/model-gateway/src/gateway.ts:647",
+      "interpretation": "Lacuna de observabilidade: a rejeição da espera sai do catch antes do emit failed. A SPEC não estabelece explicitamente um evento terminal obrigatório para essa espera; não usado como fundamento adicional do REJECT."
+    }
+  ],
+  "verification": {
+    "regressions": {
+      "summary": {
+        "numTotalTestSuites": 157,
+        "numPassedTestSuites": 157,
+        "numFailedTestSuites": 0,
+        "numTotalTests": 1332,
+        "numPassedTests": 1332,
+        "numFailedTests": 0,
+        "numPendingTests": 0,
+        "success": true
+      },
+      "scopes": {
+        "gateway": {
+          "files": 26,
+          "passed": 579,
+          "failed": 0,
+          "pending": 0
+        },
+        "shared": {
+          "files": 17,
+          "passed": 250,
+          "failed": 0,
+          "pending": 0
+        },
+        "product": {
+          "files": 24,
+          "passed": 503,
+          "failed": 0,
+          "pending": 0
+        }
+      }
+    },
+    "ownPublicProbes": {
+      "assertedCases": 39,
+      "passed": 38,
+      "failed": [
+        "circuit-tuple-collision"
+      ],
+      "observationRows": 1,
+      "frozen": "final-frozen/public-probes.json",
+      "extras": "final-frozen/extra-public-probes.json",
+      "rebuilt": "final-rebuilt/public-probes.json"
+    },
+    "strictTypes": {
+      "strict": true,
+      "skipLibCheck": false,
+      "readonlyNegativeAssertions": 7,
+      "frozenPassed": true,
+      "rebuiltPassed": true,
+      "sourceAliases": false,
+      "typescriptReadLists": [
+        "logs/final-frozen-strict-types.log",
+        "logs/final-rebuilt-strict-types.log"
+      ]
+    },
+    "artifacts": {
+      "javascriptFiles": 33,
+      "allJavascriptByteEqual": true,
+      "sourceMapsByteEqual": true,
+      "declarationFiles": 33,
+      "declarationRawDifferences": 6,
+      "declarationsEquivalentAfterSortingTypePropertiesAndUnions": true,
+      "tsbuildinfo": "not regenerated: private compile disables composite/incremental",
+      "physicalConsumer": "final-frozen/consumer and final-rebuilt/consumer: no symlinks, hardlinks, src directories or paths; imports resolve dist; zod published JS/dts only."
+    },
+    "durability": "Five distinct native Node PIDs: one reservation0.6/day1 admitted, four denied after reopen; sync-fault settlement inhibits readiness and suppresses completed, preserving uncertain bytes and residual lock."
+  },
+  "integrity": {
+    "freezeManifestSha256": "ea7bde1899a104ae50e256f524ecfb78d4f703e0f235d4b2bc768d6efaeb11e9",
+    "inventoryMatchesFreeze": true,
+    "sourceVendorDistLinksInodesDelta": [],
+    "before": "integrity-before.json",
+    "after": "integrity-after.json",
+    "privateVendorFiles": 17346,
+    "privateVendorAllHashesMatch": true
+  },
+  "attemptsAndFailures": [
+    {
+      "label": "build-shared",
+      "exitCode": 2,
+      "elapsedSeconds": 2.270393133163452,
+      "log": "logs/build-shared.log"
+    },
+    {
+      "label": "build-shared-resolve-types",
+      "exitCode": 0,
+      "elapsedSeconds": 3.06949520111084,
+      "log": "logs/build-shared-resolve-types.log"
+    },
+    {
+      "label": "regressions",
+      "exitCode": 1,
+      "elapsedSeconds": 135.93092703819275,
+      "log": "logs/regressions.log"
+    },
+    {
+      "label": "frozen-public-probes",
+      "exitCode": 1,
+      "elapsedSeconds": 0.9157171249389648,
+      "log": "logs/frozen-public-probes.log"
+    },
+    {
+      "label": "build-gateway",
+      "exitCode": 0,
+      "elapsedSeconds": 6.782880067825317,
+      "log": "logs/build-gateway.log"
+    },
+    {
+      "label": "strict-public-types",
+      "exitCode": 0,
+      "elapsedSeconds": 2.718759059906006,
+      "log": "logs/strict-public-types.log"
+    },
+    {
+      "label": "artifact-comparison",
+      "exitCode": 0,
+      "elapsedSeconds": 0.4648628234863281,
+      "log": "logs/artifact-comparison.log"
+    },
+    {
+      "label": "rebuilt-public-probes",
+      "exitCode": 1,
+      "elapsedSeconds": 0.8655622005462646,
+      "log": "logs/rebuilt-public-probes.log"
+    },
+    {
+      "label": "artifact-comparison-property-and-union-order",
+      "exitCode": 0,
+      "elapsedSeconds": 0.4649538993835449,
+      "log": "logs/artifact-comparison-property-and-union-order.log"
+    },
+    {
+      "label": "extra-public-probes",
+      "exitCode": 0,
+      "elapsedSeconds": 0.16470694541931152,
+      "log": "logs/extra-public-probes.log"
+    },
+    {
+      "label": "regressions-runner-fixed",
+      "exitCode": 0,
+      "elapsedSeconds": 137.72905778884888,
+      "log": "logs/regressions-runner-fixed.log"
+    },
+    {
+      "label": "strict-rebuilt-public-types",
+      "exitCode": 0,
+      "elapsedSeconds": 2.8699731826782227,
+      "log": "logs/strict-rebuilt-public-types.log"
+    },
+    {
+      "label": "final-frozen-public-probes",
+      "exitCode": 1,
+      "elapsedSeconds": 0.8160841464996338,
+      "log": "logs/final-frozen-public-probes.log"
+    },
+    {
+      "label": "final-frozen-extra-probes",
+      "exitCode": 0,
+      "elapsedSeconds": 0.16407036781311035,
+      "log": "logs/final-frozen-extra-probes.log"
+    },
+    {
+      "label": "final-rebuilt-public-probes",
+      "exitCode": 1,
+      "elapsedSeconds": 0.8653438091278076,
+      "log": "logs/final-rebuilt-public-probes.log"
+    },
+    {
+      "label": "final-frozen-strict-types",
+      "exitCode": 0,
+      "elapsedSeconds": 3.0194954872131348,
+      "log": "logs/final-frozen-strict-types.log"
+    },
+    {
+      "label": "final-rebuilt-strict-types",
+      "exitCode": 0,
+      "elapsedSeconds": 3.1191818714141846,
+      "log": "logs/final-rebuilt-strict-types.log"
+    }
+  ],
+  "hygiene": {
+    "contentReadsWithinPacket": true,
+    "writesWithinOutput": true,
+    "rootEdits": false,
+    "coordinationOrRootAgentsOrSkillsRead": false,
+    "builderReviewHistoryUsed": false,
+    "historicalFiles": "Only inventory hashing/lstat, not interpretation of prior reviews. Required amendment references are not followed.",
+    "credentials": false,
+    "realProviderOrData": false,
+    "externalNetwork": "No external provider/network operation requested; public HTTP probes use default Node adapters against loopback with no authorization. Existing synthetic TLS regression pins loopback and uses a generated synthetic certificate.",
+    "subagentsPgDockerPushRelease": false,
+    "globalCoverage": false,
+    "claimFile": "claim.json",
+    "boundaryVerificationLimit": "No syscall-level sandbox/egress trace. Standard runtime resolution and FileCostBudgetStore validation inspect ancestor-directory metadata; no external document/file content was used."
+  },
+  "limitations": [
+    "Resultado limitado à fronteira funcional sintética; não certifica HISO-010/012/013/014 integralmente, integração PG/E2E, imagem, CI remoto ou operação distribuída.",
+    "Não mediu fault físico de kernel/power failure; falhas de IO são injeções síncronas e os restarts são processos reais.",
+    "Regressões originais usam aliases de fonte e processos filhos; o oracle público separado utiliza apenas artefatos físicos dist-only e recompilação privada.",
+    "Primeira execução teve 13 falhas de preparação (gateway dist e lockfile ausentes); as duas execuções completas e seus resultados foram preservados. Nenhum teste de origem foi editado.",
+    "Primeiro build privado falhou TS2688 por typeRoots do runner; ajuste próprio de configuração preservado em setup e logs.",
+    "Diferentes ordens de membros/unions nas declarations foram comparadas por AST; não se declarou identidade byte a byte dessas seis declarations.",
+    "Consumers iniciais continham src publicado do vendor zod sem utilizá-lo; consumers finais também removem esse src e foram reexecutados, com resultados anteriores preservados.",
+    "Comandos comportamentais/build/typecheck têm stdout/stderr completos. Inspeções iniciais antes do runner estão no transcript de ferramentas, mas não têm stdout bruto completo copiado para output."
+  ],
+  "nextAction": "Corrigir F01 em novo candidato autorizado e obter nova revisão independente do artefato público; manutenção Root/ledgers é responsabilidade do Lead."
+}
