@@ -1,24 +1,10 @@
 # Auditoria do Operational Harness e do consumidor — 05/10/2026
 
-## Estado atual — checkpoint 57
+## Estado atual — checkpoint 58
 
-O checker Root foi corrigido por cinco módulos próprios em commit local 05d1253: 62/62 controles CLI esperados e 78/78 testes originais passaram; desconhecidos seguem INCOMPLETE. Reconstrução dos 8.479 inputs R25 conferida por bytes das partes arquivadas no repositório; corpo histórico do handoff A5 preservado. Dockerfile completo pinado compilou e gerou imagem 0151d13b/bundle67a5a288; preparação de egress local conferida, sem aplicar ou qualificar política de host. Revisão R36 reproduziu corrupção do journal vivo aceita com webhook200, sendText e readiness200, enquanto restart503; também violou Q7 de leitura e não concede aceite formal. Revisão independente R37 rejeitou backup/restore: quatro volumes irrecuperáveis recebem sucesso. Monitor e controles B3–B5 passaram somente no escopo local. R38 corrige os cinco defeitos em cópia isolada, R39 investiga próximo reparo concreto da closure. Os 16 gates R26 e seus 5.735 testes em 413 arquivos, mais 5.100/385 da variante neutra, são histórico da candidata anterior e se sobrepõem. Não certificam a correção R38 futura. Global FAIL, produção NO_GO; apenas HISO-001 DONE, 24 critérios preservados. NO_MODEL, zero chamadas externas; promoção/T4 pendentes e packet de egress deve ser refeito após novo artefato.
+R38 corrigiu o journal vivo e a validação offline de backup/restore em cópia isolada. Revisão nova R41: APPROVE local, 30 controles sobre imagem do Dockerfile completo e 823 inputs técnicos exatos; R42: PASS local, 106 asserções de consistência offline. As revisões não concedem produção, egress de host ou fidelidade clínica. A primeira certificação R38 teve 5.754 PASS/1 FAIL em 414 arquivos por contador CI49 obsoleto; rawFAIL preservado. R44 corrigiu apenas essa adição própria para50 com presença exata do novo arquivo, mantendo371 testes originais/281 caminhos de cobertura/49 adições prévias e todos os floors/negativos; I1 R45 aprovou33 controles desse delta. Na nova candidata3909fdcc, formato/tipos/lint/build e gate unitário passaram: 5.755 testes/414 arquivos, zero falhas/skips. Cobertura e demais gates completos estão RUNNING, não herdados das execuções anteriores. Programa/bundle e829 inputs Docker são exatos aos revisados. R46 trata uma prova estreita da metadata reflexiva; R47 reconhece projeção neutra. A closure instalada continua INCOMPLETE/8.882 diagnósticos, zero violações, sem aceite HISO-005. Global FAIL, produção NO_GO; apenas HISO-001 DONE, 24 critérios preservados. NO_MODEL, zero chamadas externas, promoção/T4 pendentes; egress antigo não vincula a imagem nova.
 
-Próxima ação: concluir R38, obter revisão nova sobre o artefato corrigido e repetir os gates completos antes da promoção condicionada. [Evidência](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-57-new-storage-defects-and-root-checker.json).
-
-Task: `HARNESS_ISO_GREEN_20261004`. Estado desta revisão: **IN_PROGRESS**.
-Veredito global: **FAIL**. Produção: **NO_GO**. Escopo: engenharia local com
-dados exclusivamente sintéticos. Zero chamadas OpenAI nesta execução.
-
-Este relatório separa o harness do produto acoplado. Não reutiliza a antiga
-nota combinada 61/100 nem soma suítes sobrepostas. As notas medem a maturidade
-da evidência de cada cartão, e não a probabilidade de sucesso em produção.
-
-Escala: 0 = sem material; 20 = requisito/contrato preparado; 40 = implementação
-e controles parciais; 60 = validação local relevante; 80 = evidência local
-com revisão independente no escopo correspondente; 100 = critério canônico
-encerrado. Uma nota 80 não fecha dependências, autoriza promoção ou libera
-produção. A ausência de um gate obrigatório prevalece sobre a nota.
+Próxima ação: concluir os gates R44 e a projeção neutra atual, avançar a prova finita R46 e obter revisão final antes da promoção condicionada. [Evidência](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-58-local-storage-reviews-and-unit-pass.json).
 
 ## Harness: notas por item
 
@@ -47,18 +33,18 @@ Os estados e critérios canônicos continuam no [backlog do produto](../../produ
 Notas clínicas e conteúdo desconhecido mantêm NO_MODEL. O aceite do transporte
 sintético não qualifica áudio humano, fidelidade clínica ou uso por plantonistas.
 
-| Item                                       | Nota / 100 | Evidência e limitação que determina a nota                                                                                                                                        |
-| ------------------------------------------ | ---------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| PISO-001 — confirmação humana              |         80 | Fluxo determinístico, replay e correções exercitados na candidata; fonte ainda sem promoção condicionada final.                                                                   |
-| PISO-002 — fidelidade e identidade         |         60 | Regressões locais de IDs/homônimos e memória preservadas; corpus esperado sem revisão humana e sem prova de fidelidade clínica.                                                   |
-| PISO-003 — processamento/envio durável     |         80 | Reinício oficial, provas brutas causais e replays aceitos no escopo sintético. Confirmação do simulador não demonstra entrega por canal real.                                     |
-| PISO-004 — recuperação de journal          |         40 | Revisão R36 reproduziu corrupção do journal vivo aceita com envio e readiness200; restart detecta. Correção R38 e revisão nova pendentes.                                         |
-| PISO-005 — serialização de lembretes       |         60 | Regressões operacionais e saturação passam na R19 sem reduzir o limite original. A melhoria TTL tem aceite semântico, sem promessa de custo linear global.                        |
-| PISO-006 — pausa/saúde/falha de transporte |         60 | Controles de processos e recebimentos simulados exercitados; transporte/canal real não qualificado.                                                                               |
-| PISO-007 — hardening do consumidor         |         60 | Dockerfile completo pinado compilou; constraints locais Q1–Q5 exercitadas, mas artefato recusado por falha de integridade Q6 e leitura Q7 inválida. Egress de host NOT_QUALIFIED. |
-| PISO-008 — backup/restore/alerta           |         40 | Crítico I1 R37: quatro volumes inválidos recebem sucesso de backup/restore; R38 em correção. Monitor passou apenas localmente; recebimento por responsável real NOT_RUN.          |
-| PISO-009 — guia e homologação              |         20 | Vinte JSONs e dez WAVs com hashes conferidos. Whisper e revisão humana NOT_RUN; casos de mídia 17/18 são placeholders.                                                            |
-| PISO-010 — piloto específico               |         20 | Contrato e decisão futura registrados; piloto não executado nem autorizado nesta rodada. Não simular aceite humano.                                                               |
+| Item                                       | Nota / 100 | Evidência e limitação que determina a nota                                                                                                                                                                                               |
+| ------------------------------------------ | ---------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PISO-001 — confirmação humana              |         80 | Fluxo determinístico, replay e correções exercitados na candidata; fonte ainda sem promoção condicionada final.                                                                                                                          |
+| PISO-002 — fidelidade e identidade         |         60 | Regressões locais de IDs/homônimos e memória preservadas; corpus esperado sem revisão humana e sem prova de fidelidade clínica.                                                                                                          |
+| PISO-003 — processamento/envio durável     |         80 | Reinício oficial, provas brutas causais e replays aceitos no escopo sintético. Confirmação do simulador não demonstra entrega por canal real.                                                                                            |
+| PISO-004 — recuperação de journal          |         80 | Correção do journal vivo revisada R41: mutações observáveis recusadas antes do ingresso, readiness e próximo envio; I1 local. Gates finais R44 em execução; sem garantia para escrita hostil concorrente ou bitrot invisível a metadata. |
+| PISO-005 — serialização de lembretes       |         60 | Regressões operacionais e saturação passam na R19 sem reduzir o limite original. A melhoria TTL tem aceite semântico, sem promessa de custo linear global.                                                                               |
+| PISO-006 — pausa/saúde/falha de transporte |         60 | Controles de processos e recebimentos simulados exercitados; transporte/canal real não qualificado.                                                                                                                                      |
+| PISO-007 — hardening do consumidor         |         80 | Dockerfile completo novo com Node22/UID10001/rootfs readonly/capdrop/nnprivs e imagem exata; R41 APPROVE local,30 controles. Egress de host ainda NOT_QUALIFIED, packet anterior vincula imagem obsoleta.                                |
+| PISO-008 — backup/restore/alerta           |         80 | Validação completa compilada antes de backup/restore: R42 PASS local,106 asserções; inválidos recusados e retenção/hold preservados. Monitor local anterior; recebimento por responsável real e remoto NOT_RUN.                          |
+| PISO-009 — guia e homologação              |         20 | Vinte JSONs e dez WAVs com hashes conferidos. Whisper e revisão humana NOT_RUN; casos de mídia 17/18 são placeholders.                                                                                                                   |
+| PISO-010 — piloto específico               |         20 | Contrato e decisão futura registrados; piloto não executado nem autorizado nesta rodada. Não simular aceite humano.                                                                                                                      |
 
 ## Resultados executados e seu alcance
 
