@@ -69,6 +69,16 @@
 
 ## HARNESS-ISO — correção contínua até gates e revisão válidos — 04/10/2026
 
+- Claim `FINAL_SECURITY_FRESH_REVIEW_R20`: novo crítico independente sem Root/ledgers/vereditos anteriores; source/scans atuais readonly, runtimeAPI R19 e provaTCP2OS/PG report-r5; writes somente `security-final-fresh-review-r20/output`. Scope6575+3 individual, sem provider/release. Critério bootstrap explícito: tarefa fora do repositório, cwdpacket, não governança defaultworkspace.
+
+- Claim `CURRENT_COMPILED_HTTP_RATE_R19`: prova HTTP real sobre compiled runtime readonly de `final-api-qualification-r19`,2 filhosNode22/portasefêmerasloopback,PG55598/roles e schemas prefixadoscvg_r19_rate*/cvg_r19_auth*; escrita `security-rate-compiled-r19`. Provider/key0, semTSalias/Rootmutação.
+
+- Claim `FINAL_HISTORY_DISPOSITION_R19`: crítica independente das6.688 observações históricas no HEAD849455b; leitura exclusivamente relatório redatado e gitshow commit:path, sem workingtree/env/vereditos anteriores; escrita exclusiva `final-history-disposition-r19`. Não altera histórico, scanner ou produção.
+
+- Claim `FINAL_HISTORY_SECURITY_R19`: scanner estrito somente do histórico Git no HEAD849455b, sem ler working .env; saída exclusiva `final-history-security-r19`, redaction100, sem supressões ou alterações de histórico. Disposições e aceite separados.
+
+- Claim `FINAL_COMPILED_API_R19`: qualificação da imagem sobre `candidate-final-r19` readonly; scripts/capturas/contexto em `final-api-qualification-r19`, imagem e rede exclusivamente cvg-r19*, PG55598/schemas/roles prefixo cvg_synthetic_green_r19_*, bridges3272/3273. Sem chave real/provider, sem alterar recursos alheios. Execução pesada sequenciada após testes nativos.
+
 - Claim `FINAL_NATIVE_CERTIFY_R19`: cópia física exclusiva `certify-final-r19-candidate`, saída `certify-final-r19`; execução do produtor nativo certify, SBOM/licenças próprios, PostgreSQL55599, E2E3268/4268. Sem compartilhar lockfile/cache, sem provider, sem modificar fonte congelada/Root.
 
 - Claim `FINAL_SECURITY_DISPOSITION_R19`: revisão independente dos 6.575 achados Gitleaks e 3 CodeQL atuais; leitura exclusiva das cópias `security-final-source-r19`/`security-final-scans-r19`, escrita exclusiva `security-final-disposition-r19`; sem alterar código, regras ou relatórios originais; sem provider ou produção.
