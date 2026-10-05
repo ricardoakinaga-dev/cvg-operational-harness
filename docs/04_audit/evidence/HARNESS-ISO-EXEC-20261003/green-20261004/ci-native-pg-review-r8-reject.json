@@ -1,0 +1,286 @@
+{
+  "review": "CI_NATIVE_PG_FRESH_REVIEW_R8",
+  "verdict": "REJECT",
+  "scope": "Local independent review of CI producers/report admission/verifier/importer/public SDK inputs/neutral projection, under the authorized packet freeze only",
+  "completedAt": "2026-10-05T05:44:19.754Z",
+  "freezeSha256": "e286bb09949b5bb5d8019a864105a6774bf86a290d3623d3c9816eb22b162b26",
+  "approvedSpecSha256": "7971771ca8e4a12be90e58536ea105c8399d844e28c47093b2a50575afff6dc2",
+  "node": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+  "findings": [
+    {
+      "id": "R8-F01",
+      "severity": "HIGH",
+      "blocking": true,
+      "title": "Critical branch gate accepts raw coverage below 95% after rounding",
+      "locations": [
+        "../source/scripts/lib/coverage-gate.mjs:135",
+        "../source/scripts/lib/coverage-gate.mjs:142",
+        "../source/scripts/hiso-snapshot-types.mjs:308"
+      ],
+      "repro": "Pure buildCoverageReport with all approved critical paths, each branches covered=94999,total=100000; global counts sum the unique file counts. Native verdict=PASS; snapshotSchema and verifySnapshots both ACCEPT. No V8 run or source modification.",
+      "expected": "Raw critical group covered/total*100 >= 95; this 94.999% report must fail.",
+      "observed": {
+        "covered": 94999,
+        "total": 100000,
+        "rawPct": 94.999,
+        "displayPct": 95,
+        "producer": "PASS",
+        "snapshotSchema": "ACCEPT",
+        "verifySnapshots": "ACCEPT"
+      },
+      "impact": "Independent admission reconstructs the same rounded producer decision, so the sealed native report can satisfy the critical gate below the required raw threshold. A remote PASS was not attempted or claimed.",
+      "evidence": [
+        "raw/semantic-probes.json",
+        "raw/critical-rounded-native-report.json",
+        "raw/semantics.execution.json"
+      ],
+      "nextActionForLead": "Compare the raw critical numerator/denominator against 95 independently of display rounding, preserving manifest/schema/test bar; correction belongs to Lead after this review."
+    },
+    {
+      "id": "R8-F02",
+      "severity": "MEDIUM",
+      "blocking": false,
+      "title": "Unit producer admission does not bind collected case identity and multiplicity before snapshot",
+      "locations": [
+        "../source/scripts/hiso-ci.mjs:138",
+        "../source/scripts/hiso-ci.mjs:432",
+        "../source/scripts/hiso-ci.mjs:487"
+      ],
+      "repro": "validateReport(unit, report, inventory) with two collected same-name occurrences in one file accepts a one-case passing native report. It also accepts replacement of one collected title. Reports carry internally consistent native counters.",
+      "expected": "Admission compares complete collected file/name/occurrence membership before accepting/snapshotting.",
+      "observed": "ACCEPT at validateReport; REJECT by verifySnapshots with requiredTestIds. Static runScope comparison later fails the gate, after snapshotOutputs.",
+      "impact": "Admission parity is incomplete. This is a delayed validation gap, not a demonstrated final-scope or release bypass: later runScope and independent verifier controls remain effective.",
+      "evidence": [
+        "raw/semantic-probes.json",
+        "raw/unit-later-controls.json",
+        "raw/supplied-vitest.json"
+      ],
+      "nextActionForLead": "Move/share exact unit case admission before snapshot emission without weakening or changing original tests."
+    },
+    {
+      "id": "R8-I01",
+      "severity": "INFO",
+      "blocking": false,
+      "title": "Main native count remains 8400; frozen packet collector count is 8402",
+      "repro": "sourceFiles(source) and sourceFiles(output/runtimecopy) compared to native-main-inputs.json by path/hash/size, using only opaque document hashing.",
+      "observed": {
+        "nativeMainInputs": 8400,
+        "packetCollectorInputs": 8402,
+        "mainRowsMissing": 0,
+        "mainRowsChanged": 0,
+        "packetExtras": [
+          {
+            "path": "docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/production-bootstrap-amendment.md",
+            "sha256": "2559fec7558358dc03d28fd8eabf8d5c3416f31c217088641988375a5cee6b45",
+            "size": 6332
+          },
+          {
+            "path": "docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/production-bootstrap-user-approval.json",
+            "sha256": "fc047f7d16c0608dd1f7c09c373db3bcefdd300748d819dbff902b83be31a57a",
+            "size": 515
+          }
+        ],
+        "nativeMainHash": "4e492ceae7b5b459f50214a4f8004d998a0cbfade9c9256eac59b6f1829a4ae9",
+        "packetHash": "bf3f7bf57411905cceb53f96df2c9a16a372a2829f6db0cd27d5a5388f34ab43"
+      },
+      "impact": "All 8400 real Main inputs are copied exactly. Two additional frozen opaque documents are also included by the packet collector; native Main identity and packet identity differ. No exclusion or deletion was used to force count/hash equality.",
+      "evidence": [
+        "raw/input-count-reconciliation.json",
+        "source-before-summary.json"
+      ],
+      "nextActionForLead": "Keep both count definitions and hashes explicit in integration; investigate origin in the authorized Lead lane. This critic cannot infer document meaning or inspect Root."
+    }
+  ],
+  "nativeCounts": {
+    "collector": {
+      "files": 6,
+      "cases": 345,
+      "executed": 0
+    },
+    "native": {
+      "files": 6,
+      "cases": 345,
+      "passed": 345,
+      "failed": 0,
+      "pending": 0,
+      "todo": 0,
+      "testSuitesIncludingDescribe": 22
+    },
+    "collectedEqualsExecutedMembership": true,
+    "perFile": [
+      {
+        "file": "tests/coverage-gate.test.js",
+        "cases": 3,
+        "passed": 3,
+        "failed": 0
+      },
+      {
+        "file": "tests/hiso-ci-scopes.test.js",
+        "cases": 199,
+        "passed": 199,
+        "failed": 0
+      },
+      {
+        "file": "tests/hiso-effective-inputs-own.test.js",
+        "cases": 15,
+        "passed": 15,
+        "failed": 0
+      },
+      {
+        "file": "tests/hiso-security.test.js",
+        "cases": 3,
+        "passed": 3,
+        "failed": 0
+      },
+      {
+        "file": "tests/hiso-snapshot-membership-own.test.js",
+        "cases": 113,
+        "passed": 113,
+        "failed": 0
+      },
+      {
+        "file": "tests/hiso-variant.test.js",
+        "cases": 12,
+        "passed": 12,
+        "failed": 0
+      }
+    ],
+    "pgMock": {
+      "executedPureMockVersionCases": 12,
+      "identityGuardBeforeProducerImport": true,
+      "guardSource": "../source/tests/hiso-snapshot-membership-own.test.js",
+      "pgIntegrationExecuted": 0
+    },
+    "notExecuted": [
+      "full unit suite",
+      "real PostgreSQL",
+      "chaos suite",
+      "eval suite",
+      "E2E",
+      "V8 coverage",
+      "remote CI",
+      "certify"
+    ]
+  },
+  "inputBinding": {
+    "nativeMainInputs": 8400,
+    "nativeMainInputHash": "4e492ceae7b5b459f50214a4f8004d998a0cbfade9c9256eac59b6f1829a4ae9",
+    "immutablePacketCollectorInputs": 8402,
+    "immutablePacketCollectorHash": "bf3f7bf57411905cceb53f96df2c9a16a372a2829f6db0cd27d5a5388f34ab43",
+    "runtimeCollectorInputs": 8402,
+    "runtimeCollectorHash": "bf3f7bf57411905cceb53f96df2c9a16a372a2829f6db0cd27d5a5388f34ab43",
+    "nativeSetAllExactInPacket": true,
+    "packetExtras": [
+      {
+        "path": "docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/production-bootstrap-amendment.md",
+        "sha256": "2559fec7558358dc03d28fd8eabf8d5c3416f31c217088641988375a5cee6b45",
+        "size": 6332
+      },
+      {
+        "path": "docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/production-bootstrap-user-approval.json",
+        "sha256": "fc047f7d16c0608dd1f7c09c373db3bcefdd300748d819dbff902b83be31a57a",
+        "size": 515
+      }
+    ],
+    "packetEqualsRuntime": true,
+    "realPublicBuildSourceHashBefore": "bf3f7bf57411905cceb53f96df2c9a16a372a2829f6db0cd27d5a5388f34ab43",
+    "realPublicBuildSourceHashAfter": "bf3f7bf57411905cceb53f96df2c9a16a372a2829f6db0cd27d5a5388f34ab43",
+    "realPublicBuildSourceHashEqual": true,
+    "definitions": "26405 frozen files/links includes tooling+dist; 8400 actual Main source collector rows remain unchanged; 8402 packet collector rows includes precisely two packet-only frozen opaque documents. No deletion/exclusion/rebinding performed. Root was not inspected; origin of packet-only delta cannot be inferred from narratives."
+  },
+  "fullSourceIntegrity": {
+    "unchanged": true,
+    "changed": [],
+    "added": [],
+    "beforeEntries": 29341,
+    "afterEntries": 29341,
+    "beforeSha256": "61885a0beaccea6832db876dc8ca054401614f680c3eaca471929f2d27e4950d",
+    "afterSha256": "61885a0beaccea6832db876dc8ca054401614f680c3eaca471929f2d27e4950d",
+    "metadataFields": [
+      "dev",
+      "ino",
+      "mode",
+      "nlink",
+      "uid",
+      "gid",
+      "size",
+      "mtimeNs",
+      "ctimeNs",
+      "birthtimeNs"
+    ],
+    "hashes": "every file, symlink target and immediate directory membership; includes vendor,node_modules,dist",
+    "atime": "not compared: access-time is read side effect; O_NOATIME used for content hashing"
+  },
+  "executionConformity": {
+    "files": 37185,
+    "dirs": 4381,
+    "symlinks": [],
+    "hardlinks": [],
+    "externalLinks": [],
+    "networkAttempts": 0,
+    "node": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+    "boundary": "packet/output/**",
+    "noRootNoHistoryReasoningNoSecretsNoRemote": true
+  },
+  "checks": {
+    "pg16Producer": "12 supplied pure-mock cases; ESM Client identity asserted before every producer import; safe integers 160000/169999 accepted, ten invalid representations rejected with no success receipt; importer safe integer check reviewed statically before success output",
+    "membership": "PG/chaos producer and snapshot parity reject omissions, extra multiplicity, changed identity and status; complete positives accept; unit admission gap R8-F02 with downstream rejection",
+    "eval": "Original supplied semantics tests plus pure computeMetrics on current 48 constant scenarios/14 adversarial members; perfect and tolerable ordinary failure accepted; fractional numerator, contradictory group projection, missing metric and weak threshold rejected. Zero evaluator/agent instantiations by new probes; no eval-suite execution.",
+    "coverage": "Native integral/zero-denominator/file/group tests passed, but raw critical rounding defect R8-F01 reproduced. No actual coverage achievement or V8 run claimed.",
+    "publicSDK": {
+      "build": "PASS",
+      "smoke": "PASS",
+      "sourceHashEqual": true,
+      "sourceHashBefore": "bf3f7bf57411905cceb53f96df2c9a16a372a2829f6db0cd27d5a5388f34ab43",
+      "sourceHashAfter": "bf3f7bf57411905cceb53f96df2c9a16a372a2829f6db0cd27d5a5388f34ab43",
+      "rewrittenDistFiles": 170,
+      "distFilesInspected": 170,
+      "distContentChanges": 0,
+      "closureSha256": "baf44503d0ef7e1c30e9dd3e0de0780c26f37889f9d4d62501fc8934f661a8b9",
+      "sourceFree": true,
+      "declarations": true,
+      "clinicalCalls": 0,
+      "unknownCalls": 0
+    },
+    "effectiveInputs": "Finite compiler-derived emit leaves and build-info changes exercised by supplied tests; 10 additional inert nested-helper paths retained and their hash changes bound",
+    "preservation": {
+      "baselineTests": 371,
+      "newTestPaths": 43,
+      "totalApprovedTestPaths": 414,
+      "coverageFull": 281,
+      "coverageFullExecutable": 253,
+      "coverageFullErased": 28,
+      "legacySealedGates": 34,
+      "neutralCoverage": 250,
+      "neutralProductAbsent": true,
+      "neutralTransforms": "Exact seven approved configs; real prepareVariant on physical source copy; original bar/tests/schema unchanged"
+    }
+  },
+  "executionEvidence": [
+    "raw/final-binding.execution.json",
+    "raw/inputs-after-build.execution.json",
+    "raw/inputs-before.execution.json",
+    "raw/projection.execution.json",
+    "raw/public-build.execution.json",
+    "raw/public-smoke.execution.json",
+    "raw/semantics.execution.json",
+    "raw/supplied-collection.execution.json",
+    "raw/supplied-vitest.execution.json"
+  ],
+  "limits": [
+    "No Root or other candidates; historical narratives, ledgers and prior opinions hashed opaquely, not opened for reasoning; no skills or subagents",
+    "No real data/provider, secrets/private.env, network/DNS/PG/Docker; no E2E/full suite/V8/remote CI/certify/commit/push/fixes",
+    "Network guard records zero attempts; no kernel syscall trace was collected, and this evidence does not assert kernel-level isolation",
+    "Full metadata comparison includes source root and every directory, inode/device/mode/link-count/uid/gid/size/mtime/ctime/birthtime plus file/link/directory-membership hashes; atime excluded as read side effect, content hashing uses O_NOATIME",
+    "Legacy importer reviewed as source only; no legacy import execution or invented signed/sealed state",
+    "Neutral proof is physical inventory/config projection; it does not claim neutral runtime/PG/E2E completion",
+    "345 executed tests and 345 separately collected cases are distinct observations; collection contributes zero executed tests",
+    "REJECT is scoped; no release, certification, integrated-system verdict or approval granted"
+  ],
+  "localLedgers": [
+    "runtime-state.json",
+    "execution-log.jsonl",
+    "backlog.json"
+  ],
+  "evidenceIndex": "review-artifacts.json"
+}

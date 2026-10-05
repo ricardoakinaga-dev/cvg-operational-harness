@@ -1,0 +1,298 @@
+{
+  "reviewId": "C1_WRITE_WRAPPERS_FRESH_REVIEW_R7",
+  "verdict": "REJECT",
+  "verdictScope": "Static lexical/value identity, erased TS write wrappers, scalar-proof stability; no installed/global/production acceptance",
+  "claim": "Task already claimed by Lead; no competing claim or repository mutation",
+  "freezeSha256": "70659412f9a715d51e82db01e684d9576d9fc0eb6b274ab2c03d5e1a4f779059",
+  "installedGate": {
+    "status": "INCOMPLETE",
+    "executed": false,
+    "passInferred": false,
+    "basis": "User-supplied scope; this review neither measures nor grants installed acceptance"
+  },
+  "findings": [
+    {
+      "id": "C1-R7-F1",
+      "priority": "P1",
+      "title": "TS write-target wrappers drop selected values at assignment-pattern leaves",
+      "location": {
+        "path": "runtime/scripts/boundary-lexical.mjs",
+        "line": 365
+      },
+      "consumers": [
+        {
+          "path": "runtime/scripts/boundary-code-execution.mjs",
+          "line": 359
+        },
+        {
+          "path": "runtime/scripts/check-product-boundary.mjs",
+          "line": 793
+        }
+      ],
+      "nativeEvidence": true,
+      "nativeMismatchCount": 20,
+      "nativeProbeIds": [
+        "selection-as",
+        "nested-selection-as",
+        "default-selection-as",
+        "selection-satisfies",
+        "nested-selection-satisfies",
+        "default-selection-satisfies",
+        "selection-non-null",
+        "nested-selection-non-null",
+        "default-selection-non-null",
+        "selection-assertion",
+        "nested-selection-assertion",
+        "default-selection-assertion",
+        "selection-nested",
+        "nested-selection-nested",
+        "default-selection-nested",
+        "selection-parameter-as",
+        "selection-parameter-satisfies",
+        "selection-parameter-non-null",
+        "selection-parameter-assertion",
+        "selection-parameter-nested"
+      ],
+      "reproducer": "probes/selection-as/packages/core/src/entry.mts",
+      "expected": "INCOMPLETE with UNVERIFIED_DYNAMIC_CODE_EXECUTION",
+      "actual": "PASS; passed=true; empty diagnostics and violations",
+      "control": "selection-plain, selection-paren and unknown-constructor-declaration are INCOMPLETE; neutral-pattern is PASS",
+      "mechanism": "assignedValues unwraps ParenthesizedExpression but not AsExpression, SatisfiesExpression, NonNullExpression or TypeAssertionExpression. Selected constructor values never reach the original token identity. Both consumers use this real helper, but end-to-end false PASS evidence here is from the dynamic-code consumer. No loader-native bypass is claimed.",
+      "impact": "A transparent erased wrapper changes the static gate from unknown to PASS for the same unknown constructor value. The real checker conservatively treats an unproved constructor selection as executor; no fixture executor is present or run.",
+      "helperEvidence": "30 of 42 AST callback controls omit leaves; these counts are structural helper evidence, not native capability acceptance."
+    },
+    {
+      "id": "C1-R7-F2",
+      "priority": "P1",
+      "title": "Wrapped method calls retain an unstable own scalar property proof",
+      "location": {
+        "path": "runtime/scripts/boundary-code-execution.mjs",
+        "line": 176
+      },
+      "nativeEvidence": true,
+      "nativeMismatchCount": 12,
+      "nativeProbeIds": [
+        "method-property-assignment-call-paren",
+        "method-property-assignment-call-as",
+        "method-property-assignment-call-satisfies",
+        "method-property-assignment-call-non-null",
+        "method-property-assignment-call-assertion",
+        "method-property-assignment-call-nested",
+        "method-parameter-paren",
+        "method-parameter-as",
+        "method-parameter-satisfies",
+        "method-parameter-non-null",
+        "method-parameter-assertion",
+        "method-parameter-nested"
+      ],
+      "reproducer": "probes/method-parameter-as/packages/core/src/entry.mts",
+      "expected": "INCOMPLETE with UNVERIFIED_DYNAMIC_CODE_EXECUTION",
+      "actual": "PASS; passed=true; empty diagnostics and violations",
+      "control": "method-parameter-plain and method-property-assignment-call-plain are INCOMPLETE. All 7 property mutation controls are INCOMPLETE; scalar reads remain PASS.",
+      "mechanism": "stableInitializer checks CallExpression/NewExpression only at the property access immediate parent. Parentheses or erased TS wrappers place the call above that parent and admit the object as stable. Ordinary (obj.method)() preserves the receiver and can mutate the object.",
+      "impact": "The analyzer certifies obj.constructor as a fixed scalar across an unknown receiver method invocation. Only inert text with an unknown method parameter was parsed and audited; no mutation implementation or evaluator payload was generated or executed."
+    },
+    {
+      "id": "C1-R7-F3",
+      "priority": "P2",
+      "title": "Destructured outer CJS var declarations lose wrapper parameter identity",
+      "location": {
+        "path": "runtime/scripts/boundary-lexical.mjs",
+        "line": 217
+      },
+      "nativeEvidence": true,
+      "nativeMismatchCount": 2,
+      "nativeProbeIds": [
+        "wrapper-module-native-cjs-pattern",
+        "wrapper-module-native-cts-pattern"
+      ],
+      "reproducer": "probes/wrapper-module-native-cjs-pattern/packages/core/src/entry.cjs",
+      "expected": "Outer CJS var leaves share lexical.global(name); conservative module control remains INCOMPLETE",
+      "actual": "BindingElement symbol is treated as a separate local cell; module pattern control is PASS in cjs and cts",
+      "control": "All 40 static-block identity cases preserve own cells; simple outer cjs/cts vars use wrapper globals; mjs/mts pattern vars use local cells.",
+      "mechanism": "wrapperVar requires every symbol declaration to be VariableDeclaration. TypeScript binds a destructured name through BindingElement, so the same outer wrapper parameter is not recognized.",
+      "impact": "Lexical identity and checker behavior depend on declaration shape. This is an identity/conservative-policy defect; the neutral scalar initializer does not itself demonstrate dangerous runtime acquisition.",
+      "lexicalEvidence": "10 mismatches in 80 real identity controls, covering five wrapper names in cjs and cts. No labels or injected checker were used."
+    }
+  ],
+  "counts": {
+    "suppliedVitest": {
+      "runner": "Vitest 4.1.11 native",
+      "node": "v22.23.2",
+      "testFiles": 1,
+      "total": 276,
+      "passed": 276,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0,
+      "auditProductBoundaryCases": 167,
+      "otherASTSymbolicSourceCases": 109,
+      "description": "All 276 executed by native runner; 167 directly call unmodified auditProductBoundary, 109 use lexical/AST/source/symbolic or injected analyzer checks"
+    },
+    "own": {
+      "node": "v22.23.2",
+      "total": 259,
+      "parseErrors": 0,
+      "fixtureExecutions": 0,
+      "counts": {
+        "native-auditProductBoundary": {
+          "total": 137,
+          "mismatches": 34
+        },
+        "real-helper-AST-callback-only": {
+          "total": 42,
+          "mismatches": 30
+        },
+        "real-lexical-identity": {
+          "total": 80,
+          "mismatches": 10
+        }
+      },
+      "mismatches": [
+        "method-property-assignment-call-paren",
+        "selection-as",
+        "nested-selection-as",
+        "default-selection-as",
+        "method-property-assignment-call-as",
+        "assigned-values-direct-as",
+        "assigned-values-object-as",
+        "assigned-values-array-as",
+        "assigned-values-default-as",
+        "assigned-values-nested-object-as",
+        "assigned-values-rest-array-as",
+        "selection-satisfies",
+        "nested-selection-satisfies",
+        "default-selection-satisfies",
+        "method-property-assignment-call-satisfies",
+        "assigned-values-direct-satisfies",
+        "assigned-values-object-satisfies",
+        "assigned-values-array-satisfies",
+        "assigned-values-default-satisfies",
+        "assigned-values-nested-object-satisfies",
+        "assigned-values-rest-array-satisfies",
+        "selection-non-null",
+        "nested-selection-non-null",
+        "default-selection-non-null",
+        "method-property-assignment-call-non-null",
+        "assigned-values-direct-non-null",
+        "assigned-values-object-non-null",
+        "assigned-values-array-non-null",
+        "assigned-values-default-non-null",
+        "assigned-values-nested-object-non-null",
+        "assigned-values-rest-array-non-null",
+        "selection-assertion",
+        "nested-selection-assertion",
+        "default-selection-assertion",
+        "method-property-assignment-call-assertion",
+        "assigned-values-direct-assertion",
+        "assigned-values-object-assertion",
+        "assigned-values-array-assertion",
+        "assigned-values-default-assertion",
+        "assigned-values-nested-object-assertion",
+        "assigned-values-rest-array-assertion",
+        "selection-nested",
+        "nested-selection-nested",
+        "default-selection-nested",
+        "method-property-assignment-call-nested",
+        "assigned-values-direct-nested",
+        "assigned-values-object-nested",
+        "assigned-values-array-nested",
+        "assigned-values-default-nested",
+        "assigned-values-nested-object-nested",
+        "assigned-values-rest-array-nested",
+        "identity-cjs-require-outer-pattern",
+        "identity-cjs-module-outer-pattern",
+        "identity-cjs-exports-outer-pattern",
+        "identity-cjs-__filename-outer-pattern",
+        "identity-cjs-__dirname-outer-pattern",
+        "identity-cts-require-outer-pattern",
+        "identity-cts-module-outer-pattern",
+        "identity-cts-exports-outer-pattern",
+        "identity-cts-__filename-outer-pattern",
+        "identity-cts-__dirname-outer-pattern",
+        "method-parameter-paren",
+        "method-parameter-as",
+        "selection-parameter-as",
+        "method-parameter-satisfies",
+        "selection-parameter-satisfies",
+        "method-parameter-non-null",
+        "selection-parameter-non-null",
+        "method-parameter-assertion",
+        "selection-parameter-assertion",
+        "method-parameter-nested",
+        "selection-parameter-nested",
+        "wrapper-module-native-cjs-pattern",
+        "wrapper-module-native-cts-pattern"
+      ]
+    },
+    "ownNativeObserved": {
+      "INCOMPLETE": 78,
+      "PASS": 59
+    },
+    "ownNativeExpected": {
+      "INCOMPLETE": 112,
+      "PASS": 25
+    }
+  },
+  "integrity": {
+    "phase": "after",
+    "freeze_sha256": "70659412f9a715d51e82db01e684d9576d9fc0eb6b274ab2c03d5e1a4f779059",
+    "freeze_valid": true,
+    "frozen_entries": 19382,
+    "inventory_mismatches": [],
+    "full_entries": 21355,
+    "directories": 1970,
+    "source_vendor_dist_included": true,
+    "before_after_changes": [],
+    "full_integrity_valid": true
+  },
+  "runtimeCopy": {
+    "physicalFiles": 19334,
+    "internalLinks": 48,
+    "sharedInodes": 0,
+    "externalSymlinks": 0,
+    "trustedModulesSuiteConfigPreserved": true
+  },
+  "boundaries": {
+    "writes": "output/** only",
+    "fixtureExecutions": 0,
+    "fixtureImports": 0,
+    "fixtureEvaluations": 0,
+    "newEvaluatorProcessWorkerVMPayloads": 0,
+    "trustedNativeWorkerThreads": "runner infrastructure only",
+    "codeExecutionSuiteRun": false,
+    "stubsOrCompatibilityRunner": false,
+    "rootOtherCandidatesHistorySkillsPriorReportsRead": false,
+    "networkProvidersPGDockerSubagentsCommit": false,
+    "semanticHistoryRead": false,
+    "inventoryHashingIncludesAllFrozenFiles": true,
+    "secretsEnvRead": false,
+    "repairProvided": false,
+    "notes": "Host shell/text tools and Python stdlib were used for integrity, physical copying and document generation. Project runtime and native test/probe execution used only the approved absolute Node22 and physically copied packet dependencies."
+  },
+  "evidence": {
+    "report": "report.md",
+    "commands": "commands.md",
+    "driver": "probes.mjs",
+    "probes": "probes-results.json",
+    "probesLog": "logs/probes.log",
+    "vitestJson": "logs/vitest-native.json",
+    "vitestLog": "logs/vitest-native.log",
+    "integrityDriver": "integrity.py",
+    "integrityBefore": "integrity-before.json",
+    "integrityAfter": "integrity-after.json",
+    "integritySummary": "integrity-after-summary.json",
+    "integrityLog": "logs/integrity-after.log",
+    "runtimeCopyDriver": "copy-runtime.py",
+    "runtimeCopy": "runtime-copy.json",
+    "trustedRuntimeCheck": "trusted-runtime-check.json",
+    "suppliedAbstractProofs": "tmp/r4-neutral-proofs.json"
+  },
+  "limitations": [
+    "No fixture execution or installed/global/production acceptance.",
+    "No claim that abstract seed-label or injected analyzer results prove native loader integration.",
+    "Own controls prove static contract mismatches, not a demonstrated runtime exploitation chain.",
+    "Read access time is not compared: hashes, file/link kind, size, mode, device/inode, nlink, mtime_ns and all source directory metadata are compared."
+  ],
+  "followUp": "Lead adjudicates findings and any separate repair cycle; preserve current cases and conservative contract. No correction is supplied."
+}
