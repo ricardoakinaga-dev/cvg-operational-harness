@@ -115,17 +115,18 @@ Os aceites são restritos ao escopo de cada revisão. Rejeições, execuções c
 falha e erros de preparação anteriores permanecem arquivados. Nenhum cartão
 adicional é marcado DONE por esta tabela; não há liberação de produção.
 
-
 ## Atualização de evidência: variante neutra R24
 
 A variante física sem produto passou no build público e na suíte de 5.030 testes em 383 arquivos com PostgreSQL e cobertura, sem falhas, skips ou TODOs. A captura confirmou os 7.685 inputs intactos. O resultado não é somado aos 5.662 testes da variante com produto, pois as suítes se sobrepõem. As notas e os estados canônicos permanecem: a fronteira instalada ainda requer correção e revisão. [Prova, preparação e hashes](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/final-neutral-r24-local-pass.json).
-
 
 ## Atualização de evidência: sandbox local
 
 A versão imutável R19 está disponível na console sintética local 3501. O reinício preservou três arquivos anteriores e recuperou duas notas. Nove grupos browser passaram; crítico novo aceitou o escopo local, conferindo todos os 8.476 arquivos de fonte, corpus e sete pedidos negativos sem efeitos. Conversas visíveis ficam em memória; notas/eventos são duráveis. Os serviços permanecem simulados, sem chamadas OpenAI e com delivery NOT_QUALIFIED. As notas e estados canônicos não mudam por esse resultado. [Prova do reinício/browser](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/local-sandbox-r19-restart-browser.json) e [revisão independente](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/local-sandbox-r19-fresh-review.json).
 
-
 ## Atualização de evidência: checker de fronteira
 
-A revisão R21 recusou o reparo anterior por uma consulta a uma chave sem binding lexical. A CLI independente preservou os 48 links e gerou INCOMPLETE/8.883 diagnósticos/zero violações. O novo BUILD R22 passou em 1.255 testes sem skips, tipos e lint; revisão nova e qualificação instalada estão em andamento. As notas e estados não mudam antes desse fechamento. [Rejeição e prova](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/c1-binding-stack-fresh-review-r21-rejected.json) e [correção/regressões](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/c1-nonbinding-label-r22-builder.json).
+A revisão R21 recusou o reparo anterior por uma consulta a uma chave sem binding lexical. A correção R22 passou em 1.255 testes sem skips, tipos e lint, e recebeu ACCEPT da revisão nova R23 com controles próprios. A CLI instalada preservou os 48 links e retornou INCOMPLETE/8.882 diagnósticos/zero violações/zero indisponibilidades lexicais; inputs intactos. Esse aceite fecha a correção lexical, não a fronteira instalada. As notas e estados canônicos permanecem. [Rejeição e prova](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/c1-binding-stack-fresh-review-r21-rejected.json) e [correção/regressões](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/c1-nonbinding-label-r22-builder.json).
+
+## Candidato integrado R25 em execução
+
+Formatação, tipos, lint, build e 5.735 testes unitários/413 arquivos passaram sem skips. A cobertura e os demais gates nativos ainda rodam. A variante física R25 sem produto está em teste separado com PostgreSQL/V8; nenhum total é somado. O scan estrito dos nove deltas CI/checker não encontrou segredos; sua revisão independente está em andamento. [Aceite lexical](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/c1-nonbinding-label-fresh-review-r23.json), [fronteira instalada ainda incompleta](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/c1-nonbinding-label-r22-installed.json) e [scan dos nove deltas](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/final-r25-nine-path-security-delta.json).
