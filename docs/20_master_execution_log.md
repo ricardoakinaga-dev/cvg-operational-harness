@@ -1,9 +1,9 @@
-# HARNESS-ISO-GREEN — integração e correções autorizadas — 04/10/2026
+# HARNESS-ISO-GREEN — integração e testes atuais — 04/10/2026
 
-- BUILD local de segurança/bootstrap/custo-modelo/sessões-ingresso aprovado por recibos individuais; tarefas em cópias isoladas, sem provider real ou dados reais.
-- Última execução completa com PostgreSQL/cobertura: 3.944 testes, 3.937 PASS/sete FAIL/zero skips, source MATCH. Duas configurações próprias corrigidas sem alterar testes originais; CI-R4 mantém 15 segundos e todos os denominadores, com 234 asserções instrumentadas PASS em scratch. Reteste integrado e suíte completa final pendentes.
-- R9: política e perfis imutáveis, identidade de prompt sem colisão e relógio finito; 1.207 testes focados PASS. Commit alheio `73669b8` reconciliado somente na cópia privada, inventariando oito testes novos e cinco deltas originais do dono: 1.406 testes focados com PostgreSQL PASS, zero skips; tipos/lint PASS. Nenhuma soma artificial entre recortes.
-- `status: IN_PROGRESS`; global **FAIL**, produção **NO_GO**. Próxima ação: finalizar builds ativos, revisões novas e gates completos/imagens/certificação no candidato congelado. [Checkpoint 21](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-21-full-suite-r9-and-approved-cost-model.json) e [handoff vigente](08_runtime/handoffs/harness_isolation_green_20261004.md). Conteúdo anterior dos ledgers preservado integralmente.
+- Gateway identity/pricing integrado por SHA em cinco fontes: 1.532 testes focados PASS, zero falhas/skips, MATCH. Sessões/ingresso: 112 controles PG integrados PASS. Críticas novas das duas frentes em andamento, sem autoverdict de aceite.
+- Scanner atual: 6.575 achados brutos com disposições individuais, zero desconhecidos/ausentes; achado novo HMAC de fixture sintética. CodeQL atual: três avisos para revisão. Guard histórico446/inputs59 intacto salvo dois bindings Fastify aprovados. Runtime compilado18/inputs766/maps210/contexto706.
+- Suíte completa PG/cobertura atual executando; anterior3.944/3.937 PASS/sete FAIL/zero skips. HISO-005 instalado INCOMPLETE11.700; revisão interrompida automaticamente, artefatos parciais sem aceite. Imagem neutra nova em qualificação.
+- `status: IN_PROGRESS`, global **FAIL**, produção **NO_GO**, zero OpenAI e sem promoção/push/deploy. Próximo: gates completos e revisões válidas. [Checkpoint 24](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-24-gateway-pricing-inbound-review-and-full-suite-running.json). Blocos anteriores dirty preservados byte a byte.
 
 # PR-301-WEBHOOK-CLOCK-GUARD — rascunho de SPEC T3 0162 — 28/09/2026
 
