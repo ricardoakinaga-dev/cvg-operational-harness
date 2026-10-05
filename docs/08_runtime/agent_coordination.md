@@ -69,6 +69,10 @@
 
 ## HARNESS-ISO — correção contínua até gates e revisão válidos — 04/10/2026
 
+- Claim `R62_NEUTRAL_CURRENT_FRESH_REVIEW`: I1 novo dos outputs terminais R50 e projeção R56, contexto técnico fechado em `plan-completion-r35/neutral-current-fresh-review-r62/authority/**`, outputs adjacentes; avaliar denominadores/originais/cobertura/PG/E2E/binding/recipe/inputs correntes sem histórico, docs governança, builder rationale ou Sourcewrites. Sem fullsuite/network/PG/Docker/env/descendentes. Receipts exatos e limites de identidade de evidência; não declarar certify/produção por gates isolados.
+
+- Claim `R61_MEDIA_CURRENT_DOCKER_FRESH_REVIEW`: I1 novo sobre imagem R59 e 829 COPYinputs técnicos fechados; outputs próprios `plan-completion-r35/product-dockerfile-fresh-review-r61/**`. Critérios Q1–Q7 existentes, contêineres/volumes exclusivos cvg-r61, networknone/semports/readonly/cap0/UID10001/NO_MODEL, mocks loopback sintéticos. Não ler histórico/governança/env/provider ou mutar Source/contexto; não herdarR41parecer. Capture bytes/hashes/controles antes/depois, cleanup só próprios. Sem egresshost/produção/descendentes.
+
 - Claim `R59_MEDIA_CURRENT_DOCKER_ARTIFACT`: reconstruir imagem privada completa do Dockerfile R56 em `plan-completion-r35/product-dockerfile-r59/**`; contexto fechado de COPY técnico, sem env/chave/deps/caches/governança. Build pinnedNode22, inputs/hash antes/depois, extrair bundles pelo contêiner próprio fechado; nenhuma mutação Source/Rootruntime ou promoção. Nova crítica Docker posterior; recursos somente prefixo cvg-r59, sem prune ou limpeza externa.
 
 - Claim `R58_MEDIA_CURRENT_FRESH_REVIEW`: crítica nova independente local do artefato compilado R56, input técnico fechado em `plan-completion-r35/media-current-fresh-review-r58/authority/**` e outputs próprios adjacentes. Critérios S1–S4 existentes de integridade/validação offline/segurança local/bytes compilados; sem histórico de builder ou revisões, governança Rootwalker, env/chave/provider/network/PG/Docker/descendentes/certify. Receipts hash antes/depois; nenhuma escrita Source, nenhuma aprovação global ou produção. Lead continua certificar R56 separadamente.
