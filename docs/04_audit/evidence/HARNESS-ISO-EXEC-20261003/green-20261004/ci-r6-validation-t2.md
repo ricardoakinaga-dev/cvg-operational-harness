@@ -1,0 +1,7 @@
+# CI_R6_VALIDATION — integridade do produtor e verificador
+
+T2 dentro da SPEC0180 aprovada e correções contínuas do usuário, claim registrado. Seis defeitos reproduzidos pela crítica CI-R5: snapshot inventory incompatível; ordem unit importer; executáveis ocultos por exclusão ampla; ausência de membros PostgreSQL/chaos; métricas críticas/evals contraditórias; envelope/tipos incompletos antes emissão. A variante neutra também falha approvedCoverageInventory em 43 controles após um timeout.
+
+Corrigir no scratch somente helpers HISO e testes próprios. Conservar schemas/produtores públicos compatíveis, originais, contratos/SQL, barras, denominadores e históricos. Validar produtor real pelo mesmo contrato antes PASS, canonicalizar inventários, selar todos inputs efetivos, verificar membros completos por gate e reconstruir semântica dos resultados. A projeção neutra é explícita e restrita ao consumidor fisicamente ausente e à transformação/lock aprovados; não excluir por mera falta de arquivo.
+
+Pronto exige negativos antes/depois e positivos de produtores reais, controles inertes sem evaluator, regressões HISO/variant/security originais, tipos/lint/formato, variante física sem produto e revisão nova válida com política documental obrigatória incluída no packet. Gates completos PG/E2E/cobertura e certificação continuam exigidos antes promoção. Sem provider/env/rede externa/push/produção.

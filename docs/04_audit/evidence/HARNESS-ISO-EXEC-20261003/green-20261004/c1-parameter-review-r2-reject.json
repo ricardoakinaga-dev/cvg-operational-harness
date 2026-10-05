@@ -1,0 +1,371 @@
+{
+  "review": "C1_PARAMETER_FRESH_STATIC_REVIEW_R2",
+  "verdict": "REJECT",
+  "scope": "STATIC_FUNCTIONAL_PRECISION_ONLY",
+  "completedAt": "2026-10-05T02:32:15.472381+00:00",
+  "packet": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-parameter-review-r2",
+  "authoritySha256": "426756b9d3d66887a90fb0c1aa4d6742f261915ceddd5a3cd5fcece1e7e0d390",
+  "freezeSha256": "5f97bc30bd246503902a98156a5d20b403f50610ba07f09571ddc77347a21cef",
+  "claim": "output/claim.json",
+  "mandatoryInputsPresent": true,
+  "findings": [
+    {
+      "id": "C1-R2-S01",
+      "severity": "P1",
+      "summary": "Parameters containing expressions and same-name body vars share a symbol despite distinct runtime environments.",
+      "location": "source/scripts/boundary-lexical.mjs:39",
+      "relatedLocations": [
+        "source/scripts/boundary-lexical.mjs:60",
+        "source/scripts/boundary-lexical.mjs:99",
+        "source/scripts/boundary-code-execution.mjs:343",
+        "source/scripts/check-product-boundary.mjs:773"
+      ],
+      "proofCases": [
+        "real-parameter-vs-body-var",
+        "destructured-parameter-vs-body-var"
+      ],
+      "expected": "Parameter initializer closures reference the parameter binding; a same-name body var is a separate binding with an initial value transfer. Body writes must not rewrite the parameter binding identity.",
+      "observed": "identity(param) === identity(bodyVar), with both declarations present on the same TypeScript symbol. Confirmed in .mts and .mjs parse-only proofs.",
+      "cause": "The correction only looks outward when every runtime declaration is inside the body. A merged parameter + var symbol fails that predicate, and no distinct body/parameter key is allocated.",
+      "impact": "The capability fixed points and stable-initializer/reference analyses consume the conflated key. This violates the requested precision and cannot establish absence of parameter/body contamination. No native exploit or additional adversarial capability fixture was generated.",
+      "requiredCorrection": "Model separate parameter and body var bindings for parameter lists containing expressions, preserving explicit initial-value transfer and keeping the legitimately shared simple-parameter case."
+    },
+    {
+      "id": "C1-R2-S02",
+      "severity": "P1",
+      "summary": "A body reference resolves to a parameter instead of the same-name body function.",
+      "location": "source/scripts/boundary-lexical.mjs:39",
+      "relatedLocations": [
+        "source/scripts/boundary-lexical.mjs:45",
+        "source/scripts/boundary-lexical.mjs:99",
+        "source/scripts/boundary-code-execution.mjs:235"
+      ],
+      "proofCases": [
+        "real-parameter-vs-body-function"
+      ],
+      "expected": "The initializer closure token refers to the parameter; return token in the body refers to the hoisted body function.",
+      "observed": "identity(returnToken) === identity(parameterToken); identity(returnToken) !== identity(bodyFunctionToken). Confirmed in .mts and .mjs parse-only proofs.",
+      "cause": "The helper accepts checker.getSymbolAtLocation for body references. The parameter-only ancestry correction never revisits body references, so the TypeScript binder choice survives unchanged.",
+      "impact": "Body reads and the actual body declaration disagree on symbol identity. Classification can attach the wrong origin to body references; precise static binding is not established. No offensive payload or native evaluation was run.",
+      "requiredCorrection": "Resolve references in the body against its actual runtime body environment, while preserving parameter/outer resolution for initializer closures."
+    }
+  ],
+  "validation": {
+    "authorizedStaticTests": {
+      "total": 124,
+      "passed": 124,
+      "failed": 0,
+      "neutralControls": 61,
+      "uncertaintyControls": 61,
+      "symbolControls": 2,
+      "expectedSupplied117Plus7": 124,
+      "fixturesExecuted": false,
+      "evidence": "output/vitest-static-results.json"
+    },
+    "ownNeutralProofs": {
+      "cases": 24,
+      "passed": 21,
+      "failed": 3,
+      "individualChecks": 61,
+      "failedChecks": 3,
+      "parseErrors": 0,
+      "fixturesExecuted": false,
+      "evidence": "output/symbol-proofs.json"
+    },
+    "sameFailuresPlainJavaScript": {
+      "cases": 3,
+      "failed": 3,
+      "parseErrors": 0,
+      "fixturesExecuted": false,
+      "evidence": "output/javascript-symbol-confirmation.json"
+    },
+    "integrity": {
+      "review": "C1_PARAMETER_FRESH_STATIC_REVIEW_R2",
+      "sourceEntries": 21353,
+      "regularFiles": 19335,
+      "links": 48,
+      "directories": 1970,
+      "readonly": true,
+      "differences": [],
+      "freezeInventorySha256": "6b53350a4b0a7ed26a0066c7a3f4a80819dbb4ed827bebc287c426061dde15d4",
+      "freezeInventoryHashMatches": true,
+      "freezeRecords": 19383,
+      "freezeMismatches": [],
+      "extraSourceFilesOrLinks": [],
+      "freezeMatchesBefore": true,
+      "hashControlledTestSpecFilesOutsideVendor": 412,
+      "hashControlledVendorFiles": 17346,
+      "hashControlledDistFilesIncludingVendor": 4776,
+      "beforeSha256": "6053e545e28712c40088f38e0371a6b488a6b32514b8067fa2184ae927370854",
+      "afterSha256": "6053e545e28712c40088f38e0371a6b488a6b32514b8067fa2184ae927370854",
+      "incident": false
+    },
+    "physicalRuntime": {
+      "runtime": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-parameter-review-r2/output/runtime",
+      "entries": 20557,
+      "symlinks": 0,
+      "sharedSourceInodes": 0,
+      "materializedLinks": [
+        {
+          "source": "node_modules/.bin/vitest",
+          "target": "node_modules/vitest/vitest.mjs"
+        },
+        {
+          "source": "node_modules/.bin/acorn",
+          "target": "node_modules/acorn/bin/acorn"
+        },
+        {
+          "source": "node_modules/.bin/lz-string",
+          "target": "node_modules/lz-string/bin/bin.js"
+        },
+        {
+          "source": "node_modules/.bin/playwright",
+          "target": "node_modules/@playwright/test/cli.js"
+        },
+        {
+          "source": "node_modules/.bin/tsc",
+          "target": "node_modules/typescript/bin/tsc"
+        },
+        {
+          "source": "node_modules/.bin/safe-regex2",
+          "target": "node_modules/safe-regex2/bin/safe-regex2.js"
+        },
+        {
+          "source": "node_modules/.bin/esbuild",
+          "target": "node_modules/esbuild/bin/esbuild"
+        },
+        {
+          "source": "node_modules/.bin/playwright-core",
+          "target": "node_modules/playwright-core/cli.js"
+        },
+        {
+          "source": "node_modules/.bin/prettier",
+          "target": "node_modules/prettier/bin/prettier.cjs"
+        },
+        {
+          "source": "node_modules/.bin/pino",
+          "target": "node_modules/pino/bin.js"
+        },
+        {
+          "source": "node_modules/.bin/nanoid",
+          "target": "node_modules/nanoid/bin/nanoid.cjs"
+        },
+        {
+          "source": "node_modules/.bin/tldts",
+          "target": "node_modules/tldts/bin/cli.js"
+        },
+        {
+          "source": "node_modules/.bin/node-which",
+          "target": "node_modules/which/bin/node-which"
+        },
+        {
+          "source": "node_modules/.bin/why-is-node-running",
+          "target": "node_modules/why-is-node-running/cli.js"
+        },
+        {
+          "source": "node_modules/.bin/specificity",
+          "target": "node_modules/@bramus/specificity/bin/cli.js"
+        },
+        {
+          "source": "node_modules/.bin/eslint",
+          "target": "node_modules/eslint/bin/eslint.js"
+        },
+        {
+          "source": "node_modules/.bin/semver",
+          "target": "node_modules/semver/bin/semver.js"
+        },
+        {
+          "source": "node_modules/.bin/tsx",
+          "target": "node_modules/tsx/dist/cli.mjs"
+        },
+        {
+          "source": "node_modules/.bin/parser",
+          "target": "node_modules/@babel/parser/bin/babel-parser.js"
+        },
+        {
+          "source": "node_modules/.bin/tsserver",
+          "target": "node_modules/typescript/bin/tsserver"
+        },
+        {
+          "source": "node_modules/.bin/rolldown",
+          "target": "node_modules/rolldown/bin/cli.mjs"
+        },
+        {
+          "source": "node_modules/.bin/vite",
+          "target": "node_modules/vite/bin/vite.js"
+        },
+        {
+          "source": "node_modules/@cvg/legacy-secretary-evals",
+          "target": "legacy/packages/secretary-evals"
+        },
+        {
+          "source": "node_modules/@cvg/agent-runtime",
+          "target": "packages/agent-runtime"
+        },
+        {
+          "source": "node_modules/@cvg/policy-engine",
+          "target": "packages/policy-engine"
+        },
+        {
+          "source": "node_modules/@cvg/legacy-secretary-profile",
+          "target": "legacy/packages/secretary-profile"
+        },
+        {
+          "source": "node_modules/@cvg/agent-evals",
+          "target": "packages/agent-evals"
+        },
+        {
+          "source": "node_modules/@cvg/observability",
+          "target": "packages/observability"
+        },
+        {
+          "source": "node_modules/@cvg/agent-core",
+          "target": "packages/agent-core"
+        },
+        {
+          "source": "node_modules/@cvg/channel-gateway",
+          "target": "packages/channel-gateway"
+        },
+        {
+          "source": "node_modules/@cvg/policy",
+          "target": "packages/policy"
+        },
+        {
+          "source": "node_modules/@cvg/web",
+          "target": "apps/web"
+        },
+        {
+          "source": "node_modules/@cvg/rag",
+          "target": "packages/rag"
+        },
+        {
+          "source": "node_modules/@cvg/harness-orchestrator",
+          "target": "packages/orchestrator"
+        },
+        {
+          "source": "node_modules/@cvg/model-gateway",
+          "target": "packages/model-gateway"
+        },
+        {
+          "source": "node_modules/@cvg/adapters",
+          "target": "packages/adapters"
+        },
+        {
+          "source": "node_modules/@cvg/platform",
+          "target": "packages/platform"
+        },
+        {
+          "source": "node_modules/@cvg/api",
+          "target": "apps/api"
+        },
+        {
+          "source": "node_modules/@cvg/persistence",
+          "target": "packages/persistence"
+        },
+        {
+          "source": "node_modules/@cvg/legacy-secretary-journeys",
+          "target": "legacy/packages/secretary-journeys"
+        },
+        {
+          "source": "node_modules/@cvg/chaos",
+          "target": "packages/chaos"
+        },
+        {
+          "source": "node_modules/@cvg/conversation",
+          "target": "packages/conversation"
+        },
+        {
+          "source": "node_modules/@cvg/harness-contracts",
+          "target": "packages/contracts"
+        },
+        {
+          "source": "node_modules/@cvg/approval-engine",
+          "target": "packages/approval-engine"
+        },
+        {
+          "source": "node_modules/@cvg/harness",
+          "target": "packages/harness"
+        },
+        {
+          "source": "node_modules/@cvg/worker",
+          "target": "apps/worker"
+        },
+        {
+          "source": "node_modules/@cvg/shift-assistant",
+          "target": "products/shift-assistant"
+        },
+        {
+          "source": "node_modules/@cvg/shared",
+          "target": "packages/shared"
+        }
+      ],
+      "purpose": "Only focused authorized static test runtime; no global scanner closure claim"
+    },
+    "boundedReviewChecks": [
+      {
+        "area": "Parameter initializers with exclusively body-local function/var/class declarations",
+        "evidence": "symbol-proofs.json: outer-function-split, outer-var-split, outer-class-split, global-hidden-by-body",
+        "result": "PASS for these bounded controls"
+      },
+      {
+        "area": "Earlier real parameters, outer values, nested defaults, closure-local hoists, named function expressions",
+        "evidence": "symbol-proofs.json and 124 authorized static tests",
+        "result": "PASS for tested controls; same-name body redeclarations fail as reported"
+      },
+      {
+        "area": "Blocks, catch, hoists, CommonJS wrapper var and nested var, import/export/shorthand identity",
+        "evidence": "symbol-proofs.json and vitest-static-results.json",
+        "result": "PASS for bounded controls"
+      },
+      {
+        "area": "Type, ambient, metadata, import/export erasure without erasing extends/decorators/computed/field/default executable nodes",
+        "evidence": "symbol-proofs.json: syntax-runtime-erasure; authorized suite type/ambient/runtime controls",
+        "result": "PASS for bounded controls"
+      },
+      {
+        "area": "Own constructor scalar, literal BigInt and conservative mutation/escape/prototype/getter/spread/unknown refusals",
+        "evidence": "vitest-static-results.json: bigint-own-constructor, bigint-own-constructor-alias, constructor controls",
+        "result": "PASS for supplied parse/analyzer controls; no universal scalar proof claimed"
+      },
+      {
+        "area": "Neutral named reexports and module metadata versus acquired capabilities",
+        "evidence": "vitest-static-results.json: module-public-metadata-export/indirect, safe-module-renamed, capability/module reexport refusal controls",
+        "result": "PASS for supplied controls"
+      },
+      {
+        "area": "INCOMPLETE never treated as PASS",
+        "evidence": "61 supplied uncertainty controls assert INCOMPLETE and passed=false; checker status at source/scripts/check-product-boundary.mjs:1320",
+        "result": "PASS for supplied controls; global installed scan not run"
+      }
+    ],
+    "installedGlobalScanner": "NOT_RUN",
+    "executedInputHashes": {
+      "identical": true,
+      "files": 7,
+      "evidence": "output/executed-input-hashes.json"
+    }
+  },
+  "limitations": [
+    "Static functional lexical/parameter/syntax precision only. REJECT does not constitute native, adversarial, full-production or universal completeness review.",
+    "Fixtures were never imported or evaluated. Own proofs contain neutral inert text and inspect only AST/symbol identity/grammar.",
+    "Only tests/product-boundary-lexical-static.test.js was executed through Vitest, in the physical output runtime. tests/product-boundary-code-execution.test.js and the original/native suites were not executed.",
+    "No PostgreSQL, Docker, real provider/env, external network, subagents, certify, push or deploy.",
+    "The only analyzer resolver subprocess is the supplied fixed physical module resolver; it uses createRequire.resolve/import.meta.resolve/stat and does not load fixture modules.",
+    "The installed global scanner was not run; global status is NOT_RUN, never inferred PASS. No scanner roots, vendor closure, tests or type-edge exclusions were added or changed.",
+    "The focused physical test runtime is a dependency/analyzer/test copy, not a complete installed global-closure artifact. Documentation/log copying was omitted there solely for isolation; source integrity covers the complete Source.",
+    "Authority declares 371 baseline tests and 41 additions, totaling the 412 test/spec files independently hash-controlled. The packet supplies no original/new path membership list; every file in either set is covered by the full frozen control. No claimed 281 coverage run was repeated or accepted from a previous report.",
+    "No prior report, Builder history, root AGENTS, coordination, ledgers, skills or other scratch was read. Required short SPEC files were read as mandated; conclusions come from own symbol proofs."
+  ],
+  "toolingEvents": [
+    {
+      "event": "First readonly verification attempt rejected an inventory record kind named link rather than symlink.",
+      "sourceMutation": false,
+      "resolution": "Adjusted own output verifier to the actual frozen-inventory schema, reran complete snapshot and comparison.",
+      "evidence": "output/commands.json; final integrity.json and identical before/after manifests"
+    }
+  ],
+  "nextAction": "Correct the two runtime binding-identity defects in a separately authorized builder lane, then repeat the focused static review with fresh frozen inputs.",
+  "productionAcceptance": false,
+  "nativeAcceptance": false,
+  "universalCompletenessAcceptance": false
+}

@@ -1,0 +1,262 @@
+{
+  "reviewId": "C1_PARAMETER_FRESH_STATIC_REVIEW_R3",
+  "verdict": "REJECT",
+  "reviewValid": true,
+  "scope": "Static lexical identities, parameter/body environments, declaration ownership, initialTransfers and both capability fixed-point consumers only",
+  "source": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-parameter-review-r3/source",
+  "inventorySha256": "ec844a455df6960de4a72916bf0f2da304002d168517bffbf0c1a31d5e4f0434",
+  "task": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-parameter-review-r3/source/docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/c1-parameter-environment-r3-t2.md",
+  "completedUtc": "2026-10-05T03:14:06.709278+00:00",
+  "scopeExclusions": [
+    "native/adversarial evaluator tests",
+    "execution of any fixture",
+    "provider/env inspection",
+    "PostgreSQL",
+    "Docker",
+    "network",
+    "subagents",
+    "Root edits or commits",
+    "push",
+    "deployment",
+    "production certification"
+  ],
+  "authorizationAndReadBoundary": "First tool read only packet authority.json and freeze.json; second read packet source/docs/07_agents/AGENTS.md. Followed explicit packet-only, readonly static-review instruction; no skills, Root ledgers/history/prior reports or builder verdict consulted. Byte hashing for integrity covered all frozen files without semantic reading of forbidden documents.",
+  "execution": {
+    "nodeExecutable": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+    "nodeVersion": "v22.23.2",
+    "physicalRuntime": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-parameter-review-r3/output/runtime",
+    "sourceNodeModulesExecution": false,
+    "fixtureExecution": false,
+    "environment": "env -i; HOME/TMPDIR/XDG_CACHE_HOME/npm cache entirely under output; PATH includes authorized Node 22 and standard system executables",
+    "resolverNote": "The authorized static scanner uses its fixed trusted --eval Node resolution helper; it resolves names only and never imports or evaluates fixture contents. The supplied tests and own neutral reexport audits use that helper. Identity confirmations use only TypeScript AST/checker and neutral symbolic cell labels."
+  },
+  "suppliedTests": {
+    "path": "tests/product-boundary-lexical-static.test.js",
+    "sha256": "cc500112e5c39584976504d4ecb21783c2eda1c396ba6ede79a7d30d4a1cf7d2",
+    "total": 132,
+    "passed": 132,
+    "failed": 0,
+    "neutralSyntaxControls": 61,
+    "unknownINCOMPLETEControls": 61,
+    "identityEnvironmentChecks": 10,
+    "originalNativeSuiteRun": false,
+    "artifacts": [
+      "supplied-tests.json",
+      "supplied-tests.log"
+    ]
+  },
+  "independentProofs": {
+    "initialTotal": 32,
+    "initialPassed": 27,
+    "initialFailed": 5,
+    "failedIds": [
+      "simple-function",
+      "array-binding-default",
+      "catch-shadow",
+      "erased-type-computed",
+      "erased-type-array"
+    ],
+    "neutralAnalyzerControls": 6,
+    "confirmationCases": 13,
+    "allConfirmationParseErrors": 0,
+    "symbolicProofLimit": "Neutral labels show identity-map contamination only; no fixture/evaluator executed and no native exploit or runtime outcome inferred.",
+    "fixedPointTransferLoops": [
+      {
+        "file": "scripts/check-product-boundary.mjs",
+        "line": 774,
+        "transferLoop": "for (const [body, parameter] of lexical.initialTransfers)\n        bind(identity(body), parameter)",
+        "enclosingWhile": "changed",
+        "direction": "parameter value -> identity(body)",
+        "sameLexicalIdentityConsumer": true
+      },
+      {
+        "file": "scripts/boundary-code-execution.mjs",
+        "line": 353,
+        "transferLoop": "for (const [body, parameter] of lexical.initialTransfers)\n      record(identity(body), classify(parameter))",
+        "enclosingWhile": "changed",
+        "direction": "parameter value -> identity(body)",
+        "sameLexicalIdentityConsumer": true
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "R3-STATIC-01",
+      "priority": "P1",
+      "blocking": true,
+      "title": "Destructured body var cells remain merged with parameter cells; initialTransfers becomes a self edge",
+      "source": "scripts/boundary-lexical.mjs",
+      "lines": [
+        73,
+        82,
+        90,
+        160,
+        164
+      ],
+      "neutralProof": "function f([token=\"parameter\"],value=()=>token){var [token]=[\"body\"];return token}",
+      "expected": "Parameter/default closure and body var/return have distinct keys and separate declarations. A one-way initial parameter value copy targets the body cell.",
+      "actual": "mjs and mts: all references use cell1; declarations contain both parameter and body BindingElements; transfer target=cell1, parameter=cell1, selfEdge=true. Object and computed object body destructuring reproduce the same defect.",
+      "cause": "Collected body.declarations stores the enclosing VariableDeclaration, but TypeScript symbol.declarations contains a BindingElement. Exact includes() fails the belongs test, so the environment override is skipped and the merged binder symbol survives.",
+      "impact": "Identity correctness and directed initial-copy precision fail. The neutral symbolic mapping adds body-write-label to the parameter and initializer closure too. Both capability fixed points consume these same identity keys, so their separation premise fails. No native escape or real capability execution is asserted.",
+      "proofArtifacts": [
+        "neutral-probes.json#array-binding-default",
+        "confirm-neutral.json#body-array-binding",
+        "confirm-neutral.json#body-object-binding",
+        "confirm-neutral.json#computed-body-binding"
+      ],
+      "remediation": "Classify binding declaration ownership through the containing runtime declaration/environment, and require a distinct target/source transfer key for parameter-expression body vars, preserving actual nested/block shadow declarations."
+    },
+    {
+      "id": "R3-STATIC-02",
+      "priority": "P1",
+      "blocking": true,
+      "title": "Catch bindings are collected as body var declarations and can capture references outside the catch scope",
+      "source": "scripts/boundary-lexical.mjs",
+      "lines": [
+        73,
+        74,
+        85,
+        90,
+        165
+      ],
+      "neutralProof": "function f(token=\"parameter\"){try{}catch(token){read(token)}return token}",
+      "expected": "Catch parameter/use remain a separate lexical identity. Return outside catch resolves to the function parameter. No body-var initial transfer is created when there is no body var.",
+      "actual": "mjs and mts: parameter=cell1, catch binding/use=cell2, outside return=cell2. An invented cell1 -> cell2 initial transfer targets the catch binding. With an actual body var, body var and catch key merge instead.",
+      "cause": "CatchClause.variableDeclaration satisfies isVariableDeclaration and its parent has no BlockScoped declaration-list flag. The body collector accepts it as a var, and identity assigns body.key to every otherwise matching body reference.",
+      "impact": "Both lexical lookup and capability-transfer targets include a cell that is not a body var. Catch scope isolation fails; the outside return has incorrect declarations.",
+      "proofArtifacts": [
+        "neutral-probes.json#catch-shadow",
+        "confirm-neutral.json#catch-cell",
+        "confirm-neutral.json#catch-only"
+      ],
+      "remediation": "Collect only real var declarations under their declaration list, exclude catch lexical declarations, and preserve the TypeScript catch identity separately."
+    },
+    {
+      "id": "R3-STATIC-03",
+      "priority": "P2",
+      "blocking": true,
+      "title": "Simple-parameter body function declaration and its body reference use different identities",
+      "source": "scripts/boundary-lexical.mjs",
+      "lines": [
+        45,
+        53,
+        99,
+        200
+      ],
+      "neutralProof": "function f(token){function token(){}return token}",
+      "expected": "The function declaration initializes/overwrites the shared simple-parameter runtime binding; a body reference must represent that effective body function value and its declaration. Simple parameter/var sharing must continue to work.",
+      "actual": "mjs and mts: parameter=cell1 (Parameter declaration), function declaration=cell2 (FunctionDeclaration), return=cell1. BodyVsReturn=false; no transfer. The original binder body-reference-to-parameter behavior remains when expressions=false.",
+      "cause": "Environment correction is gated on parameter expressions; the simple parameter case falls back to the raw checker symbols without repairing body-function precedence.",
+      "impact": "Declaration/reference identity and body function precedence remain incorrect for an explicitly in-scope lexical case. The positive simple-var probe does pass.",
+      "proofArtifacts": [
+        "neutral-probes.json#simple-function",
+        "confirm-neutral.json#simple-function-precedence"
+      ],
+      "remediation": "Model simple-parameter shared binding and function initialization precedence consistently, including the body declaration/reference identities, without treating a body function as a parameter-value copy."
+    },
+    {
+      "id": "R3-STATIC-04",
+      "priority": "P2",
+      "blocking": true,
+      "title": "Computed names inside erased parameter types create a fictitious parameter-expression environment",
+      "source": "scripts/boundary-lexical.mjs",
+      "lines": [
+        47,
+        48,
+        50,
+        52,
+        53,
+        92
+      ],
+      "neutralProof": "function f(token:{[\"label\"]:string}){var token;return token}",
+      "expected": "The type annotation is erased. The runtime parameter list is simple; parameter and body var share one key, with no separate initial transfer.",
+      "actual": "mts: parameter=cell1, body var/return=cell2; a cell1 -> cell2 transfer is created. Nested Array<{[\"label\"]:string}> type reproduces the defect.",
+      "cause": "parameterExpressions recursively scans type syntax and marks every ComputedPropertyName as an expression, without respecting runtime/value erasure.",
+      "impact": "Value/type erasure and simple-parameter sharing fail even for neutral scalar input. Six neutral analyzer controls still pass, so this is specifically a lexical/transfer invariant failure.",
+      "proofArtifacts": [
+        "neutral-probes.json#erased-type-computed",
+        "neutral-probes.json#erased-type-array",
+        "confirm-neutral.json#erased-computed-type"
+      ],
+      "remediation": "Detect ContainsExpression in emitted parameter binding syntax and initializers, excluding all erased type/declaration syntax."
+    }
+  ],
+  "integrity": {
+    "source": "/home/ricardo/.cache/cvg-harness-green-20261004/c1-parameter-review-r3/source",
+    "snapshotEntriesBefore": 21352,
+    "snapshotEntriesAfter": 21352,
+    "regularFiles": 19334,
+    "links": 48,
+    "directories": 1970,
+    "frozenEntries": 19382,
+    "inventorySha256": "ec844a455df6960de4a72916bf0f2da304002d168517bffbf0c1a31d5e4f0434",
+    "expectedInventorySha256": "ec844a455df6960de4a72916bf0f2da304002d168517bffbf0c1a31d5e4f0434",
+    "beforeSnapshotSha256": "6383086c94ce142169a8d5abeb0347fe502d91bc0284b67b02c7d1e7e34ffd44",
+    "afterSnapshotSha256": "6383086c94ce142169a8d5abeb0347fe502d91bc0284b67b02c7d1e7e34ffd44",
+    "fullMetadataDifferences": 0,
+    "frozenContentDifferences": 0,
+    "frozenDifferencePaths": [],
+    "outputSharedSourceInodes": [],
+    "outputSymlinks": [],
+    "comparedFields": [
+      "kind",
+      "dev",
+      "inode",
+      "mode",
+      "nlink",
+      "size",
+      "mtime_ns",
+      "ctime_ns",
+      "sha256 (regular files)",
+      "target (symlinks)"
+    ],
+    "sourceWalkPolicy": "lstat; os.walk(followlinks=False); hashes cover all regular files including vendor/dist/original tests/schema/roots/bar/lockfiles; includes root directory",
+    "valid": true
+  },
+  "runtimeIsolation": {
+    "copiedEntries": 20888,
+    "sharedSourceInodes": [],
+    "runtimeSymlinks": [],
+    "copyPolicy": "physical copy2, omitted all node_modules symlinks; 4 scanner modules and supplied inert test only",
+    "selectedHashes": {
+      "scripts/boundary-lexical.mjs": "f783557a47395f1f047549fc2f0c8cd9fd4f3789b54779a0b4bc338940b09bb4",
+      "scripts/boundary-code-execution.mjs": "ec716aca63169fec688e77297f2817c4834a7d7091fea04705a1b0ff7fdecd63",
+      "scripts/check-product-boundary.mjs": "b27012431f813a6bae645383d6952e5baf798b095c44926f641440a27dbd7b23",
+      "scripts/tsconfig-path-grammar.mjs": "62f5791962360d1836c281b68758094abdd970412d7a5f2ad49e538352201f8f",
+      "tests/product-boundary-lexical-static.test.js": "cc500112e5c39584976504d4ecb21783c2eda1c396ba6ede79a7d30d4a1cf7d2"
+    }
+  },
+  "copiedFilesAfterExecution": {
+    "copiedFilesVerifiedAfterExecution": 17351,
+    "changedCopiedFiles": [],
+    "runtimeSymlinksAfterExecution": [],
+    "selectedTestPreserved": true,
+    "excludedOwnFiles": [
+      "package.json",
+      "vitest.review.config.mjs",
+      "neutral-probes.mjs",
+      "confirm-neutral.mjs"
+    ],
+    "note": "Initial broad path comparison included reviewer-authored runtime/package.json; corrected to actual copy scope. No copied file changed."
+  },
+  "cleanup": {
+    "removedOnlyOwnResources": [
+      "/home/ricardo/.cache/cvg-harness-green-20261004/c1-parameter-review-r3/output/runtime/node_modules",
+      "/home/ricardo/.cache/cvg-harness-green-20261004/c1-parameter-review-r3/output/cache",
+      "/home/ricardo/.cache/cvg-harness-green-20261004/c1-parameter-review-r3/output/tmp",
+      "/home/ricardo/.cache/cvg-harness-green-20261004/c1-parameter-review-r3/output/home"
+    ],
+    "retained": "copied scanner modules, supplied test, neutral probe scripts/text fixtures, logs, JSON evidence, integrity snapshots"
+  },
+  "unknownPolicy": {
+    "suppliedUnknownControls": "61/61 require status INCOMPLETE, passed=false and the expected reason; all passed.",
+    "wholeInstalledRepositoryScanner": "NOT_RUN",
+    "wholeInstalledRepositoryAssessment": "INCOMPLETE; no PASS or release evidence inferred from this limited review.",
+    "remainingGates": "Native/adversarial and integrated product/repository gates remain outside this review."
+  },
+  "executionNotes": [
+    "The initial inventory comparator used symlink instead of frozen kind link: 48 label-only differences. Normalization produced exact zero-content/target differences before execution and again after.",
+    "An initial post-execution comparison included reviewer-authored runtime/package.json as if copied from Source. Corrected to the actual copy scope; all 17351 copied regular files match their frozen hashes. Both diagnostic artifacts are retained."
+  ],
+  "nextAction": "Correct the four lexical/declaration defects, add inert controls for both body destructuring forms/computed binding/catch-only/simple-function/erased types, verify disjoint transfers and both fixed points, then request a new independent static review. This report grants no broader gate."
+}
