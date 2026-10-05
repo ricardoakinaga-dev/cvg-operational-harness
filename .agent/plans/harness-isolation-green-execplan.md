@@ -1,5 +1,11 @@
 # GREEN — correção contínua local — 04/10/2026
 
+## Estado atual — checkpoint 57
+
+O checker Root foi corrigido por cinco módulos próprios em commit local 05d1253: 62/62 controles CLI esperados e 78/78 testes originais passaram; desconhecidos seguem INCOMPLETE. Reconstrução dos 8.479 inputs R25 conferida por bytes das partes arquivadas no repositório; corpo histórico do handoff A5 preservado. Dockerfile completo pinado compilou e gerou imagem 0151d13b/bundle67a5a288; preparação de egress local conferida, sem aplicar ou qualificar política de host. Revisão R36 reproduziu corrupção do journal vivo aceita com webhook200, sendText e readiness200, enquanto restart503; também violou Q7 de leitura e não concede aceite formal. Revisão independente R37 rejeitou backup/restore: quatro volumes irrecuperáveis recebem sucesso. Monitor e controles B3–B5 passaram somente no escopo local. R38 corrige os cinco defeitos em cópia isolada, R39 investiga próximo reparo concreto da closure. Os 16 gates R26 e seus 5.735 testes em 413 arquivos, mais 5.100/385 da variante neutra, são histórico da candidata anterior e se sobrepõem. Não certificam a correção R38 futura. Global FAIL, produção NO_GO; apenas HISO-001 DONE, 24 critérios preservados. NO_MODEL, zero chamadas externas; promoção/T4 pendentes e packet de egress deve ser refeito após novo artefato.
+
+Próxima ação: concluir R38, obter revisão nova sobre o artefato corrigido e repetir os gates completos antes da promoção condicionada. [Evidência](../../docs/04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-57-new-storage-defects-and-root-checker.json).
+
 ## Purpose / Big Picture
 
 Entregar harness e consumidor separados com todos os gates locais obrigatórios verdes e revisão independente válida. Pedido atual revoga o orçamento de um ciclo NEXT. Preservar os failures anteriores, a baseline completa e as SPECs aprovadas. OpenAI/GPT‑6 Luna e chave privada no `.env`; emenda sintética aprovada para BUILD local, execução externa sujeita ao pacote T4 final. NO_MODEL clínico padrão permanece. Sem dados reais, push, piloto ou deploy de produção.
