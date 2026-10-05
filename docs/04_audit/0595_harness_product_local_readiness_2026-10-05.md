@@ -119,3 +119,8 @@ adicional é marcado DONE por esta tabela; não há liberação de produção.
 ## Atualização de evidência: variante neutra R24
 
 A variante física sem produto passou no build público e na suíte de 5.030 testes em 383 arquivos com PostgreSQL e cobertura, sem falhas, skips ou TODOs. A captura confirmou os 7.685 inputs intactos. O resultado não é somado aos 5.662 testes da variante com produto, pois as suítes se sobrepõem. As notas e os estados canônicos permanecem: a fronteira instalada ainda requer correção e revisão. [Prova, preparação e hashes](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/final-neutral-r24-local-pass.json).
+
+
+## Atualização de evidência: sandbox local
+
+A versão imutável R19 está disponível na console sintética local 3501. O reinício preservou três arquivos anteriores e recuperou duas notas. Nove grupos browser passaram; crítico novo aceitou o escopo local, conferindo todos os 8.476 arquivos de fonte, corpus e sete pedidos negativos sem efeitos. Conversas visíveis ficam em memória; notas/eventos são duráveis. Os serviços permanecem simulados, sem chamadas OpenAI e com delivery NOT_QUALIFIED. As notas e estados canônicos não mudam por esse resultado. [Prova do reinício/browser](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/local-sandbox-r19-restart-browser.json) e [revisão independente](evidence/HARNESS-ISO-EXEC-20261003/green-20261004/local-sandbox-r19-fresh-review.json).
