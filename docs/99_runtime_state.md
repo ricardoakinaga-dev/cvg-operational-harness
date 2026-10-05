@@ -1,10 +1,11 @@
 # HARNESS-ISO-GREEN — correções isoladas em execução — 04/10/2026
 
-- Task: `HARNESS_ISO_GREEN_20261004`. `status: IN_PROGRESS`; global **FAIL**, produção **NO_GO**. Zero chamadas OpenAI; sem runtime promovido, push, implantação ou dado real.
-- `last_completed_action`: cinco fontes gateway integradas; 1.532 testes focados PASS/zero falhas/skips. Sessões/ingresso: 112 controles PG integrados PASS. Revisões independentes novas nas duas frentes em andamento. Recortes sobrepostos, não somar à suíte completa.
-- Segurança atual: 6.575 disposições individuais/zero desconhecidos; CodeQL tem três avisos para revisão. Runtime atual compilado: 18 projetos/766 inputs/210 source maps/706 arquivos de contexto. Imagem neutra nova e processo production com auth separado em qualificação.
-- Suíte completa PostgreSQL/cobertura atual em execução. Anterior: 3.937 PASS/sete FAIL/zero skips entre 3.944. HISO-005 instalado INCOMPLETE/11.700; crítica interrompida pela ferramenta, sem aceite. 371 paths originais/38 adições/281 coverage, 24 critérios intactos, nenhum novo DONE.
-- `next_action`: concluir gates/críticas em andamento, fechar fronteira/CI/OPS/segurança e condições de promoção. NO_MODEL e T4 separado mantidos. [Checkpoint 24](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-24-gateway-pricing-inbound-review-and-full-suite-running.json). Todo conteúdo dirty anterior preservado.
+- Task: `HARNESS_ISO_GREEN_20261004`. `status: IN_PROGRESS`; global **FAIL**, produção **NO_GO**. Zero chamadas OpenAI, sem promoção, push, implantação ou dado real.
+- `last_completed_action`: suíte completa PostgreSQL com cobertura global **4.348 PASS em 402 arquivos, zero falhas/skips, MATCH**. E2E 12 Chromium e recorte 15 nas três engines PASS, sem retries/skips; conjuntos sobrepostos. Tipos/lint/formato/audit 0 vulnerabilidades PASS.
+- Sessões/ingresso: revisão independente ACCEPT no escopo (220 existentes, 68 casos próprios, 238 HTTP, 15 processos main). Imagem neutra atual: build/shape/processo production PostgreSQL/auth separado PASS, somente rede privada sintética.
+- Gate crítico channel FAIL no Main por functions94,59/branches94,85 abaixo95; recorte isolado de 129 testes PASS atingiu95,94/95,12 sem mudar denominadores, integração/reteste completo pendentes. Gateway R9 válido REJECT por colisão de tupla; correção isolada ativa. HISO-005 instalado INCOMPLETE/11.700; crítica estática R2 INVALID, quatro achados informativos em correção lexical isolada.
+- Segurança: 6.575 disposições individuais/zero desconhecidos e três avisos CodeQL aguardam revisão. 371 paths originais/38 adições/281 coverage atuais; 24 critérios mantidos, sem novo DONE.
+- `next_action`: fechar critical95 e fronteira instalada, novas revisões válidas e gates finais neutros/PG/segurança/operação/certificação antes promoção condicionada. NO_MODEL/T4 separados. [Checkpoint 27](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-27-critical-focused-green-and-gateway-tuple-finding.json). Todo conteúdo dirty anterior preservado.
 
 # PR-301-WEBHOOK-CLOCK-GUARD — SPEC 0162 draft — 28/09/2026
 
