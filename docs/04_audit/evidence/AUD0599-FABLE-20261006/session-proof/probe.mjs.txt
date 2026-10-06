@@ -1,0 +1,29 @@
+import './loader.mjs'
+import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
+const root='/home/ricardo/Área de trabalho/cvg-operational-harness'
+const {buildServer}=await import(root+'/apps/api/src/server.ts')
+const {createTrustedOperatorIdentityResolver,createTrustedOperatorIdentityToken}=await import(root+'/apps/api/src/operator-identity.ts')
+const {createInMemoryOperatorSessionStore}=await import(root+'/apps/api/src/operator-session.ts')
+const secret=randomBytes(48).toString('hex')
+const identity={operatorId:'operator.aud0599.synthetic',role:'Admin',tenantId:'tenant_00000000-0000-4000-8000-000000000731'}
+const results=[]
+for(const composeStore of [false,true]){
+ const app=buildServer({identityMode:'trusted',operatorIdentityResolver:createTrustedOperatorIdentityResolver({secret}),...(composeStore?{operatorSessionStore:createInMemoryOperatorSessionStore()}:{})})
+ try {
+  const token=createTrustedOperatorIdentityToken(identity,secret)
+  const login=await app.inject({method:'GET',url:'/v1/session',headers:{'x-cvg-operator-token':token}})
+  const cookie=String(login.headers['set-cookie']??'').split(';')[0]
+  const protectedRoute=await app.inject({method:'GET',url:'/v1/admin/agents',headers:cookie?{cookie}:{}})
+  const noSession=await app.inject({method:'GET',url:'/v1/admin/agents'})
+  const health=await app.inject({method:'GET',url:'/live'})
+  assert.equal(health.statusCode,200)
+  assert.equal(login.statusCode,composeStore?200:503)
+  assert.equal(protectedRoute.statusCode,composeStore?200:503)
+  assert.equal(noSession.statusCode,composeStore?401:503)
+  results.push({composeStore,login:login.statusCode,protectedRoute:protectedRoute.statusCode,noSession:noSession.statusCode,live:health.statusCode})
+ } finally {await app.close()}
+}
+const evidence={node:process.version,scope:'Fastify injection with synthetic memory dependencies; missing session-store composition boundary, not official main production-process proof',results}
+writeFileSync('/tmp/cvg-aud0599-20261006/session-proof/results.json',JSON.stringify(evidence,null,2)+'\n');console.log(JSON.stringify(evidence))

@@ -1,0 +1,44 @@
+import './loader.mjs'
+import { createRequire } from 'node:module'
+import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
+const root='/home/ricardo/Área de trabalho/cvg-operational-harness'
+const require=createRequire(root+'/package.json')
+const {Client,Pool}=require('pg')
+const {DurableApprovalEngineAdapter}=await import(root+'/packages/persistence/src/operational-approval-adapter.ts')
+const {PostgresApprovalAuthority}=await import(root+'/packages/persistence/src/runtime-approval-store.ts')
+const {runPostgresMigrations}=await import(root+'/packages/persistence/src/postgres.ts')
+const connectionString='postgres://postgres:synthetic-aud0599-local@127.0.0.1:55721/cvg_aud0599'
+const schema='aud0599_release_'+randomBytes(6).toString('hex')
+const admin=new Client({connectionString});await admin.connect();let pool
+const results=[]
+try {
+ await runPostgresMigrations(admin,{schemaName:schema})
+ pool=new Pool({connectionString,max:2,options:`-c search_path=${schema}`})
+ const authority=new PostgresApprovalAuthority(pool),adapter=new DurableApprovalEngineAdapter(authority)
+ const tenantId='tenant_00000000-0000-4000-8000-000000000731'
+ async function approved(hint){
+  const input={tenantId,agentId:'agent.synthetic',operationKey:'aud0599-'+hint,toolId:'synthetic.tool',summary:'synthetic only',correlationId:'corr_aud0599_'+hint,executionRef:'exec_aud0599_'+hint,operatorId:'requester.synthetic',agentVersion:'v1',action:'tool.execute',resource:{type:'tool',id:'synthetic.tool'},payload:{synthetic:true,hint},policyVersion:'policy-v1'}
+  const decision=await adapter.request(input);assert.equal(decision.status,'PENDING')
+  await authority.approve(tenantId,decision.approvalId,{approverId:'operator.synthetic.independent'})
+  return {execution:{...input,approvalId:decision.approvalId},status:async()=>(await authority.get(tenantId,decision.approvalId)).status}
+ }
+ const h=await approved('release'),first=await adapter.execution.begin(h.execution)
+ assert.equal(await h.status(),'EXECUTING')
+ await adapter.execution.release({request:h.execution,reservationId:first.reservationId,evidenceRef:'synthetic-no-effect'})
+ assert.equal(await h.status(),'APPROVED')
+ const secondAdapter=new DurableApprovalEngineAdapter(new PostgresApprovalAuthority(pool))
+ const second=await secondAdapter.execution.begin(h.execution);assert.notEqual(first.reservationId,second.reservationId)
+ await assert.rejects(()=>adapter.execution.release({request:h.execution,reservationId:first.reservationId,evidenceRef:'synthetic-stale'}))
+ assert.equal(await h.status(),'EXECUTING')
+ await secondAdapter.execution.complete({request:h.execution,reservationId:second.reservationId,evidenceRef:'synthetic-confirmed'})
+ assert.equal(await h.status(),'EXECUTED');await assert.rejects(()=>secondAdapter.execution.begin(h.execution))
+ results.push({case:'release/reconstruct/re-reserve/complete/stale-release/replay',status:'PASS',finalStatus:await h.status()})
+ const terminal=await approved('terminal'),handle=await adapter.execution.begin(terminal.execution)
+ await adapter.execution.fail({request:terminal.execution,reservationId:handle.reservationId,evidenceRef:'synthetic-terminal'})
+ assert.equal(await terminal.status(),'FAILED');await assert.rejects(()=>adapter.execution.begin(terminal.execution))
+ results.push({case:'terminal-fail-never-releases',status:'PASS',finalStatus:await terminal.status()})
+} finally {await pool?.end();await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);await admin.end()}
+const evidence={node:process.version,postgres:'16 disposable owned loopback',syntheticOnly:true,scope:'real new adapter release port with PostgreSQL authority; not full runtime pause/crash with PostgreSQL',results}
+writeFileSync('/tmp/cvg-aud0599-20261006/pg-proof/results.json',JSON.stringify(evidence,null,2)+'\n');console.log(JSON.stringify(evidence))

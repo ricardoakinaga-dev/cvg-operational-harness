@@ -294,6 +294,28 @@ export async function dispatchTool(
   }
 
   const stepId = `step_${run.executionId}_${stepNumber}_tool`
+  // A resumed step already holds this step number as a tool step (waiting for
+  // approval or in flight); a control that now denies it closes that same
+  // step instead of recording a second one under the same number.
+  const resumedStep = run.state.pendingStepNumber === stepNumber
+  const recordDenial = (
+    record: Parameters<IterativeDispatchContext['recordStep']>[1] & {
+      errorCode: string
+    }
+  ): Promise<void> =>
+    ctx.recordStep(
+      run,
+      resumedStep
+        ? {
+            stepNumber,
+            stepType: 'TOOL',
+            status: 'FAILED',
+            sideEffecting: true,
+            reasonCode: decision.reasonCode,
+            errorCode: record.errorCode
+          }
+        : record
+    )
   const call: ToolCallState = {
     turn: ctx.turn(run),
     tool,
@@ -345,11 +367,15 @@ export async function dispatchTool(
       // approval is only reserved after this checkpoint.
       if (!alreadyCounted) run.usage.toolCalls += 1
       run.inFlightCounted = false
+      // The step is in flight from here: a stop reason left by an earlier
+      // approval wait would hide that this call is already counted when the
+      // execution resumes (AUD-0598 R02).
       run.state = {
         ...run.state,
         pendingDecision: decision,
         pendingStepNumber: stepNumber,
-        ...(approvalId ? { pendingApprovalId: approvalId } : {})
+        ...(approvalId ? { pendingApprovalId: approvalId } : {}),
+        stopReason: undefined
       }
       await ctx.persistCheckpoint(run)
       await ctx.recordStep(run, {
@@ -386,7 +412,7 @@ export async function dispatchTool(
           provenance: { sourceId: 'policy-engine' }
         })
       )
-      await ctx.recordStep(run, {
+      await recordDenial({
         stepNumber,
         stepType: 'POLICY',
         status: 'FAILED',
@@ -399,7 +425,7 @@ export async function dispatchTool(
     await recordPolicy()
     switch (gate.cause) {
       case 'policy_denied':
-        await ctx.recordStep(run, {
+        await recordDenial({
           stepNumber,
           stepType: 'POLICY',
           status: 'FAILED',
@@ -409,6 +435,16 @@ export async function dispatchTool(
         })
         break
       case 'policy_handoff':
+        if (resumedStep) {
+          await recordDenial({
+            stepNumber,
+            stepType: 'TOOL',
+            status: 'FAILED',
+            sideEffecting: true,
+            errorCode: 'policy_handoff'
+          })
+          break
+        }
         await ctx.recordStep(run, {
           stepNumber,
           stepType: 'HANDOFF',
@@ -426,7 +462,7 @@ export async function dispatchTool(
           pauseStepNumber: stepNumber
         }
       case 'approval_denied':
-        await ctx.recordStep(run, {
+        await recordDenial({
           stepNumber,
           stepType: 'APPROVAL',
           status: 'FAILED',
@@ -456,6 +492,15 @@ export async function dispatchTool(
   switch (outcome.kind) {
     case 'not_started': {
       const gate = outcome.gate
+      if (pipeline.logFailure) {
+        // The closing record was lost: this is neither a clean pause nor a
+        // clean denial, although nothing ran (AUD-0598 R04).
+        await failStep('not_started')
+        return ctx.stop(
+          'INSUFFICIENT_EVIDENCE',
+          `${pipeline.logFailure.response} The call was blocked before it started: ${gate.response}`
+        )
+      }
       if (gate.cause === 'operator_paused') {
         // The reservation was released as certain; the step resumes later.
         return {

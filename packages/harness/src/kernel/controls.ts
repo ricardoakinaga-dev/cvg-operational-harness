@@ -543,11 +543,21 @@ export function approvalsControl(
     }
     const ref = (suffix: string) => `${request.executionRef}:${suffix}`
     switch (outcome.kind) {
-      case 'not_started':
-        await port
-          .fail({ ...base, evidenceRef: ref('tool_not_started') })
-          .catch(() => undefined)
+      case 'not_started': {
+        const evidence = { ...base, evidenceRef: ref('tool_not_started') }
+        // An operator pause leaves the execution resumable, so the proven
+        // absence of effect gives the approval back instead of ending it
+        // (AUD-0598 R01). Every other not-started stop is terminal.
+        if (outcome.gate.cause === 'operator_paused' && port.release) {
+          const released = await port.release(evidence).then(
+            () => true,
+            () => false
+          )
+          if (released) return outcome
+        }
+        await port.fail(evidence).catch(() => undefined)
         return outcome
+      }
       case 'deadline':
         await port
           .uncertain({

@@ -1,0 +1,17 @@
+import {registerHooks, createRequire} from 'node:module';
+import {readFileSync} from 'node:fs';
+import {fileURLToPath,pathToFileURL} from 'node:url';
+const root='/home/ricardo/Área de trabalho/cvg-operational-harness';
+const require=createRequire(root+'/package.json');
+const ts=require('typescript');
+const paths=JSON.parse(readFileSync(root+'/tsconfig.base.json','utf8')).compilerOptions.paths;
+registerHooks({
+ resolve(specifier,context,nextResolve){
+  if(paths[specifier]) return {url:pathToFileURL(root+'/'+paths[specifier][0]).href,shortCircuit:true};
+  return nextResolve(specifier,context);
+ },
+ load(url,context,nextLoad){
+  if(url.endsWith('.ts')) return {format:'module',source:ts.transpileModule(readFileSync(fileURLToPath(url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText,shortCircuit:true};
+  return nextLoad(url,context);
+ }
+});

@@ -372,6 +372,17 @@ export interface ApprovalExecutionPort {
     readonly reservationId: string
     readonly evidenceRef: string
   }): Promise<void>
+  /**
+   * Returns a reservation whose effect provably never started, so the same
+   * approval stays usable when the execution resumes (operator pause). It
+   * never grants a second use: the reservation is given back, not duplicated.
+   * A port without it settles the reservation with `fail`.
+   */
+  release?(input: {
+    readonly request: ApprovalExecutionRequest
+    readonly reservationId: string
+    readonly evidenceRef: string
+  }): Promise<void>
   uncertain(input: {
     readonly request: ApprovalExecutionRequest
     readonly reservationId: string

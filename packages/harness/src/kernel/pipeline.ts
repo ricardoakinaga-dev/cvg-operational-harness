@@ -251,13 +251,23 @@ export async function runToolCall(
   const closeNotStarted = async (
     blocked: KernelStop
   ): Promise<ToolPipelineResult> => {
-    await appendLog(host, {
+    const unrecorded = await appendLog(host, {
       type: 'tool/result',
       correlationId,
       toolId: tool.id,
       outcome: 'not_started'
     })
-    return { kind: 'stopped', gate: blocked }
+    // A lost closing record is not hidden behind the denial (AUD-0598 R04):
+    // the call stays blocked, and the turn reports the missing evidence.
+    return unrecorded
+      ? {
+          kind: 'stopped',
+          gate: stop(
+            'INSUFFICIENT_EVIDENCE',
+            `${unrecorded.response} The call was blocked before it started: ${blocked.response}`
+          )
+        }
+      : { kind: 'stopped', gate: blocked }
   }
 
   const gate = await runGate(host, 'tool/pre-execute', call)
@@ -266,7 +276,20 @@ export async function runToolCall(
   const denial = await revalidate(host, call)
   if (denial) return closeNotStarted(denial)
 
-  const hooked = await hooks.beforeDispatch?.(call)
+  let hooked: KernelStop | undefined
+  try {
+    hooked = await hooks.beforeDispatch?.(call)
+  } catch (error) {
+    // The loop's own checkpoint failed: the logged call is still closed once
+    // and the original failure reaches the loop unchanged (AUD-0598 R03).
+    await appendLog(host, {
+      type: 'tool/result',
+      correlationId,
+      toolId: tool.id,
+      outcome: 'not_started'
+    })
+    throw error
+  }
   if (hooked) return closeNotStarted(hooked)
 
   // The hook may have taken time (checkpoint): re-check before reserving.

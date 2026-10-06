@@ -172,3 +172,36 @@ acrescenta três exigências ao kernel:
    da execução (single-pass), requisição ao modelo reconstruível pelo log (os
    três), exceção normalizada (`GovernedAgentRuntime`) e cancelamento por
    `signal` (single-pass e iterativo). Os `it.fails` correspondentes viram `it`.
+
+## 11. Adendo — settlement retomável e encerramento de chamada (AUD-0598)
+
+Origem: [AUD-0598](../04_audit/0598_reauditoria_kplg004_2026-10-06.md) R01–R04.
+Pedido do usuário em 06/10/2026 (corrigir e levar o harness à barra 0373).
+Nenhuma invariante é relaxada; I4/I9 (uso único) e I5 continuam valendo.
+
+1. **`ApprovalExecutionPort.release` (opcional, aditivo).** Devolve uma reserva
+   cujo efeito comprovadamente não começou. O kernel só a usa quando a parada é
+   uma pausa do operador (`cause: operator_paused`), porque só aí a execução
+   continua retomável. Cancelamento, prazo esgotado e falha de plugin antes do
+   despacho continuam terminais e usam `fail`. Porta sem `release`, ou
+   `release` que falha, cai em `fail`. O `DurableApprovalEngineAdapter`
+   implementa `release` com `authority.release` (a aprovação volta a
+   `APPROVED`); a reserva é devolvida, nunca duplicada.
+2. **Checkpoint de despacho não carrega `stopReason`.** A partir do checkpoint
+   gravado em `beforeDispatch`, o passo está em andamento e a chamada já foi
+   contada; um `APPROVAL_REQUIRED` herdado da espera anterior é removido. Na
+   retomada, `pendingDecision` sem `stopReason` significa "chamada em andamento
+   já contabilizada". Nenhum campo novo no estado durável.
+3. **Chamada registrada é encerrada também nos caminhos de erro.** Exceção do
+   hook `beforeDispatch` (checkpoint ou registro de passo) grava um
+   `tool/result not_started` e a falha original segue para o loop. Se o
+   registro de encerramento de uma chamada negada falhar, o turno termina em
+   `INSUFFICIENT_EVIDENCE`, com o motivo da negação na resposta.
+4. **Negação numa etapa retomada fecha a própria etapa.** Quando política ou
+   aprovação negam um passo que já existe como etapa de ferramenta (aguardando
+   aprovação ou em andamento), o iterativo marca essa etapa como `FAILED` com o
+   código da negação, em vez de gravar outra etapa no mesmo número.
+
+Testes: `packages/harness/src/__tests__/aud0598-kplg004-regressions.test.ts` e
+`tests/conformance/durable-approval-resume.conformance.test.ts` (adaptador e
+máquina de estados de aprovação reais).

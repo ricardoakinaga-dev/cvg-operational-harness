@@ -33,6 +33,7 @@ export class DurableApprovalEngineAdapter implements ApprovalEngine {
     begin: (request) => this.beginExecution(request),
     complete: (input) => this.completeExecution(input),
     fail: (input) => this.failExecution(input),
+    release: (input) => this.releaseExecution(input),
     uncertain: (input) => this.markUncertain(input)
   }
 
@@ -260,6 +261,23 @@ export class DurableApprovalEngineAdapter implements ApprovalEngine {
     evidenceRef: string
   }): Promise<void> {
     await this.authority.fail({
+      tenantId: input.request.tenantId,
+      approvalId: input.request.approvalId,
+      reservationId: input.reservationId,
+      evidence: {
+        outcome: 'no_effect',
+        source: 'adapter',
+        evidenceRef: input.evidenceRef
+      }
+    })
+  }
+
+  private async releaseExecution(input: {
+    request: ApprovalExecutionRequest
+    reservationId: string
+    evidenceRef: string
+  }): Promise<void> {
+    await this.authority.release({
       tenantId: input.request.tenantId,
       approvalId: input.request.approvalId,
       reservationId: input.reservationId,
