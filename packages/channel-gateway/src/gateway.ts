@@ -48,6 +48,7 @@ export interface ChannelGatewayOptions {
   effectJournal?: ChannelEffectJournal
   leaseMs?: number
   leaseOwner?: string
+  /** Accepted for compatibility; leases use the effect journal's clock. */
   clock?: () => number
   waitTimeoutMs?: number
   heartbeatIntervalMs?: number
@@ -75,7 +76,6 @@ export class ChannelGateway {
   readonly #effects: ChannelEffectJournal
   readonly #leaseMs: number
   readonly #leaseOwner: string
-  readonly #clock: () => number
   readonly #waitTimeoutMs: number
   readonly #heartbeatIntervalMs: number
   readonly #onEvent?: (event: ChannelEvent) => void
@@ -93,7 +93,6 @@ export class ChannelGateway {
     this.#leaseOwner = `${
       options.leaseOwner ?? 'gateway'
     }:${process.pid}:${randomUUID()}`
-    this.#clock = options.clock ?? (() => Date.now())
     this.#waitTimeoutMs = options.waitTimeoutMs ?? this.#leaseMs * 2
     this.#heartbeatIntervalMs =
       options.heartbeatIntervalMs ?? Math.max(1, Math.floor(this.#leaseMs / 3))
