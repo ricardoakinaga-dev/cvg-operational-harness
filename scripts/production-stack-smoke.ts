@@ -118,7 +118,11 @@ async function main(): Promise<void> {
     '--security-opt',
     'no-new-privileges',
     '--tmpfs',
-    '/tmp:rw,noexec,nosuid,size=16m'
+    '/tmp:rw,noexec,nosuid,size=16m',
+    // Same image probe, evaluated faster for the smoke.
+    '--health-interval=2s',
+    '--health-start-period=2s',
+    '--health-retries=2'
   ]
 
   docker(['network', 'create', network])
@@ -400,6 +404,30 @@ async function main(): Promise<void> {
       (await operations.status(TENANT)).workers.length > 0 ? true : undefined
     )
     check('worker.started_production_kernel', true)
+    const health = (name: string) =>
+      waitFor(
+        async () => {
+          const status = docker([
+            'inspect',
+            '--format',
+            '{{.State.Health.Status}}',
+            name
+          ])
+          return status === 'healthy' ? status : undefined
+        },
+        30_000,
+        500
+      ).catch(() =>
+        docker(['inspect', '--format', '{{.State.Health.Status}}', name])
+      )
+    const apiHealth = await health(apiName)
+    const workerHealth = await health(workerName)
+    check('api.image_healthcheck_healthy', apiHealth === 'healthy', apiHealth)
+    check(
+      'worker.image_healthcheck_healthy',
+      workerHealth === 'healthy',
+      workerHealth
+    )
 
     let messageCount = 0
     const sendInbound = async (
