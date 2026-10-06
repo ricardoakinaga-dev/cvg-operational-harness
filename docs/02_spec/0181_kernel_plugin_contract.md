@@ -205,3 +205,25 @@ Nenhuma invariante é relaxada; I4/I9 (uso único) e I5 continuam valendo.
 Testes: `packages/harness/src/__tests__/aud0598-kplg004-regressions.test.ts` e
 `tests/conformance/durable-approval-resume.conformance.test.ts` (adaptador e
 máquina de estados de aprovação reais).
+
+## 12. Adendo — encerramento perdido não perde a decisão (AUD-0599)
+
+Origem: [AUD-0599](../04_audit/0599_auditoria_entrega_fable_2026-10-06.md)
+F01/F02. Completa §11.3 e §11.4 sem relaxar invariantes.
+
+1. Quando o `tool/result` de uma chamada bloqueada falha, o pipeline devolve o
+   `INSUFFICIENT_EVIDENCE` e, junto, a decisão original do controle
+   (`blocked`, com causa e `approvalId`). A resposta traz o motivo do bloqueio
+   em todos os caminhos, inclusive no single-pass depois da reserva.
+2. O iterativo encerra a etapa aberta (retomada, ou aberta como `RUNNING` pelo
+   checkpoint de despacho) como `FAILED` com o código da decisão:
+   `policy_denied`, `approval_denied`, `policy_handoff`,
+   `policy_outcome_invalid`, `deadline`, `cancelled` ou `not_started`. Nunca
+   grava etapa concorrente no mesmo número e nunca a trata como pausa,
+   handoff ou espera de aprovação.
+3. Com log saudável vale o mesmo para bloqueios que encerram a execução depois
+   que a etapa foi aberta (guarda, cancelamento, conflito na retomada):
+   checkpoint terminal e etapa não divergem. A pausa do operador continua
+   preservando o checkpoint e a etapa para a retomada.
+
+Testes: `tests/conformance/aud0599-blocked-close.conformance.test.ts`.

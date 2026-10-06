@@ -28,9 +28,10 @@ import type { KernelHost } from './kernel/host.ts'
 import {
   CANCELLED_RESPONSE,
   runModelCall,
-  runToolCall
+  runToolCall,
+  unrecordedBlock
 } from './kernel/pipeline.ts'
-import type { ToolCallState, TurnState } from './kernel/types.ts'
+import type { KernelStop, ToolCallState, TurnState } from './kernel/types.ts'
 
 /**
  * Explicit dependency surface for the extracted dispatch domain. The runtime
@@ -250,6 +251,67 @@ export function applyResume(
   return null
 }
 
+type StepRecord = Parameters<IterativeDispatchContext['recordStep']>[1] & {
+  errorCode: string
+}
+
+/** The error code a step carries when a control blocked its call. */
+function blockedErrorCode(gate: KernelStop): string {
+  switch (gate.cause) {
+    case 'policy_denied':
+    case 'policy_handoff':
+    case 'approval_denied':
+      return gate.cause
+    case 'policy_unsupported':
+      return 'policy_outcome_invalid'
+    default:
+      return gate.stopReason === 'MAX_DURATION'
+        ? 'deadline'
+        : gate.stopReason === 'CANCELLED'
+          ? 'cancelled'
+          : 'not_started'
+  }
+}
+
+/** The step recorded for a blocked call, by the control that decided. */
+function blockedStepRecord(
+  gate: KernelStop,
+  stepNumber: number,
+  reasonCode: ExecutionStep['reasonCode']
+): StepRecord {
+  const errorCode = blockedErrorCode(gate)
+  switch (gate.cause) {
+    case 'policy_denied':
+    case 'policy_unsupported':
+      return {
+        stepNumber,
+        stepType: 'POLICY',
+        status: 'FAILED',
+        sideEffecting: false,
+        reasonCode: 'POLICY_REQUIRED',
+        errorCode
+      }
+    case 'approval_denied':
+      return {
+        stepNumber,
+        stepType: 'APPROVAL',
+        status: 'FAILED',
+        sideEffecting: false,
+        reasonCode: 'POLICY_REQUIRED',
+        errorCode
+      }
+    default:
+      return {
+        stepNumber,
+        stepType: 'TOOL',
+        status: 'FAILED',
+        sideEffecting: true,
+        reasonCode,
+        errorCode
+      }
+  }
+}
+
 export async function dispatchTool(
   ctx: IterativeDispatchContext,
   run: LoopRun,
@@ -295,17 +357,15 @@ export async function dispatchTool(
 
   const stepId = `step_${run.executionId}_${stepNumber}_tool`
   // A resumed step already holds this step number as a tool step (waiting for
-  // approval or in flight); a control that now denies it closes that same
-  // step instead of recording a second one under the same number.
-  const resumedStep = run.state.pendingStepNumber === stepNumber
-  const recordDenial = (
-    record: Parameters<IterativeDispatchContext['recordStep']>[1] & {
-      errorCode: string
-    }
-  ): Promise<void> =>
+  // approval or in flight), and the dispatch checkpoint opens it as RUNNING;
+  // a control that then blocks the call closes that same step instead of
+  // recording a second one under the same number, or leaving it open while
+  // the checkpoint ends (AUD-0599 F02).
+  let stepOpen = run.state.pendingStepNumber === stepNumber
+  const recordDenial = (record: StepRecord): Promise<void> =>
     ctx.recordStep(
       run,
-      resumedStep
+      stepOpen
         ? {
             stepNumber,
             stepType: 'TOOL',
@@ -385,12 +445,41 @@ export async function dispatchTool(
         sideEffecting: true,
         reasonCode: decision.reasonCode
       })
+      stepOpen = true
       return undefined
     }
   })
 
+  const recordUnsupported = (): Promise<void> =>
+    ctx.recordObservation(
+      run,
+      ctx.makeObservation(run, {
+        stepId,
+        stepNumber,
+        type: 'POLICY_DECISION',
+        source: 'POLICY',
+        trust: 'TRUSTED',
+        payload: { outcome: 'UNSUPPORTED' },
+        summary: 'Policy returned an unsupported outcome.',
+        provenance: { sourceId: 'policy-engine' }
+      })
+    )
+
   if (pipeline.kind === 'stopped') {
     const gate = pipeline.gate
+    const blockedStep = (decided: KernelStop): Promise<void> =>
+      recordDenial(blockedStepRecord(decided, stepNumber, decision.reasonCode))
+    if (pipeline.blocked) {
+      // The closing record was lost: this is neither a clean pause, handoff
+      // nor denial, although nothing ran. The step is still closed for the
+      // control's own decision, and the turn ends on the missing evidence
+      // with that decision in its response (AUD-0599 F02).
+      const blocked = pipeline.blocked
+      if (blocked.cause === 'policy_unsupported') await recordUnsupported()
+      else await recordPolicy()
+      await blockedStep(blocked)
+      return ctx.stop(gate.stopReason, gate.response)
+    }
     if (gate.cause === 'operator_paused') {
       // Nothing ran and nothing is reserved: keep the step resumable (F03).
       return {
@@ -399,50 +488,15 @@ export async function dispatchTool(
       }
     }
     if (gate.cause === 'policy_unsupported') {
-      await ctx.recordObservation(
-        run,
-        ctx.makeObservation(run, {
-          stepId,
-          stepNumber,
-          type: 'POLICY_DECISION',
-          source: 'POLICY',
-          trust: 'TRUSTED',
-          payload: { outcome: 'UNSUPPORTED' },
-          summary: 'Policy returned an unsupported outcome.',
-          provenance: { sourceId: 'policy-engine' }
-        })
-      )
-      await recordDenial({
-        stepNumber,
-        stepType: 'POLICY',
-        status: 'FAILED',
-        sideEffecting: false,
-        reasonCode: 'POLICY_REQUIRED',
-        errorCode: 'policy_outcome_invalid'
-      })
+      await recordUnsupported()
+      await blockedStep(gate)
       return ctx.stop(gate.stopReason, gate.response)
     }
     await recordPolicy()
     switch (gate.cause) {
-      case 'policy_denied':
-        await recordDenial({
-          stepNumber,
-          stepType: 'POLICY',
-          status: 'FAILED',
-          sideEffecting: false,
-          reasonCode: 'POLICY_REQUIRED',
-          errorCode: 'policy_denied'
-        })
-        break
       case 'policy_handoff':
-        if (resumedStep) {
-          await recordDenial({
-            stepNumber,
-            stepType: 'TOOL',
-            status: 'FAILED',
-            sideEffecting: true,
-            errorCode: 'policy_handoff'
-          })
+        if (stepOpen) {
+          await blockedStep(gate)
           break
         }
         await ctx.recordStep(run, {
@@ -461,17 +515,14 @@ export async function dispatchTool(
           ...(gate.approvalId ? { approvalId: gate.approvalId } : {}),
           pauseStepNumber: stepNumber
         }
+      case 'policy_denied':
       case 'approval_denied':
-        await recordDenial({
-          stepNumber,
-          stepType: 'APPROVAL',
-          status: 'FAILED',
-          sideEffecting: false,
-          reasonCode: 'POLICY_REQUIRED',
-          errorCode: 'approval_denied'
-        })
+        await blockedStep(gate)
         break
       default:
+        // Any other block (a guard, cancellation, a conflicting resume) ends
+        // the run, so a step it left open is closed with it.
+        if (stepOpen) await blockedStep(gate)
         break
     }
     return ctx.stop(gate.stopReason, gate.response)
@@ -494,12 +545,10 @@ export async function dispatchTool(
       const gate = outcome.gate
       if (pipeline.logFailure) {
         // The closing record was lost: this is neither a clean pause nor a
-        // clean denial, although nothing ran (AUD-0598 R04).
-        await failStep('not_started')
-        return ctx.stop(
-          'INSUFFICIENT_EVIDENCE',
-          `${pipeline.logFailure.response} The call was blocked before it started: ${gate.response}`
-        )
+        // clean denial, although nothing ran (AUD-0598 R04, AUD-0599 F02).
+        await failStep(blockedErrorCode(gate))
+        const lost = unrecordedBlock(pipeline.logFailure, gate)
+        return ctx.stop(lost.stopReason, lost.response)
       }
       if (gate.cause === 'operator_paused') {
         // The reservation was released as certain; the step resumes later.
@@ -508,13 +557,7 @@ export async function dispatchTool(
           preserveCheckpoint: true
         }
       }
-      await failStep(
-        gate.stopReason === 'MAX_DURATION'
-          ? 'deadline'
-          : gate.stopReason === 'CANCELLED'
-            ? 'cancelled'
-            : 'not_started'
-      )
+      await failStep(blockedErrorCode(gate))
       return ctx.stop(gate.stopReason, gate.response)
     }
     case 'deadline':

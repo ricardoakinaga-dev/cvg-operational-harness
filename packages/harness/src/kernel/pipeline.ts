@@ -115,6 +115,22 @@ export async function appendLog(
   }
 }
 
+/**
+ * A call that was blocked and whose closing record was then lost: the turn
+ * reports the missing evidence without hiding why the call was blocked
+ * (AUD-0598 R04, AUD-0599 F01).
+ */
+export function unrecordedBlock(
+  lost: KernelStop,
+  blocked: KernelStop
+): KernelStop {
+  return stop(
+    'INSUFFICIENT_EVIDENCE',
+    `${lost.response} The call was blocked before it started: ${blocked.response}`,
+    blocked.approvalId !== undefined ? { approvalId: blocked.approvalId } : {}
+  )
+}
+
 /** Races an operation against the turn budget and the cancel signal (I8). */
 export async function race<T>(
   turn: TurnState,
@@ -203,8 +219,17 @@ export async function revalidate(
 }
 
 export type ToolPipelineResult =
-  /** Nothing ran and nothing is reserved; the call is closed as not started. */
-  | { readonly kind: 'stopped'; readonly gate: KernelStop }
+  /**
+   * Nothing ran and nothing is reserved; the call is closed as not started.
+   * `blocked` is set when that closing record was lost: `gate` then reports
+   * the missing evidence and `blocked` keeps the control's own decision, so
+   * the loop can still close its step for the real reason (AUD-0599 F02).
+   */
+  | {
+      readonly kind: 'stopped'
+      readonly gate: KernelStop
+      readonly blocked?: KernelStop
+    }
   /**
    * Dispatch was attempted; the outcome is already settled. `logFailure` is
    * set when the final record could not be written: the outcome stays the
@@ -260,13 +285,7 @@ export async function runToolCall(
     // A lost closing record is not hidden behind the denial (AUD-0598 R04):
     // the call stays blocked, and the turn reports the missing evidence.
     return unrecorded
-      ? {
-          kind: 'stopped',
-          gate: stop(
-            'INSUFFICIENT_EVIDENCE',
-            `${unrecorded.response} The call was blocked before it started: ${blocked.response}`
-          )
-        }
+      ? { kind: 'stopped', gate: unrecordedBlock(unrecorded, blocked), blocked }
       : { kind: 'stopped', gate: blocked }
   }
 

@@ -16,7 +16,8 @@ import {
   race,
   runGate,
   runModelCall,
-  runToolCall
+  runToolCall,
+  unrecordedBlock
 } from './pipeline.ts'
 import {
   CONTROL_SERVICES,
@@ -516,9 +517,14 @@ class Turn {
     const toolResult = this.#toolResult(call, settled)
     if (pipeline.logFailure) {
       // F04: the effect fact stays in the result; the turn is not a success.
+      // A call blocked after its reservation keeps the reason it was blocked
+      // (AUD-0599 F01).
       return this.#finish({
         ...toolResult,
-        response: pipeline.logFailure.response,
+        response:
+          settled.kind === 'not_started'
+            ? unrecordedBlock(pipeline.logFailure, settled.gate).response
+            : pipeline.logFailure.response,
         stopReason: 'INSUFFICIENT_EVIDENCE'
       })
     }
