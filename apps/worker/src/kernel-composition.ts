@@ -19,6 +19,7 @@ import {
 import {
   HashChainedAuditLedger,
   InMemoryTelemetry,
+  type AuditLedgerEntryInput,
   type AuditLedgerRecord
 } from '@cvg/observability'
 import {
@@ -46,7 +47,8 @@ import {
 import {
   CorrelationIdSchema,
   DataClassificationSchema,
-  RoleSchema
+  RoleSchema,
+  sanitizeAuditEvidencePayload
 } from '@cvg/shared'
 import type { ControlledWorkerHandlers } from './controlled-worker.ts'
 import { NonRetryableOutboxError } from './jobs/process-outbox-event.ts'
@@ -322,7 +324,7 @@ export function createPostgresKernelRuntime(
   // The in-memory ledger is the runtime's working chain; every record a turn
   // appends is also persisted to `audit_events` before the turn is reported.
   // The ledger rotates so a long-running worker does not grow without bound.
-  let audit = new HashChainedAuditLedger()
+  let audit: HashChainedAuditLedger = new SanitizedAuditLedger()
   let ledgerId = randomUUID()
   const modelGateway = createControlledModelGateway()
   const conversations = new TenantScopedPostgresRuntimeRepository(pool)
@@ -341,7 +343,7 @@ export function createPostgresKernelRuntime(
     turnInput: GovernedTurnInput
   ): Promise<GovernedTurnResult> => {
     if (audit.size() >= KERNEL_AUDIT_LEDGER_ROTATE_AT) {
-      audit = new HashChainedAuditLedger()
+      audit = new SanitizedAuditLedger()
       ledgerId = randomUUID()
     }
     const ledger = audit
@@ -424,6 +426,25 @@ export function createPostgresKernelRuntime(
 export const KERNEL_RUNTIME_HISTORY_LIMIT = 1_000
 /** Records after which the working audit ledger starts a new chain. */
 export const KERNEL_AUDIT_LEDGER_ROTATE_AT = 10_000
+
+/**
+ * The worker's working audit chain hashes each payload as it will be stored:
+ * the audit sanitizer runs before the hash, not after, so a chain read back
+ * from `audit_events` can prove its payloads too (AUD-0601 F06). The
+ * sanitizer is idempotent and independent of where the payload is nested.
+ */
+export class SanitizedAuditLedger extends HashChainedAuditLedger {
+  override append(entry: AuditLedgerEntryInput): AuditLedgerRecord {
+    return super.append(
+      entry.payload === undefined
+        ? entry
+        : {
+            ...entry,
+            payload: sanitizeAuditEvidencePayload(entry.payload).payload
+          }
+    )
+  }
+}
 
 function retainRecent<T>(list: T[], item: T): void {
   list.push(item)

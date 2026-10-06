@@ -12,7 +12,11 @@
  *    (ledgers, event counts, head hashes); row counts must match too.
  * 6. One restored row is rewritten: the verifier must break.
  *
- * Usage: npx tsx scripts/restore-audit-chain-proof.ts --output <file.json>
+ * Profile: the in-process API runs the synthetic test profile (unsigned
+ * inbound, NODE_ENV=test), as the kernel integration tests do; signed
+ * production webhooks are proven by scripts/production-stack-smoke.ts.
+ *
+ * Usage: NODE_ENV=test npx tsx scripts/restore-audit-chain-proof.ts --output <file.json>
  */
 import { randomBytes } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
@@ -39,6 +43,14 @@ const TENANT = TenantIdSchema.parse(
 const AGENT = 'agent_00000000-0000-4000-8000-000000000873'
 const IMAGE = 'postgres:16-alpine'
 const PASSWORD = 'synthetic-restore-proof'
+
+function requireSyntheticProfile(): void {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error(
+      'restore-audit-chain-proof runs the in-process API under the synthetic test profile: run it with NODE_ENV=test'
+    )
+  }
+}
 
 function args(): { output: string } {
   const index = process.argv.indexOf('--output')
@@ -236,6 +248,7 @@ async function workload(url: string): Promise<{ turns: number }> {
 }
 
 async function main(): Promise<void> {
+  requireSyntheticProfile()
   const { output } = args()
   const container = `cvg-restore-proof-${randomBytes(4).toString('hex')}`
   const startedAt = new Date().toISOString()
@@ -263,6 +276,7 @@ async function main(): Promise<void> {
     await admin.connect()
     await admin.query('CREATE DATABASE cvg_source')
     await admin.query('CREATE DATABASE cvg_restored')
+    await admin.query('CREATE DATABASE cvg_payload_tamper')
     await admin.end()
     const sourceUrl = `${base}/cvg_source`
     const restoredUrl = `${base}/cvg_restored`
@@ -288,24 +302,40 @@ async function main(): Promise<void> {
       '--no-owner',
       'cvg_source'
     ])
-    docker(
-      [
-        'exec',
-        '-i',
-        container,
-        'pg_restore',
-        '-U',
-        'postgres',
-        '--no-owner',
-        '--exit-on-error',
-        '-d',
-        'cvg_restored'
-      ],
-      dump
-    )
+    const restore = (database: string) =>
+      docker(
+        [
+          'exec',
+          '-i',
+          container,
+          'pg_restore',
+          '-U',
+          'postgres',
+          '--no-owner',
+          '--exit-on-error',
+          '-d',
+          database
+        ],
+        dump
+      )
+    restore('cvg_restored')
+    restore('cvg_payload_tamper')
 
     const restoredPool = new Pool({ connectionString: restoredUrl })
-    const restoredChain = await verifyPersistedKernelAudit(restoredPool, TENANT)
+    // The restored copy must end exactly where the source ended.
+    const anchors = Object.fromEntries(
+      sourceChain.ledgers.map((ledger) => [
+        ledger.ledgerId,
+        { events: ledger.events, headHash: ledger.headHash ?? '' }
+      ])
+    )
+    const restoredChain = await verifyPersistedKernelAudit(
+      restoredPool,
+      TENANT,
+      {
+        anchors
+      }
+    )
     const restoredCounts = await rowCounts(restoredUrl)
 
     // Tamper control: rewrite one restored event; the verifier must break.
@@ -321,6 +351,25 @@ async function main(): Promise<void> {
     const tamperedChain = await verifyPersistedKernelAudit(restoredPool, TENANT)
     await restoredPool.end()
 
+    // Payload control on a second restore: only a stored payload changes.
+    const payloadPool = new Pool({
+      connectionString: `${base}/cvg_payload_tamper`
+    })
+    await withTenantContext(payloadPool, TENANT, (client) =>
+      client.query(
+        `UPDATE audit_events
+            SET payload = jsonb_set(payload, '{kernelAudit,payload}', '{"synthetic":"rewritten"}')
+          WHERE id = (SELECT id FROM audit_events
+                       WHERE payload ? 'kernelAudit'
+                       ORDER BY created_at, id LIMIT 1 OFFSET 4)`
+      )
+    )
+    const payloadTamperedChain = await verifyPersistedKernelAudit(
+      payloadPool,
+      TENANT
+    )
+    await payloadPool.end()
+
     const sameChains =
       JSON.stringify(chainSummary(sourceChain).ledgers) ===
       JSON.stringify(chainSummary(restoredChain).ledgers)
@@ -332,6 +381,7 @@ async function main(): Promise<void> {
       sameChains &&
       sameCounts &&
       !tamperedChain.valid &&
+      !payloadTamperedChain.valid &&
       sourceChain.events > 0
     const report = {
       schemaVersion: 1,
@@ -346,6 +396,13 @@ async function main(): Promise<void> {
       backup: { bytes: dump.length },
       source: { chain: chainSummary(sourceChain), counts: sourceCounts },
       restored: { chain: chainSummary(restoredChain), counts: restoredCounts },
+      verification: { payloads: 'strict', anchoredToSource: true },
+      apiProfile: 'synthetic test profile (NODE_ENV=test, unsigned inbound)',
+      payloadTamperControl: {
+        rewritten: 'kernelAudit.payload of the fifth persisted event',
+        detected: !payloadTamperedChain.valid,
+        chain: chainSummary(payloadTamperedChain)
+      },
       tamperControl: {
         rewritten: 'kernelAudit.eventType of the third persisted event',
         detected: !tamperedChain.valid,

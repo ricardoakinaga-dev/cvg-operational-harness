@@ -9,7 +9,11 @@
 
 Uma imagem para API e worker, em `gcr.io/distroless/cc-debian12:nonroot`,
 com o Node 22.23.2 fixado, sem shell e sem gerenciador de pacotes. Roda como
-`cvg` (uid 10001); os arquivos da aplicação pertencem a root.
+`cvg` (uid 10001); os arquivos da aplicação pertencem a root. O healthcheck
+(`scripts/runtime-healthcheck.mjs`) serve aos dois comandos: na API consulta
+`/live`; no worker (`CVG_WORKER_RUN_MODE` definido) exige o arquivo de vida
+`/tmp/cvg-worker.alive` tocado a cada heartbeat há no máximo 60 s
+(`CVG_WORKER_LIVENESS_FILE`, `CVG_WORKER_LIVENESS_MAX_AGE_MS`).
 
 ```sh
 docker build --target runtime -t cvg-operational-harness:<sha> .
@@ -49,7 +53,9 @@ node scripts/ops-kernel-pause.mjs --tenant <tenant_id> --resume --actor <quem>
 
 Com a pausa ligada o worker não pega item novo (os pendentes ficam intactos,
 sem gastar tentativa) e o kernel não inicia efeito nem consome aprovação; um
-turno em andamento termina `paused` e volta para a fila. Interruptor ilegível
+turno em andamento termina `paused` e volta para a fila. O interruptor é lido
+de novo imediatamente antes do corpo da ferramenta: uma pausa que chegue
+depois da reserva libera a aprovação e o journal como sem efeito. Interruptor ilegível
 conta como pausa. Ao retomar, os mesmos itens rodam.
 
 ## Alerta de parada (condição 9)
@@ -74,9 +80,13 @@ Limiares e destino reais são decisão do responsável pela operação.
 `pg_dump --format=custom` do banco e `pg_restore` num banco novo. Depois do
 restore, a cadeia do kernel é verificada a partir de `audit_events`
 (`verifyPersistedKernelAudit` em `apps/worker/src/kernel-audit-chain.ts`):
-sequência contínua, encadeamento e hash de cada evento. O ensaio completo,
-com carga real do kernel e controle de adulteração, é
-`npx tsx scripts/restore-audit-chain-proof.ts --output <arquivo.json>`.
+sequência contínua, encadeamento, hash de cada evento e de cada payload
+gravado (o worker sanitiza o payload antes de encadear). Guarde fora do banco
+as cabeças e contagens de cada ledger no momento do backup e passe-as como
+`anchors`, para detectar cauda truncada. O ensaio completo, com carga real do
+kernel e controles de adulteração de metadado e de payload, usa a API
+em processo no perfil sintético de teste:
+`NODE_ENV=test npx tsx scripts/restore-audit-chain-proof.ts --output <arquivo.json>`.
 
 ## Smoke da pilha (condição 3)
 

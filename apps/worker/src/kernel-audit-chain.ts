@@ -10,9 +10,8 @@ import { withTenantContext, type PostgresPoolLike } from '@cvg/persistence'
  * PROD-0373 (barra 0373, condição 8) — re-verifies the governed kernel's
  * hash-chained audit from `audit_events` (the `kernelAudit` rows the worker
  * persists per turn), e.g. after a backup is restored. Each ledger is checked
- * from sequence 1: linkage, contiguity and every event hash. Payloads went
- * through the audit sanitizer on the way in, so their mismatches are counted
- * rather than fatal; the event hash still binds each payload hash.
+ * from sequence 1: linkage, contiguity, every event hash and, by default,
+ * every stored payload against its hash (AUD-0601 F06).
  */
 
 export interface KernelAuditLedgerVerification extends AuditChainVerification {
@@ -21,6 +20,8 @@ export interface KernelAuditLedgerVerification extends AuditChainVerification {
 
 export interface KernelAuditChainReport {
   readonly valid: boolean
+  /** Anchored ledgers that are missing, shorter/longer or end elsewhere. */
+  readonly anchorMismatches?: readonly string[]
   readonly ledgers: readonly KernelAuditLedgerVerification[]
   readonly events: number
   readonly payloadMismatches: number
@@ -53,9 +54,28 @@ interface KernelAuditRow {
   }
 }
 
+export interface KernelAuditVerificationOptions {
+  /**
+   * `strict` (default): a stored payload that does not match its hash
+   * invalidates the chain. The worker hashes payloads already sanitized, so
+   * a mismatch is tampering, not redaction. `report` only counts mismatches,
+   * for chains written before payloads were sanitized ahead of the hash.
+   */
+  readonly payloads?: 'strict' | 'report'
+  /**
+   * Known heads kept outside the database (e.g. at backup time). Each
+   * anchored ledger must still have that many events and that head hash, so
+   * a truncated tail or a missing ledger is detected.
+   */
+  readonly anchors?: Readonly<
+    Record<string, { readonly events: number; readonly headHash: string }>
+  >
+}
+
 /** Groups persisted kernel audit rows into chains and verifies each one. */
 export function verifyKernelAuditRows(
-  rows: readonly KernelAuditRow[]
+  rows: readonly KernelAuditRow[],
+  options: KernelAuditVerificationOptions = {}
 ): KernelAuditChainReport {
   const byLedger = new Map<string, AuditLedgerRecord[]>()
   for (const row of rows) {
@@ -84,11 +104,29 @@ export function verifyKernelAuditRows(
       ledgerId,
       ...verifyAuditChainRecords(
         records.sort((left, right) => left.sequence - right.sequence),
-        { payloads: 'report' }
+        { payloads: options.payloads ?? 'strict' }
       )
     }))
+  const anchorFailures = Object.entries(options.anchors ?? {}).filter(
+    ([ledgerId, anchor]) => {
+      const ledger = ledgers.find(
+        (candidate) => candidate.ledgerId === ledgerId
+      )
+      return (
+        !ledger ||
+        ledger.events !== anchor.events ||
+        ledger.headHash !== anchor.headHash
+      )
+    }
+  )
   return {
-    valid: ledgers.length > 0 && ledgers.every((ledger) => ledger.valid),
+    valid:
+      ledgers.length > 0 &&
+      ledgers.every((ledger) => ledger.valid) &&
+      anchorFailures.length === 0,
+    ...(anchorFailures.length > 0
+      ? { anchorMismatches: anchorFailures.map(([ledgerId]) => ledgerId) }
+      : {}),
     ledgers,
     events: ledgers.reduce((sum, ledger) => sum + ledger.events, 0),
     payloadMismatches: ledgers.reduce(
@@ -101,7 +139,8 @@ export function verifyKernelAuditRows(
 /** Reads and verifies every kernel audit chain of one tenant. */
 export async function verifyPersistedKernelAudit(
   pool: PostgresPoolLike,
-  tenantId: TenantId
+  tenantId: TenantId,
+  options: KernelAuditVerificationOptions = {}
 ): Promise<KernelAuditChainReport> {
   const result = await withTenantContext(pool, tenantId, (client) =>
     client.query<KernelAuditRow>(
@@ -111,5 +150,5 @@ export async function verifyPersistedKernelAudit(
       [tenantId]
     )
   )
-  return verifyKernelAuditRows(result.rows)
+  return verifyKernelAuditRows(result.rows, options)
 }
