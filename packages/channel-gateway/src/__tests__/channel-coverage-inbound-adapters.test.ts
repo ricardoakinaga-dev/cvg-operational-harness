@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ChatwootChannelAdapter } from '../adapters/chatwoot.ts'
 import { EvolutionChannelAdapter } from '../adapters/evolution.ts'
 import { ControlledFakeChannelAdapter } from '../adapters/fake.ts'
+import { ChannelError } from '../errors.ts'
 import {
   InMemoryInboundDedupStore,
   InboundDeduplicator
@@ -261,5 +262,111 @@ describe('fake adapter without injected clock', () => {
     const result = await adapter.send(outbound())
     expect(result.accepted).toBe(true)
     expect(Number.isNaN(Date.parse(result.sentAt))).toBe(false)
+  })
+})
+
+describe('base URL configuration (AUD-0599 linear trailing-slash helper)', () => {
+  it('rejects an enabled adapter without a base URL or with only slashes', () => {
+    for (const baseUrl of [undefined, '   ', '///']) {
+      expect(
+        () =>
+          new ChatwootChannelAdapter({
+            enabled: true,
+            ...(baseUrl !== undefined ? { baseUrl } : {}),
+            apiKey: 'k',
+            accountId: '1'
+          })
+      ).toThrowError(expect.objectContaining({ code: 'invalid_config' }))
+      expect(
+        () =>
+          new EvolutionChannelAdapter({
+            enabled: true,
+            ...(baseUrl !== undefined ? { baseUrl } : {}),
+            apiKey: 'k',
+            instance: 'i'
+          })
+      ).toThrowError(expect.objectContaining({ code: 'invalid_config' }))
+    }
+  })
+
+  it('accepts a base URL with trailing slashes', () => {
+    const chatwoot = new ChatwootChannelAdapter({
+      enabled: true,
+      baseUrl: ' https://chatwoot.example.com/// ',
+      dnsLookup: async () => ['93.184.216.34'],
+      apiKey: 'k',
+      accountId: '1'
+    })
+    const evolution = new EvolutionChannelAdapter({
+      enabled: true,
+      baseUrl: 'https://evolution.example.com//',
+      dnsLookup: async () => ['93.184.216.34'],
+      apiKey: 'k',
+      instance: 'i'
+    })
+    expect(chatwoot.enabled).toBe(true)
+    expect(evolution.enabled).toBe(true)
+  })
+})
+
+describe('adapter send error mapping', () => {
+  const chatwoot = (fetchImpl: () => Promise<Response>) =>
+    new ChatwootChannelAdapter({
+      enabled: true,
+      baseUrl: 'https://chatwoot.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
+      apiKey: 'k',
+      accountId: '1',
+      clock: () => NOW,
+      fetchImpl
+    })
+  const evolution = (fetchImpl: () => Promise<Response>) =>
+    new EvolutionChannelAdapter({
+      enabled: true,
+      baseUrl: 'https://evolution.example.com',
+      dnsLookup: async () => ['93.184.216.34'],
+      apiKey: 'k',
+      instance: 'i',
+      clock: () => NOW,
+      fetchImpl
+    })
+
+  it('keeps a channel error from the transport unchanged', async () => {
+    const original = new ChannelError('provider_rejected', 'synthetic')
+    const fail = async (): Promise<Response> => {
+      throw original
+    }
+    await expect(chatwoot(fail).send(outbound('web'))).rejects.toBe(original)
+    await expect(evolution(fail).send(outbound())).rejects.toBe(original)
+  })
+
+  it('maps an unsafe URL and an unknown transport failure', async () => {
+    const unsafe = async (): Promise<Response> => {
+      const error = new Error('synthetic unsafe hop')
+      error.name = 'UnsafeUrlError'
+      throw error
+    }
+    await expect(chatwoot(unsafe).send(outbound('web'))).rejects.toMatchObject({
+      code: 'url_rejected'
+    })
+    const broken = async (): Promise<Response> => {
+      throw new Error('synthetic socket reset')
+    }
+    await expect(chatwoot(broken).send(outbound('web'))).rejects.toMatchObject({
+      code: 'send_failed'
+    })
+  })
+
+  it('sends over explicit loopback HTTP', async () => {
+    const adapter = new ChatwootChannelAdapter({
+      enabled: true,
+      baseUrl: 'http://127.0.0.1:32123',
+      allowPrivateNetworks: true,
+      apiKey: 'k',
+      accountId: '1',
+      clock: () => NOW,
+      fetchImpl: async () => new Response('{}', { status: 200 })
+    })
+    expect((await adapter.send(outbound('web'))).accepted).toBe(true)
   })
 })
