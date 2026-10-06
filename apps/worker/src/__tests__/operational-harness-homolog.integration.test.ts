@@ -406,7 +406,9 @@ describeWithPostgres('homologation durable worker smoke (AUD19-008)', () => {
       const lines = parseJsonLines(idle.output())
       const notReadyIndex = lines.findIndex(
         (line) =>
-          line.event === 'worker.readiness' && line.status === 'not_ready'
+          line.event === 'worker.readiness' &&
+          line.status === 'not_ready' &&
+          line.reason === 'shutdown_started'
       )
       expect(lines).toContainEqual(
         expect.objectContaining({

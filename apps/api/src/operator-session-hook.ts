@@ -6,6 +6,14 @@ import {
   type OperatorSessionRecord,
   type OperatorSessionStore
 } from './operator-session.ts'
+import { healthRoute, liveRoute, readyRoute } from './routes/health.ts'
+
+const sessionIndependentProbePaths = new Set([
+  healthRoute,
+  liveRoute,
+  readyRoute,
+  '/health/metrics'
+])
 
 export interface OperatorSessionHookOptions {
   app: FastifyInstance
@@ -35,6 +43,8 @@ export function installOperatorSessionHook(
 
   app.addHook('onRequest', async (request, reply) => {
     const rawPath = request.url.split('?')[0]
+    // A stale browser cookie must not turn public health probes into auth failures.
+    if (sessionIndependentProbePaths.has(rawPath ?? '')) return
     const sessionId = parseOperatorSessionCookie(request.headers.cookie)
     if (!sessionId) return
 
