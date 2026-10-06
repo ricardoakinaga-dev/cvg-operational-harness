@@ -812,9 +812,26 @@ export function buildServer(options: BuildServerOptions = {}) {
         existing.identity.role === identity.role
       const rotate =
         sameOperator && options.operatorSessionStore.replace !== undefined
+      const next = { identity, expiresAt: Number(claims.exp) * 1000 }
+      // Another identity (or a store without atomic replace) retires the
+      // previous family durably first (SPEC 0144, AUD-0602 F02). If that
+      // fails the answer is 503 without Set-Cookie: the previous cookie is
+      // kept, no second family exists and no new session is exposed.
+      const retirePrevious = existing !== undefined && !rotate
+      if (existing && retirePrevious) {
+        try {
+          await options.operatorSessionStore.revoke(existing.sessionId)
+        } catch {
+          reply.code(503)
+          return fail(
+            'configuration_error',
+            'Operator session store is unavailable',
+            correlationId
+          )
+        }
+      }
       let record: OperatorSessionRecord
       try {
-        const next = { identity, expiresAt: Number(claims.exp) * 1000 }
         record =
           rotate && existing
             ? await options.operatorSessionStore.replace!(
@@ -824,39 +841,25 @@ export function buildServer(options: BuildServerOptions = {}) {
             : await options.operatorSessionStore.create(next)
       } catch {
         reply.code(503)
+        // A retired family's cookie is no longer usable; a failed rotation
+        // keeps the previous cookie, which is still valid.
+        if (retirePrevious) {
+          reply.header(
+            'set-cookie',
+            clearOperatorSessionCookie(httpSecurity.enforceHttps)
+          )
+        }
         return fail(
           'configuration_error',
           'Operator session store is unavailable',
           correlationId
         )
       }
+      // Set-Cookie only after the durable change committed.
       reply.header(
         'set-cookie',
         serializeOperatorSessionCookie(record, httpSecurity.enforceHttps)
       )
-      if (existing && !rotate) {
-        try {
-          await options.operatorSessionStore.revoke(existing.sessionId)
-        } catch {
-          try {
-            await options.operatorSessionStore.revoke(record.sessionId)
-          } catch {
-            // Best effort cleanup; the response remains fail-closed below.
-          }
-          reply
-            .code(503)
-            .header('cache-control', 'no-store')
-            .header(
-              'set-cookie',
-              clearOperatorSessionCookie(httpSecurity.enforceHttps)
-            )
-          return fail(
-            'configuration_error',
-            'Operator session store is unavailable',
-            correlationId
-          )
-        }
-      }
       return ok(
         {
           identity: record.identity,

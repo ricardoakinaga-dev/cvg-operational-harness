@@ -449,6 +449,74 @@ describe.skipIf(!databaseUrl)(
       })
     }, 60_000)
 
+    it('a role change retires the old family first; if that fails no cookie changes (AUD-0602 F02)', async () => {
+      await withDatabase(async ({ open, admin, auth, sessionRole }) => {
+        const app = await open()
+        const login = (
+          who: {
+            operatorId: string
+            role: 'Admin' | 'Supervisor'
+            tenantId: string
+          },
+          cookie?: string
+        ) =>
+          app.inject({
+            url: '/v1/session',
+            headers: {
+              ...headers,
+              ...(cookie ? { cookie } : {}),
+              'x-cvg-operator-token': createTrustedOperatorIdentityToken(
+                who,
+                key
+              )
+            }
+          })
+        const first = await login(identity)
+        const a = String(first.headers['set-cookie']).split(';')[0]!
+        const activeSessions = async () =>
+          Number(
+            (
+              await admin.query<{ count: string }>(
+                `SELECT count(*)::text AS count
+                   FROM ${auth}.operator_sessions s
+                   JOIN ${auth}.operator_session_families f USING (family_id)
+                  WHERE s.revoked_at IS NULL AND f.revoked_at IS NULL
+                    AND s.expires_at > clock_timestamp()`
+              )
+            ).rows[0]?.count
+          )
+        expect(await activeSessions()).toBe(1)
+        const supervisor = { ...identity, role: 'Supervisor' as const }
+        await admin.query(
+          `REVOKE EXECUTE ON FUNCTION ${auth}.operator_session_revoke(bytea) FROM ${sessionRole}`
+        )
+        try {
+          const failed = await login(supervisor, a)
+          expect(failed.statusCode).toBe(503)
+          expect(failed.headers['set-cookie']).toBeUndefined()
+          expect(await activeSessions()).toBe(1)
+        } finally {
+          await admin.query(
+            `GRANT EXECUTE ON FUNCTION ${auth}.operator_session_revoke(bytea) TO ${sessionRole}`
+          )
+        }
+        const url = '/v1/admin/agents'
+        expect(
+          (await app.inject({ url, headers: { ...headers, cookie: a } }))
+            .statusCode
+        ).toBe(200)
+        const retried = await login(supervisor, a)
+        expect(retried.statusCode).toBe(200)
+        const b = String(retried.headers['set-cookie']).split(';')[0]!
+        expect(b).not.toBe(a)
+        expect(await activeSessions()).toBe(1)
+        expect(
+          (await app.inject({ url, headers: { ...headers, cookie: a } }))
+            .statusCode
+        ).toBe(401)
+      })
+    }, 60_000)
+
     it('fails readiness, cookie and token-only requests on auth outage, then recovers', async () => {
       await withDatabase(async ({ open, admin, auth, sessionRole }) => {
         const app = await open()
