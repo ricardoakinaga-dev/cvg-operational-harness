@@ -20,11 +20,22 @@
  * exact file, the exact repository path of the target and the removing task
  * under `removedTargets`. Such documents are hash-bound evidence and cannot be
  * edited. A listed target that exists again fails the check (stale policy).
+ * Exact `movedTargets` entries resolve old repository paths to existing new
+ * files without rewriting historical Markdown. Origins must remain absent.
+ * `sha256Before` records historical provenance only; it is not a checksum of
+ * the current destination, which may legitimately change after extraction.
  *
  * Usage: node scripts/check-doc-links.mjs [roots...]
  * Exit 0 when no broken internal link exists in the scanned roots.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync
+} from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 
 const roots = process.argv.slice(2)
@@ -137,6 +148,9 @@ function maskSource(text) {
 const broken = []
 const historicalRemovedTargets = []
 const staleRemovedTargets = []
+const resolvedMovedTargets = []
+const staleMovedTargets = []
+const missingMovedTargets = []
 const nonPortableAbsolute = []
 const unallowlistedNonPortableAbsolute = []
 
@@ -155,6 +169,94 @@ if (existsSync(policyPath)) {
 
 function relativeFile(file) {
   return relative(process.cwd(), file).split(sep).join('/')
+}
+
+function pathEntryExists(path) {
+  try {
+    lstatSync(path)
+    return true
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false
+    throw error
+  }
+}
+
+function validateMovedPath(path) {
+  if (
+    typeof path !== 'string' ||
+    path === '' ||
+    path !== path.trim() ||
+    /[\\\x00-\x1f\x7f:%?#]/.test(path) ||
+    path.split('/').some((part) => part === '' || part === '.' || part === '..')
+  ) {
+    throw new Error(`unsafe moved target path: ${JSON.stringify(path)}`)
+  }
+  // Also reject escapes through symlinked ancestors, including for absent
+  // origins/destinations. Lexically safe paths alone are not sufficient.
+  let ancestor = resolve(path)
+  while (!existsSync(ancestor)) ancestor = dirname(ancestor)
+  const physical = relative(realpathSync(process.cwd()), realpathSync(ancestor))
+  if (physical === '..' || physical.startsWith(`..${sep}`)) {
+    throw new Error(`moved target path escapes repository: ${path}`)
+  }
+}
+
+const movedTargetsByOld = new Map()
+try {
+  if (
+    linkPolicy.movedTargets !== undefined &&
+    !Array.isArray(linkPolicy.movedTargets)
+  ) {
+    throw new Error('movedTargets must be an array')
+  }
+  const destinations = new Set()
+  for (const entry of linkPolicy.movedTargets ?? []) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error('movedTargets entries must be objects')
+    }
+    validateMovedPath(entry.old)
+    validateMovedPath(entry.new)
+    if (
+      typeof entry.movedBy !== 'string' ||
+      entry.movedBy !== entry.movedBy.trim() ||
+      !/^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$/.test(entry.movedBy)
+    ) {
+      throw new Error(`movedTargets requires a task identifier: ${entry.old}`)
+    }
+    if (
+      entry.sha256Before !== undefined &&
+      (typeof entry.sha256Before !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(entry.sha256Before))
+    ) {
+      throw new Error(`invalid historical sha256Before: ${entry.old}`)
+    }
+    if (
+      entry.old === entry.new ||
+      movedTargetsByOld.has(entry.old) ||
+      destinations.has(entry.new)
+    ) {
+      throw new Error(`duplicate or identity moved target: ${entry.old}`)
+    }
+    movedTargetsByOld.set(entry.old, entry)
+    destinations.add(entry.new)
+  }
+  for (const entry of movedTargetsByOld.values()) {
+    if (destinations.has(entry.old)) {
+      throw new Error(`chained moved target: ${entry.old}`)
+    }
+    if (pathEntryExists(resolve(entry.old))) {
+      staleMovedTargets.push({ old: entry.old, new: entry.new })
+    }
+    if (
+      !existsSync(resolve(entry.new)) ||
+      !statSync(resolve(entry.new)).isFile()
+    ) {
+      missingMovedTargets.push({ old: entry.old, new: entry.new })
+    }
+  }
+} catch (error) {
+  console.error(`DOC_LINK_POLICY_INVALID=${error.message}`)
+  process.exit(1)
 }
 
 function isAllowlistedAbsolute(file, target) {
@@ -249,6 +351,25 @@ for (const root of roots) {
       const decoded = decodeURIComponent(parsed.path)
       const absolute = resolve(dirname(file), decoded)
       if (!existsSync(absolute)) {
+        const moved = movedTargetsByOld.get(relativeFile(absolute))
+        if (moved) {
+          if (
+            !pathEntryExists(absolute) &&
+            existsSync(resolve(moved.new)) &&
+            statSync(resolve(moved.new)).isFile()
+          ) {
+            resolvedMovedTargets.push({
+              file,
+              target,
+              old: moved.old,
+              new: moved.new,
+              movedBy: moved.movedBy
+            })
+          } else {
+            broken.push({ file, target })
+          }
+          continue
+        }
         const removed = removedTargetPolicy(file, absolute)
         if (removed) {
           historicalRemovedTargets.push({
@@ -271,6 +392,9 @@ console.log(
       broken,
       historicalRemovedTargets,
       staleRemovedTargets,
+      resolvedMovedTargets,
+      staleMovedTargets,
+      missingMovedTargets,
       nonPortableAbsolute,
       unallowlistedNonPortableAbsolute
     },
@@ -281,6 +405,8 @@ console.log(
 if (
   broken.length > 0 ||
   staleRemovedTargets.length > 0 ||
+  staleMovedTargets.length > 0 ||
+  missingMovedTargets.length > 0 ||
   unallowlistedNonPortableAbsolute.length > 0
 ) {
   if (broken.length > 0) {
@@ -288,6 +414,12 @@ if (
   }
   if (staleRemovedTargets.length > 0) {
     console.error(`STALE_REMOVED_TARGETS=${staleRemovedTargets.length}`)
+  }
+  if (staleMovedTargets.length > 0) {
+    console.error(`STALE_MOVED_TARGETS=${staleMovedTargets.length}`)
+  }
+  if (missingMovedTargets.length > 0) {
+    console.error(`MISSING_MOVED_TARGETS=${missingMovedTargets.length}`)
   }
   if (unallowlistedNonPortableAbsolute.length > 0) {
     console.error(

@@ -197,12 +197,14 @@ function validatePolicy(policy, options = {}) {
   ) {
     errors.push('workspacePatterns must not be empty')
   }
+  const patterns = stableStringify([...(policy.workspacePatterns ?? [])].sort())
+  const historicalPatterns = ['apps/*', 'legacy/packages/*', 'packages/*']
   if (
-    stableStringify([...(policy.workspacePatterns ?? [])].sort()) !==
-    stableStringify(['apps/*', 'legacy/packages/*', 'packages/*'])
+    patterns !== stableStringify(historicalPatterns) &&
+    patterns !== stableStringify([...historicalPatterns, 'products/*'])
   ) {
     errors.push(
-      'workspacePatterns must match the reviewed apps/*, packages/* and legacy/packages/* inventory'
+      'workspacePatterns must match the reviewed apps/*, packages/* and legacy/packages/* inventory, optionally including products/* under SPEC 0178'
     )
   }
   if (!policy.fileDiscovery || typeof policy.fileDiscovery !== 'object') {

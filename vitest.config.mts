@@ -25,7 +25,9 @@ export default defineConfig({
       'packages/**/*.test.ts',
       'legacy/**/*.test.ts',
       'apps/**/*.test.ts',
-      'apps/**/*.test.tsx'
+      'apps/**/*.test.tsx',
+      'products/**/*.test.ts',
+      'products/**/*.test.tsx'
     ],
     server: {
       deps: {
@@ -45,7 +47,9 @@ export default defineConfig({
         'packages/**/*.ts',
         'legacy/**/*.ts',
         'apps/**/*.ts',
-        'apps/**/*.tsx'
+        'apps/**/*.tsx',
+        'products/**/*.ts',
+        'products/**/*.tsx'
       ],
       // Process bootstraps, browser rendering, and PostgreSQL adapters have
       // dedicated smoke/E2E/integration gates. Keep them out of the unit

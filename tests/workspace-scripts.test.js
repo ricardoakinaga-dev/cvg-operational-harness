@@ -17,7 +17,8 @@ describe('workspace quality scripts', () => {
     expect(packageJson.workspaces).toEqual([
       'apps/*',
       'packages/*',
-      'legacy/packages/*'
+      'legacy/packages/*',
+      'products/*'
     ])
     expect(packageJson.scripts.typecheck).toBe(
       'tsc -p tsconfig.typecheck.json --noEmit'
