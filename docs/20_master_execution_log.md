@@ -1,3 +1,10 @@
+# PROD-0373 — AUD-0600 corrigida e barra 0373 executada — 06/10/2026
+
+- Task `PROD-0373-20261006`, Claude Code; `status: DONE_LOCAL / CONDITION_5_PENDING_PUSH`. Pedido do usuário: "avalia as colocações do auditor e faz as correções necessárias para colocar o programa em produção". [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md), [operação](08_runtime/0802_harness_production_operations.md).
+- `last_completed_action`: AUD-0600 F01/F02 corrigidos (motivo preservado com `turn/end` perdido; etapa pendente fechada em toda parada terminal, pausa estaciona como `WAITING`, `RUNNING` vira `unknown_effect`). Barra 0373: I6/I7/I12 no `GovernedAgentRuntime` (zero `it.fails`); bootstrap de sessão PostgreSQL em produção (condição 4, assumida do claim GREEN por decisão do usuário); imagem distroless sem shell com API e worker; migração 0027 com heartbeat e interruptor de pausa; monitor de parada com webhook HMAC na API; verificador da cadeia de auditoria a partir do banco; CodeQL sem evidências históricas e #6/#7 dispensados no GitHub.
+- `verification_state`: suíte completa 358 arquivos/2.925 PASS, zero falhas, skips ou `it.fails`; PostgreSQL 37 arquivos/296 PASS; typecheck/lint/formato PASS. Smoke da pilha real 16/16 na imagem `sha256:416d227e…`; restore com cadeia íntegra e adulteração detectada; gitleaks na imagem 0 achados; `npm audit` 0.
+- `next_action`: push para `origin/main` (bloqueado pela permissão do terminal nesta sessão), CI Verify/Security verdes no mesmo SHA, novo scan CodeQL sem high aberto e proteção do `main`. Limiares/destino reais do alerta: decisão de operação. Produção do núcleo fica `GO_PENDING_CONDITION_5`; nenhum produto liberado.
+
 # AUD0599-REMEDIATION — correções da AUD-0599 — 06/10/2026
 
 - Task `AUD0599-REMEDIATION-20261006`, Claude Code (owner KERNEL-PLUGINS); `status: DONE_LOCAL`. Pedido do usuário: "faça as correções apontadas nesses relatorios". [Evidência](04_audit/evidence/AUD0599-REMEDIATION-20261006/summary.md).

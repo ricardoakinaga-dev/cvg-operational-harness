@@ -227,3 +227,30 @@ F01/F02. Completa §11.3 e §11.4 sem relaxar invariantes.
    preservando o checkpoint e a etapa para a retomada.
 
 Testes: `tests/conformance/aud0599-blocked-close.conformance.test.ts`.
+
+## 13. Adendo — encerramento terminal e kernel durável (AUD-0600, PROD-0373)
+
+Origem: [AUD-0600](../04_audit/0600_reauditoria_remediacao_aud0599_2026-10-06.md)
+F01/F02 e a barra [0373](../03_build/0373_barra_producao_harness.md),
+condições 1 e 10. Nenhuma invariante é relaxada.
+
+1. Se o registro `turn/end` falha, um turno que já tinha parado mantém o
+   motivo na resposta (`INSUFFICIENT_EVIDENCE` com a causa anterior).
+2. Pausa do operador estaciona a etapa em voo como `WAITING`: nada rodou e
+   nada fica reservado. Toda parada terminal do iterativo fecha a etapa
+   pendente: `WAITING` com `cancelled`, `deadline` ou `not_started`; etapa
+   ainda `RUNNING` (efeito possivelmente iniciado antes de uma queda) com
+   `unknown_effect`, nunca como não executada. Paradas retomáveis
+   (`TOOL_FAILURE`, `INTERNAL_FAILURE`, espera de aprovação ou de entrada)
+   não fecham a etapa; a retomada continua sob o journal de efeitos.
+3. `GovernedAgentRuntime` (kernel durável do worker): `model.requested` entra
+   na cadeia de auditoria antes da chamada (I6); exceção da política vira
+   negação auditada `policy_failed` (I7); com o interruptor de pausa ligado o
+   turno termina `paused` antes do modelo, da ferramenta direta e da reserva
+   da aprovação (I12), sem consumir nada. O worker devolve o item à fila e,
+   enquanto pausado, não pega item novo; interruptor ilegível conta como
+   pausa.
+
+Testes: `tests/conformance/aud0599-blocked-close.conformance.test.ts` (seção
+AUD-0600), `tests/conformance/agent-runtime.conformance.test.ts` (C06, C07,
+C12) e `apps/worker/src/__tests__/worker-operations-postgres.integration.test.ts`.

@@ -1,3 +1,16 @@
+# PROD-0373 — AUD-0600 corrigida e barra 0373 executada — 06/10/2026
+
+- Task `PROD-0373-20261006`, Claude Code: `DONE_LOCAL`, condição 5 pendente de publicação. Supersede a disposição OPEN de AUD0600-F01/F02 e das condições 1, 3, 4, 6, 7, 8, 9 e 10 da [0373](03_build/0373_barra_producao_harness.md); registros anteriores ficam como histórico. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md).
+
+| Task          | Estado       | Critério atendido                                                                                                                                   |
+| ------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AUD0600-F01   | FIXED_LOCAL  | Log inteiro fora depois da reserva: motivo presente, body0, aprovação FAILED                                                                        |
+| AUD0600-F02   | FIXED_LOCAL  | Cancelamento, ferramenta ausente, ferramenta some antes do despacho e prazo: mesma etapa FAILED com código; `RUNNING` incerto vira `unknown_effect` |
+| 0373-C1/C10   | DONE_LOCAL   | Zero `it.fails`; pausa durável no worker e no kernel com retomada                                                                                   |
+| 0373-C3/C4/C7 | DONE_LOCAL   | Smoke 16/16 na imagem distroless em produção; login 200/401                                                                                         |
+| 0373-C6/C8/C9 | DONE_LOCAL   | Gitleaks na imagem 0; restore com cadeia íntegra; alerta de parada assinado recebido                                                                |
+| 0373-C5       | PENDING_PUSH | Push, CI verde no SHA, CodeQL sem high, proteção do `main`                                                                                          |
+
 # AUD0599-REMEDIATION — correções da AUD-0599 — 06/10/2026
 
 - Task `AUD0599-REMEDIATION-20261006`, Claude Code: `DONE_LOCAL`, aguardando reauditoria. [Evidência](04_audit/evidence/AUD0599-REMEDIATION-20261006/summary.md). Supersede a disposição OPEN de AUD0599-F01/F02 e AUD0598-R04; os registros anteriores ficam como histórico.

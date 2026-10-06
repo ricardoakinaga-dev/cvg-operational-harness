@@ -6,6 +6,34 @@
 - Vale para qualquer agente. Em conflito entre este arquivo e uma instrução
   direta do usuário, vale a instrução do usuário.
 
+## PROD-0373 — AUD-0600 e barra 0373 até produção — 06/10/2026
+
+- Task `PROD-0373-20261006`, Claude Code, `DONE_LOCAL / CONDITION_5_PENDING_PUSH`. Pedido do usuário:
+  "avalia as colocações do auditor e faz as correções necessárias para colocar
+  o programa em produção". Decisões do usuário nesta sessão: push normal para
+  `origin/main` e proteção do `main` com checks obrigatórios; dispensar
+  CodeQL #6/#7 como falso positivo com justificativa; excluir
+  `docs/04_audit/evidence/**` do scan do CodeQL; **Claude Code assume a
+  condição 4 (bootstrap de sessão)**, antes no claim GREEN do Codex, parado
+  desde 04/10 — o cache do Codex é só consulta.
+- Escrita: kernel e iterativo (`packages/harness/src/**`),
+  `packages/agent-runtime/src/**` (parte B), `apps/api/src/main.ts`,
+  `apps/api/src/production-bootstrap.ts` e testes novos, `apps/worker/src/**`
+  (heartbeat/alerta), `packages/observability/src/**`, migração nova em
+  `packages/persistence/migrations/`, `Dockerfile`, `scripts/**` de imagem,
+  restore e alerta, `.github/codeql/**` e `.github/workflows/security.yml`,
+  `tests/**` próprios, SPEC 0181, barra 0373, evidência
+  `docs/04_audit/evidence/PROD-0373-20261006/**`, esta seção e entradas
+  próprias nos ledgers (staging parcial: as entradas AUD-0600 do Codex não
+  são commitadas por mim). PostgreSQL descartável próprio `claude-prod0373-pg`
+  (loopback 55731). Sem dado real, provider externo ou deploy.
+- Fechamento: AUD-0600 F01/F02 e condições 1, 3, 4, 6, 7, 8, 9 e 10 da 0373
+  feitas e provadas localmente (suíte 2.925 PASS, PostgreSQL 296 PASS, smoke
+  16/16 na imagem, restore com cadeia íntegra). PostgreSQL próprio
+  `claude-prod0373-pg` removido; contêineres das provas removidos. Condição 5
+  depende do push, que a permissão do terminal bloqueou. As entradas AUD-0600
+  do Codex nos ledgers e nesta coordenação não foram commitadas por mim.
+
 ## AUD0599-REMEDIATION — correções da AUD-0599 e dos levantamentos — 06/10/2026
 
 - Task `AUD0599-REMEDIATION-20261006`, Claude Code (owner KERNEL-PLUGINS),
