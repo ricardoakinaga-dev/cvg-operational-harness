@@ -6,6 +6,15 @@
 - Vale para qualquer agente. Em conflito entre este arquivo e uma instrução
   direta do usuário, vale a instrução do usuário.
 
+## AUD-KPLG004-20261006 — auditoria independente e publicação autorizada
+
+- Codex, `COMPLETED_AUDIT / FINDINGS_OPEN`; usuário autorizou auditoria de `ee7b3f9`, commit e push para `ricardoakinaga-dev/cvg-operational-harness` nesta sessão.
+- Escrita exclusiva: `docs/04_audit/0597_auditoria_kplg004_2026-10-06.md`, `docs/04_audit/evidence/AUD-KPLG004-20261006/**`, cópias isoladas `/tmp/cvg-aud-kplg004-20261006/**` e `/tmp/cvg-aud-kplg004-parent-20261006/**`; nesta coordenação e nos três ledgers, somente entrada própria nova. Código do kernel, iterativo e worker somente leitura.
+- Testes em Node 22 com instalação e PostgreSQL próprios (contêiner `cvg-aud-kplg004-pg-20261006`, porta loopback 55716). Sem certify, E2E, SBOM, licenças, lockfile, deploy, provider ou dados reais. Critérios: SPEC 0181 I3–I12, reserva após checkpoint, efeitos/recuperação, compatibilidade e regressões.
+- Commit só dos artefatos próprios; não incorporar alterações locais concorrentes. Push normal, sem force, do histórico commitado mais a auditoria; nenhum release de produção.
+
+- Fechamento: seis achados no AUD-0597; sondas 1 PASS/7 FAIL; 2711 testes PASS + 2 falhas esperadas de conformidade, zero skips; PostgreSQL 288 PASS; typecheck/lint PASS. Artefatos próprios preparados para commit seletivo e push normal autorizado; caminhos de runtime continuam somente leitura, remediação pertence ao owner KERNEL-PLUGINS. Sem gate/release herdado.
+
 ## ENGINE-PROD-FIX — correção integral da carteira 0371 — 04/10/2026
 
 - Task `ENGINE-PROD-FIX-20261004`: Claude Code, `CONCLUÍDO_LOCAL / SEM_COMMIT`.

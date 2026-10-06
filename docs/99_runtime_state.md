@@ -1,3 +1,9 @@
+# AUD-KPLG004 — auditoria de ee7b3f9 — 06/10/2026
+
+- Task `AUD-KPLG004-20261006`; `status: COMPLETED` para a auditoria, código `FAIL_INVARIANTS_PART_A`, remediações `OPEN`. [AUD-0597](04_audit/0597_auditoria_kplg004_2026-10-06.md); produção `NO_GO`.
+- `last_completed_action`: seis achados confirmados (cinco P1/um P2), oito sondas 1 PASS/7 FAIL; duas regressões diferenciais Node 22; 2711 testes PASS + 2 falhas esperadas de conformidade, zero skips; PostgreSQL 288 PASS; typecheck/lint PASS. Nenhuma alteração de runtime nesta rodada.
+- `next_action`: coordenar F01–F06 com o owner KERNEL-PLUGINS e revalidar pausa/cancelamento, pendências e logs na SPEC 0181 antes de aceitar a parte A. As duas falhas esperadas do worker e parte B continuam abertas. Commit/push documental e do histórico já commitado foram explicitamente autorizados; não concedem release. Os estados das outras frentes abaixo permanecem válidos em seu próprio escopo.
+
 # HARNESS-ISO-GREEN — checkpoint 62 — 05/10/2026
 
 - Task `HARNESS_ISO_GREEN_20261004`; `status: IN_PROGRESS`. R56 certificação terminou FAIL_ENOSPC: 5792/414 unit PASS zero skip; coverage/PG/E2E sem certificação válida. R58 e R61 REJECT por integridade de backup retido e restart pós-truncamento; R63 corrigido isoladamente, R65 payload aguardando freeze. R64 REJECT reproduziu falso PASS module-sync; R70 recusa contexto não comprovado e passou 89/2 focados zero skip, types/lint/sintaxe/formato; crítico R72 novo ativo. R66 cópia8354 exata+overlayR63+deps17394/48 preparada sem promoção. R50 gates locais/neutral finite aceitos parcialmente, N2 histórico INCOMPLETE; sem herdar inventário global. Liberadas apenas dependências próprias inativas R69/R71 com source/lock MATCH. GLOBAL FAIL, produção NO_GO, só HISO001 DONE; NO_MODEL e nenhum provider/push/dado real.

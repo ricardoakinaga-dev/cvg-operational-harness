@@ -1,0 +1,135 @@
+import { describe, expect, it } from 'vitest'
+import type { ApprovalEngine, ExecutionCheckpoint, ToolDefinition } from '@cvg/harness-contracts'
+import { ScriptedModelGateway, ScriptedOrchestrator } from '@cvg/harness-orchestrator'
+import { IterativeGovernedRuntime } from '../iterative-runtime.ts'
+import { InMemoryExecutionStepStore } from '../step-store.ts'
+import { InMemoryEffectLedger, InMemoryKernelLog, InMemoryPauseSwitch, KernelRuntime, standardKernelPlugins } from '../kernel/index.ts'
+import { phase3RuntimeInput, PHASE3_TOOL_RESERVE } from './fixtures/phase3-fixtures.ts'
+
+const input = phase3RuntimeInput()
+const decision = { decisionType: 'CALL_TOOL', reasonCode: 'TOOL_REQUIRED', toolId: PHASE3_TOOL_RESERVE, toolInput: {} } as const
+
+function harness(options: { checkpoint?: () => void; reserve?: () => void; pending?: () => boolean; logFails?: boolean; approved?: boolean } = {}) {
+  const order: string[] = []
+  const pause = new InMemoryPauseSwitch()
+  const effects = new InMemoryEffectLedger()
+  const log = new InMemoryKernelLog()
+  class Store extends InMemoryExecutionStepStore {
+    override async saveCheckpoint(checkpoint: ExecutionCheckpoint) {
+      await super.saveCheckpoint(checkpoint)
+      if (checkpoint.state.pendingDecision && !checkpoint.state.stopReason) {
+        order.push('checkpoint')
+        options.checkpoint?.()
+      }
+    }
+  }
+  const store = new Store()
+  const approvals: ApprovalEngine = {
+    request: async () => options.pending?.()
+      ? { status: 'PENDING', approvalId: 'approval-audit' as never, reason: 'waiting' }
+      : { status: 'APPROVED', approvalId: 'approval-audit' as never, reason: 'synthetic' },
+    execution: {
+      begin: async () => { order.push('reserve'); options.reserve?.(); return { reservationId: 'reservation-audit' } as never },
+      complete: async () => { order.push('complete') },
+      fail: async () => { order.push('fail') },
+      uncertain: async () => { order.push('uncertain') }
+    }
+  }
+  const tool: ToolDefinition = {
+    id: PHASE3_TOOL_RESERVE, version: 'v1', description: 'synthetic only', inputSchema: {}, outputSchema: {}, risk: 'LOW', sideEffect: 'WRITE', idempotent: false, requiresApproval: options.approved ?? true,
+    execute: async () => { order.push('body'); return { status: 'SUCCEEDED', output: { ok: true } } }
+  }
+  const runtime = new IterativeGovernedRuntime({
+    orchestrator: new ScriptedOrchestrator({ script: [decision, { decisionType: 'RESPOND', reasonCode: 'GOAL_SATISFIED', responseText: 'ok' }] }),
+    modelGateway: new ScriptedModelGateway({ responses: ['synthetic'] }),
+    policy: { evaluate: async () => ({ outcome: 'ALLOW', reason: 'synthetic', policyVersion: 'v1' }) },
+    approvals, tools: { list: () => [tool], resolve: id => id === tool.id ? tool : undefined },
+    audit: { append: async () => {} }, telemetry: { record: () => {} }, stepStore: store, pause, effects,
+    log: { append: async event => { if (options.logFails && event.type === 'tool/result') throw new Error('synthetic result log failure'); log.append(event) } }
+  })
+  return { runtime, order, pause, effects, store, log }
+}
+
+describe('AUD-KPLG004 — invariants challenged through iterative public execute', () => {
+  it('control: checkpoint precedes reservation and exactly one body', async () => {
+    const h = harness()
+    const result = await h.runtime.execute(input)
+    expect(result.stopReason).toBe('COMPLETED')
+    expect(h.order).toEqual(['checkpoint', 'reserve', 'body', 'complete'])
+  })
+  it('I12: pause acknowledged during checkpoint must block the body', async () => {
+    const h = harness({ checkpoint: () => h.pause.pause(input.tenantId) })
+    await h.runtime.execute(input)
+    expect(h.order).not.toContain('body')
+  })
+  it('I8: cancellation during checkpoint must not reserve or start an effect', async () => {
+    const controller = new AbortController()
+    const h = harness({ checkpoint: () => controller.abort() })
+    await h.runtime.execute({ ...input, signal: controller.signal })
+    console.info('AUD-CANCEL', JSON.stringify({ order: h.order, effects: h.effects.entries }))
+    expect(h.order).not.toContain('body')
+    expect(h.order).not.toContain('reserve')
+    expect(h.effects.entries).toEqual([])
+  })
+  it('I12: pause acknowledged during approval reservation must block body', async () => {
+    const h = harness({ reserve: () => h.pause.pause(input.tenantId) })
+    await h.runtime.execute(input)
+    expect(h.order).not.toContain('body')
+  })
+  it('I12: operator pause must preserve an existing pending approval for resume', async () => {
+    let pending = true
+    const h = harness({ pending: () => pending })
+    const first = await h.runtime.execute(input)
+    expect(first.stopReason).toBe('APPROVAL_REQUIRED')
+    pending = false
+    h.pause.pause(input.tenantId)
+    const paused = await h.runtime.execute({ ...input, resume: { kind: 'approval', approvalId: 'approval-audit' as never } })
+    expect(paused.stopReason).toBe('HUMAN_TAKEOVER')
+    h.pause.resume(input.tenantId)
+    const resumed = await h.runtime.execute({ ...input, resume: { kind: 'approval', approvalId: 'approval-audit' as never } })
+    console.info('AUD-RESUME', JSON.stringify({ first: first.stopReason, paused: paused.stopReason, resumed: resumed.stopReason, response: resumed.response }))
+    expect(resumed.stopReason).toBe('COMPLETED')
+    expect(h.order.filter(value => value === 'body')).toHaveLength(1)
+  })
+  it('I5: failure to record the tool result must fail closed', async () => {
+    const h = harness({ logFails: true })
+    const result = await h.runtime.execute(input)
+    expect(h.order).toContain('body')
+    expect(h.log.events.some(event => event.type === 'tool/result')).toBe(false)
+    expect(result.stopReason).not.toBe('COMPLETED')
+  })
+  it('I6: the model request log must match a request rewritten by before-call', async () => {
+    const log = new InMemoryKernelLog()
+    let sent: unknown
+    const runtime = await KernelRuntime.boot(standardKernelPlugins({
+      orchestrator: { decideNextStep: async () => ({ action: 'RESPOND' }) },
+      modelGateway: { complete: async request => { const { signal, ...rest } = request; void signal; sent = rest; return { text: 'synthetic', provider: 'synthetic', inputTokens: 1, outputTokens: 1, costUsd: 0 } } },
+      policy: { evaluate: async () => ({ outcome: 'ALLOW', reason: 'synthetic', policyVersion: 'v1' }) },
+      approvals: { request: async () => ({ status: 'DENIED', reason: 'unused' }) },
+      tools: { list: () => [], resolve: () => undefined }, audit: { append: async () => {} }, telemetry: { record: () => {} }, log,
+      plugins: [{ name: 'control.rewrite', kind: 'control', apply: ctx => { ctx.on('model/before-call', async (call, next) => { Object.assign(call.request, { messages: [{ role: 'user', content: 'rewritten synthetic' }] }); return next() }) } }]
+    }))
+    const result = await runtime.execute({ ...input, runtimeProfile: 'single_pass' })
+    expect(result.stopReason).toBe('COMPLETED')
+    const logged = log.events.find(event => event.type === 'model/request')
+    expect(logged?.type === 'model/request' ? logged.request : null).toEqual(sent)
+  })
+  it('I5: a denied guard must record exactly one not-started result', async () => {
+    const log = new InMemoryKernelLog()
+    let body = 0
+    const tool: ToolDefinition = { id: PHASE3_TOOL_RESERVE, version: 'v1', description: 'synthetic only', inputSchema: {}, outputSchema: {}, risk: 'LOW', sideEffect: 'WRITE', idempotent: false, requiresApproval: false, execute: async () => { body++; return { status: 'SUCCEEDED', output: {} } } }
+    const runtime = await KernelRuntime.boot(standardKernelPlugins({
+      orchestrator: { decideNextStep: async () => ({ action: 'CALL_TOOL', toolInvocation: { toolId: tool.id, input: {}, operationKey: 'audit-denial' } }) },
+      modelGateway: new ScriptedModelGateway({ responses: ['unused'] }),
+      policy: { evaluate: async () => ({ outcome: 'ALLOW', reason: 'synthetic', policyVersion: 'v1' }) },
+      approvals: { request: async () => ({ status: 'DENIED', reason: 'unused' }) },
+      tools: { list: () => [tool], resolve: () => tool }, audit: { append: async () => {} }, telemetry: { record: () => {} }, log,
+      plugins: [{ name: 'control.deny', kind: 'control', apply: ctx => { ctx.guard(() => 'synthetic denial') } }]
+    }))
+    const result = await runtime.execute({ ...input, runtimeProfile: 'single_pass' })
+    expect(result.stopReason).toBe('POLICY_DENIED')
+    expect(body).toBe(0)
+    console.info('AUD-GUARD', JSON.stringify(log.events))
+    expect(log.events.filter(event => event.type === 'tool/result' && event.outcome === 'not_started')).toHaveLength(1)
+  })
+})
