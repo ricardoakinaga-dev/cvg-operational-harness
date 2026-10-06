@@ -903,6 +903,17 @@ function workspaceBySpecifier(owners, specifier) {
   return longest.length === 1 ? longest[0] : null
 }
 
+function wildcardCount(value) {
+  return value.split('*').length - 1
+}
+
+/** Substitutes the captured text for the single `*`, taken literally. */
+function expandAliasTarget(target, captured) {
+  const star = target.indexOf('*')
+  if (captured === null || star === -1) return target
+  return `${target.slice(0, star)}${captured}${target.slice(star + 1)}`
+}
+
 function resolveAliasTargets(root, sourceOwner, specifier, aliases) {
   const results = []
   for (const alias of aliases) {
@@ -919,8 +930,7 @@ function resolveAliasTargets(root, sourceOwner, specifier, aliases) {
       continue
     }
     for (const target of alias.targets) {
-      const expanded =
-        captured === null ? target : target.replace('*', captured)
+      const expanded = expandAliasTarget(target, captured)
       const absolute = path.resolve(alias.basePath, expanded)
       results.push({
         absolutePath: absolute,
@@ -1117,9 +1127,15 @@ function readTsconfigPaths(root, owners, configFiles, gaps) {
       continue
     }
     for (const [pattern, targets] of Object.entries(options.paths ?? {})) {
+      // Same limits TypeScript enforces (TS5061, TS5062, TS5066): an alias it
+      // would reject is never used to resolve an edge.
       if (
         !Array.isArray(targets) ||
-        targets.some((target) => typeof target !== 'string')
+        targets.length === 0 ||
+        targets.some(
+          (target) => typeof target !== 'string' || wildcardCount(target) > 1
+        ) ||
+        wildcardCount(pattern) > 1
       ) {
         gaps.push({
           code: 'TSCONFIG_PATHS_INVALID',

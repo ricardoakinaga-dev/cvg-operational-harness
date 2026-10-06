@@ -1007,10 +1007,15 @@ export function hasForbiddenMemoryContent(
   return found
 }
 
-/** Rejects instruction-like prose before approved knowledge reaches a reply. */
+/**
+ * Rejects instruction-like prose before approved knowledge reaches a reply.
+ * Whitespace runs are collapsed first so the pattern matches single spaces:
+ * adjacent `\s+`/`\s*` around optional words backtracked quadratically on
+ * long runs of spaces (CodeQL js/polynomial-redos, AUD-0599).
+ */
 export function hasUntrustedInstructionContent(value: string): boolean {
-  return /ignore\s+(?:all|any|the|previous|prior|earlier|as?|os|todas?)\s*(?:rules?|regras?|instructions?|instruções?)?|desconsid(?:ere|erar)\s+(?:todas?|as)\s+(?:rules?|regras?|instruções?)|system\s+(?:message|prompt)|assistant\s+instructions?|execute\s+(?:the\s+)?(?:hidden|arbitrary|untrusted)?\s*tool|grant\s+approval|override\s+(?:the\s+)?policy|reveal\s+(?:secrets?|credentials?|reasoning)|call\s+hidden\.?capability/i.test(
-    value
+  return /ignore (?:all|any|the|previous|prior|earlier|as?|os|todas?)|desconsid(?:ere|erar) (?:todas?|as) (?:rules?|regras?|instruções?)|system (?:message|prompt)|assistant instructions?|execute (?:the )?(?:(?:hidden|arbitrary|untrusted) ?)?tool|grant approval|override (?:the )?policy|reveal (?:secrets?|credentials?|reasoning)|call hidden\.?capability/i.test(
+    value.replace(/\s+/g, ' ')
   )
 }
 

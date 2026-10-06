@@ -2,7 +2,8 @@ import { z } from 'zod'
 import {
   evaluateOutboundUrl,
   fetchWithSsrfGuard,
-  isLoopbackHostname
+  isLoopbackHostname,
+  withoutTrailingSlashes
 } from '@cvg/shared'
 import type { EgressDns } from '@cvg/shared'
 import type {
@@ -68,9 +69,9 @@ export class OllamaProvider implements ModelProvider {
   readonly #boundFetch: typeof fetchWithResolvedAddress | undefined
 
   constructor(options: OllamaProviderOptions) {
-    const baseUrl = (options.baseUrl ?? 'http://127.0.0.1:11434')
-      .trim()
-      .replace(/\/+$/, '')
+    const baseUrl = withoutTrailingSlashes(
+      (options.baseUrl ?? 'http://127.0.0.1:11434').trim()
+    )
     const parsedBaseUrl = new URL(baseUrl)
     const allowPrivateNetworks = options.allowPrivateNetworks ?? false
     const allowHttp =

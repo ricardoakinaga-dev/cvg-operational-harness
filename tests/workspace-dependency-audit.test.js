@@ -304,6 +304,72 @@ describe('M07 workspace dependency policy', () => {
     ])
   })
 
+  it('never resolves through a path alias TypeScript would reject (AUD-0599, CodeQL #17)', () => {
+    const invalid = {
+      '@two-stars/*/*': ['apps/beta/src/*'],
+      '@two-target-stars/*': ['apps/beta/src/*/*'],
+      '@empty/*': []
+    }
+    for (const [pattern, targets] of Object.entries(invalid)) {
+      const root = makeRoot()
+      fs.writeFileSync(
+        path.join(root, 'tsconfig.base.json'),
+        JSON.stringify({
+          compilerOptions: { baseUrl: '.', paths: { [pattern]: targets } }
+        })
+      )
+      const prefix = pattern.slice(0, pattern.indexOf('/'))
+      fs.writeFileSync(
+        path.join(root, 'apps/alpha/src/index.ts'),
+        `import { value } from '${prefix}/index/index';\nexport { value };\n`
+      )
+      const report = createReport(root, syntheticPolicy(), {
+        syntheticFixture: true,
+        useConfiguredBaseline: false,
+        baselineManifest: null,
+        command: ['synthetic']
+      })
+      expect(report.report.coverage.gaps).toContainEqual(
+        expect.objectContaining({ code: 'TSCONFIG_PATHS_INVALID', pattern })
+      )
+      expect(
+        report.report.edges.map((edge) => edge.resolutionMethods).flat()
+      ).not.toContain('TYPESCRIPT_PATH_ALIAS')
+      expect(report.result.exitCode).not.toBe(0)
+    }
+  })
+
+  it('substitutes the captured alias text literally', () => {
+    const root = makeRoot()
+    fs.mkdirSync(path.join(root, 'apps/beta/src/$&'), { recursive: true })
+    fs.writeFileSync(
+      path.join(root, 'apps/beta/src/$&/index.ts'),
+      'export const value = 1;\n'
+    )
+    fs.writeFileSync(
+      path.join(root, 'tsconfig.base.json'),
+      JSON.stringify({
+        compilerOptions: {
+          baseUrl: '.',
+          paths: { '@synthetic-alias/*': ['apps/beta/src/*'] }
+        }
+      })
+    )
+    fs.writeFileSync(
+      path.join(root, 'apps/alpha/src/index.ts'),
+      "import { value } from '@synthetic-alias/$&/index';\nexport { value };\n"
+    )
+    const report = createReport(root, syntheticPolicy(), {
+      syntheticFixture: true,
+      useConfiguredBaseline: false,
+      baselineManifest: null,
+      command: ['synthetic']
+    })
+    expect(
+      report.report.edges.map((edge) => edge.resolutionMethods).flat()
+    ).toContain('TYPESCRIPT_PATH_ALIAS')
+  })
+
   it('shares a safe production type-only declaration with a test edge and preserves both roles', () => {
     const root = makeRoot()
     fs.mkdirSync(path.join(root, 'apps/alpha/src/__tests__'), {

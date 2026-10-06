@@ -2,7 +2,8 @@ import { z } from 'zod'
 import {
   evaluateOutboundUrl,
   fetchWithSsrfGuard,
-  isLoopbackHostname
+  isLoopbackHostname,
+  withoutTrailingSlashes
 } from '@cvg/shared'
 import type { EgressDns } from '@cvg/shared'
 import type {
@@ -81,7 +82,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   readonly #boundFetch: typeof fetchWithResolvedAddress | undefined
 
   constructor(options: OpenAICompatibleProviderOptions) {
-    const baseUrl = options.baseUrl.trim().replace(/\/+$/, '')
+    const baseUrl = withoutTrailingSlashes(options.baseUrl.trim())
     const hostname = new URL(baseUrl).hostname.toLowerCase()
     const isLocal = options.location === 'local'
     const allowPrivateNetworks = options.allowPrivateNetworks ?? false

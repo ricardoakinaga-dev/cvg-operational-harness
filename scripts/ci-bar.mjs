@@ -14,11 +14,11 @@ import {
   runnerIdentity,
   verifyGateSeals
 } from './ci-bar-provenance.mjs'
-import { parsePlaywrightSummary } from './lib/certification-rules.mjs'
 import {
   parseE2eEvidenceLog,
   validateE2eReportPair
 } from './lib/e2e-report-binding.mjs'
+import { parsePlaywrightSummary } from './lib/test-log-summaries.mjs'
 import { validateRem21010ProofReport } from './rem21-010-postgres-proof-contract.mjs'
 import { validateRem21011ProofReport } from './rem21-011-observability-proof-contract.mjs'
 import { validateRem21014BrowserProofReport } from './rem21-014-browser-proof-contract.mjs'

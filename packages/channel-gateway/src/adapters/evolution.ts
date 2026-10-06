@@ -1,7 +1,8 @@
 import {
   evaluateOutboundUrl,
   fetchWithSsrfGuard,
-  isLoopbackHostname
+  isLoopbackHostname,
+  withoutTrailingSlashes
 } from '@cvg/shared'
 import type { EgressDns } from '@cvg/shared'
 import {
@@ -76,7 +77,7 @@ export class EvolutionChannelAdapter
     this.#maxResponseBytes =
       options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
     if (this.enabled) {
-      const baseUrl = options.baseUrl?.trim().replace(/\/+$/, '')
+      const baseUrl = withoutTrailingSlashes(options.baseUrl?.trim() ?? '')
       if (!baseUrl || !options.apiKey || !options.instance) {
         throw new ChannelError(
           'invalid_config',
