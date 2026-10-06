@@ -28,8 +28,9 @@
 
 - Estado: `IN_PROGRESS`. Feito: [SPEC 0181](../02_spec/0181_kernel_plugin_contract.md)
   em rascunho; suíte de conformidade em `tests/conformance/` executada contra os
-  três runtimes (26 PASS, 7 lacunas confirmadas). Falta: revisão da SPEC pelo
-  usuário e rascunho da barra de produção do harness. Gate: T3 para a SPEC; revisão do usuário antes do KPLG-003.
+  três runtimes (26 PASS, 7 lacunas confirmadas); SPEC revisada pelo usuário
+  (decisões D-0181-1 a 3); [barra 0373](0373_barra_producao_harness.md) em
+  rascunho. Falta: ok do usuário para o BUILD do kernel e aprovação da barra. Gate: T3 para a SPEC; revisão do usuário antes do KPLG-003.
   Dependências: KPLG-001.
 - O quê:
   - SPEC curta do contrato: tipos de plugin, chaves de serviço, pontos de

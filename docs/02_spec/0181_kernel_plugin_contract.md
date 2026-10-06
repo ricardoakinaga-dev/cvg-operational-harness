@@ -1,7 +1,8 @@
 # SPEC 0181 — Contrato do kernel de plugins
 
-- Data: 06/10/2026. Status: `DRAFT / AGUARDANDO_REVISAO_DO_USUARIO` (T3).
-  O BUILD do kernel (KPLG-003) só começa depois da revisão.
+- Data: 06/10/2026. Status: `REVISADA_PELO_USUARIO / AGUARDANDO_OK_DE_BUILD`
+  (T3). As três perguntas da §9 foram respondidas pelo usuário em 06/10/2026. O
+  BUILD do kernel (KPLG-003) começa com o ok explícito do usuário.
 - Decisão: [ADR-011](../architecture/adrs/ADR-011-kernel-de-plugins-com-controles-obrigatorios.md).
   Roteiro: [0372](../03_build/0372_kernel_plugins_roadmap.md), cartão KPLG-002.
 - Referência: DeepSeek Harness, `~/deepseek-harness` (`docs/cordis-primer.md`,
@@ -102,7 +103,7 @@ type ToolGuard = (call: Readonly<ToolCall>) => string | undefined
 
 ## 6. Suíte de conformidade (KPLG-002)
 
-Cada invariante vira pelo menos um teste em `packages/harness/src/__tests__/conformance/`.
+Cada invariante vira pelo menos um teste em `tests/conformance/` (decisão D-0181-2).
 A suíte roda **antes** da refatoração contra os três runtimes atuais, por meio de
 um adaptador fino que expõe `HarnessRuntime.execute`. O resultado esperado é uma
 tabela invariante × runtime com PASS, FAIL ou N/A. As falhas de hoje viram
@@ -131,8 +132,9 @@ cartões, não são ignoradas.
 2. Política, aprovação, journal, auditoria e orçamento atuais são embrulhados
    como plugins de controle, sem mudar comportamento. A suíte do motor e a de
    conformidade precisam passar.
-3. `createOperationalHarness` passa a compor o kernel. Os runtimes antigos ficam
-   como fachada fina até o KPLG-004, e depois são removidos.
+3. `createOperationalHarness` passa a compor o kernel. Os runtimes antigos viram
+   fachada fina que delega ao kernel e são removidos quando API, worker e
+   Assistente de Plantão migrarem (D-0181-3).
 4. A extração do Codex em `packages/agent-runtime` (SPECs 0165–0171) é
    integrada antes do KPLG-004, para não haver duas refatorações no mesmo
    arquivo.
@@ -144,11 +146,30 @@ ferramentas de shell e sistema de arquivos, perfis por agente hospitalar,
 guarda de saída clínica (só o ponto `turn/before-reply` é reservado), dado
 real, provider externo, push e deploy.
 
-## 9. Perguntas para a revisão
+## 9. Decisões da revisão (usuário, 06/10/2026)
 
-1. A lista de controles obrigatórios (I1) está certa para todo perfil, ou
-   `pause` pode ser opcional em perfis de teste?
-2. A suíte de conformidade pode ficar dentro de `packages/harness`, ou deve
-   ser um pacote próprio (`packages/conformance`)?
-3. Os runtimes antigos são removidos no KPLG-004, ou mantidos como
-   compatibilidade por uma versão?
+| ID       | Pergunta                                      | Decisão                                                                                                                                                                                                           |
+| -------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D-0181-1 | `pause` pode ser opcional em perfis de teste? | **Não.** Obrigatória em todo perfil; nos testes usa implementação em memória. Não existe caminho de boot sem pausa.                                                                                               |
+| D-0181-2 | Onde fica a suíte de conformidade?            | **`tests/conformance/`**, na suíte padrão, sem virar pacote nem dependência de workspace.                                                                                                                         |
+| D-0181-3 | O que acontece com os runtimes antigos?       | **Fachada fina** que delega ao kernel enquanto API, worker e Assistente de Plantão migram; **removidos** quando o último consumidor interno migrar. Nada foi publicado, então não há cliente externo a preservar. |
+
+## 10. Resultado da conformidade antes do kernel
+
+A suíte executada em 06/10/2026 ([evidência](../04_audit/evidence/KERNEL-PLUGINS-20261006/baseline-and-conformance.md))
+acrescenta três exigências ao kernel:
+
+1. **Um contrato de governança só.** Hoje convivem `@cvg/harness-contracts`
+   (runtimes do `harness`) e `@cvg/policy-engine` + `@cvg/approval-engine` +
+   `runTurn` (`GovernedAgentRuntime`). No KPLG-003 o kernel implementa o
+   primeiro; no KPLG-004 o kernel durável do worker passa a usar o mesmo
+   contrato, com adaptadores para o que for exclusivo do segundo (reserva,
+   incerteza de efeito, outbox).
+2. **Desfechos canônicos.** A mesma falha produz hoje desfechos diferentes em
+   cada runtime. O kernel fixa um desfecho por causa: canal de aprovação
+   indisponível, política indisponível, ferramenta falhou, efeito incerto.
+   Negação e efeito incerto são reportados como fatos separados.
+3. **As sete lacunas confirmadas fecham no kernel:** chamada registrada antes
+   da execução (single-pass), requisição ao modelo reconstruível pelo log (os
+   três), exceção normalizada (`GovernedAgentRuntime`) e cancelamento por
+   `signal` (single-pass e iterativo). Os `it.fails` correspondentes viram `it`.
