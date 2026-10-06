@@ -15,7 +15,7 @@ import type { GovernedTurnInput } from '@cvg/agent-runtime'
 /**
  * KERNEL-PLUGINS-20261006 — suíte de conformidade da SPEC 0181 contra o
  * kernel durável do worker (`GovernedAgentRuntime`). Mesmas invariantes da
- * suíte dos runtimes do harness; lacunas conhecidas usam `it.fails`.
+ * suíte dos runtimes do harness, sem `it.fails` restante (barra 0373).
  */
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000097'
@@ -214,28 +214,34 @@ describe('conformidade SPEC 0181 — GovernedAgentRuntime', () => {
     )
   })
 
-  // `model.completed` guarda provedor, modelo, custo e tentativas; a
-  // requisição enviada não fica no log.
-  it.fails(
-    'C06/I6 — requisição ao modelo reconstruível pelo log (LACUNA)',
-    async () => {
-      const h = build()
-      await h.runtime.runTurn(turn())
-      expect(JSON.stringify(h.audit.records())).toContain(MODEL_INPUT)
-    }
-  )
+  it('C06/I6 — requisição ao modelo registrada antes do envio e reconstruível pelo log', async () => {
+    const h = build()
+    await h.runtime.runTurn(turn())
+    const records = h.audit.records()
+    const requested = records.findIndex((r) => r.type === 'model.requested')
+    expect(requested).toBeGreaterThan(-1)
+    expect(requested).toBeLessThan(
+      records.findIndex((r) => r.type === 'model.completed')
+    )
+    expect(records[requested]?.payload).toMatchObject({
+      promptId: 'conformance',
+      promptVersion: '1.0.0',
+      modelProfile: 'fast',
+      structuredOutputSchema: 'Payload',
+      input: turn().modelMessages
+    })
+  })
 
-  // A exceção da política escapa de `runTurn` e o turno não deixa registro.
-  it.fails(
-    'C07/I7 — exceção da política vira desfecho normalizado e auditado (LACUNA)',
-    async () => {
-      const h = build({ policyThrows: true })
-      h.arm()
-      const result = await h.runtime.runTurn(turn())
-      expect(result.outcome).toBe('denied')
-      expect(h.audit.size()).toBeGreaterThan(0)
-    }
-  )
+  it('C07/I7 — exceção da política vira desfecho normalizado e auditado', async () => {
+    const h = build({ policyThrows: true })
+    h.arm()
+    const result = await h.runtime.runTurn(turn())
+    expect(result.outcome).toBe('denied')
+    expect(result.reason).toBe('policy_failed')
+    expect(auditTypes(h)).toContain('runtime.denied')
+    expect(result.auditChainValid).toBe(true)
+    expect(h.toolExecutor).not.toHaveBeenCalled()
+  })
 
   it('C08/I8 — cancelamento antes do despacho não executa', async () => {
     const h = build()

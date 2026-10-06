@@ -525,24 +525,47 @@ export class GovernedAgentRuntime {
       const postApprovalSweepStop = earlyStop()
       if (postApprovalSweepStop !== undefined) return postApprovalSweepStop
 
-      const decision = policy.evaluate({
-        tenantId: input.tenantId,
-        operatorId: input.operatorId,
-        operatorRole: input.operatorRole,
-        agentId: input.agentId,
-        agentProfile: input.agentProfile,
-        capability: input.capability,
-        action: input.action,
-        correlationId,
-        resource: {
-          type: input.resource.type,
-          ...(input.resource.id !== undefined ? { id: input.resource.id } : {}),
-          ...(input.resource.tenantId !== undefined
-            ? { tenantId: input.resource.tenantId }
-            : {})
-        },
-        context: { dataClassification: input.dataClassification }
-      })
+      let decision: PolicyDecision
+      try {
+        decision = policy.evaluate({
+          tenantId: input.tenantId,
+          operatorId: input.operatorId,
+          operatorRole: input.operatorRole,
+          agentId: input.agentId,
+          agentProfile: input.agentProfile,
+          capability: input.capability,
+          action: input.action,
+          correlationId,
+          resource: {
+            type: input.resource.type,
+            ...(input.resource.id !== undefined
+              ? { id: input.resource.id }
+              : {}),
+            ...(input.resource.tenantId !== undefined
+              ? { tenantId: input.resource.tenantId }
+              : {})
+          },
+          context: { dataClassification: input.dataClassification }
+        })
+      } catch {
+        // I7 (SPEC 0181): a failing policy is a normalized, audited denial;
+        // the exception never escapes the turn.
+        appendAudit('runtime.denied', {
+          code: 'policy_failed',
+          phase: 'policy'
+        })
+        return finish('denied', 'policy_failed', {
+          ...syntheticDenialDecision(
+            'policy_failed',
+            input,
+            risk,
+            correlationId,
+            startedAt.toISOString()
+          ),
+          policyId: 'runtime.policy-failure',
+          policyVersion: 'policy-failure-v1'
+        })
+      }
       appendAudit('policy.decided', {
         capability: input.capability,
         action: input.action,
@@ -615,6 +638,25 @@ export class GovernedAgentRuntime {
       if ('denied' in modelStage) return modelStage.denied
       const modelSpan = modelStage.span
       let modelResult: ModelResult
+      // I6 (SPEC 0181): the request is on the audit chain before it is sent,
+      // as sent (the structured-output schema by name; the signal is local).
+      appendAudit('model.requested', {
+        requestId: `req_${traceId}`,
+        promptId: input.prompt.promptId,
+        promptVersion: input.prompt.version,
+        ...(input.prompt.sha256 !== undefined
+          ? { promptSha256: input.prompt.sha256 }
+          : {}),
+        policyVersion: decision.policyVersion,
+        modelProfile: input.modelProfile,
+        dataClassification: input.dataClassification,
+        input: input.modelMessages,
+        maxCostUsd: limits.maxCostUsd,
+        ...(input.task !== undefined ? { task: input.task } : {}),
+        ...(input.structuredOutput !== undefined
+          ? { structuredOutputSchema: input.structuredOutput.schemaName }
+          : {})
+      })
       try {
         modelResult = await modelGateway.generate({
           requestId: `req_${traceId}`,
