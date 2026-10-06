@@ -21,6 +21,11 @@ describe('secret scan configuration (PR-011)', () => {
     expect(read('.github/workflows/security.yml')).toContain(
       'GITLEAKS_VERSION: 8.28.0'
     )
+    // Fingerprints carry the commit: the scan needs real history (PROD-0373).
+    const secretScan = read('.github/workflows/security.yml').split(
+      '  codeql:'
+    )[0]
+    expect(secretScan).toMatch(/fetch-depth: 0/)
     const fingerprints = read('.gitleaksignore')
       .split('\n')
       .filter((line) => line && !line.startsWith('#'))
