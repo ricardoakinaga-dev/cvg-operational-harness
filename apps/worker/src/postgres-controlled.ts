@@ -199,6 +199,7 @@ export function createPostgresContinuousWorker(
     ...(options.operationsIntervalMs !== undefined
       ? { operationsIntervalMs: options.operationsIntervalMs }
       : {}),
+    ...livenessOption(env),
     ...(options.sweeps ? { sweeps: options.sweeps } : {})
   })
   return {
@@ -209,6 +210,18 @@ export function createPostgresContinuousWorker(
     workerId: connection.workerId,
     tuning
   }
+}
+
+function livenessOption(env: NodeJS.ProcessEnv): { livenessFile?: string } {
+  const file = workerLivenessFile(env)
+  return file === undefined ? {} : { livenessFile: file }
+}
+
+/** Liveness file for the container healthcheck; on by default in production. */
+export function workerLivenessFile(env: NodeJS.ProcessEnv): string | undefined {
+  const configured = env.CVG_WORKER_LIVENESS_FILE?.trim()
+  if (configured) return configured
+  return env.NODE_ENV === 'production' ? '/tmp/cvg-worker.alive' : undefined
 }
 
 /**

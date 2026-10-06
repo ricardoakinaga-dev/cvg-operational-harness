@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs'
 import type { TenantId } from '@cvg/platform'
 import {
   DEFAULT_OUTBOX_LEASE_MS,
@@ -71,6 +72,11 @@ export interface ContinuousWorkerOptions extends Partial<ContinuousWorkerTuning>
   operations?: WorkerOperationsHooks
   /** Heartbeat cadence; defaults to 10 s. */
   operationsIntervalMs?: number
+  /**
+   * File touched on every heartbeat tick, for the container healthcheck
+   * (`scripts/runtime-healthcheck.mjs`, AUD-0601 F04).
+   */
+  livenessFile?: string
 }
 
 export interface WorkerOperationsHooks {
@@ -474,22 +480,44 @@ export function createContinuousWorker(
     )
   }
 
-  async function beat(): Promise<void> {
-    const operations = options.operations
-    if (!operations) return
-    const settled = settledCount()
+  let beating = false
+  function touchLivenessFile(): void {
+    if (!options.livenessFile) return
     try {
-      await operations.beat({
-        startedAt,
-        progressed: settled - settledReported
-      })
-      settledReported = settled
+      writeFileSync(options.livenessFile, `${new Date().toISOString()}\n`)
     } catch (error) {
+      telemetry.log(
+        'worker.liveness_file_failed',
+        { workerId, error: sanitizeOutboxError(error) },
+        'error'
+      )
+    }
+  }
+
+  /**
+   * One heartbeat at a time (AUD-0601 F05): the progress delta is reserved
+   * before the await and handed back if the write fails, so a slow store
+   * never counts the same settled events twice nor loses them.
+   */
+  async function beat(): Promise<void> {
+    touchLivenessFile()
+    const operations = options.operations
+    if (!operations || beating) return
+    beating = true
+    const settled = settledCount()
+    const progressed = settled - settledReported
+    settledReported = settled
+    try {
+      await operations.beat({ startedAt, progressed })
+    } catch (error) {
+      settledReported -= progressed
       telemetry.log(
         'worker.heartbeat_failed',
         { workerId, error: sanitizeOutboxError(error) },
         'error'
       )
+    } finally {
+      beating = false
     }
   }
 
@@ -642,7 +670,7 @@ export function createContinuousWorker(
       durable: true
     })
     options.sweeps?.start()
-    if (options.operations) {
+    if (options.operations || options.livenessFile) {
       startedAt = new Date()
       void beat()
       operationsTimer = setInterval(() => {

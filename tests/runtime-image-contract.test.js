@@ -45,7 +45,9 @@ describe('REM21-016 runtime image contract', () => {
     )
     expect(runtime).not.toMatch(/^RUN /m)
     expect(runtime).toContain('USER cvg')
-    expect(runtime).toMatch(/HEALTHCHECK[\s\S]*CMD \["node", "-e"/)
+    expect(runtime).toMatch(
+      /HEALTHCHECK[\s\S]*CMD \["node", "scripts\/runtime-healthcheck\.mjs"\]/
+    )
     expect(runtime).toContain('CMD ["node", "apps/api/dist/main.js"]')
     const build = fs.readFileSync(
       path.join(root, 'scripts/build-runtime.mjs'),

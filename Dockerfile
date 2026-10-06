@@ -39,8 +39,10 @@ WORKDIR /app
 COPY --from=prod-deps /app ./
 USER cvg
 EXPOSE 3000
+# One probe for both commands: /live for the API, the heartbeat liveness
+# file for the worker (scripts/runtime-healthcheck.mjs).
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-  CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/live').then((response)=>process.exit(response.ok?0:1)).catch(()=>process.exit(1))"]
+  CMD ["node", "scripts/runtime-healthcheck.mjs"]
 CMD ["node", "apps/api/dist/main.js"]
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0 AS web

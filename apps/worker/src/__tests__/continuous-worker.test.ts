@@ -1148,3 +1148,87 @@ describe('AAA-19 continuous worker shutdown and lease safety', () => {
     expect(() => worker.start()).toThrow(/cannot be restarted/)
   })
 })
+
+describe('PROD-0373 worker operations hooks (AUD-0601 F05/F04)', () => {
+  it('never counts the same progress twice when heartbeats are slow, and hands back a failed delta', async () => {
+    const db = new InMemoryDatabase()
+    const adapter = new OutboxRepository(db)
+    enqueueInbound(adapter, 'worker-ops-f05-a')
+    const reported: number[] = []
+    let calls = 0
+    let failNext = false
+    const worker = createContinuousWorker({
+      tenantId,
+      workerId: 'worker-ops-f05',
+      adapter,
+      handlers: createHandlers(),
+      pollIntervalMs: 5,
+      leaseMs: 1_000,
+      operationsIntervalMs: 5,
+      operations: {
+        beat: async ({ progressed }) => {
+          calls += 1
+          await delay(40)
+          if (failNext) {
+            failNext = false
+            throw new Error('synthetic heartbeat store outage')
+          }
+          reported.push(progressed)
+        },
+        isPaused: async () => false
+      },
+      telemetry: createRecordingTelemetry().telemetry
+    })
+    worker.start()
+    await vi.waitFor(() => expect(worker.metrics().processed).toBe(1), {
+      timeout: 5_000,
+      interval: 5
+    })
+    await vi.waitFor(
+      () => expect(reported.reduce((sum, n) => sum + n, 0)).toBe(1),
+      { timeout: 5_000, interval: 5 }
+    )
+    failNext = true
+    enqueueInbound(adapter, 'worker-ops-f05-b')
+    await vi.waitFor(() => expect(worker.metrics().processed).toBe(2), {
+      timeout: 5_000,
+      interval: 5
+    })
+    await vi.waitFor(
+      () => expect(reported.reduce((sum, n) => sum + n, 0)).toBe(2),
+      { timeout: 5_000, interval: 5 }
+    )
+    await worker.stop()
+    expect(reported.reduce((sum, n) => sum + n, 0)).toBe(2)
+    expect(calls).toBeGreaterThan(reported.length)
+  })
+
+  it('touches the liveness file on every tick, even without database hooks', async () => {
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cvg-liveness-'))
+    const file = path.join(dir, 'alive')
+    const worker = createContinuousWorker({
+      tenantId,
+      workerId: 'worker-liveness-f04',
+      adapter: new OutboxRepository(new InMemoryDatabase()),
+      handlers: createHandlers(),
+      pollIntervalMs: 5,
+      operationsIntervalMs: 10,
+      livenessFile: file,
+      telemetry: createRecordingTelemetry().telemetry
+    })
+    worker.start()
+    await vi.waitFor(() => expect(fs.existsSync(file)).toBe(true), {
+      timeout: 2_000,
+      interval: 5
+    })
+    const first = fs.statSync(file).mtimeMs
+    await vi.waitFor(
+      () => expect(fs.statSync(file).mtimeMs).toBeGreaterThan(first),
+      { timeout: 2_000, interval: 5 }
+    )
+    await worker.stop()
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+})
