@@ -92,6 +92,49 @@ describe('HTTP security edge branches', () => {
     expect(insecureForwarded.statusCode).toBe(426)
   })
 
+  it('lets only the in-container GET /live probe through plain HTTP when HTTPS is enforced', async () => {
+    const app = buildServer({
+      httpSecurity: {
+        allowedOrigins: [allowedOrigin],
+        enforceHttps: true,
+        trustedProxyAddresses: ['10.0.0.9']
+      }
+    })
+    const probe = await app.inject({
+      method: 'GET',
+      url: '/live',
+      remoteAddress: '127.0.0.1'
+    })
+    const fromNetwork = await app.inject({
+      method: 'GET',
+      url: '/live',
+      remoteAddress: '198.51.100.24'
+    })
+    const proxied = await app.inject({
+      method: 'GET',
+      url: '/live',
+      remoteAddress: '127.0.0.1',
+      headers: { 'x-forwarded-for': '198.51.100.24' }
+    })
+    const otherRoute = await app.inject({
+      method: 'GET',
+      url: '/ready',
+      remoteAddress: '127.0.0.1'
+    })
+    const withQuery = await app.inject({
+      method: 'GET',
+      url: '/live?x=1',
+      remoteAddress: '127.0.0.1'
+    })
+    await app.close()
+
+    expect(probe.statusCode).toBe(200)
+    expect(fromNetwork.statusCode).toBe(426)
+    expect(proxied.statusCode).toBe(426)
+    expect(otherRoute.statusCode).toBe(426)
+    expect(withQuery.statusCode).toBe(426)
+  })
+
   it('accepts a lowercase preflight method from an allowed origin', async () => {
     const app = buildServer({
       httpSecurity: { allowedOrigins: [allowedOrigin] }

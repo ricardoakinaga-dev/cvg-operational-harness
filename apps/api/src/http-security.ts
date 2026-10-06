@@ -231,6 +231,7 @@ export function installHttpSecurityHooks(
   app.addHook('onRequest', async (request, reply) => {
     if (
       options.enforceHttps &&
+      !isInContainerLivenessProbe(request) &&
       (!isTrustedForwardedProtocolRequest(request, options) ||
         request.protocol !== 'https')
     ) {
@@ -387,6 +388,28 @@ function assertLegacyTrustedProxyHops(value: number | undefined): void {
   if (value !== undefined && value !== 0) {
     throw new Error(TRUSTED_PROXY_HOPS_MIGRATION_ERROR)
   }
+}
+
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+
+/**
+ * The image healthcheck asks GET /live over loopback from inside the
+ * container, where no TLS terminates (PROD-0373). Only that exact probe is
+ * exempt from the HTTPS requirement: liveness carries no data, and any
+ * request with forwarding headers came through a proxy and stays enforced.
+ */
+function isInContainerLivenessProbe(request: FastifyRequest): boolean {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return false
+  if (request.url !== '/live') return false
+  if (
+    request.headers['x-forwarded-for'] !== undefined ||
+    request.headers['x-forwarded-proto'] !== undefined ||
+    request.headers.forwarded !== undefined
+  ) {
+    return false
+  }
+  const remote = request.raw.socket?.remoteAddress
+  return typeof remote === 'string' && LOOPBACK_ADDRESSES.has(remote)
 }
 
 function isTrustedForwardedProtocolRequest(
