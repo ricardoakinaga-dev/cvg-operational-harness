@@ -102,43 +102,80 @@ export class HashChainedAuditLedger {
   }
 
   verify(): AuditLedgerVerification {
-    let previousHash = GENESIS_HASH
-    for (const [index, record] of this.#records.entries()) {
-      if (record.sequence !== index + 1) {
-        return { valid: false, brokenAt: index, reason: 'sequence_mismatch' }
-      }
-      if (record.previousHash !== previousHash) {
-        return {
-          valid: false,
-          brokenAt: index,
-          reason: 'previous_hash_mismatch'
-        }
-      }
-      const expectedPayload = computePayloadHash(record.payload)
-      if (record.payloadHash !== expectedPayload) {
-        return {
-          valid: false,
-          brokenAt: index,
-          reason: 'payload_hash_mismatch'
-        }
-      }
-      const recomputed = computeEventHash({
-        sequence: record.sequence,
-        previousHash: record.previousHash,
-        payloadHash: record.payloadHash,
-        eventId: record.eventId,
-        type: record.type,
-        actor: record.actor,
-        tenantId: record.tenantId,
-        correlationId: record.correlationId,
-        timestamp: record.timestamp,
-        ...(record.payload !== undefined ? { payload: record.payload } : {})
-      })
-      if (record.eventHash !== recomputed) {
-        return { valid: false, brokenAt: index, reason: 'event_hash_mismatch' }
-      }
-      previousHash = record.eventHash
+    const { valid, brokenAt, reason } = verifyAuditChainRecords(this.#records)
+    return {
+      valid,
+      ...(brokenAt !== undefined ? { brokenAt } : {}),
+      ...(reason !== undefined ? { reason } : {})
     }
-    return { valid: true }
+  }
+}
+
+export interface AuditChainVerificationOptions {
+  /**
+   * `strict` (default): a payload that does not match its hash breaks the
+   * chain. `report`: payload mismatches are counted instead, for chains read
+   * back from storage whose payloads went through redaction; the linkage and
+   * every event hash (which binds the payload hash) are still enforced.
+   */
+  readonly payloads?: 'strict' | 'report'
+}
+
+export interface AuditChainVerification extends AuditLedgerVerification {
+  readonly events: number
+  readonly payloadMismatches: number
+  readonly headHash?: string
+}
+
+/**
+ * Verifies a chain given as records, from sequence 1 and the genesis hash:
+ * contiguous sequences, previous-hash linkage, payload hashes and event
+ * hashes. Used for the in-memory ledger and for chains restored from storage
+ * (barra 0373, condição 8).
+ */
+export function verifyAuditChainRecords(
+  records: readonly AuditLedgerRecord[],
+  options: AuditChainVerificationOptions = {}
+): AuditChainVerification {
+  const strict = (options.payloads ?? 'strict') === 'strict'
+  let previousHash = GENESIS_HASH
+  let payloadMismatches = 0
+  const broken = (index: number, reason: string): AuditChainVerification => ({
+    valid: false,
+    brokenAt: index,
+    reason,
+    events: records.length,
+    payloadMismatches
+  })
+  for (const [index, record] of records.entries()) {
+    if (record.sequence !== index + 1) return broken(index, 'sequence_mismatch')
+    if (record.previousHash !== previousHash) {
+      return broken(index, 'previous_hash_mismatch')
+    }
+    if (record.payloadHash !== computePayloadHash(record.payload)) {
+      if (strict) return broken(index, 'payload_hash_mismatch')
+      payloadMismatches += 1
+    }
+    const recomputed = computeEventHash({
+      sequence: record.sequence,
+      previousHash: record.previousHash,
+      payloadHash: record.payloadHash,
+      eventId: record.eventId,
+      type: record.type,
+      actor: record.actor,
+      tenantId: record.tenantId,
+      correlationId: record.correlationId,
+      timestamp: record.timestamp
+    })
+    if (record.eventHash !== recomputed) {
+      return broken(index, 'event_hash_mismatch')
+    }
+    previousHash = record.eventHash
+  }
+  return {
+    valid: true,
+    events: records.length,
+    payloadMismatches,
+    ...(records.length > 0 ? { headHash: previousHash } : {})
   }
 }

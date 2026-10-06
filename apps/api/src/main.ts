@@ -1,6 +1,10 @@
 import { buildApiWithProductionSessions } from './production-bootstrap.ts'
 import { createConfiguredOperatorIdentityResolver } from './operator-identity.ts'
 import { serializeStartupFailure } from './startup-failure.ts'
+import {
+  createStopAlertRuntimeFromEnv,
+  type StopAlertRuntime
+} from './stop-alert-monitor.ts'
 import { createShutdownController, parseEnv } from '@cvg/shared'
 import {
   CompositeTelemetry,
@@ -11,12 +15,14 @@ async function start() {
   let app:
     | Awaited<ReturnType<typeof buildApiWithProductionSessions>>
     | undefined
+  let alerts: StopAlertRuntime | undefined
   let startup: Promise<void> = Promise.resolve()
   const shutdown = createShutdownController({
     close: async () => {
       // A signal during preflight waits for partial startup cleanup. The
       // controller bounds this wait and startup never listens after a signal.
       await startup.catch(() => undefined)
+      await alerts?.close()
       await app?.close()
     },
     exit: (code) => process.exit(code),
@@ -49,8 +55,10 @@ async function start() {
         : { telemetry }
     )
     if (shutdown.isShuttingDown()) return
+    alerts = createStopAlertRuntimeFromEnv(process.env)
     const port = Number(process.env.PORT ?? 3000)
     await app.listen({ port, host: '0.0.0.0' })
+    alerts?.start()
   })()
   try {
     await startup
