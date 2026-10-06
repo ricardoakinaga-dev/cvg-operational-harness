@@ -18,10 +18,14 @@ export function parseLogHeader(log) {
   return header
 }
 
+// Vitest colors its summary when CI is set, even into a pipe (as on GitHub
+// Actions); the summary is read without the escape codes.
+const ANSI_ESCAPE = /\u001b\[[0-9;]*[A-Za-z]/g
+
 export function parseVitestSummary(log, label) {
   const line = log
     .split('\n')
-    .map((entry) => entry.trim())
+    .map((entry) => entry.replace(ANSI_ESCAPE, '').trim())
     .find((entry) => entry.startsWith(label))
   if (!line) return null
   const counts = { passed: 0, failed: 0, skipped: 0 }
