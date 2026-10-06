@@ -1,0 +1,119 @@
+{
+  "proof_id": "I14-SPEC-0162-INDEPENDENT-CRITIQUE",
+  "date": "2026-09-29",
+  "reviewer": {
+    "agent": "Codex",
+    "context": "fresh independent review",
+    "mode": "read-only critique"
+  },
+  "scope": {
+    "candidate": "docs/02_spec/0162_webhook_clock_highwater_marker.md",
+    "inputs_read": [
+      "docs/02_spec/0160_webhook_replay_window_and_processing_fence.md",
+      "docs/02_spec/0161_webhook_inbox_schema_delta.md",
+      "docs/02_spec/0162_webhook_clock_highwater_marker.md",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I12-review.md",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I12-response.md",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I12-proof.json",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I13-review.md",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I13-proof.json",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I13-response.md",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I13-response-proof.json"
+    ],
+    "written_paths": [
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I14-review.md",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I14-proof.json",
+      "docs/08_runtime/agent_coordination.md#SPEC-PR301-WEBHOOK-CLOCK-I14-CRITIQUE-001"
+    ],
+    "tests_sql_migration_database_runtime": "NOT_RUN"
+  },
+  "candidate": {
+    "sha256_before": "5a46ce6d814b49102be11ddadaa6ee1af9c0def017ddb42d2f6df006a316c538",
+    "sha256_after": "5a46ce6d814b49102be11ddadaa6ee1af9c0def017ddb42d2f6df006a316c538",
+    "result": "MATCHED_AND_UNCHANGED"
+  },
+  "input_sha256": {
+    "docs/02_spec/0160_webhook_replay_window_and_processing_fence.md": "60068f6a75bf39e43a26b0bce59d71d2652681495a84bba15ea601819cd6bee5",
+    "docs/02_spec/0161_webhook_inbox_schema_delta.md": "efdb5da702dff515ad6b3450f8a1359608880657cf0b6a18eb9740258cd57111",
+    "docs/02_spec/0162_webhook_clock_highwater_marker.md": "5a46ce6d814b49102be11ddadaa6ee1af9c0def017ddb42d2f6df006a316c538",
+    "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I12-review.md": "6333b96b376ae8e23ba77f8679c01016e5215d0654b21f8c55b58e8e9bcb58ec",
+    "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I12-response.md": "2ca426e95fa2d776eefa688ccf95499eca4e2a4f8f7ba4397e7fdd9a7a78c184",
+    "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I12-proof.json": "5c0236fa5af3fc96298e7675f4c6c97bef6189c405a9ab060f9b384ba5536053",
+    "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I13-review.md": "8b9f94f1f39ec0eb760e5dddc7caaa679e286106ead1335c92523e741cc0fb09",
+    "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I13-proof.json": "74998139ad3413d4e33fa7031a59a137fa0cb3127dee282a9a974e54fc9bbd23",
+    "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I13-response.md": "7a724bc4dee1e06c0b01c0aff867708da853d24009a24ca0d12f4a7497a66a09",
+    "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I13-response-proof.json": "d9ca829874720c1c637d281d0df25744604cfa1c4b754e40af55a21c5b24e508"
+  },
+  "review": {
+    "artifact": "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I14-review.md",
+    "sha256": "228bf9cb1e24a2a7978180d2a7ca007a4033c21e93a5ea285e3c9323f07916bc",
+    "verdict": "REVISE",
+    "counts": {
+      "P0": 0,
+      "P1": 0,
+      "P2": 2,
+      "P3": 1
+    },
+    "findings": [
+      {
+        "id": "P2-01",
+        "severity": "P2",
+        "confidence": "HIGH",
+        "blocking": true,
+        "summary": "synchronous_commit=remote_apply waits for standby while the singleton FOR UPDATE transaction remains open; the I13 no-remote-I/O condition is not fully closed.",
+        "minimum_resolution": "Commit locally durably, release SQL locks, then wait for observer/standby WAL fence before DECISION_COMMIT or effects; retain UNKNOWN_COMMIT and fencing recovery."
+      },
+      {
+        "id": "P2-02",
+        "severity": "P2",
+        "confidence": "HIGH",
+        "blocking": true,
+        "summary": "ADMISSION_SLOT has no witness-enforced expiry or specified cancellation proof/CAS for a missing or ambiguous SAMPLE acknowledgement.",
+        "minimum_resolution": "Add a finite monotonic slot deadline and atomic one-use PENDING-to-SAMPLE_RECORDED/CANCELLED then SAMPLE_RECORDED-to-DECISION_COMMIT/SAMPLE_ABORTED transitions; resolve ACK uncertainty by operation_id/head and keep the gate closed when absence cannot be proven."
+      },
+      {
+        "id": "P3-01",
+        "severity": "P3",
+        "confidence": "HIGH",
+        "blocking": false,
+        "summary": "SPEC 0190 still describes I11 acceptance on the old c334… hash and says a new critique is satisfied, while SPEC 0162 requires I14 and T3 reapproval.",
+        "minimum_resolution": "Reconcile the 0190 status in its owning claim before the next gate; it was read-only and not edited here."
+      }
+    ]
+  },
+  "i13_closure": {
+    "P1_decision_at_in_external_highwater": "CLOSED_DOCUMENTARILY: DECISION_COMMIT.decision_at is in external_max, the SQL marker/revision update is atomic, and one pending slot blocks the next serving SAMPLE until its receipt.",
+    "P2_remote_receipt_io_under_row_lock": "PARTIALLY_CLOSED: observer/witness/verifier calls are outside SQL locks, but synchronous remote_apply remains inside COMMIT while row locks are retained.",
+    "rollback_and_unknown_commit": "FAIL_CLOSED_DOCUMENTED: witnessed SAMPLE is preserved through SAMPLE_ABORTED and reconciliation; UNKNOWN_COMMIT retains slot/gate pending operation_id readback and receipt.",
+    "guard_revision": "DECISION_AND_RECONCILIATION_INCREMENT_ONCE; BOOTSTRAP_STARTS_AT_ZERO; BREAK_GLASS_NEW_EPOCH_STARTS_AT_ZERO; receipts/claims bind epoch and old/new revisions."
+  },
+  "protocol_review": {
+    "highwater_reconciliation": "The specified maximum includes baseline, SAMPLE, RECONCILE_SAMPLE, DECISION_COMMIT.decision_at, SAMPLE_ABORTED and RECOVERY_REBASE; reconciliation is tuple-fenced and cannot lower the marker.",
+    "bootstrap_ha_break_glass": "Detailed fail-closed contracts exist for virgin/legacy bootstrap, legacy quiet window, HA fencing/WAL recovery, and two-phase break-glass rebase; operational independence and execution remain unproven.",
+    "transactions_and_grants": "SECURITY DEFINER ownership, runtime restrictions, trigger claims, RLS, and external receipt ordering are specified; P2-01 remains.",
+    "markdown": "No structural Markdown defect found by inspection; the 0190 state drift is recorded as P3."
+  },
+  "performance": {
+    "status": "NOT_MEASURED",
+    "required_profile": "64 req/s open-loop; five 300-second runs after 60-second warmup; p99 <= 800 ms; decision confirmed <= 1 s; zero loss/error/timeout.",
+    "arrival_interval_ms_at_64_rps": 15.625,
+    "judgment": "Plausible but tight. A single serialized slot must sustain average end-to-end slot occupancy strictly below 15.625 ms to avoid queue growth. The specified 2 ms +/- 0.5 ms links do not prove that sequential slot, SAMPLE, SQL/replication, and DECISION_COMMIT steps meet the target. No load test or measurement was run."
+  },
+  "residual_dependencies": [
+    "Independent controller, observer, witness/WORM quorum, verifier/HSM, sink, identity registry and fencing authority are specified but not demonstrated.",
+    "B3 pending-event reconciliation/handoff, D-06 retention, provider idempotency, root/PR-L04 integration, CI/attestation and staging remain open under SPEC 0160."
+  ],
+  "not_run": [
+    "Tests of any kind",
+    "SQL or migration",
+    "PostgreSQL/database",
+    "runtime or load measurement",
+    "BUILD/deploy/production"
+  ],
+  "authorization": {
+    "build_0028": false,
+    "human_t3_approval_for_candidate_hash": false,
+    "production": "NO_GO",
+    "next_gate": "Resolve both P2 findings, update and hash the exact candidate, obtain a fresh independent critique, then explicit human T3 approval bound to the accepted hash."
+  }
+}

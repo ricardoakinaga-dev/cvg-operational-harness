@@ -1,0 +1,21 @@
+**REVISE.** `TECHNICALLY_SPECIFIED` is not yet warranted: the injected-fetch path needs an explicit contract and discriminating oracle for responses intercepted by the redirect guard. This verdict grants no product PASS, BUILD or T3 authority.
+
+- **I1-STR-01 — P1: Intermediate injected responses lack a specified cleanup boundary.** [SPEC0175:55](</home/ricardo/Área de trabalho/cvg-operational-harness/docs/02_spec/0175_stream_response_receive_limit.md:55>) requires reader cancellation and cleanup; STR-05/10 cover injected readers and redirects separately. However, [`fetchWithSsrfGuard`:359](</home/ricardo/Área de trabalho/cvg-operational-harness/packages/shared/src/ssrf.ts:359>) can follow or reject a redirect before returning its Response to the adapter, without consuming or canceling that body. Models use `maxRedirects=0`, making rejection after the first response a concrete path. A limiter placed only after the guard cannot clean up these responses. The matrix does not expressly reject this placement. Specify a per-hop wrapper or equivalent ownership mechanism within authorized paths, preserving redirect policy. Add public-entrypoint oracles for injected 302 responses with streaming bodies, both followed and rejected: cancellation/settlement must occur, and rejected targets must receive zero requests. This is a static specification gap, not a demonstrated runtime exploit.
+
+- **I1-STR-02 — P2: STR-09 conflates adapter and gateway error fields.** [SPEC0175:89](</home/ricardo/Área de trabalho/cvg-operational-harness/docs/02_spec/0175_stream_response_receive_limit.md:89>) requires `effectUnknown=true` alongside the real gateway/journal experiment. The adapter can provide that field, but [`ChannelGateway`:367](</home/ricardo/Área de trabalho/cvg-operational-harness/packages/channel-gateway/src/gateway.ts:367>) converts it into `ChannelError(code='effect_uncertain', retryable=false)` without options; [`ChannelError`:45](</home/ricardo/Área de trabalho/cvg-operational-harness/packages/channel-gateway/src/errors.ts:45>) consequently exposes `effectUnknown=false`. State separate oracles: adapter uncertainty fields; gateway `effect_uncertain`; journal `UNCERTAIN`; destination count remaining one across concurrent/repeated dispatch and a new gateway instance sharing the journal. Otherwise the public oracle could demand a gateway change outside the currently delimited patch.
+
+The remaining inspected contracts are substantially specified: wire versus exposed-reader bytes, Content-Length trust, rejection of Node compression, decoded UTF8 expansion, owned backing-store bounds, bounded chunk cardinality, discarded empty chunks, cooperative scheduling, deadlines and terminal cleanup. Model `kind` versus gateway `code` mappings match actual types; nonretryable mappings prevent retry/fallback. Journal reservation explicitly blocks `UNCERTAIN` redispatch. SPEC0174 retains independent authority, and the proposed isolated/integrated sequence does not imply its approval.
+
+**Confidence:** high in the source paths and field behavior; moderate in the readiness verdict. No tests, probes, installations, network calls, descendants or writes were performed. The baseline was inspected, not reproduced; it covers OpenAICompatible/Evolution rather than every acceptance path.
+
+**Independence limitation:** I mistakenly read excluded operational ledgers at the start. These findings use packet inputs, but this return must **not count as the requested compliant fresh-context I1**. The lead should record the actual return and obtain a replacement critic.
+
+**Pre/post hashes:** all **18/18** declared inputs, including baseline, matched before and after; packet bytes also remained unchanged. Canonical input-map digest uses sorted path→SHA256 JSON, compact separators and UTF8; the pre digest derives from the individually pre-verified manifest.
+
+```text
+                        PRE = POST SHA-256
+Packet:   7a87ceab4793a5ed2f203245da48244f3f83d0090e1a16b41c635c88524da28b
+SPEC0175: 730e4823774ac07cda47c9d42d22d3fded6ecef8e3e0587033c724e8cf2b5f82
+Baseline: 989f6c2a74942e3f00bacc1dfdc840c46b610ea38456203dd4a2c9469e33133c
+Input map:1f2fad44efe75916ded4c873d2a97d3a81a4298e8b467ff48906c43287502488
+```

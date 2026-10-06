@@ -1,0 +1,18 @@
+import { createServer } from 'node:http'
+import { once } from 'node:events'
+import { fetchWithResolvedAddress as model } from '../repo/packages/model-gateway/src/providers/ssrf-node.ts'
+import { fetchWithResolvedAddress as channel } from '../repo/packages/channel-gateway/src/adapters/ssrf-node.ts'
+const cases = [{host:'transport.synthetic.invalid',method:'GET',status:200},{host:'127.0.0.1',method:'GET',status:200},{host:'127.0.0.1',method:'GET',status:204},{host:'127.0.0.1',method:'GET',status:205},{host:'127.0.0.1',method:'GET',status:304},{host:'127.0.0.1',method:'HEAD',status:200}]
+const results=[]
+let observed=0
+const server=createServer((request,response)=>{observed++;response.statusCode=Number(request.url!.slice(1));response.end()})
+server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address();if(!address||typeof address==='string')throw Error('Fixtureaddress unavailable')
+try {
+ for (const [name,transport] of [['model',model],['channel',channel]] as const) {
+  for (const item of cases) {
+   try {const response=await transport(`http://${item.host}:${address.port}/${item.status}`,{method:item.method},['127.0.0.1']);results.push({transport:name,...item,outcome:'RESOLVED',actualStatus:response.status,bodyIsNull:response.body===null,body:await response.text()})}
+   catch(error){results.push({transport:name,...item,outcome:'REJECTED',errorType:error instanceof Error?error.name:typeof error,errorMessage:error instanceof Error?error.message:String(error)})}
+  }
+ }
+} finally {server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()))}
+console.log(JSON.stringify({results,observed,fixtureClosed:!server.listening,scope:'Exportedtransport only; directloopback fixture is not guardpermission or productionchannel'},null,2))

@@ -1,10 +1,15 @@
 # F03 — pacote de revisão humana T3
 
-**Decisão solicitada:** aprovar ou rejeitar BUILD **sintético** da
-[SPEC 0163](../../../../02_spec/0163_otel_redaction_boundary.md), SHA-256
-`ec8d3950b96532f4af8a17a8aa98911791e385921ca78a80ac8b358661684f5f`,
-commit de revisão `90d7f13`. [I9 independente](I9-review.md):
-`ACCEPT_SPEC_REVIEW_READY`, sem P0/P1/P2. Aprovação humana: **PENDING**.
+**Decisão futura:** aprovar ou rejeitar BUILD **sintético** da
+[SPEC 0163](../../../../02_spec/0163_otel_redaction_boundary.md), candidato atual SHA-256
+`5c2dd7c612c181b2e1d46e512c5d9eb134b0c8ef376bbc94993c47ee6e707ca4`.
+I9 `ACCEPT_SPEC_REVIEW_READY` aplicou-se somente a `ec8d3950b96532f4af8a17a8aa98911791e385921ca78a80ac8b358661684f5f`;
+I10 `REVISE`/1 P2 aplicou-se somente a `b528f27f776cdf9796571ed4210c7bafda2fb38367e3bd1ff7244e4473aac77d`.
+O [I10 response](I10-response.md) estreita a afirmação histórica e registra que
+I1–I6 não foram integralmente revalidados; a resposta não infere aceitação.
+A crítica I11 do hash atual e a aprovação humana T3 permanecem **PENDING**.
+O pacote lista apenas hashes pertinentes à decisão recente; cada parecer tem
+seu próprio input hash. BUILD não autorizado.
 
 | Item | Escopo submetido |
 | --- | --- |

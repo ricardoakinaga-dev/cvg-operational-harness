@@ -1,0 +1,9 @@
+import json,hashlib,sys
+from pathlib import Path
+p=Path(sys.argv[1]);x=json.loads(p.read_text());rows=[]
+for r in x['observed']['results']:
+ expectednull=r['method']=='HEAD' or r['status'] in [204,205,304]
+ passed=r['outcome']=='RESOLVED' and r.get('actualStatus')==r['status'] and r.get('bodyIsNull')==expectednull
+ rows.append({'transport':r['transport'],'host':r['host'],'method':r['method'],'expectedStatus':r['status'],'expectedBodyNull':expectednull,'observed':r,'result':'PASS' if passed else 'FAIL'})
+report={'scope':'Exportedtransport conformance diagnostic, not nativeunit suite or providerqualification','sourceSha256':hashlib.sha256(p.read_bytes()).hexdigest(),'cases':rows,'pass':sum(r['result']=='PASS' for r in rows),'fail':sum(r['result']=='FAIL' for r in rows),'result':'PASS' if all(r['result']=='PASS' for r in rows) else 'FAIL'}
+Path(sys.argv[2]).write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n');print(json.dumps({k:v for k,v in report.items() if k!='cases'},ensure_ascii=False));sys.exit(0 if report['result']=='PASS' else 1)

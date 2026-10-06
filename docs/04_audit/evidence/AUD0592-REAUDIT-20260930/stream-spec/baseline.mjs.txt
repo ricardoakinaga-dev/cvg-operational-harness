@@ -1,0 +1,55 @@
+import { createServer } from 'node:http'
+import { once } from 'node:events'
+import { pathToFileURL } from 'node:url'
+const repo='/tmp/cvg-aud0592-20260930/repo'
+const {OpenAICompatibleProvider}=await import(pathToFileURL(`${repo}/packages/model-gateway/src/providers/openai-compatible.ts`))
+const {EvolutionChannelAdapter}=await import(pathToFileURL(`${repo}/packages/channel-gateway/src/adapters/evolution.ts`))
+const observed=[]
+const originalConcat=Buffer.concat
+Buffer.concat=function(chunks,length){
+ const stack=new Error().stack ?? ''
+ if(stack.includes('/ssrf-node.ts')) observed.push({bytes:chunks.reduce((n,b)=>n+b.length,0),declaredLength:length ?? null,workspace:stack.includes('/model-gateway/')?'model':'channel'})
+ return originalConcat.call(Buffer,chunks,length)
+}
+const report={at:new Date().toISOString(),node:process.version,synthetic:true,productModified:false,measurement:'delegating Buffer.concat observer; records retained body before actual concat; no return or product alteration',cases:[]}
+const sockets=new Set()
+let requests=0
+let finished=0
+let body=Buffer.from('{}')
+const server=createServer((req,res)=>{
+ requests++
+ req.resume()
+ res.on('finish',()=>finished++)
+ res.writeHead(200,{'content-type':'application/json'})
+ // Chunked framing deliberately avoids Content-Length as an early indicator.
+ res.end(body)
+})
+server.on('connection',socket=>{sockets.add(socket);socket.on('close',()=>sockets.delete(socket))})
+let watchdog=setTimeout(()=>{server.closeAllConnections();throw new Error('own probe watchdog')},15000)
+try{
+ server.listen(0,'127.0.0.1');await once(server,'listening')
+ const baseUrl=`http://127.0.0.1:${server.address().port}`
+ const cap=4096
+ const provider=new OpenAICompatibleProvider({id:'fixture-stream',baseUrl,model:'fixture',location:'local',requiresApiKey:false,allowHttp:true,allowPrivateNetworks:true,maxResponseBytes:cap})
+ const channel=new EvolutionChannelAdapter({enabled:true,baseUrl,apiKey:'synthetic-fixture-key',instance:'fixture',allowPrivateNetworks:true,maxResponseBytes:cap})
+ const request={requestId:'fixture-request',tenantId:'synthetic-tenant',correlationId:'fixture-correlation',model:'fixture',input:{messages:[{role:'user',content:'synthetic'}]},temperature:0,maxTokens:1,promptSha256:'fixture-prompt',signal:AbortSignal.timeout(10000),timeoutMs:10000}
+ const message={messageId:'fixture-message',tenantId:'synthetic-tenant',conversationId:'fixture-conversation',recipient:{id:'fixture-recipient'},body:{text:'synthetic'}}
+ for(const name of ['model-control','model-oversize','channel-oversize']){
+  body=Buffer.from(JSON.stringify({choices:[{message:{content:'ok'}}],padding:name==='model-control'?'': 'x'.repeat(256*1024)}))
+  const start=observed.length;const r0=requests;const f0=finished
+  let result
+  try{
+   const output=name==='channel-oversize'?await channel.send(message):await provider.execute(request)
+   result={outcome:'fulfilled',text:output.text ?? null,accepted:output.accepted ?? null}
+  }catch(error){result={outcome:'rejected',name:error.name,kind:error.kind ?? null,code:error.code ?? null,retryable:error.retryable,effectUnknown:error.effectUnknown ?? null}}
+  report.cases.push({name,configuredCap:cap,fixtureBodyBytes:body.length,contentLengthAbsent:true,requests:requests-r0,serverFinished:finished-f0,concatenations:observed.slice(start),result})
+ }
+}finally{
+ Buffer.concat=originalConcat
+ clearTimeout(watchdog)
+ const closed=once(server,'close');server.close();server.closeAllConnections();await closed
+ await new Promise(resolve=>setImmediate(resolve))
+ report.cleanup={serverListening:server.listening,remainingTrackedSockets:sockets.size}
+}
+console.log(JSON.stringify(report,null,2))
+if(report.cases.length!==3 || report.cases[0].result.outcome!=='fulfilled' || report.cases.slice(1).some(x=>x.requests!==1 || !x.concatenations.some(c=>c.bytes>x.configuredCap)) || report.cleanup.remainingTrackedSockets!==0)process.exitCode=1

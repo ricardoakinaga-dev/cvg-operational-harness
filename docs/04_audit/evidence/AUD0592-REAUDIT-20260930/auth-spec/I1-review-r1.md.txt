@@ -1,0 +1,53 @@
+**REVISE — prontidão técnica da SPEC0176.** Dois P1 e dois P2; nenhum P0 identificado. As decisões de negócio foram consideradas conforme `decision-state`, sem interpretá-las como aprovação BUILD.
+
+1. **P1 — Falta descobrir o caso antes da primeira atribuição.**  
+   [SPEC0176:70](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/docs/02_spec/0176_case_assignment_read_authorization.md:70) lista atribuições existentes; o PUT exige `caseId` (:71), definido como UUID opaco (:73). Os DTOs de conversa e execução (:88/:92) também não fornecem esse identificador. Com zero atribuições, o gerente não tem contrato público para obter o `caseId` necessário ao primeiro grant, inclusive após backfill.  
+   **Correção:** especificar uma consulta autorizada Supervisor/Admin que resolva ou liste roots por `kind/resourceId`, incluindo casos sem atribuição, com DTO mínimo e paginação. Acrescentar aceite de primeira atribuição partindo de cadastro vazio, sem consulta SQL manual.
+
+2. **P1 — Namespace reconhecido no modelo, mas sem resolução determinística nas entradas públicas.**  
+   [SPEC0176:54](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/docs/02_spec/0176_case_assignment_read_authorization.md:54) distingue as famílias, mas :56 exige consultar o “repositório correto” sem definir como escolhê-lo na submissão pública. O reader de auditoria (:86) também recebe somente `sessionId`. O contrato real contém apenas `conversationId/sessionId` ([contracts.ts:176](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/packages/contracts/src/contracts.ts:176)); a família harness não torna `sessionId` único isoladamente ([0020:18](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/packages/persistence/migrations/0020_conversation_intelligence.sql:18)). Assim, a colisão exigida por AUTH06 não tem resultado completamente definido.  
+   **Correção:** fixar a família de cada entrada por contexto confiável do servidor e definir resolução de sessão dentro dessa família. Onde faltar informação ou houver múltiplos pais elegíveis, recusar explicitamente; não escolher pela atribuição do caller, ordem de busca ou coincidência textual. Completar AUTH06/AUTH07 com esse oracle.
+
+3. **P2 — Projeção de `HUMAN_TAKEOVER` contradiz a classificação persistida atual.**  
+   [SPEC0176:94](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/docs/02_spec/0176_case_assignment_read_authorization.md:94) permite resposta de apresentação nesse stopReason, mas dá precedência a qualquer `failure`. O classificador atual sempre produz `FAILED_TERMINAL` com `failure` para `HUMAN_TAKEOVER` ([execution-spine.ts:1579](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/packages/harness/src/execution-spine.ts:1579), :1582–1591). Portanto, esse ramo de apresentação não funciona com os registros atuais.  
+   **Correção:** explicitar a projeção desse registro persistido e sua precedência, preservando somente apresentação de origem comprovada. Incluir tabela de mapeamento dos stopReasons/failure codes conhecidos para código público e mensagem estática, com aceite específico de handoff.
+
+4. **P2 — Precedência entre papel da sessão e principal materializado precisa ficar explícita.**  
+   [SPEC0176:42](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/docs/02_spec/0176_case_assignment_read_authorization.md:42), :50 e :102 exigem principal vigente, mas não definem o tratamento de divergência entre sua revisão/papel e a identidade da sessão. `OperatorIdentity` não contém revisão ([auth.ts:68](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/packages/shared/src/auth.ts:68)); o resolver de sessão retorna a identidade armazenada ([server.ts:4484](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/apps/api/src/server.ts:4484)).  
+   **Correção:** definir qual estado autoritativo determina active/role na snapshot, como tratar divergência e como impedir que uma sessão antiga restaure uma revisão anterior. Acrescentar negativos com o mesmo cookie após desativação e downgrade de Supervisor/Admin, cobrindo leitura tenant-wide e gestão de atribuições. Não constatei bypass implementado; o achado é a ambiguidade do contrato proposto.
+
+A proposta estabelece bons invariantes para grants, lineage, filtragem antes da paginação, snapshot única no primary, auditoria atômica e recuperação fechada. A revisão permaneceu estática: não houve escritas, testes, instalação, rede, mensagens externas ou descendentes. Imports, consumidores, demais migrations e catálogo PostgreSQL ficaram fora da allowlist; sua integração e execução continuam sem prova nesta revisão. Os hashes delimitam a estabilidade observada nos dois momentos, sem demonstrar ausência de mudanças transitórias entre eles.
+
+Mapa SHA256 dos **19 inputs**: em cada linha, **pré = pós = valor abaixo**, também coincidente com o manifesto.
+
+| Caminho lido | SHA256 pré e pós |
+|---|---|
+| `packages/shared/src/auth.ts` | `6dec8799b7e82f181697a9b27ba09a6d62c77fe012548d4b99bef0fc1d945123` |
+| `apps/api/src/server.ts` | `76a588fbc40640638ede9a6c0f79b0926b7750557a06e9f36659150482fc38fa` |
+| `packages/persistence/src/schema.ts` | `642f684064451219b6b39d9c8bab5ffa48813f433af0ccf76de84a86d90b5461` |
+| `packages/persistence/src/repositories/conversation-repository.ts` | `b9fe48fdbac443bada5c68132192633b5fa10ccec6ef92a8bdefcafc6d23da53` |
+| `packages/persistence/src/repositories/audit-repository.ts` | `cdf6e7c77789b16c77046e41b4a7353479d5ebebe1d4728ab6ff97d5426c6a36` |
+| `packages/persistence/src/postgres-audit.ts` | `36361beecf45a2d4da8282b860d9fd60a51734876d3cf9e0240d3cd55bd5fa2b` |
+| `packages/agent-core/src/queries/get-conversation-timeline.ts` | `b634d2f61d894b0e8aad47f91d881a80b7cd55f311734047a59e97f573d90bde` |
+| `packages/harness/src/execution-spine.ts` | `4a63f55799d1549c79ddcaa50810c29d8e53963fa884737660f562d5c4b6a5dd` |
+| `packages/harness/src/trajectory.ts` | `c5ea6efc45814a033b806d28481d406261db783a6ebe2c7995739617d66f33f0` |
+| `docs/02_spec/0152_corporate_oidc_authority_contract.md` | `3dc167f24aeb9b8fab73ab5dae3313956c02e222636adb527d117501ba1055e6` |
+| `packages/contracts/src/contracts.ts` | `1191185725992dd349a0d19791666516dccd5633390aa26c11833b5bb31c589a` |
+| `packages/persistence/src/tenant-schema.ts` | `63b9b12b866d0148ba868b35bfa61b21e109a493b75be82e6b04794fcfd8a17d` |
+| `packages/persistence/src/operational-execution-postgres.ts` | `03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac` |
+| `packages/persistence/migrations/0000_initial.sql` | `0723d589cf121c75fcd587036c09423b9e3b49bf6f9a7c0b4d9b5b40131212b9` |
+| `packages/persistence/migrations/0001_tenant_isolation.sql` | `c418e96bec995414d8395fee5b4ff95e0f7197bec0b3801ae8795e7de1ff34af` |
+| `packages/persistence/migrations/0016_operational_execution_spine.sql` | `b36d08ae7a19dc324bb08cc382afaddf26107e857a11e739e7fa136acfbdfb86` |
+| `packages/persistence/migrations/0020_conversation_intelligence.sql` | `7b1fc15ef0cc9239d0ca45db7b0e1cf3e36d351c8f1f2ddcd407a699e6d5e907` |
+| `docs/04_audit/evidence/AUD0592-REAUDIT-20260930/auth-decision/decision-state.json` | `a399e6a980f3f078e0354ded62144402919335320c12cdd9c9a3ada9cb895503` |
+| `docs/02_spec/0176_case_assignment_read_authorization.md` | `b9b0acb1d9d0747c6f7572787cf89acfa1d376750d020ef2d3ead11f8e8384b0` |
+
+Os outros três caminhos lidos foram os abaixo, totalizando **22 caminhos**, todos relativos à raiz informada. Estes hashes foram coletados no encerramento; não têm medição pré independente.
+
+| Caminho adicional lido | SHA256 no encerramento |
+|---|---|
+| `AGENTS.md` | `39bfa71237d2fcde29584184f5579d23b1f4b9388b0b33688b1906ac997c565e` |
+| `docs/07_agents/AGENTS.md` | `0a945019ae7959f60f297f0459cd00575f6bc301d534f609183a0dcd91b14c41` |
+| `docs/04_audit/evidence/AUD0592-REAUDIT-20260930/auth-spec/review-packet-r1.json` | `b4e8699d072d9e815723766a3ed154f1079d223b5ff9e5f0fc48d7df5898ddf7` |
+
+Este parecer julga exclusivamente prontidão técnica da SPEC; não concede gate CVG, aprovação humana, BUILD ou produção.

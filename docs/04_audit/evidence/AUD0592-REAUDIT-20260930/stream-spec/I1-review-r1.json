@@ -1,0 +1,62 @@
+{
+  "verdict": "REVISE",
+  "assessment": "Not yet TECHNICALLY_SPECIFIED for human approval of the exact contract.",
+  "scope": "Independent I1 SPEC review only; no BUILD, release or T3 authority.",
+  "findings": [
+    {
+      "id": "I1-STR-001",
+      "severity": "HIGH",
+      "classification": "Memory-bound specification gap",
+      "refs": [
+        "docs/02_spec/0175_stream_response_receive_limit.md:40,53-59,85,92",
+        "packages/model-gateway/src/providers/ssrf-node.ts:158-173",
+        "packages/channel-gateway/src/adapters/ssrf-node.ts:158-173"
+      ],
+      "finding": "retainedBytes <= L does not establish the stated O(L+C+headers) application memory bound. Retaining many small Uint8Array views can retain distinct, much larger backing ArrayBuffers. Retaining zero-length chunks can also grow the chunks collection without advancing retainedBytes. The current Node implementation retains Buffer instances directly; the proposed injected reader has no explicit ownership/normalization rule.",
+      "example": "4096 one-byte views into distinct 1 MiB buffers satisfy L=4096 while retaining approximately 4 GiB through application references. This concerns retention by the reader, distinct from excluded upstream allocation.",
+      "required_revision": "Specify bounded storage ownership: discard empty chunks and copy accepted views into storage bounded by accepted bytes, or provide an equivalent backing-store bound. Add discriminating acceptance cases for empty chunks and small views of large backing buffers; define what C measures."
+    },
+    {
+      "id": "I1-STR-002",
+      "severity": "MEDIUM",
+      "classification": "Raw-versus-decoded policy ambiguity",
+      "refs": [
+        "docs/02_spec/0175_stream_response_receive_limit.md:38-46,83-85",
+        "packages/model-gateway/src/providers/openai-compatible.ts:24",
+        "packages/shared/src/ssrf.ts:321-330"
+      ],
+      "finding": "The injected path defines L against exposed, potentially decompressed bytes, but the unqualified Content-Length rule mandates immediate rejection when the header exceeds L. A decompressed Response can retain the compressed representation's Content-Length. These quantities are not necessarily comparable, so an exposed body within L can be rejected using a different unit.",
+      "required_revision": "Explicitly separate the Node framing rule from injected-response metadata. Either disregard unverifiable encoded length for the exposed-byte cap, or declare an additional conservative header-rejection policy within T3. Freeze a test where compressed Content-Length exceeds L while the exposed body fits, alongside the converse case."
+    },
+    {
+      "id": "I1-STR-003",
+      "severity": "MEDIUM",
+      "classification": "Executable acceptance contradicts public error contract",
+      "refs": [
+        "docs/02_spec/0175_stream_response_receive_limit.md:73,88",
+        "packages/model-gateway/src/errors.ts:27-40,66-87,135-144"
+      ],
+      "finding": "STR-08 requires the public model gateway to expose response_too_large/malformed_response. Those are ModelProviderError.kind values. The existing gateway contract exposes ModelGatewayError.code values provider_response_too_large/provider_malformed_response and has no kind property. A literal STR-08 assertion would reject the preserved public contract.",
+      "required_revision": "State separate provider and gateway assertions with their actual field names and values. Keep the non-retryable/no-fallback oracle and specify the observable usage-recording expectation."
+    }
+  ],
+  "covered_without_material_objection": [
+    "Original STREAM-01 requirements at docs/03_build/0367_program_backlog_reaudit_2026-09-30.md:507-510 are substantially represented.",
+    "Node raw-byte counting, unsupported-encoding rejection, framing distinctions, inclusive cap and decoded-text expansion are addressed.",
+    "Abort, single settlement, cleanup and a total read deadline are specified.",
+    "Post-POST effectUnknown, no transport retry and public journal repetition/restart/concurrency evidence are required.",
+    "0174 authority remains independent; integration and full-program gates remain explicit."
+  ],
+  "confidence": {
+    "overall": "HIGH for static contract findings",
+    "limits": "No execution, tests, probes, network, installs, descendants or writes. Baseline accepted only as supplied evidence. Public gateway/journal implementation was not included among sealed source inputs, so its actual reconciliation behavior was not independently established."
+  },
+  "preposthashresult": {
+    "pre": "13/13 declared input and baseline hashes MATCH",
+    "post": "13/13 MATCH; unchanged",
+    "packet_pre_equals_post": true,
+    "packet_sha256": "ceddbae7e6cd374527e02703ce5913323c8905af59878b08f51c63556038a899",
+    "spec_sha256": "90dc1aa7601642182d29ca86a17582bc148c700b585e7e62c52bf6110089b2a1"
+  },
+  "authority": "Lead preserves this response independently. I1 acceptance cannot grant T3."
+}

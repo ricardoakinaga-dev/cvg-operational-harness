@@ -1,17 +1,16 @@
-# SPEC 0162 — marcador durável do relógio: estado da revisão
+# SPEC 0162 — status de revisão — 28/09/2026
 
-## Resultado
+## Estado atual
 
-`SPEC_DRAFT_CRITIC_BLOCKED / BUILD_NOT_AUTHORIZED / NO_GO`.
+`SPEC_DRAFT / I6_REVISE_RESPONDED / I7_UNAVAILABLE / HUMAN_T3_REVIEW_NOT_REQUESTED / BUILD_NOT_AUTHORIZED / NO_GO`.
 
-O rascunho [0162](../../../02_spec/0162_webhook_clock_highwater_marker.md) descreve o delta separado de schema requerido por A2 da SPEC 0160. Não houve implementação, migration, alteração de banco, uso de dados reais, aprovação humana T3, push ou deploy.
+I6 revisou o candidato `215f5146eec6ecac8b07c9561f34487e1a33da5e030965c83af6b9ab4d6bc4a3` e retornou `REVISE` (4 P1 / 2 P2, sem P0). A resposta normativa está na [SPEC 0162](../../../02_spec/0162_webhook_clock_highwater_marker.md), hash atual `ee949d17daa04241131bae402bd49f5c28e61f4dcda38a5e81b772d2d497bc8e`; a [resposta I6](I6-response.md) dispõe dos seis achados. Duas tentativas fresh-context de I7 não retornaram parecer; veja [registro I7](I7-review.md). Timeout não é aceite.
 
-## Revisão e evidência
+## Limites do gate
 
-A tentativa de abrir um crítico independente foi recusada pela ferramenta com `agent thread limit reached`. Portanto não existe parecer independente nem conclusão de aceitabilidade. O status permanece draft e não deve ser submetido como pronto para BUILD até haver crítica e revisão humana.
+- Este pacote cobre somente contrato/documentação. Nenhuma migration 0028 ou implementação de aplicação foi criada ou autorizada.
+- Mesmo que I7 aceite a SPEC, a implementação exige aprovação humana T3 separada e fica limitada a dados sintéticos e PostgreSQL descartável.
+- SPEC 0160 permanece incompleta: B3/reconciliador pending, D-06 de retenção e idempotência externa do provider ainda bloqueiam aceitação integral. Root/PR-L04, CI/atestação, staging e GO de produção também não foram comprovados.
+- Produção permanece `NO_GO`.
 
-Hashes das fontes e resultados das checagens locais estão em [proof.json](proof.json). `npm run format:check` e `npm run docs:check-links` passaram; nenhum teste de comportamento ou PostgreSQL foi executado para esta SPEC documental.
-
-## Próxima ação
-
-Obter vaga de agente para crítica independente read-only; corrigir achados e então submeter o contrato para aprovação T3. Até esse gate, não criar migration 0028 ou código de aplicação.
+Histórico das críticas e hashes está em [I1](I1-review.md), [I2](I2-review.md), [I3](I3-review.md), [I4](I4-review.md), [I5](I5-review.md), [I6](I6-review.md), [resposta I6](I6-response.md), [tentativa I7](I7-review.md) e [proof.json](proof.json).

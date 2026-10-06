@@ -1,0 +1,88 @@
+{
+  "audit": "AUD-0589",
+  "version": "v1",
+  "frozenAt": "2026-09-28T21:32:00Z",
+  "scope": "Synthetic HTTP route/session boundary on the current root worktree; not a production-release bar.",
+  "candidate": {
+    "head": "eff8e0d8974f2c3222eb4602e4a37ff73c708245",
+    "serverSha256": "76a588fbc40640638ede9a6c0f79b0926b7750557a06e9f36659150482fc38fa",
+    "baseline": "AUD-0583 tested a different isolated SHA and is not a baseline for this candidate."
+  },
+  "criteria": [
+    {
+      "id": "R1",
+      "source": "REPO",
+      "dimension": "route inventory",
+      "target": "Enumerate Fastify runtime method/path pairs; parse every route-tree line; app.hasRoute confirms every pair.",
+      "evidence": "probe-results.json and route-tree.txt",
+      "required": true,
+      "priority": "high",
+      "validity": "Uses the actual built Fastify instance, not source-text route matching."
+    },
+    {
+      "id": "R2",
+      "source": "USER + REPO",
+      "dimension": "unauthenticated route boundary",
+      "target": "Every route-method pair except explicit health/observability, idempotent logout, and webhook-signature routes returns HTTP 401 in each no-cookie, forged-header/invalid-token, and unknown-cookie scenario.",
+      "evidence": "probe-results.json; route classes are computed from actual registered paths",
+      "required": true,
+      "priority": "critical",
+      "validity": "Valid Origin avoids conflating CSRF rejection with authentication; an unknown but syntactically valid session ID exercises store lookup failure."
+    },
+    {
+      "id": "R3",
+      "source": "REPO",
+      "dimension": "positive session controls",
+      "target": "A synthetic live cookie session returns HTTP 200 for GET /v1/session, /v1/tasks and /v1/admin/agents.",
+      "evidence": "probe-results.json",
+      "required": true,
+      "priority": "high",
+      "validity": "Confirms denial results are not caused by a server that denies all requests."
+    },
+    {
+      "id": "R4",
+      "source": "REPO",
+      "dimension": "bootstrap token lifecycle and compatibility",
+      "target": "Record whether a valid synthetic signed token can bootstrap /v1/session, whether replay is rejected, and whether the token authenticates selected protected reads without a cookie; compare observations to SPEC 0144 and existing tests without inventing a policy absent from them.",
+      "evidence": "probe-results.json, SPEC 0144, and current API tests",
+      "required": true,
+      "priority": "high",
+      "validity": "Separates explicit contract failures from currently ambiguous compatibility behavior."
+    },
+    {
+      "id": "R5",
+      "source": "REPO",
+      "dimension": "logout without session",
+      "target": "POST /v1/session/logout without cookie is idempotent, returns HTTP 200, and does not call store.revoke.",
+      "evidence": "probe-results.json",
+      "required": true,
+      "priority": "medium",
+      "validity": "Counts store revocations in the synthetic adapter."
+    },
+    {
+      "id": "R6",
+      "source": "REPO",
+      "dimension": "evidence integrity",
+      "target": "HEAD and the hashed API/shared source manifest remain unchanged from before import through probe completion; exact command outputs and artifact hashes are recorded.",
+      "evidence": "probe-results.json and SHA256SUMS.txt",
+      "required": true,
+      "priority": "high",
+      "validity": "The probe refuses to produce valid evidence on source drift."
+    },
+    {
+      "id": "R7",
+      "source": "USER + REPO",
+      "dimension": "safety boundary",
+      "target": "Only synthetic identity, an in-memory store and in-process HTTP injection are used; no PostgreSQL, external IdP/webhook/channel, real data, deploy or production access.",
+      "evidence": "probe command, script and runtime profile in probe-results.json",
+      "required": true,
+      "priority": "critical",
+      "validity": "All requests stay in Fastify inject and test-owned memory adapters."
+    }
+  ],
+  "limitations": [
+    "This route/authentication audit does not test business correctness of every handler.",
+    "Production entrypoint, PostgreSQL session store, corporate OIDC/MFA, webhook signatures and staging are outside this synthetic profile.",
+    "A valid HMAC token directly accepted on a protected route is evaluated against the approved session contract and existing compatibility tests; the probe alone cannot create a new policy."
+  ]
+}

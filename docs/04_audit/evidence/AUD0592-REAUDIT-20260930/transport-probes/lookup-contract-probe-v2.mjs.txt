@@ -1,0 +1,10 @@
+import {createServer,request} from 'node:http'
+import {once} from 'node:events'
+import {getDefaultAutoSelectFamily} from 'node:net'
+let observed=0;const seen=[];const server=createServer((req,res)=>{observed++;res.end('synthetic-ok')});server.listen(0,'127.0.0.1');await once(server,'listening');const {port}=server.address();const results=[]
+try {
+ for(const c of [{mode:'existing-single-result',autoSelectFamily:true},{mode:'honor-all',autoSelectFamily:true},{mode:'honor-all',autoSelectFamily:false}]){
+  const result=await new Promise(resolve=>{const req=request({agent:false,hostname:'transport.synthetic.invalid',port,path:'/',autoSelectFamily:c.autoSelectFamily,lookup:(host,options,callback)=>{seen.push({mode:c.mode,host,options});if(c.mode==='honor-all'&&options.all)callback(null,[{address:'127.0.0.1',family:4}]);else callback(null,'127.0.0.1',4)}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({...c,outcome:'RESOLVED',status:res.statusCode,body:Buffer.concat(chunks).toString()}))});req.on('error',error=>resolve({...c,outcome:'REJECTED',message:error.message}));req.end()});results.push(result)
+ }
+}finally{server.closeAllConnections();await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()))}
+console.log(JSON.stringify({node:process.version,defaultAutoSelectFamily:getDefaultAutoSelectFamily(),lookupCalls:seen,results,observed,fixtureClosed:!server.listening,scope:'NodeAPIcontrol only; no productpatch or networking beyond ownloopback'},null,2))

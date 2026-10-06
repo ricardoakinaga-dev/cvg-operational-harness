@@ -1,0 +1,15 @@
+import {buildServer} from '../repo/apps/api/src/server.ts'
+import {writeFile} from 'node:fs/promises'
+const app=buildServer({identityMode:'simulation',runtimeLogger:()=>{}})
+const results=[]
+try{
+ const r=await app.inject({method:'POST',url:'/v1/webhooks/channels/whatsapp/messages',payload:{externalMessageId:'aud92-limited-synthetic',senderRef:'fixture-only-no-recipient',body:'synthetic audit fixture',receivedAt:'2026-09-30T00:00:00Z'}})
+ const data=r.json().data
+ if(r.statusCode!==200||!data?.sessionId)throw Error('Fixture failed: '+r.statusCode)
+ for(const [operator,role] of [['synthetic-supervisor','Supervisor'],['synthetic-operator-a','Operator'],['synthetic-operator-b','Operator']] as const){
+  const a=await app.inject({method:'GET',url:`/v1/audit/sessions/${data.sessionId}`,headers:{'x-operator-id':operator,'x-operator-role':role}})
+  const j=a.json();results.push({operator,role,status:a.statusCode,success:j.success,eventCount:j.data?.events?.length??0,associatedToCase:false})
+ }
+ const a=await app.inject({method:'GET',url:`/v1/audit/sessions/${data.sessionId}`});results.push({operator:'no-identity',status:a.statusCode,success:a.json().success})
+}finally{await app.close()}
+await writeFile('/tmp/cvg-aud0592-20260930/probes/limited-audit-observed.json',JSON.stringify({results,scope:'Actual buildServer + public HTTP inject path, memory stores and simulation identity under NODE_ENV=test. Synthetic inbound fixture with no operator/case assignment; no external effects or real data. Does not prove exploitation with production IdP or bypass of cross-tenant RLS.'},null,2)+'\n')

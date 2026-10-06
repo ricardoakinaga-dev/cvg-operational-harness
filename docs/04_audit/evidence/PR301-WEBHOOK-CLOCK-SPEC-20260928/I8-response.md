@@ -1,0 +1,12 @@
+# SPEC 0162 — resposta aos achados I8
+
+- Parecer de origem: [I8](I8-review.md), `REVISE` (2 P1/1 P2), sem P0, no candidato SHA-256 `08892d7328ce6a7ce45943f5316f3e9de270fe21b11aeb18a55934469e520646`.
+- Resposta: revisão documental; nenhum código ou migration foi implementado. O candidato revisado tem SHA-256 `433c46bb7fe0c66c1b2926ed8592cca023209b3374439af8de5d603b04fae40a`; exige crítica fresh-context I9 e aprovação humana T3 antes de qualquer BUILD.
+
+| Achado | Resposta no contrato | Critério de verificação |
+| --- | --- | --- |
+| P1 — subjects/chaves distintos não provavam pessoas distintas | `recovery_authority_policy` agora inclui `person_id` opaco e canônico. Um registry assinado de identidade, com root pinned própria, mapeia cada fingerprint/issuer/subject para esse ID; a autoridade garante que certificados/aliases da mesma pessoa compartilhem o ID. As duas approvals precisam ter `person_id` distintos entre si e do executor, ainda que subjects/chaves sejam diferentes. O registro de recovery guarda digests desses IDs. | Testes rejeitam duas credenciais/subjects da mesma pessoa e aprovador com mesmo person_id do executor; aceitam duas identidades autorizadas realmente distintas; verificam validade/revogação do registry. |
+| P1 — bootstrap/rebase não definiam epoch, baseline e head | Genesis define epoch 1. Antes do insert singleton, receipt witnessed `BOOTSTRAP` fixa `baseline_highwater` e primeiro head; a linha inicial grava exatamente epoch 1/baseline. High-water ativo é o máximo entre baseline e SAMPLEs dessa epoch. `RECOVERY_REBASE` witnessed fixa nova epoch old+1, `approved_safe_highwater` como baseline e seu head, preservando a cadeia histórica. A primeira amostra/autorização posterior usa esse anchor. | Testes interrompem/repetem bootstrap antes/depois do insert e rebase antes/depois do receipt; verificam idempotência, primeiro SAMPLE/autorização em ambas as epochs, readback do marker/baseline e gate fechado até prova completa. |
+| P2 — benchmark não fixava carga oferecida nem p99 | Perfil agora usa gerador open-loop constante a 64 requests/s, sem backpressure, seed/mix fixos, 19.200 chegadas/run, cinco runs e nenhuma exclusão de outlier. O método é nearest-rank p99 sobre horários monotônicos agendados até ACK, contando perdas/timeouts como falha. | Cada um dos cinco runs registra p50/p95/p99 e cumpre o limite; atraso do gerador/requests não enviados não somem da população. |
+
+A resposta não equivale a aceite independente nem libera BUILD. O gate T3 humano segue pendente.

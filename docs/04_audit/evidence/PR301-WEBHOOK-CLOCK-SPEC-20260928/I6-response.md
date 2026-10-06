@@ -1,0 +1,18 @@
+# SPEC 0162 — resposta normativa à crítica I6
+
+- Hash revisado por I6: `215f5146eec6ecac8b07c9561f34487e1a33da5e030965c83af6b9ab4d6bc4a3`.
+- Candidato final após resposta e formatação: `ee949d17daa04241131bae402bd49f5c28e61f4dcda38a5e81b772d2d497bc8e`.
+- Estado: `I6_REVISE_RESPONDED / I7_REQUIRED / HUMAN_T3_REVIEW_NOT_REQUESTED / BUILD_NOT_AUTHORIZED`.
+
+## Disposição por achado
+
+1. **P1 — Redução controlada do high-water:** o trigger continua negando toda redução normal. A única exceção exige contexto efetivo `guard-owner` dentro de `APPLY_PREPARED`, receipt/identity-attest validado e claim one-use vinculada a intent, old/new, PID e txid, criada/consumida na mesma transação. Runtime/executor/migration não podem gravar claims nem assumir o owner; GUC e `SET ROLE` não criam a exceção. O alvo break-glass é calculado a partir de três amostras PG/chrony saudáveis e do maior timestamp de decisões/eventos aceitos sob checkpoint witness e retenção completa; observer records agora incluem esse máximo agregado. Target à frente do PostgreSQL ou abaixo do histórico aceito bloqueia recovery.
+2. **P1 — Identidade standby:** `application_name` passa a ser apenas rótulo. A identidade pinada combina cluster/epoch, endereço não compartilhado e `issuer_dn + client_serial`; o controller junta `pg_stat_replication` com `pg_stat_ssl` por PID e exige exatamente uma conexão correspondente, com `backend_start`, state/sync e replay fence esperados. Linhas ausentes, extras ou ambíguas fecham o gate. PostgreSQL 16 documenta o join por PID e a identidade issuer/serial em [pg_stat_ssl](https://www.postgresql.org/docs/16/monitoring-stats.html).
+3. **P1 — Head mais recente dos ledgers:** acrescentada testemunha monotônica WORM/quorum independente, com trust root e domínio administrativo próprios. Ela executa compare-and-append, recusa rollback/fork/replay e assina checkpoint para cada transição do controller e record do observer. Cada receipt público depende do checkpoint; bootstrap/reopen desafia a witness e compara o head. Rollback de tail, witness indisponível ou cadeia/checkpoint divergente mantém gate fechado.
+4. **P1 — Restart normal:** separados os caminhos de recovery candidate e primary normal. Em recovery, replay LSN não nulo precisa alcançar a maior fence witness. Em restart normal, NULL de `pg_last_wal_replay_lsn()` é esperado; usar `IDENTIFY_SYSTEM`, systemid/timeline aprovados, `pg_current_wal_flush_lsn()` contra a fence e readback dos registros/digests. A regra está alinhada à [documentação PostgreSQL 16](https://www.postgresql.org/docs/16/functions-admin.html), [protocolo de replicação](https://www.postgresql.org/docs/16/protocol-replication.html).
+5. **P2 — Prova WAL por COMMIT:** cada transação grava `operation_id` e digest imutáveis. Depois do COMMIT, o observer lê de volta o ID/digest no primário e captura uma fence conservadora via `pg_current_wal_flush_lsn()`; compara com replay da standby autenticada e anexa ambos ao receipt assinado e checkpoint da witness. Essa é uma fence posterior que inclui o COMMIT, não uma afirmação de que a API expõe o LSN exato do commit record. Se escrita concorrente elevar a fence além do replay, aguarda ou falha fechado.
+6. **P2 — Ordem do recovery:** normalizada como intent/approvals → sink persiste e retorna PREPARED → verifier valida receipt e emite identity-attest ligado a ele → APPLY_PREPARED → COMMITTED → sink-attest → COMPLETE_EXPORT. Os testes exigem essa ordem e bloqueiam attest PREPARED antes do receipt.
+
+## Próximo gate
+
+Checks de formato/links/higiene e crítica fresh-context I7 devem revisar o hash final exato antes de solicitar revisão humana T3. Nenhum código ou migration 0028 está autorizado; produção continua `NO_GO`.

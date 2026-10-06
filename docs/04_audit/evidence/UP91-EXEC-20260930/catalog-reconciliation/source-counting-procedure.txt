@@ -1,0 +1,51 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import {createHash} from 'node:crypto'
+import ts from '/tmp/cvg-up91-exec-20260930/repo/node_modules/typescript/lib/typescript.js'
+const dir='/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/UP91-EXEC-20260930/catalog-reconciliation'
+const catalog=JSON.parse(fs.readFileSync(path.join(dir,'inputs/root/scripts/skip-catalog.json')))
+const sha=b=>createHash('sha256').update(b).digest('hex')
+function inspect(file) {
+ const bytes=fs.readFileSync(file), sf=ts.createSourceFile(file,bytes.toString(),ts.ScriptTarget.Latest,true,ts.ScriptKind.TS), bindings=new Map(), registrations=[], guards=[]
+ const unwrap=n=> {while(n && (ts.isAsExpression(n)||ts.isParenthesizedExpression(n)||ts.isTypeAssertionExpression(n)||ts.isSatisfiesExpression(n))) n=n.expression; return n}
+ function collect(n){
+  if(ts.isVariableDeclaration(n)&&ts.isIdentifier(n.name)&&n.initializer) {
+   bindings.set(n.name.text,n.initializer)
+   if(['testDatabaseUrl','pgRequired','pgEnabled','itWithPostgres','describeWithPostgres'].includes(n.name.text)) guards.push({line:sf.getLineAndCharacterOfPosition(n.getStart(sf)).line+1,text:n.getText(sf)})
+  }
+  ts.forEachChild(n,collect)
+ }
+ collect(sf)
+ function table(n){
+  n=unwrap(n)
+  if(ts.isIdentifier(n)) n=unwrap(bindings.get(n.text))
+  if(!n||!ts.isArrayLiteralExpression(n)) throw new Error('unresolved each array')
+  return n.elements.map(row=> {row=unwrap(row); return ts.isArrayLiteralExpression(row)?row.elements.map(a=>ts.isStringLiteralLike(a)?a.text:a.getText(sf)):row.getText(sf)})
+ }
+ function walk(n,suites=[],suiteSkipped=false){
+  if(ts.isCallExpression(n)) {
+   let binding=null, rows=null
+   if(ts.isIdentifier(n.expression)) binding=n.expression.text
+   else if(ts.isCallExpression(n.expression)&&ts.isPropertyAccessExpression(n.expression.expression)&&n.expression.expression.name.text==='each'&&ts.isIdentifier(n.expression.expression.expression)) {
+    binding=n.expression.expression.expression.text; rows=table(n.expression.arguments[0])
+   }
+   if(['describe','describeWithPostgres'].includes(binding)) {
+    const title=n.arguments[0]&&ts.isStringLiteralLike(n.arguments[0])?n.arguments[0].text:'<dynamic>'
+    const skip=suiteSkipped||binding==='describeWithPostgres'
+    for(const a of n.arguments.slice(1)) walk(a,[...suites,title],skip)
+    return
+   }
+   if(['it','test','itWithPostgres'].includes(binding)) {
+    const title=n.arguments[0]&&ts.isStringLiteralLike(n.arguments[0])?n.arguments[0].text:'<dynamic>'
+    registrations.push({line:sf.getLineAndCharacterOfPosition(n.getStart(sf)).line+1,binding,title,suites,skipWithoutPostgres:suiteSkipped||binding==='itWithPostgres',expandedCount:rows?rows.length:1,eachRows:rows})
+    return
+   }
+  }
+  ts.forEachChild(n,c=>walk(c,suites,suiteSkipped))
+ }
+ walk(sf)
+ return {sha256:sha(bytes),parseDiagnostics:sf.parseDiagnostics.length,guards,registrations,totalRegisteredTests:registrations.reduce((n,r)=>n+r.expandedCount,0),skippedWithoutPostgres:registrations.filter(r=>r.skipWithoutPostgres).reduce((n,r)=>n+r.expandedCount,0)}
+}
+const sources=catalog.entries.filter(e=>['SKIP-PG-004','SKIP-PG-008','SKIP-PG-014'].includes(e.id)).map(e=>({id:e.id,file:e.file,catalogExpected:e.expectedSkippedTests,current:inspect(path.join(dir,'inputs/root',e.file)),preimage:inspect(path.join(dir,'preimages',e.id+'.test.ts'))}))
+fs.writeFileSync(path.join(dir,'source-counts.json'),JSON.stringify({method:'TypeScript AST static registration enumeration; resolve literal/const arrays, expand each, inherit skipped describe. Independent runtime JSON corroboration required.',conditions:{TEST_DATABASE_URL:'absent',AUD19_PG_REQUIRED:'absent'},sources},null,2)+'\n')
+for(const s of sources) console.log(s.id,'preimage',s.preimage.skippedWithoutPostgres,'current',s.current.skippedWithoutPostgres,'total current',s.current.totalRegisteredTests)

@@ -1,0 +1,1393 @@
+{
+  "auditId": "AUD0592",
+  "lane": "security-data-audit",
+  "independence": "I1",
+  "depth": 1,
+  "descendants": 0,
+  "scope": {
+    "criteria": "C22–C42",
+    "productionGates": "G01–G13 de 0354 §2",
+    "mode": "READ_ONLY_AUDIT_AND_PLANNING",
+    "snapshotRoot": "/tmp/cvg-aud0592-20260930/repo",
+    "outputRoot": "/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/AUD0592-REAUDIT-20260930/security-data-audit",
+    "data": "synthetic/source-only; no real data"
+  },
+  "verdict": "NO_GO / PROVISIONAL_STATIC_JUDGMENT",
+  "grading": "Notas 0–100 por julgamento provisório das fontes: não são gate PASS, certificado, autorização T3/T4 ou prova de runtime. UNKNOWN não PASS.",
+  "artifactIdentity": {
+    "contractOriginalHEAD": "f8ccc845e6f177959bc5d40e0cec59c71e595b5b",
+    "sealedFingerprintHEAD": "3085e865a1e467c7fcc6489c1772b2818dc7f4f9",
+    "warning": "originalHEAD do contrato difere do HEAD registrado no fingerprint selado; parecer avalia os bytes do snapshot, não transfere checks ou aprovações entre SHAs.",
+    "baselineFingerprint": {
+      "kind": "bounded_sealed_source_comparison",
+      "baselineCapturedAt": "2026-09-30T12:56:30Z",
+      "baselineDigest": "7e8be0fcda7ab8ee36bcf5ece57370b763450837a5985571e6a7d5104a5126b0",
+      "checkedFiles": 801,
+      "changed": [],
+      "comparison": "read-only hashes; no runtime tests; not full tree sentinel"
+    }
+  },
+  "checks": {
+    "executed": [
+      "Inspeção estática com rg/nl/sed e leitura Python de metadata",
+      "Comparação SHA256 de 801 arquivos de fontes/config/PRD/SPEC com fingerprint selado"
+    ],
+    "notExecuted": [
+      "build",
+      "npm/certify/certification:verify",
+      "test/unit/coverage/e2e/PG",
+      "network",
+      "database",
+      "render/browser/a11y runtime",
+      "performance/backup/DR/production"
+    ],
+    "leadCurrentResults": "UNKNOWN / não recebidos nesta lane"
+  },
+  "limitations": [
+    "Sem descendants/delegação. Mesma família de modelo, contexto desta sessão independente do builder: I1; nenhum I2/I3 presumido.",
+    "Coordenação/ledgers e backlog normativo obrigatórios contêm resumos históricos expostos durante leitura. Descartados como prova e sem abrir/follow pareceres anteriores, .gauntlet ou evidências UP91-EXEC; cegueira absoluta a esses resumos não é afirmada.",
+    "PRD candidato 0014 é REVIEW_PENDING: usado para comparar intenção proposta; exigências permanentes vêm de AGENTS/0354 e PRD/SPEC controlados. Deltas não aprovados não são tratados como BUILD autorizado.",
+    "Produto/snapshot somente leitura. Dois arquivos de saída são a única mutação. Estado/log/backlog/claims compartilhados permanecem para integração pelo Lead sob ownership próprio.",
+    "Scores medem estrutura e aderência estática observadas, com desconto por lacunas. Nenhum critério alcança classificação completa; hipóteses de runtime não foram reproduzidas.",
+    "Os P0 identificados são blockers de release por capacidade/prova ausente, não relatos de dano real observado.",
+    "Inventário estático não prova inexistência de infraestrutura externa. Config GitHub/proteção de branch, IAM, cofre, IdP, pentest e piloto são UNKNOWN quando não observados."
+  ],
+  "criteria": [
+    {
+      "id": "C22",
+      "score": 62,
+      "reason": "HMAC-SHA256 sobre canal/evento/rawBody, comparação constante, janela inclusiva e reserva PG com geração/token estão ligados ao ingress. PG usa clock_timestamp sem high-water persistido e o commit replay sucede o COMMIT inbound; proteção temporal e crash safety permanecem incompletas.",
+      "evidence": [
+        "apps/api/src/webhook-security.ts:210",
+        "apps/api/src/webhook-security.ts:391",
+        "apps/api/src/webhook-security.ts:483",
+        "apps/api/src/server.ts:1458",
+        "apps/api/src/server.ts:1583"
+      ],
+      "limitations": [
+        "Nenhum request HMAC/PG executado nesta lane; resultados atuais UNKNOWN.",
+        "Regressão de relógio PG, takeover durante processamento e commit ambíguo não demonstrados; guard em memória não prova guarda durável."
+      ],
+      "title": "HMAC, replay e relógio"
+    },
+    {
+      "id": "C23",
+      "score": 74,
+      "reason": "Produção recusa RLS desativado; verifica role sem bypass, separação runtime/migration, FORCE RLS e expressão de policies. withTenantContext limpa tenant/search_path e destrói conexão contaminada. Há composição estática consistente, sem validação dinâmica do isolamento no candidato.",
+      "evidence": [
+        "apps/api/src/server.ts:5209",
+        "apps/api/src/server.ts:5292",
+        "apps/api/src/tenant-preflight.ts:490",
+        "packages/persistence/src/tenant-scoped-postgres.ts:84",
+        "apps/worker/src/postgres-role-preflight.ts:95"
+      ],
+      "limitations": [
+        "Sem catálogo PG vivo, negative tests cross-tenant ou reuse de pool observados.",
+        "Schemas globais de auth/replay/rate limit exigem fronteiras próprias; não equivalem a RLS de tenant."
+      ],
+      "title": "Isolamento tenant e RLS"
+    },
+    {
+      "id": "C24",
+      "score": 35,
+      "reason": "Há keyring local com kid/revogação/janela e secretRef tipado. Entrypoint lê valores em env e webhook configura um segredo. Não foi encontrado adapter de cofre gerenciado nem protocolo operacional de rotação para todas as famílias.",
+      "evidence": [
+        "apps/api/src/operator-identity.ts:220",
+        "apps/api/src/operator-identity.ts:243",
+        "apps/api/src/server.ts:5452",
+        ".env.example:23",
+        "packages/platform/src/contracts.ts:61",
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:51"
+      ],
+      "limitations": [
+        "Nenhum segredo real inspecionado; env example tem placeholders.",
+        "Cofre externo, IAM e drills de rotação UNKNOWN; suporte local não fecha G06."
+      ],
+      "title": "Segredos, cofre e rotação"
+    },
+    {
+      "id": "C25",
+      "score": 62,
+      "reason": "Lockfile, npm audit high, SBOM/licenças e actions pinadas estão presentes; secret scan conserva defaults com exceções por regra. Controles de cadeia são configurados, mas ausência de advisories e artefatos assinados no digest alvo não foi demonstrada.",
+      "evidence": [
+        "package.json:31",
+        "package.json:46",
+        ".github/workflows/security.yml:24",
+        ".github/workflows/security.yml:67",
+        ".gitleaks.toml:10",
+        ".github/workflows/verify.yml:228"
+      ],
+      "limitations": [
+        "Sem npm audit, install, rede, SBOM ou licenças nesta lane; advisories atuais UNKNOWN.",
+        "Exceção genérica de fixture não prova ausência de segredo; não reutilizados resultados de scans históricos."
+      ],
+      "title": "Dependências e segurança da cadeia de fornecimento"
+    },
+    {
+      "id": "C26",
+      "score": 69,
+      "reason": "Runner aplica migrations ordenadas com checksum e lock transacional; preflight de webhook valida definição/validação/dependências built-in e policies tenant têm semântica. Rate limit confere nomes de constraints/índices, sem definições e vínculo suficiente ao objeto esperado. Serving mantém credencial de migration.",
+      "evidence": [
+        "packages/persistence/src/postgres-migrations.ts:119",
+        "apps/api/src/tenant-preflight.ts:490",
+        "apps/api/src/tenant-preflight.ts:781",
+        "apps/api/src/tenant-preflight.ts:938",
+        "apps/api/src/server.ts:5267",
+        "apps/api/src/server.ts:5319"
+      ],
+      "limitations": [
+        "Sem upgrade/rollback/PG negativos executados.",
+        "Migrations efetivas terminam em 0026; SPEC futura de inbox/clock não é implementação."
+      ],
+      "title": "Schema, migrations e preflights"
+    },
+    {
+      "id": "C27",
+      "score": 63,
+      "reason": "Mensagem/idempotency/outbox são gravados na mesma conexão/transação e há store de sessão com função replace atômica. A rota /v1/session chama create e revoke separadamente; ingress/audit/replay também não compartilham um COMMIT único. Invariantes locais fortes não fecham todas as transições públicas.",
+      "evidence": [
+        "packages/persistence/src/postgres-inbound.ts:118",
+        "packages/persistence/src/postgres-inbound.ts:323",
+        "packages/persistence/migrations/operator-session/0000_auth.sql:110",
+        "apps/api/src/server.ts:807",
+        "apps/api/src/server.ts:825",
+        "apps/api/src/server.ts:1583"
+      ],
+      "limitations": [
+        "Atomicidade de sessão existe no componente, mas não é usada pela rota inspecionada.",
+        "Sem fault injection em janelas create/revoke/commit; não afirmada duplicação externa efetiva."
+      ],
+      "title": "Atomicidade e integridade transacional"
+    },
+    {
+      "id": "C28",
+      "score": 70,
+      "reason": "Execution store usa FOR UPDATE/SKIP LOCKED, leases, checkpoints e journal incerto; recovery evita tratar incerteza como no_effect e retoma journal confirmado. Teste de processo tem SIGKILL e competição. Reconciler de ingress/clock e varreduras do worker contínuo não estão plenamente compostos.",
+      "evidence": [
+        "packages/persistence/src/operational-execution-postgres.ts:479",
+        "packages/agent-runtime/src/runtime-effect-recovery.ts:130",
+        "packages/agent-runtime/src/runtime-effect-recovery.ts:180",
+        "apps/worker/src/main.ts:506",
+        "apps/worker/src/__tests__/operational-harness-process-restart.integration.test.ts:238"
+      ],
+      "limitations": [
+        "Teste de restart lido, não executado; integração/concorrência atual UNKNOWN.",
+        "Dedup externa exige receipt/destino; lease PG do replay não cerca por si só o processamento inbound."
+      ],
+      "title": "Recuperação de execução e concorrência"
+    },
+    {
+      "id": "C29",
+      "score": 30,
+      "reason": "Inventário reconhece categorias vinculáveis e política técnica de tratamento, mas RetentionLedger é memória e preserva audit indefinidamente. Não foi localizado purge físico abrangente ou fluxo de direitos na composição API/worker/persistência. TTL de sessão não elimina rows/famílias.",
+      "evidence": [
+        "docs/platform/09-personal-data-inventory.md:3",
+        "packages/shared/src/data-classification.ts:38",
+        "packages/platform/src/retention-ledger.ts:48",
+        "packages/platform/src/retention-ledger.ts:102",
+        "packages/persistence/migrations/operator-session/0000_auth.sql:9",
+        "docs/08_runtime/data_governance_signoff.md:18"
+      ],
+      "limitations": [
+        "Decisões por classe/tenant e controlador/DPO não comprovadas.",
+        "Sem acesso a banco nem dados reais; retenção aplicada, direitos e reexpurgo pós-restore UNKNOWN."
+      ],
+      "title": "Retenção, eliminação e direitos operacionais"
+    },
+    {
+      "id": "C30",
+      "score": 70,
+      "reason": "Suíte cobre isolamento, PG, atomicidade, replay, restart de processo, canais e E2E; job CI fornece PG e Node22. Há verificações comportamentais mais fortes que asserts de presença, porém execução corrente é tarefa do Lead e não foi recebida nesta lane.",
+      "evidence": [
+        "package.json:12",
+        "package.json:15",
+        ".github/workflows/verify.yml:26",
+        "apps/api/src/__tests__/webhook-security.test.ts:532",
+        "apps/worker/src/__tests__/operational-harness-process-restart.integration.test.ts:238",
+        "tests/e2e/rem21-014-qualification.spec.ts:46"
+      ],
+      "limitations": [
+        "Nenhum teste/typecheck/lint/build executado aqui; todos os resultados atuais UNKNOWN.",
+        "Mocks/fixtures de bootstrap não provam IdP corporativo e requests reais."
+      ],
+      "title": "Suíte automatizada e integração PostgreSQL"
+    },
+    {
+      "id": "C31",
+      "score": 59,
+      "reason": "Cobertura global usa thresholds 90/85 e crítico 95 por grupos, com validação numérica dos relatórios. Denominador exclui UI, entrypoints e vários adapters PG; grupos críticos incluem extrações do kernel, mas não toda a superfície pública. Falta união verificável das exclusões aos gates dedicados.",
+      "evidence": [
+        "vitest.config.mts:35",
+        "vitest.config.mts:55",
+        "scripts/critical-coverage-manifest.json:4",
+        "scripts/critical-coverage-manifest.json:9",
+        "scripts/lib/certification-rules.mjs:755",
+        "scripts/lib/coverage-gate.mjs:83"
+      ],
+      "limitations": [
+        "Percentuais/cobertura de branches atuais UNKNOWN; não inferidos de thresholds.",
+        "Não se presume que exclusão justificada seja bug; requer inventário de denominador e prova por fronteira."
+      ],
+      "title": "Cobertura e denominador"
+    },
+    {
+      "id": "C32",
+      "score": 65,
+      "reason": "Governança calcula candidateId e consome quatro relatórios, recusando inputs ausentes; policy classifica produção/teste/build/unresolved e workspaces incluem legado de forma explícita. Não demonstrados hashes/casos do catálogo nem conclusão do inventário no snapshot atual.",
+      "evidence": [
+        "scripts/skip-inventory.mjs:16",
+        "scripts/skip-inventory.mjs:21",
+        "config/workspace-dependency-policy.json:29",
+        "config/workspace-dependency-policy.json:98",
+        "scripts/workspace-dependency-audit.mjs:31",
+        "package.json:6"
+      ],
+      "limitations": [
+        "Não executado skip:governance nem audit de dependências.",
+        "Dependência de teste não é defeito de runtime por inferência; catálogos precisam ser revalidados no candidato."
+      ],
+      "title": "Governança de skips e dependências entre workspaces"
+    },
+    {
+      "id": "C33",
+      "score": 58,
+      "reason": "Verificador confere candidateId de arquivos, hashes/relatórios e findings vinculados. computeCandidateId não inclui HEAD e o fluxo corrente não compara HEAD vivo aos campos de commit; bytes iguais podem manter candidateId após novo commit. Certificação presente não foi aceita como prova.",
+      "evidence": [
+        "scripts/lib/certification-rules.mjs:328",
+        "scripts/phase10-verify.mjs:1615",
+        "scripts/phase10-verify.mjs:1649",
+        "scripts/phase10-verify.mjs:1694",
+        "scripts/lib/certification-rules.mjs:755"
+      ],
+      "limitations": [
+        "Constatação estática; nenhuma adulteração/reprodução executada.",
+        "certification:verify corrente, imagem/config/digest e negativos externos UNKNOWN."
+      ],
+      "title": "Certificação e vínculo ao candidato"
+    },
+    {
+      "id": "C34",
+      "score": 58,
+      "reason": "CI declara 34 gates, Node22/PG, upload imutável e job com OIDC atestando manifesto; contexto runner, hashes, identidade de producer são vinculados. YAML e implementação são fortes controles projetados; execução remota, atestação verificada e branch protection exigem prova externa.",
+      "evidence": [
+        ".github/workflows/verify.yml:55",
+        ".github/workflows/verify.yml:205",
+        ".github/workflows/verify.yml:228",
+        ".github/workflows/verify.yml:264",
+        "scripts/ci-bar-provenance.mjs:32",
+        "scripts/ci-bar-provenance.mjs:75"
+      ],
+      "limitations": [
+        "Rede proibida; nenhuma configuração GitHub, ruleset, check ou attestation consultada.",
+        "Não declarado que proteção de branch está ausente; seu estado é UNKNOWN."
+      ],
+      "title": "CI remoto, atestação e proteção de branch"
+    },
+    {
+      "id": "C35",
+      "score": 68,
+      "reason": "Console modela loading/error/empty, conflito e ações ocupadas; cliente usa timeout/retry GET e dispara 401 handler. CSS adapta 1180/760px. Composição ainda expõe jornadas/branding Secretary e a continuidade trusted fica incompleta, afetando jornada operacional.",
+      "evidence": [
+        "apps/web/src/App.tsx:36",
+        "apps/web/src/App.tsx:193",
+        "apps/web/src/api/client.ts:125",
+        "apps/web/src/styles.css:739",
+        "apps/web/src/App.tsx:837",
+        "apps/web/src/App.tsx:960"
+      ],
+      "limitations": [
+        "Sem render/browser/screenshots atuais; overflow, responsividade e fluxo real UNKNOWN.",
+        "Avaliação de UI exclusivamente por fontes; testes existentes não substituem observação."
+      ],
+      "title": "Fluxos, estados de erro e responsividade"
+    },
+    {
+      "id": "C36",
+      "score": 66,
+      "reason": "Skip link, landmarks, labels, estados role=status e outline focus-visible estão no produto; testes axe WCAG e teclado existem. Isso sustenta intenção de acessibilidade integrada, mas não prova contraste, ordem/foco em mudanças assíncronas ou operação completa com leitor de tela.",
+      "evidence": [
+        "apps/web/src/App.tsx:832",
+        "apps/web/src/App.tsx:954",
+        "apps/web/src/App.tsx:965",
+        "apps/web/src/styles.css:91",
+        "tests/e2e/ux-accessibility.spec.ts:17",
+        "tests/e2e/ux-accessibility.spec.ts:49"
+      ],
+      "limitations": [
+        "Sem axe/teclado/render/leitor de tela nesta lane; conformidade runtime UNKNOWN.",
+        "Asserts axe filtram serious/critical; não demonstram zero de todas as violações ou todos os fluxos trusted."
+      ],
+      "title": "Acessibilidade e teclado"
+    },
+    {
+      "id": "C37",
+      "score": 38,
+      "reason": "Cliente envia cookies e API lê sessão existente; existe store PG e OIDC/PKCE isolados. Bootstrap trusted exige token antes de GET, main injeta resolver HMAC e telemetria sem compor store/OIDC; reautenticar repete bootstrap em vez de iniciar IdP. Continuidade cookie-only e login produto não fecham.",
+      "evidence": [
+        "apps/web/src/auth/session.ts:55",
+        "apps/web/src/api/client.ts:751",
+        "apps/api/src/server.ts:770",
+        "apps/api/src/main.ts:12",
+        "apps/api/src/server.ts:4474",
+        "apps/api/src/oidc-login-transaction.ts:59",
+        "apps/web/src/App.tsx:884"
+      ],
+      "limitations": [
+        "Sem IdP corporativo/MFA ou callback de browser observado.",
+        "APIs de adapter não são login publicado; nenhum runtime histórico usado para provar sessão."
+      ],
+      "title": "Login e continuidade da sessão no produto"
+    },
+    {
+      "id": "C38",
+      "score": 45,
+      "reason": "Adapters HTTP de modelo/canal têm SSRF/DNS, limites e fail-closed; journal e approvals organizam efeitos. Worker publicado está controlado/sintético, com provider determinístico e sem efeito externo; não há prova end-to-end de provider/canal escolhido, dedup destino ou kill switch real.",
+      "evidence": [
+        "packages/model-gateway/src/providers/openai-compatible.ts:130",
+        "packages/channel-gateway/src/adapters/chatwoot.ts:78",
+        "packages/agent-runtime/src/runtime-effect-recovery.ts:130",
+        "apps/worker/src/kernel-composition.ts:12",
+        "apps/worker/src/kernel-composition.ts:119",
+        "apps/worker/src/main.ts:435"
+      ],
+      "limitations": [
+        "Nenhuma chamada externa ou dado real; adapters não contam como integração operacional liberada.",
+        "Escolha de provider/canal/DPA/tenant e capability gate T4 permanecem insumos específicos."
+      ],
+      "title": "Providers, canais e efeitos externos"
+    },
+    {
+      "id": "C39",
+      "score": 46,
+      "reason": "Catalog tenant-scoped tem aprovação/revogação e PromptRegistry verifica status/version/hash. Runtime iterativo recebe resultado knowledge sem tenant/approval explícito e o registra como sucesso; ModelGateway valida referência mas envia request.input não ligado ao conteúdo do prompt aprovado.",
+      "evidence": [
+        "packages/platform/src/control-plane-store.ts:532",
+        "packages/model-gateway/src/prompt-registry.ts:93",
+        "packages/model-gateway/src/gateway.ts:479",
+        "packages/model-gateway/src/gateway.ts:313",
+        "packages/contracts/src/execution-v2.ts:654",
+        "packages/harness/src/iterative-dispatch.ts:771",
+        "packages/harness/src/iterative-dispatch.ts:803"
+      ],
+      "limitations": [
+        "Sem corpus institucional ou fonte real; nada deste relatório responde RAG.",
+        "Ausência de enforcement na borda inspecionada; adapters específicos podem restringir, mas isso não garante contrato público reutilizável."
+      ],
+      "title": "Conhecimento institucional e governança de prompts"
+    },
+    {
+      "id": "C40",
+      "score": 58,
+      "reason": "API/worker usam JSONL e CompositeExporter sanitiza antes do sink, com buffer bounded e falhas observáveis. OpenTelemetry encaminha atributos/names diretamente ao SDK, e hash ledger recebe payload sem redaction. Dashboards/alertas/on-call distribuídos não comprovados.",
+      "evidence": [
+        "apps/api/src/main.ts:15",
+        "packages/observability/src/operational.ts:92",
+        "packages/observability/src/otel.ts:47",
+        "packages/observability/src/otel.ts:152",
+        "packages/observability/src/audit-ledger.ts:69",
+        "packages/agent-runtime/src/runtime.ts:296"
+      ],
+      "limitations": [
+        "Sem exporter remoto/tráfego; risco de leak é caminho estático, não vazamento de dado real observado.",
+        "OTel é adapter exportado, não comprovadamente o sink do main; redaction do JSONL não corrige esse adapter."
+      ],
+      "title": "Logs, métricas e observabilidade"
+    },
+    {
+      "id": "C41",
+      "score": 35,
+      "reason": "Existem budget/deadline/backoff e smoke de carga em memória com percentis; SPEC define SLOs conceituais. Não há workload representativo HTTP+PG+provider, soak, saturação/backlog, HA ou SLO operacional com owner comprovados.",
+      "evidence": [
+        "packages/model-gateway/src/gateway.ts:257",
+        "packages/model-gateway/src/gateway.ts:296",
+        "scripts/phase10-load.ts:1",
+        "scripts/phase10-load.ts:30",
+        "scripts/phase10-load.ts:89",
+        "docs/02_spec/0113_observabilidade_runtime_e_operacao.md:50"
+      ],
+      "limitations": [
+        "Nenhum benchmark executado; latência/throughput/capacidade/SLO atuais UNKNOWN.",
+        "Smoke em memória não sustenta SLA nem percentil da jornada publicada."
+      ],
+      "title": "Performance, capacidade e SLOs"
+    },
+    {
+      "id": "C42",
+      "score": 32,
+      "reason": "Snapshot restore preserva digest/audit em memória; há playbook controlado e gate CI PG backup/restore. G09 exige PITR e restore em staging, com RPO/RTO. Não foram encontradas infraestrutura de WAL/PITR ou prova de DR/segredo backup, failover e reexpurgo.",
+      "evidence": [
+        "packages/persistence/src/restore.ts:22",
+        "packages/persistence/src/restore.ts:39",
+        "scripts/phase10-restore-check.ts:4",
+        "scripts/phase10-restore-check.ts:75",
+        ".github/workflows/verify.yml:118",
+        "docs/08_runtime/incident_playbook.md:5",
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:57"
+      ],
+      "limitations": [
+        "Não executado restore/PG/drill; resultados atuais UNKNOWN.",
+        "Backup externo pode existir fora do repo; não demonstrado neste pacote, não se declara ausência universal."
+      ],
+      "title": "Backup, PITR, incidentes e prontidão operacional"
+    }
+  ],
+  "findings": [
+    {
+      "id": "SD01",
+      "severity": "P1",
+      "title": "Relógio PostgreSQL do replay não tem high-water durável",
+      "reason": "Reserve usa clock_timestamp, purge exclui rows expiradas e commit depende do relógio; a proteção monotônica sticky existe apenas no store em memória. Recuo temporal após exclusão/restart pode reabrir janela de assinatura sem memória durável do máximo observado. É risco inferido de código, sem reprodução nesta lane.",
+      "evidence": [
+        "apps/api/src/webhook-security.ts:167",
+        "apps/api/src/webhook-security.ts:224",
+        "apps/api/src/webhook-security.ts:232",
+        "apps/api/src/webhook-security.ts:263",
+        "packages/persistence/src/postgres-migrations.ts:46"
+      ],
+      "remediation": "Concluir SPEC temporal no hash corrente e, após T3 explícito, integrar guard persistido/inbox ao ingress. Provar limites ts±T, regressão PG, restart, concorrência, futuro, takeover e UNKNOWN_COMMIT por HTTP+PG sintéticos; demonstrar que nenhum efeito/2xx sai sem decisão temporal/fence válido.",
+      "mappedTasks": [
+        "UP91-027"
+      ],
+      "gate": "T3 para contrato/migrations/segurança; T4 para serving/capacidade/release; G03/G07",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD02",
+      "severity": "P1",
+      "title": "Fencing do replay não cerca o COMMIT da mensagem/outbox",
+      "reason": "Lease generation/token impede commit replay do holder antigo, mas receiveInboundMessage persiste antes de webhookLease.commit e não recebe a reserva. Holder antigo pode escrever inbound após takeover e só depois descobrir que perdeu o replay. Dedup inbound/outbox reduz duplicação; não fecha atomicidade/certeza do protocolo.",
+      "evidence": [
+        "apps/api/src/server.ts:1458",
+        "apps/api/src/server.ts:1521",
+        "apps/api/src/server.ts:1583",
+        "apps/api/src/server.ts:1605",
+        "packages/persistence/src/postgres-inbound.ts:323"
+      ],
+      "remediation": "Integrar inbox com digest/estado/receipt e commitInbound fenced na mesma fronteira transacional pertinente; conservar outcome incerto e reconciler pendente. Injetar crash após COMMIT inbound, após audit e antes/depois de commit replay, takeover concorrente e conflito de conteúdo; verificar HTTP e outbox no vencedor sem presumir dedup externa.",
+      "mappedTasks": [
+        "UP91-027"
+      ],
+      "gate": "T3; T4 antes de efeito externo/release; G03/G07",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD03",
+      "severity": "P1",
+      "title": "Preflight de rate limit aceita identidade nominal de constraints e índices",
+      "reason": "Consultas selecionam apenas conname/indexname no schema. Não verificam contype, conrelid, convalidated, definição nem chave/colunas/validade do índice. Objetos de mesmo nome com CHECK(true) ou índice incorreto podem satisfazer o preflight enquanto a semântica exigida diverge.",
+      "evidence": [
+        "apps/api/src/tenant-preflight.ts:938",
+        "apps/api/src/tenant-preflight.ts:945",
+        "apps/api/src/tenant-preflight.ts:958",
+        "apps/api/src/server.ts:5340"
+      ],
+      "remediation": "Após SPEC T3, validar OIDs da relação, tipos/defaults/nullability, constraints built-in/validadas e PK/índices íntegros com colunas/predicado corretos. Produzir negativos PG com constraints isca, CHECK(true), NOT VALID, índice inválido/objeto em outra tabela e DML violador; boot deve recusar cada caso.",
+      "mappedTasks": [
+        "UP91-028",
+        "UP91-033"
+      ],
+      "gate": "T3 segurança/schema; T4 configuração serving; G03/G07",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD04",
+      "severity": "P1",
+      "title": "Store durável e OIDC não são compostos pelo entrypoint publicado",
+      "reason": "main cria resolver de token HMAC local e injeta telemetry; não fornece operatorSessionStore nem OIDC. Em trusted sem store a resolução de identidade lança configuration_error. Componentes PG/OIDC existentes não tornam o login corporativo disponível.",
+      "evidence": [
+        "apps/api/src/main.ts:12",
+        "apps/api/src/main.ts:18",
+        "apps/api/src/operator-identity.ts:243",
+        "apps/api/src/server.ts:4474",
+        "apps/api/src/oidc-login-transaction.ts:59"
+      ],
+      "remediation": "Compor store PG/preflight e OIDC issuer/MFA/roles/tenant aprovados no main/buildServerFromEnv, mantendo erros fechados. Exercitar o processo real com PG e IdP local HTTPS/MFA sintético, múltiplas réplicas, store indisponível, state replay, tenant/role divergente e cookies; staging corporativo só sob T4.",
+      "mappedTasks": [
+        "UP91-025",
+        "UP91-026"
+      ],
+      "gate": "T3 contrato/identidade; T4 IdP/ambiente real; G05/G07",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD05",
+      "severity": "P1",
+      "title": "Rota de troca de sessão ignora replace atômico já disponível",
+      "reason": "/v1/session faz create, emite Set-Cookie e então revoke da anterior em operações distintas. Crash após create deixa sessão anterior ativa e nova row; rollback best effort pode falhar. A função SQL replace transaciona sob lock da família, mas não é chamada por essa rota.",
+      "evidence": [
+        "apps/api/src/server.ts:807",
+        "apps/api/src/server.ts:819",
+        "apps/api/src/server.ts:825",
+        "apps/api/src/operator-session-postgres.ts:118",
+        "packages/persistence/migrations/operator-session/0000_auth.sql:110"
+      ],
+      "remediation": "Usar replace quando houver sessão anterior, só emitir cookie após confirmação, definir resultado em COMMIT ambíguo sem recuperar autoridade revogada. Testar pelo HTTP+PG crash/create/revoke, replace concorrente, logout concorrente e rollback; sessões incompatíveis/duplas não podem sobreviver ao protocolo aprovado.",
+      "mappedTasks": [
+        "UP91-026"
+      ],
+      "gate": "T3 identidade/atomicidade; T4 qualificação corporativa; G03/G05/G07",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD06",
+      "severity": "P1",
+      "title": "Console não restaura sessão apenas por cookie nem inicia login OIDC",
+      "reason": "load exige token e lança 401 antes de getSession; runtime provider consome/apaga o token global. Reload com cookie válido sem novo token não chega ao endpoint que já aceita cookie. Reautenticar chama o mesmo loader. E2E primeBootstrap injeta token via addInitScript, cobrindo composição diferente de cookie-only real.",
+      "evidence": [
+        "apps/web/src/auth/session.ts:59",
+        "apps/web/src/auth/session.ts:81",
+        "apps/web/src/api/client.ts:751",
+        "apps/api/src/server.ts:774",
+        "apps/web/src/App.tsx:884",
+        "tests/e2e/rem21-014-qualification.spec.ts:46"
+      ],
+      "remediation": "Consultar sessão cookie-only primeiro, iniciar login OIDC quando necessário e manter CSRF/401/expiração/logout seguros. Criar prova browser sem token/initScript após reload, em hosts distintos com cookie real, além de reautenticação, revogação e foco; não usar token fixture como certificado de MFA.",
+      "mappedTasks": [
+        "UP91-025",
+        "UP91-043"
+      ],
+      "gate": "T3 sessão/contrato de login; T4 IdP corporativo; G05",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD07",
+      "severity": "P1",
+      "title": "Adapter OpenTelemetry transmite dados antes de redaction",
+      "reason": "startSpan envia name e toOtelAttributes cru ao tracer; setAttribute e child enviam valores crus e métricas usam labels crus ao meter. Redaction em fallback/local ocorre tarde para o SDK; toOtelAttributes apenas copia.",
+      "evidence": [
+        "packages/observability/src/otel.ts:47",
+        "packages/observability/src/otel.ts:62",
+        "packages/observability/src/otel.ts:152",
+        "packages/observability/src/otel.ts:158",
+        "packages/observability/src/otel.ts:201",
+        "packages/observability/src/redaction.ts:61"
+      ],
+      "remediation": "Sanitizar nomes, values, errorCode/status e atributos antes de tracer/meter, com allowlist de labels e cardinalidade bounded. Instrumentar fake SDK que observa bytes brutos e comprovar segredos sintéticos ausentes em root/child/setAttribute/metric/error; manter JSONL equivalente e falhas do exporter observáveis.",
+      "mappedTasks": [
+        "UP91-017"
+      ],
+      "gate": "T3 fronteira de dados/segurança; T4 exporter real; G03/G08/G10",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD08",
+      "severity": "P1",
+      "title": "Hash do ledger de auditoria não minimiza o payload recebido",
+      "reason": "Runtime appendAudit repassa actor/action/payload ao HashChainedAuditLedger, cujo append preserva parsed.payload e records retorna referências. O hash permite verificar integridade mas não impede armazenar texto sensível vindo desses campos. Sink público não impõe sanitização prévia.",
+      "evidence": [
+        "packages/agent-runtime/src/runtime.ts:296",
+        "packages/agent-runtime/src/runtime.ts:546",
+        "packages/observability/src/audit-ledger.ts:69",
+        "packages/observability/src/audit-ledger.ts:91"
+      ],
+      "remediation": "Definir sanitização antes do primeiro append e hash sobre representação sanitizada, preservando apenas metadata allowlisted e digests necessários. Provar sentinelas secretas em actor/action/reason/objetos nested, tampering detectável e ausência do segredo nos registros/sinks. Separar payload canônico de efeito da representação de auditoria.",
+      "mappedTasks": [
+        "UP91-016"
+      ],
+      "gate": "T3 minimização/contrato de auditoria; T4 dados reais; G03/G08/G10",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD09",
+      "severity": "P1",
+      "title": "Prompt aprovado não vincula o texto efetivamente enviado ao provider",
+      "reason": "Gateway resolve promptId/version/hash, mas provider.execute recebe request.input sem comparação/construção a partir do conteúdo aprovado. promptSha256 acompanha a chamada sem atestar o input enviado; referência correta pode coexistir com system diferente.",
+      "evidence": [
+        "packages/model-gateway/src/gateway.ts:479",
+        "packages/model-gateway/src/gateway.ts:313",
+        "packages/model-gateway/src/prompt-registry.ts:93"
+      ],
+      "remediation": "Definir contrato de render e bind entre bloco aprovado/digest e system/contexto enviados, preservando usuário/dados não confiáveis. Sob T3, negar conteúdo incompatível, prompt draft/revoked/expirado/cross-tenant; fake provider deve registrar payload efetivo e comprovar vínculo, não apenas metadata sha.",
+      "mappedTasks": [
+        "UP91-013",
+        "UP91-039"
+      ],
+      "gate": "T3 prompt/contrato/segurança; T4 provider/fonte real; G03/G02",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD10",
+      "severity": "P1",
+      "title": "Borda genérica de knowledge não exige tenant e autoridade da fonte",
+      "reason": "KnowledgeSearchRequest não tem tenant obrigatório; results não têm approval/revocation/validity. dispatchKnowledge aceita result.items, registra SUCCEEDED e provenance resumida sem resolver catálogo aprovado por tenant. UNTRUSTED protege contra instrução, mas não prova fonte institucional aprovada.",
+      "evidence": [
+        "packages/contracts/src/execution-v2.ts:654",
+        "packages/contracts/src/execution-v2.ts:671",
+        "packages/harness/src/iterative-dispatch.ts:771",
+        "packages/harness/src/iterative-dispatch.ts:803",
+        "packages/platform/src/control-plane-store.ts:532"
+      ],
+      "remediation": "Após contrato T3 explícito, incluir tenant e referências aprovadas/versionadas com vigência/revogação verificadas antes do uso e do checkpoint resume. Negar fonte ausente, draft, revogada, stale/cross-tenant ou provenance incompleta; testar provider adversarial pelo createOperationalHarness.run e handoff sem fonte.",
+      "mappedTasks": [
+        "UP91-015",
+        "UP91-040"
+      ],
+      "gate": "T3 contrato/autoridade; T4 corpus institucional; G03/G02/G08",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD11",
+      "severity": "P0",
+      "title": "G06 sem cofre/rotação gerenciados demonstrados",
+      "reason": "Prioridade P0 de release: há env/keyring/secretRef, mas não adapter operacional de cofre ou evidência de rotação de DB/provider/webhook/identity/rate-limit. Não representa segredo vazado observado.",
+      "evidence": [
+        "apps/api/src/operator-identity.ts:243",
+        "apps/api/src/server.ts:5452",
+        ".env.example:23",
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:51"
+      ],
+      "remediation": "Escolher serviço/IAM/owner após ambiente aprovado, implementar resolução secretRef fora de imagem/arquivo e rotação/revogação por família. Em staging autorizado exercitar overlap bounded, kid antigo revogado, fail-closed do cofre, canário de ausência em logs/imagem e recuperação.",
+      "mappedTasks": [
+        "UP91-029",
+        "UP91-034"
+      ],
+      "gate": "T3 para contrato de segredo; T4 cofre/infra/rotação real; G06",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD12",
+      "severity": "P0",
+      "title": "G08 sem retenção física, direitos e governança aplicada",
+      "reason": "Prioridade P0 de release: inventário DRAFT/DPO_PENDING e ledger de retenção em memória não eliminam dados PG ou audit. Schema de sessões tem expiry/revocation, sem purge de sessões/famílias; fluxo de direitos do titular não localizado nas fontes de serving.",
+      "evidence": [
+        "docs/platform/09-personal-data-inventory.md:3",
+        "packages/platform/src/retention-ledger.ts:48",
+        "packages/platform/src/retention-ledger.ts:102",
+        "packages/persistence/migrations/operator-session/0000_auth.sql:9",
+        "docs/08_runtime/data_governance_signoff.md:18"
+      ],
+      "remediation": "Obter DP01–06/controlador/DPO/prazos e policy version/hash; implementar jobs mínimos de purge físico/filas/copias e direitos com audit minimizado. Provar TTL distinto de DELETE, corrida de sessão/bootstrap, cascatas, idempotência, autorização tenant/role e reexpurgo após restore sintético; sem dados reais antes de T4.",
+      "mappedTasks": [
+        "UP91-030",
+        "UP91-031",
+        "UP91-032",
+        "UP91-036"
+      ],
+      "gate": "T1 decisões documentais; T3 schema/jobs/direitos; T4 dados reais/staging; G08/G09",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD13",
+      "severity": "P0",
+      "title": "G09 sem PITR/DR e RPO/RTO do ambiente alvo",
+      "reason": "Prioridade P0 de release: restore de memória mede integridade local; script explicitamente marca rpoMeasured false. Gate PG da CI é útil, mas não comprova WAL/PITR, topologia HA, acesso ao backup, RTO operacional ou ausência de ressuscitar dados eliminados.",
+      "evidence": [
+        "scripts/phase10-restore-check.ts:4",
+        "scripts/phase10-restore-check.ts:75",
+        "packages/persistence/src/restore.ts:22",
+        ".github/workflows/verify.yml:118",
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:57"
+      ],
+      "remediation": "Provisionar backup/WAL/PITR criptografado com IAM próprio, prazos e owners definidos. Drill staging deve restaurar até timestamp, verificar schema/RLS/approvals/lease/incerteza/dados eliminados, medir perdas RPO e tempo de recuperação RTO, testar perda de região/credencial e conservar receipts/redigidos.",
+      "mappedTasks": [
+        "UP91-034",
+        "UP91-036"
+      ],
+      "gate": "T3 contrato de recovery/schema quando alterado; T4 infraestrutura/DR; G09",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD14",
+      "severity": "P1",
+      "title": "Verificação corrente não confere HEAD vivo aos metadados do certificado",
+      "reason": "CandidateId deriva só de files/path/hash/size/tracked. phase10-verify recalcula esse ID e valida bundle, mas não lê/compara git HEAD corrente com result.commit/manifest.commit/candidate.git.head. Novo commit com bytes iguais pode ser qualificado com metadados anteriores; inferência estática, não reprodução.",
+      "evidence": [
+        "scripts/lib/certification-rules.mjs:328",
+        "scripts/phase10-verify.mjs:1615",
+        "scripts/phase10-verify.mjs:1694"
+      ],
+      "remediation": "Após gate T3 da SPEC0157 corrente, conferir SHA completo e exit de Git, igualdade dos quatro metadados e candidate manifest interno; separar historical de current. Negativos: commit vazio/excluded-only após run, SHA inválido/falso/faltante e bundle incoerente. Novo SHA final exige prova própria.",
+      "mappedTasks": [
+        "UP91-045"
+      ],
+      "gate": "T3 segurança do verificador; T4 candidato congelado/certificação; G03/G04",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD15",
+      "severity": "P0",
+      "title": "G04/G11/G12/G13 não têm prova operacional atual nesta lane",
+      "reason": "Prioridade P0 de release: YAML de CI/atestação e templates não provam gates verdes no mesmo SHA/digest/config, branch protection, pentest externo, piloto concluído ou autorização humana desse candidato. Sem rede e sem execução, esses estados são UNKNOWN/PENDING, nunca PASS.",
+      "evidence": [
+        ".github/workflows/verify.yml:228",
+        ".github/workflows/verify.yml:264",
+        "scripts/ci-bar-provenance.mjs:32",
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:48",
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:60"
+      ],
+      "remediation": "Lead deve vincular checks atuais ao snapshot e, depois de correções autorizadas, congelar candidato/config/imagem; obter CI remoto/attestation validada/ruleset, pentest/UAT, decisões específicas de piloto, resultados de piloto e GO humano hash-bound. Rejeitar qualquer fechamento por certificado antigo/fixture/média.",
+      "mappedTasks": [
+        "UP91-035",
+        "UP91-045",
+        "UP91-046",
+        "UP91-047",
+        "UP91-048",
+        "UP91-049",
+        "UP91-050"
+      ],
+      "gate": "T4 em cada capacidade/release; G03 literal/G04/G11/G12/G13",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD16",
+      "severity": "P2",
+      "title": "Denominador global não demonstra cobertura das exclusões",
+      "reason": "UI, main e adapters PG ficam fora da unidade; threshold alto não mede essas bordas. Há gates dedicados e grupos críticos atualizados, mas falta união executável entre inventário de arquivos excluídos, casos mínimos e resultados correntes.",
+      "evidence": [
+        "vitest.config.mts:55",
+        "scripts/critical-coverage-manifest.json:5",
+        "scripts/lib/coverage-gate.mjs:83",
+        "package.json:15"
+      ],
+      "remediation": "Inventariar included/excluded por risco; ligar cada exclusão a prova comportamental atual e impedir nova exclusão sem aceite. Publicar cobertura core e cobertura por fronteira separadas, negativos de arquivo vazio/ausente e regressões das extrações. Não declarar 90% como cobertura integral.",
+      "mappedTasks": [
+        "UP91-004",
+        "UP91-021",
+        "UP91-045"
+      ],
+      "gate": "T3 se alterar barra/contrato de gate; T2 para regressões neutras sob SPEC; G04",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD17",
+      "severity": "P0",
+      "title": "G10 e capacidade alvo não têm SLO/alerta/on-call demonstrados",
+      "reason": "Prioridade P0 de release: JSONL/health locais e buffer bounded são úteis; SPEC traz SLO conceitual, e carga Phase10 usa memória. Não há prova de pipeline remoto, alertas entregues, escalation owner, carga/soak HTTP+PG+provider ou capacidade failover.",
+      "evidence": [
+        "apps/api/src/main.ts:15",
+        "packages/observability/src/operational.ts:92",
+        "docs/platform/operations-runbook.md:51",
+        "scripts/phase10-load.ts:30",
+        "docs/02_spec/0113_observabilidade_runtime_e_operacao.md:50"
+      ],
+      "remediation": "Definir owner/SLO/workload/tenant/custo com consumidor, configurar exporter/dashboards/alertas e drill de incidentes. Medir p95/p99 sob bursts, limites, retry, provider timeout, PG contention, backlog/soak e degradação; alertas devem chegar a responsável e runbook sustentar resposta.",
+      "mappedTasks": [
+        "UP91-037",
+        "UP91-038",
+        "UP91-008"
+      ],
+      "gate": "T3 para dados/contratos/SLO enforcement; T4 ambiente/exporter/carga real; G10",
+      "confidence": "static-source / operational outcome not observed"
+    },
+    {
+      "id": "SD18",
+      "severity": "P2",
+      "title": "UI/a11y provadas por fixture não cobrem login corporativo e jornada inteira",
+      "reason": "Fontes contêm labels/foco/responsividade e testes axe/teclado, porém qualification injeta bootstrap e axe filtra serious/critical. Branding/jornadas ainda específicas do legado aparecem no console; sem render atual não há resultado operacional.",
+      "evidence": [
+        "apps/web/src/App.tsx:837",
+        "apps/web/src/App.tsx:960",
+        "tests/e2e/rem21-014-qualification.spec.ts:46",
+        "tests/e2e/ux-accessibility.spec.ts:24",
+        "apps/web/src/styles.css:739"
+      ],
+      "remediation": "Após compor sessão real, qualificar fluxo teclado/login/reload/approval/handoff/conflito/401/erro e leitor de tela, mobile/tablet/desktop e zoom/overflow; registrar todas as violações e adjudicar moderadas. Concluir neutralização sob SPEC/claim mantendo invariantes e comparar artefato renderizado atual.",
+      "mappedTasks": [
+        "UP91-019",
+        "UP91-020",
+        "UP91-043"
+      ],
+      "gate": "T2 para UI neutra; T3 para contrato/login; T4 UAT/session corporativa; G01/G05",
+      "confidence": "static-source / operational outcome not observed"
+    }
+  ],
+  "gates": [
+    {
+      "id": "G01",
+      "score": 35,
+      "status": "FAIL",
+      "title": "Nenhum código, configuração ou documento vigente específico do legado fora de `legacy/`; guarda de CI impede regressão.",
+      "reason": "Código: API ainda importa/compoe jornadas e console tem Secretary/jornadas. Há isolamento por módulo, mas o literal de ausência fora de legacy não está satisfeito. Prova operacional: CI dessa fronteira não observada.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:43",
+        "apps/api/src/legacy-composition.ts:8",
+        "apps/web/src/App.tsx:6",
+        "apps/web/src/App.tsx:837"
+      ]
+    },
+    {
+      "id": "G02",
+      "score": 50,
+      "status": "UNKNOWN",
+      "title": "Capacidades de plataforma liberadas para produção definidas e rastreadas a testes e evidências atuais.",
+      "reason": "Código: perfis/approvals/runtime e testes existem; composição worker controlada. PRD candidato delimita deltas, não os aprova. Prova operacional: nenhuma matriz de capacidades do digest/config alvo qualificada nesta lane.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:45",
+        "docs/01_prd/0014_up91_platform_prd_reconciliation.md:3",
+        "apps/worker/src/kernel-composition.ts:119",
+        "tests/phase4a/public-harness-integration.test.ts:1"
+      ]
+    },
+    {
+      "id": "G03",
+      "score": 0,
+      "status": "BLOCKED",
+      "title": "Zero itens P0/P1 abertos em 0356.",
+      "reason": "Zero itens P0/P1 abertos em 0356. Literal preservado: não reduzir a zero internos, trocar aberto por risco aceito ou excluir bloqueios externos. Esta lane registra P0 de release e P1 estáticos; não atualiza nem adjudica fechamento do ledger canônico. Prova operacional/fechamento de 0356 não observados; nenhum PASS por média ou aceite implícito.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:47",
+        "docs/07_agents/AGENTS.md:122",
+        "apps/api/src/server.ts:807",
+        "apps/api/src/tenant-preflight.ts:938",
+        "scripts/phase10-verify.mjs:1615"
+      ]
+    },
+    {
+      "id": "G04",
+      "score": 35,
+      "status": "UNKNOWN",
+      "title": "Todos os gates de CI verdes, sem skips, com Node 22 e PostgreSQL ativos, e `certification:verify` reproduzível em execução limpa.",
+      "reason": "Código: job Node22+PG, relatórios, hashes e skip guard presentes, porém HEAD binding incompleto. Prova operacional: checks atuais do Lead não recebidos; nenhum CI remoto ou certificação limpa executado/observado aqui.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:48",
+        ".github/workflows/verify.yml:55",
+        "scripts/skip-inventory.mjs:16",
+        "scripts/phase10-verify.mjs:1615"
+      ]
+    },
+    {
+      "id": "G05",
+      "score": 30,
+      "status": "BLOCKED",
+      "title": "Operadores autenticados por IdP com MFA; RBAC por tenant verificado.",
+      "reason": "Código: HMAC trusted resolver, adapter OIDC e PG store isolados; main não compõe OIDC/store; console não restaura cookie-only. Prova operacional: issuer/MFA corporativo, revogação e RBAC no processo publicado UNKNOWN.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:50",
+        "apps/api/src/main.ts:12",
+        "apps/api/src/server.ts:4474",
+        "apps/web/src/auth/session.ts:59"
+      ]
+    },
+    {
+      "id": "G06",
+      "score": 25,
+      "status": "BLOCKED",
+      "title": "Segredos em cofre gerenciado com rotação testada; nenhum segredo em arquivo ou imagem.",
+      "reason": "Código: keyring/secretRef/env, sem cofre gerenciado conectado localizado. Prova operacional: IAM, rotação de todas as famílias e ausência em imagem/logs não verificados; placeholders não são segredos reais.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:51",
+        "apps/api/src/operator-identity.ts:243",
+        "apps/api/src/server.ts:5452",
+        ".env.example:23"
+      ]
+    },
+    {
+      "id": "G07",
+      "score": 65,
+      "status": "UNKNOWN",
+      "title": "RLS obrigatório no boot de produção; roles separadas de migração e aplicação.",
+      "reason": "Código: boot recusa RLS false e roles inadequadas, policies FORCE RLS semânticas, pool por tenant. Lacuna: serving mantém migrationPool e rate preflight nominal. Prova operacional: roles/catalog PG efetivos e negativos no candidato final não observados.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:53",
+        "apps/api/src/server.ts:5209",
+        "apps/api/src/server.ts:5292",
+        "apps/api/src/server.ts:5363",
+        "apps/api/src/tenant-preflight.ts:490"
+      ]
+    },
+    {
+      "id": "G08",
+      "score": 20,
+      "status": "BLOCKED",
+      "title": "Inventário de dados pessoais tratados pela plataforma, retenção aplicada e fluxo de direitos do titular disponível para os produtos consumidores.",
+      "reason": "Código/documento: inventário técnico draft, política técnica e retention ledger em memória; purge/direitos abrangentes não localizados. Prova operacional: DP/DPO, retenção física/direitos e reexpurgo pós-restore não comprovados.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:55",
+        "docs/platform/09-personal-data-inventory.md:3",
+        "packages/platform/src/retention-ledger.ts:48",
+        "docs/08_runtime/data_governance_signoff.md:18"
+      ]
+    },
+    {
+      "id": "G09",
+      "score": 20,
+      "status": "BLOCKED",
+      "title": "Backup com PITR, RPO/RTO definidos e restore exercitado em staging.",
+      "reason": "Código: snapshot em memória e gate de backup/restore PG úteis. Prova operacional: PITR/WAL/DR em staging e RPO/RTO medidos não observados; não equivaler restore em memória a G09.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:57",
+        "scripts/phase10-restore-check.ts:4",
+        "scripts/phase10-restore-check.ts:75",
+        ".github/workflows/verify.yml:118"
+      ]
+    },
+    {
+      "id": "G10",
+      "score": 35,
+      "status": "BLOCKED",
+      "title": "Telemetria exportada, dashboards, alertas e SLOs com dono; runbooks de incidente e on-call escalonado.",
+      "reason": "Código: JSONL e buffers locais, redaction no Composite, OTel com risco antes de SDK; runbook controlado. Prova operacional: entrega de alertas, dashboards, SLO owner/medição, on-call/drill e carga alvo UNKNOWN.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:58",
+        "apps/api/src/main.ts:15",
+        "packages/observability/src/otel.ts:47",
+        "docs/platform/operations-runbook.md:51",
+        "docs/08_runtime/incident_playbook.md:5"
+      ]
+    },
+    {
+      "id": "G11",
+      "score": 0,
+      "status": "UNKNOWN",
+      "title": "Pentest externo sem achado crítico/alto aberto.",
+      "reason": "Código/CI de segurança não é pentest externo. Prova operacional: nenhum relatório externo do SHA/digest/config alvo ou fechamento validado foi fornecido/consultado nesta lane; não afirmar ausência de altos.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:60",
+        ".github/workflows/security.yml:36"
+      ]
+    },
+    {
+      "id": "G12",
+      "score": 0,
+      "status": "UNKNOWN",
+      "title": "Piloto com o primeiro produto consumidor concluído com critérios de saída atingidos.",
+      "reason": "Código: consumidores sintéticos/exemplos; PRD candidato informa consumidor não selecionado. Prova operacional: piloto com produto definido/resultados/saída não fornecido; fixture não fecha gate.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:61",
+        "docs/01_prd/0014_up91_platform_prd_reconciliation.md:7",
+        "examples/phase4a/README.md:1"
+      ]
+    },
+    {
+      "id": "G13",
+      "score": 0,
+      "status": "BLOCKED",
+      "title": "Autorização humana registrada com hash do candidato e do escopo.",
+      "reason": "Código/documentos podem preparar candidato, mas esta auditoria não aprova T3/T4. Prova operacional: decisão humana do candidato/config/escopo alvo não fornecida; pedido renovado e silêncio não transferem hashes anteriores.",
+      "evidence": [
+        "docs/03_build/0354_production_executive_plan_2026-09-26.md:63",
+        "docs/07_agents/AGENTS.md:122",
+        "docs/01_prd/0014_up91_platform_prd_reconciliation.md:68"
+      ]
+    }
+  ],
+  "planning": [
+    {
+      "stage": "T1: consolidar e preservar",
+      "tasks": [
+        "UP91-001",
+        "UP91-002",
+        "UP91-030"
+      ],
+      "action": "Lead integrar este julgamento com checks atuais e demais lanes; registrar discrepância originalHEAD/snapshot; atualizar ledgers/backlogs sob claim próprio. Preservar G03 literal e evidência de falhas, sem renumerar tarefas nem presumir fechamento."
+    },
+    {
+      "stage": "T3: segurança e dados, com hash aprovado",
+      "tasks": [
+        "UP91-013",
+        "UP91-015",
+        "UP91-016",
+        "UP91-017",
+        "UP91-025",
+        "UP91-026",
+        "UP91-027",
+        "UP91-028",
+        "UP91-031",
+        "UP91-032",
+        "UP91-033",
+        "UP91-045"
+      ],
+      "action": "Recon por paths/holder e SPEC hash atual; revisão explícita humana antes de BUILD quando exigida. Priorizar ingress/clock/fencing, sessão/entrypoint/cookie, sink redaction, prompt/knowledge e preflight semântico. Após cada fatia autorizada, produzir negativos discriminantes pelo caminho público com PG sintético e regressões do blast radius."
+    },
+    {
+      "stage": "T2/T3: evidência local e console",
+      "tasks": [
+        "UP91-004",
+        "UP91-019",
+        "UP91-020",
+        "UP91-021",
+        "UP91-043",
+        "UP91-044"
+      ],
+      "action": "Mapear denominador a provas por fronteira; qualificar browser corrente com cookie-only e a11y/estados completos; conservar histórico como histórico. Gate T3 se contrato/login/barra mudar; simples refatoração/UI neutra segue T2 com SPEC/gates pertinentes."
+    },
+    {
+      "stage": "T4: ambiente e capacidades reais",
+      "tasks": [
+        "UP91-008",
+        "UP91-029",
+        "UP91-034",
+        "UP91-035",
+        "UP91-036",
+        "UP91-037",
+        "UP91-038",
+        "UP91-039",
+        "UP91-040",
+        "UP91-041",
+        "UP91-042"
+      ],
+      "action": "Definir consumidor/tenant/owners/infra/IdP/DPO/retention e escopos provider/canal/fontes; cofre/rotação, PITR/DR, alertas/on-call e carga representativa em staging autorizado. Não inserir dado real ou ativar capacidade por aceites sintéticos."
+    },
+    {
+      "stage": "T4: release, piloto e decisão",
+      "tasks": [
+        "UP91-045",
+        "UP91-046",
+        "UP91-047",
+        "UP91-048",
+        "UP91-049",
+        "UP91-050"
+      ],
+      "action": "Congelar SHA/digest/config, qualificar checks/CI/atestação/branch protection e independente no candidato; pentest/UAT; pacote GO/NO_GO piloto, resultado piloto, depois decisão de produção controlada hash-bound. Todas as 13 condições de 0354 juntas; G03 literal continua sem waiver implícito."
+    }
+  ],
+  "contract": {
+    "path": "/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/AUD0592-REAUDIT-20260930/audit-contract.json",
+    "sha256": "bf07b6f1e4046956bfde263c4b6e4a9afbd5ee7f57e96f3f2a9801464b249968"
+  },
+  "generatedAt": "2026-09-30T13:13:29.238981+00:00",
+  "sources": [
+    {
+      "path": ".env.example",
+      "sha256": "5ccf76e81d43f94e8a34fc8c0f905d10b07654386ae62d351346a66e14ad4c53",
+      "size": 3065
+    },
+    {
+      "path": ".github/workflows/security.yml",
+      "sha256": "08b2a69c29f2cbcee3ae2904887def84a5cef624db797a1be0133cad1c93166e",
+      "size": 2344
+    },
+    {
+      "path": ".github/workflows/verify.yml",
+      "sha256": "47d4cc786b95ce546fb3d323099c4540dde6a87ec9a470207fc980586f760805",
+      "size": 16940
+    },
+    {
+      "path": ".gitleaks.toml",
+      "sha256": "8260cbe50e383cb38a33adc5d423df09e7b89af4489c4b1c4bd1c130d020bd9a",
+      "size": 992
+    },
+    {
+      "path": "apps/api/src/__tests__/webhook-security.test.ts",
+      "sha256": "ec7c256686520334ebed35cf9807fc4b26daa7f0c60ab97aeac5640646d106ce",
+      "size": 31161
+    },
+    {
+      "path": "apps/api/src/legacy-composition.ts",
+      "sha256": "9abe63c970c9a8e48057fb88b2a1aa2d777273414f0bce4e8f9136598717dc55",
+      "size": 603
+    },
+    {
+      "path": "apps/api/src/main.ts",
+      "sha256": "1282e3a881b9ced9b7650f4377d30d4f679458cdc6dc46354ad8e8081ad5fc5d",
+      "size": 1310
+    },
+    {
+      "path": "apps/api/src/oidc-login-transaction.ts",
+      "sha256": "083386e7557d49359eacfa2335e4975433f2a2244a414ac15fb53f0862ad9711",
+      "size": 8439
+    },
+    {
+      "path": "apps/api/src/operator-identity.ts",
+      "sha256": "dc66e441757b83871be6b09e329fa3053c1fc4c249b9b1484d512782fceb46c4",
+      "size": 16118
+    },
+    {
+      "path": "apps/api/src/operator-session-postgres.ts",
+      "sha256": "db28bcf33bd9fb70e0173348034569065e7edec9c938c7c7c79c793df84a8451",
+      "size": 4828
+    },
+    {
+      "path": "apps/api/src/server.ts",
+      "sha256": "76a588fbc40640638ede9a6c0f79b0926b7750557a06e9f36659150482fc38fa",
+      "size": 178796
+    },
+    {
+      "path": "apps/api/src/tenant-preflight.ts",
+      "sha256": "45ca0e1f323b07f2e7a2c0f3cb9f82c4c895a0ad3b4b4cf1608f889ee7cbc260",
+      "size": 50198
+    },
+    {
+      "path": "apps/api/src/webhook-security.ts",
+      "sha256": "682fd2e656e8b6048dfbcbec3c3dcb2a7372c600b5469ee24ec0cf4e5c65bc3b",
+      "size": 18256
+    },
+    {
+      "path": "apps/web/src/App.tsx",
+      "sha256": "fc07d150f3848cdb475201950dadac898315623e4585bbe9d0850f385f70bc45",
+      "size": 34957
+    },
+    {
+      "path": "apps/web/src/api/client.ts",
+      "sha256": "bea8498414fb81a02068a0e7c0912b2ecac71aff3866172fb2e5a527a4bd24ba",
+      "size": 42448
+    },
+    {
+      "path": "apps/web/src/auth/session.ts",
+      "sha256": "a341ff835deca378bf746dfc2d28f55b63512651b820beba5bce04af3f0cfa0c",
+      "size": 2456
+    },
+    {
+      "path": "apps/web/src/styles.css",
+      "sha256": "6e63a160f46c97ea1512f9fd240fcc4eb46adeb2aa175912232831d22550e8f0",
+      "size": 14046
+    },
+    {
+      "path": "apps/worker/src/__tests__/operational-harness-process-restart.integration.test.ts",
+      "sha256": "9548fa470dfc10f3cd7e3b93a378d299a1bf0a2bcaadd74b38f82495773398f1",
+      "size": 14159
+    },
+    {
+      "path": "apps/worker/src/kernel-composition.ts",
+      "sha256": "5bc47caaea798e6967223ac2c1c9c1adc4b10f95b19456a03c7044f40e53bebf",
+      "size": 17066
+    },
+    {
+      "path": "apps/worker/src/main.ts",
+      "sha256": "f18feaaed59bf4d3567d190169a5d1dfb32baa4309d620d50bdffaef1ee82ae0",
+      "size": 16946
+    },
+    {
+      "path": "apps/worker/src/postgres-role-preflight.ts",
+      "sha256": "853be15e98b4f768830db9917df55b4e812a343235052c66c8600f2b09c647a8",
+      "size": 10809
+    },
+    {
+      "path": "config/workspace-dependency-policy.json",
+      "sha256": "ae56fb666050cd0298bd43d5446325bad070d9516dbba7baf44b754550e0898c",
+      "size": 4790
+    },
+    {
+      "path": "docs/01_prd/0014_up91_platform_prd_reconciliation.md",
+      "sha256": "be667c34dc98ac344298462b7749231fe1fa32a338b7d5d7e861230c6394278f",
+      "size": 22237
+    },
+    {
+      "path": "docs/02_spec/0113_observabilidade_runtime_e_operacao.md",
+      "sha256": "ac178e382d6d1ab780e585836ef3d4d07861110b932de47d6d1cf1351d645f0d",
+      "size": 2102
+    },
+    {
+      "path": "docs/03_build/0354_production_executive_plan_2026-09-26.md",
+      "sha256": "36f219c294f72ef2f00201107eeded61766745ee61598b13003a1404b88c99e5",
+      "size": 13648
+    },
+    {
+      "path": "docs/07_agents/AGENTS.md",
+      "sha256": "0a945019ae7959f60f297f0459cd00575f6bc301d534f609183a0dcd91b14c41",
+      "size": 7919
+    },
+    {
+      "path": "docs/08_runtime/data_governance_signoff.md",
+      "sha256": "8a36449d32b26da17f1386103e06b57bdca55f48b60391ff8bde2ab92729ddd0",
+      "size": 1056
+    },
+    {
+      "path": "docs/08_runtime/incident_playbook.md",
+      "sha256": "776f4b88de04a86c0cce89fe0e4b241cd741878e4123574e6cb6b5064b4eca43",
+      "size": 1112
+    },
+    {
+      "path": "docs/platform/09-personal-data-inventory.md",
+      "sha256": "eb7ba96d4ead1fa516ab93054c22d90dc3429ee5cef299bd891c0c735ee17eda",
+      "size": 26921
+    },
+    {
+      "path": "docs/platform/operations-runbook.md",
+      "sha256": "44431743018c13a2e55b1da368d840a79614dbea875c2d61f36e4b2d9a2ef8e4",
+      "size": 2244
+    },
+    {
+      "path": "examples/phase4a/README.md",
+      "sha256": "9dd9d5559321a654894002aec020bb8378cd404ba1f892f815cb986a52714e56",
+      "size": 957
+    },
+    {
+      "path": "package.json",
+      "sha256": "3542a4a33bc1020921ce5a52adf10442795f915e4693b24db927b4e5a3542f68",
+      "size": 7815
+    },
+    {
+      "path": "packages/agent-runtime/src/runtime-effect-recovery.ts",
+      "sha256": "38b0c563322156b125bac99ad23657a06c620a4082f2fd54c4293fcd6ac4d8ed",
+      "size": 29681
+    },
+    {
+      "path": "packages/agent-runtime/src/runtime.ts",
+      "sha256": "0f4ca214e94ca554da2cc590a392f8bf2b737acac3281f9fb2b6092700a18e85",
+      "size": 49851
+    },
+    {
+      "path": "packages/channel-gateway/src/adapters/chatwoot.ts",
+      "sha256": "3521aa36d0f78666bae20cf7e42dc90cc1a1a43f3b76d51e3f34e0895f1b86d3",
+      "size": 9179
+    },
+    {
+      "path": "packages/contracts/src/execution-v2.ts",
+      "sha256": "25ae8867f10495bc7a9e7d5b208e5c9fae536054a2dc890a030d4690b0700965",
+      "size": 22133
+    },
+    {
+      "path": "packages/harness/src/iterative-dispatch.ts",
+      "sha256": "145fa5c49a08d1bb4e783a503126e59d06c61d956822014d4b60d1da5e608c13",
+      "size": 34844
+    },
+    {
+      "path": "packages/model-gateway/src/gateway.ts",
+      "sha256": "b238028ce188131081dd8a963be62cd8d899d0dab44d827bf1859c82976f18a8",
+      "size": 17109
+    },
+    {
+      "path": "packages/model-gateway/src/prompt-registry.ts",
+      "sha256": "bae0c243e361571a5eed974811333b694905df30925f29207657b38b5967a75a",
+      "size": 4817
+    },
+    {
+      "path": "packages/model-gateway/src/providers/openai-compatible.ts",
+      "sha256": "ace7d88ef931a9d0c25102ed20b01c8acece2b767b6a098474b5443030e3eecd",
+      "size": 7762
+    },
+    {
+      "path": "packages/observability/src/audit-ledger.ts",
+      "sha256": "6a022335c2e5e1710c2faf12f18d0bc869f07562779858d330d59cd0c418bf0d",
+      "size": 4288
+    },
+    {
+      "path": "packages/observability/src/operational.ts",
+      "sha256": "f6688ee83234a2f66aff3bf941a9170e2d7d27b16a60306570b6242ac0b48d44",
+      "size": 14380
+    },
+    {
+      "path": "packages/observability/src/otel.ts",
+      "sha256": "0811b07301a1d7b2a8d72bb972c51b2d3c6bb749ba873ad61ea50f27e7bcb1d6",
+      "size": 5636
+    },
+    {
+      "path": "packages/observability/src/redaction.ts",
+      "sha256": "50ea69a2a83fce8d131bc3cb83419e38da74d392656aade20c496bbac073a24f",
+      "size": 2122
+    },
+    {
+      "path": "packages/persistence/migrations/operator-session/0000_auth.sql",
+      "sha256": "59b3327b608c8497d6c0dd36359856d867cbd480ab8a6f690df1459ef399c9fd",
+      "size": 7485
+    },
+    {
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "size": 52998
+    },
+    {
+      "path": "packages/persistence/src/postgres-inbound.ts",
+      "sha256": "d2b8dbf83549a9644c2f00299bc4511e5f45eb1c08eab9b57b3934f40cd7b346",
+      "size": 25957
+    },
+    {
+      "path": "packages/persistence/src/postgres-migrations.ts",
+      "sha256": "1d2199dc28c594f6dc92dabe36397a2b8fa86f323f20496f030899789b811846",
+      "size": 15185
+    },
+    {
+      "path": "packages/persistence/src/restore.ts",
+      "sha256": "e5d9291cd9795015dfbfeabba4c927238843d1d1dc2a8002a1819606ba75b2f8",
+      "size": 17696
+    },
+    {
+      "path": "packages/persistence/src/tenant-scoped-postgres.ts",
+      "sha256": "648909ec9ec68f579cce6e5cc138a0b98cbd257584a656a5adeeefb0e6e6a3ac",
+      "size": 24764
+    },
+    {
+      "path": "packages/platform/src/contracts.ts",
+      "sha256": "cb75d6500bdaf774dc35afa2a669dadfa65e62a015791b5f8bca8988a09ca385",
+      "size": 23458
+    },
+    {
+      "path": "packages/platform/src/control-plane-store.ts",
+      "sha256": "a725b6ebee92518583a545c83ca4e5835a20b3e49248f8b8f76da8d8b6b1a80b",
+      "size": 44307
+    },
+    {
+      "path": "packages/platform/src/retention-ledger.ts",
+      "sha256": "0d568862c04097c80294a36c2e3919e8de1bfbc52befa91f3d6e0bf2393addef",
+      "size": 6130
+    },
+    {
+      "path": "packages/shared/src/data-classification.ts",
+      "sha256": "2f8a0ad5e614dad1b1494a5855ab4281658596b0dae9fd19f2d79b5b4df147e3",
+      "size": 4581
+    },
+    {
+      "path": "scripts/ci-bar-provenance.mjs",
+      "sha256": "a91de0a300ceb748f239a12b5b75758bc15684f4147b419d71fe0faedc9cb394",
+      "size": 8719
+    },
+    {
+      "path": "scripts/critical-coverage-manifest.json",
+      "sha256": "b1efc6944d8dedf540712aebe0320aeab6190cb50a73bf101be80f78ef73b4c5",
+      "size": 1510
+    },
+    {
+      "path": "scripts/lib/certification-rules.mjs",
+      "sha256": "9ea6fff312b6429aaeba191698cea553f823aa92bedfc3045974d87ed642b7dc",
+      "size": 50220
+    },
+    {
+      "path": "scripts/lib/coverage-gate.mjs",
+      "sha256": "6646c80f18edf5c482c85db686c9e6878d1a95efd0401f0a4b7672279aa82014",
+      "size": 5175
+    },
+    {
+      "path": "scripts/phase10-load.ts",
+      "sha256": "df027e454569a8770643a814d050d66219e1f16400577f419887f357bad1f0a5",
+      "size": 4109
+    },
+    {
+      "path": "scripts/phase10-restore-check.ts",
+      "sha256": "0b92a58b602c60757ec81d1ce0abda98fa674b0524218986a0f36b6eb5422fd9",
+      "size": 3070
+    },
+    {
+      "path": "scripts/phase10-verify.mjs",
+      "sha256": "4b1fd93ad6bbe785cfaf6b1b266a1e696469e379cb035c3ee307a8053b1ee373",
+      "size": 54189
+    },
+    {
+      "path": "scripts/skip-inventory.mjs",
+      "sha256": "2d96c499f51664d1c6895d4402cd8cd9432411767cfdc14618814844c27bf92a",
+      "size": 2081
+    },
+    {
+      "path": "scripts/workspace-dependency-audit.mjs",
+      "sha256": "6d5064013ef6f2705f00ee45dad28635d83d0045ec871f39bba212c3977cc1e0",
+      "size": 91367
+    },
+    {
+      "path": "tests/e2e/rem21-014-qualification.spec.ts",
+      "sha256": "611d3fa3dce2387f51e3625d83a92e0cf84122467dfa4d356cbdd630b34f0ed2",
+      "size": 12571
+    },
+    {
+      "path": "tests/e2e/ux-accessibility.spec.ts",
+      "sha256": "d7a7ce9aeb99644dce63cdd738341ff58f6e1c232287e75d45fe6178d84e882f",
+      "size": 8332
+    },
+    {
+      "path": "tests/phase4a/public-harness-integration.test.ts",
+      "sha256": "31d17776a70e2ec51a70d0134c58c465641a38b58b075708d56848b55f120ad2",
+      "size": 5803
+    },
+    {
+      "path": "vitest.config.mts",
+      "sha256": "06a85bf0a587ef45431ee7104f0e358ff69ebe74fb12fac4e6f719dce6057834",
+      "size": 4419
+    }
+  ],
+  "summary": {
+    "criteriaCount": 21,
+    "meanCriteriaEqualWeight": 55.38095238095238,
+    "gatesCount": 13,
+    "meanGateProvisional": 24.23076923076923,
+    "gatePassCount": 0,
+    "findingsBySeverity": {
+      "P0": 5,
+      "P1": 11,
+      "P2": 2
+    }
+  },
+  "closingSourceComparison": {
+    "filesChecked": 801,
+    "changed": [],
+    "scope": "bounded source/config/PRD/SPEC; not full-tree/runtime certification"
+  }
+}

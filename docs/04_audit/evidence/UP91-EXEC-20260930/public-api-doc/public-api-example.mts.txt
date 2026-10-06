@@ -1,0 +1,102 @@
+import assert from 'node:assert/strict'
+import { createOperationalHarness } from '@cvg/harness'
+import { NoopOrchestrator } from '@cvg/harness-orchestrator'
+import type {
+  AuditEvent,
+  RuntimeInput,
+  TelemetryEvent
+} from '@cvg/harness-contracts'
+
+const observed = { model: 0, policy: 0, approval: 0 }
+const auditEvents: AuditEvent[] = []
+const telemetryEvents: TelemetryEvent[] = []
+const harness = createOperationalHarness({
+  orchestrator: new NoopOrchestrator(),
+  tools: { list: () => [], resolve: () => undefined },
+  modelGateway: {
+    async complete() {
+      observed.model += 1
+      throw new Error('The synthetic example must not call a model')
+    }
+  },
+  policy: {
+    async evaluate() {
+      observed.policy += 1
+      return {
+        outcome: 'DENY',
+        reason: 'Synthetic smoke only',
+        policyVersion: 'synthetic-v1'
+      }
+    }
+  },
+  approvals: {
+    async request() {
+      observed.approval += 1
+      return { status: 'DENIED', reason: 'Synthetic smoke only' }
+    }
+  },
+  audit: {
+    async append(event) {
+      auditEvents.push(event)
+    }
+  },
+  telemetry: {
+    record(event) {
+      telemetryEvents.push(event)
+    }
+  }
+})
+const now = '2026-09-30T00:00:00.000Z'
+const input: RuntimeInput = {
+  agent: {
+    id: 'agent.synthetic.public-api' as RuntimeInput['agent']['id'],
+    version: 'synthetic-v1' as RuntimeInput['agent']['version'],
+    objective: 'Exercise the public composition without effects',
+    instructions: ['Synthetic smoke only'],
+    skills: [],
+    tools: [],
+    policies: []
+  },
+  tenantId: 'tenant.synthetic.public-api' as RuntimeInput['tenantId'],
+  conversationId: 'conversation.synthetic' as RuntimeInput['conversationId'],
+  sessionId: 'session.synthetic' as RuntimeInput['sessionId'],
+  correlationId: 'correlation.synthetic' as RuntimeInput['correlationId'],
+  traceId: 'trace.synthetic' as RuntimeInput['traceId'],
+  userMessage: 'Synthetic smoke',
+  context: { values: {}, sourceIds: [], capturedAt: now },
+  state: { version: 1, values: {}, updatedAt: now },
+  budget: {
+    maxSteps: 1,
+    maxModelCalls: 0,
+    maxToolCalls: 0,
+    maxDurationMs: 5_000,
+    maxCostUsd: 0,
+    maxTokens: 0
+  }
+}
+assert.equal(harness.resolveProfile(input), 'single_pass')
+const result = await harness.run(input)
+assert.equal(result.stopReason, 'COMPLETED')
+assert.equal(result.response, 'Acknowledged.')
+assert.equal(result.modelCalls, 0)
+assert.equal(result.toolCalls, 0)
+const iterativeInput: RuntimeInput = { ...input, runtimeProfile: 'iterative' }
+assert.equal(harness.resolveProfile(iterativeInput), 'iterative')
+const unconfigured = await harness.execute(iterativeInput)
+assert.equal(unconfigured.stopReason, 'STATE_CONFLICT')
+assert.equal(unconfigured.steps, 0)
+assert.equal(unconfigured.modelCalls, 0)
+assert.equal(unconfigured.toolCalls, 0)
+assert.deepEqual(observed, { model: 0, policy: 0, approval: 0 })
+assert.ok(auditEvents.length > 0)
+assert.ok(telemetryEvents.length > 0)
+console.log(
+  JSON.stringify({
+    singlePass: result.stopReason,
+    iterative: unconfigured.stopReason,
+    modelCalls: observed.model,
+    toolCalls: result.toolCalls + unconfigured.toolCalls,
+    auditEvents: auditEvents.length,
+    telemetryEvents: telemetryEvents.length
+  })
+)

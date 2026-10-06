@@ -12,13 +12,23 @@ infer approval, certification or production access.
 - [master backlog](30_backlog_master.md)
 - [AUD21 executable backlog](03_build/0337_comprehensive_remediation_backlog.md)
 
-## Arquitetura e correções em andamento — AUD-0590
+## Navegação corrente — 30/09/2026 — AUD0592 / UP91
+
+- [Roadmap atualizado M0–M9](03_build/0366_program_roadmap_reaudit_2026-09-30.md) e [backlog corrente](03_build/0367_program_backlog_reaudit_2026-09-30.md): 52 cartões e 83 origens/13 gates preservados; 0356 conserva statusPR,0367 possui status UP91.
+- [AUD0592 com 42 notas e13 gates](04_audit/0592_repository_reaudit_2026-09-30.md): maturidade60,24/100, prontidão24,23/100; parecer FAIL/NO_GO, checks atuais isolados e limitações explícitas.
+- [Implementação capturada em 30/09](architecture/CURRENT_IMPLEMENTATION_2026-09-30.md) e [handoff atual](08_runtime/handoffs/aud0592_execution_20260930.md): fonte, contratos e atualização coordenada dos ledgers compartilhados.
+- [Planejamento histórico0363/0364](03_build/0364_program_backlog_2026-09-30.md), [auditoria0591](04_audit/0591_repository_audit_2026-09-30.md) e [baseline anterior0365](03_build/0365_up91_execution_baseline.md): preservar provas/hashes anteriores, sem transferir PASS.
+- [Módulos0166](02_spec/0166_governed_context_response_budget.md)/[0167](02_spec/0167_policy_prompt_approval_knowledge_audit.md), [certifier0170](02_spec/0170_certifier_metrics_parser_binding.md) e[transporte0174](02_spec/0174_bound_transport_node22_compatibility.md): candidatas congeladas com revisão humana pendente; I1 técnico não autorizaBUILD.
+
+Programa **IN_PROGRESS**, produção **NO_GO**. Docs/testes/fixtures não substituem qualificação operacional nem os13 gates. Controlador próprio mantém continuidade; ledgers compartilhados recebem handoff pelo holder.
+
+## Snapshot arquitetural e correções anteriores — AUD-0590
 
 - [Guia da implementação atual](architecture/CURRENT_IMPLEMENTATION_2026-09-29.md) — snapshot do código em `54257e3`; a composição e a certificação do candidato integrado continuam abertas.
 - [Auditoria sistêmica AUD-0590](04_audit/0590_deep_system_audit_2026-09-28.md) — achados e notas da baseline auditada.
 - [Roadmap M0–M5](03_build/0360_aud0590_remediation_roadmap.md) e [backlog A59-01–15](03_build/0361_aud0590_remediation_backlog.md) — sequência, dependências e critérios de fechamento; produção `NO_GO`.
 
-## Current controlled work — AUD-0576
+## Histórico — controlled work — AUD-0576
 
 - [Current runtime state](99_runtime_state.md)
 - [Current master execution log](20_master_execution_log.md)

@@ -1,0 +1,71 @@
+# AUTH-01 — decisão de atribuição e leitura por caso
+
+**Estado: PROPOSED / WHAT_PENDING / BUILD_NOT_AUTHORIZED.** Task documental AUD0592-AUTH-WHAT, ligada ao delta AUTH-01/UP91-018. Este pacote prepara uma decisão de produto; não é SPEC aprovada, implementação, revisão humana T3 ou liberação. O escopo52 cartões,83 origens,13 gates e154 critérios permanece integral; seus estados originais são preservados.
+
+## Problema observado e limite da evidência
+
+Na API atual, Operator e Approver possuem `conversation:view_assigned` e `audit:view_limited`. Os cinco pontos de leitura abaixo verificam o papel e o tenant, mas não uma atribuição do recurso à pessoa. O schema inspecionado de ConversationRecord/SessionRecord não contém assignee/owner/operator assignment. `takeoverState` representa estado de atendimento, não prova de quem recebeu permissão de leitura. Um evento com actorId ou payload.sessionId não é cadastro de atribuição. Esta inspeção não prova ausência de todo vínculo em sistemas externos: **nenhuma fonte externa de atribuição foi fornecida ou integrada neste recorte**.
+
+| Leitura atual                                  | Origem e conteúdo observado                                                                              | Decisão necessária                                                                                                |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| GET /v1/conversations                          | server.ts1383; listPage recebe tenant/paginação, sem operador; schema inclui senderRef e lastMessageBody | Filtrar casos atribuídos antes de paginação/total e escolher campos de preview                                    |
+| GET /v1/conversations/:conversationId/timeline | server.ts1662; getConversationTimeline retorna mensagens e sessões                                       | Autorizar conversa antes de ler conteúdo; definir campos permitidos ao papel                                      |
+| GET /v1/executions/:executionId                | server.ts931; toExecutionView inclui result, failure e resume, além de metadados                         | Vincular execução a recurso autorizado e definir projeção explícita, sem liberar internals por associação nominal |
+| GET /v1/executions/:executionId/trajectory     | server.ts1022; readExecutionTrajectory já exporta metadados de steps/budget, sem payload/observationRefs | Aplicar atribuição também à execução; conservar a projeção segura existente                                       |
+| GET /v1/audit/sessions/:sessionId              | server.ts2236; retorna events completos de audit.listBySession; payload desconhecido                     | Separar limited/full; autorizar sessão por vínculo confiável e projetar campos por allowlist                      |
+
+Referências de navegação: [auth.ts](../../../../../packages/shared/src/auth.ts), [server.ts](../../../../../apps/api/src/server.ts), [schema.ts](../../../../../packages/persistence/src/schema.ts), [timeline](../../../../../packages/agent-core/src/queries/get-conversation-timeline.ts), [execution view](../../../../../packages/harness/src/execution-spine.ts), [trajectory](../../../../../packages/harness/src/trajectory.ts), [audit repository](../../../../../packages/persistence/src/repositories/audit-repository.ts). As linhas são ponteiros da fonte congelada; o [manifesto de hashes](source-before.json) é a referência de versão. O [probe anterior](../rbac-probe/limited-audit-observed.json) demonstrou audit200 de dois Operators sem atribuição em ambiente sintético; não demonstra incidente com IdP real ou bypass de RLS entre tenants.
+
+## Proposta A — cadastro interno de atribuições explícitas
+
+Escolha proposta, **não aprovada**: Supervisor/Admin gerenciam atribuições reversíveis dentro do próprio tenant por fluxo autenticado e auditável. Uma pessoa pode ser atribuída a vários casos; um caso pode ter vários membros explicitamente autorizados. Nenhum Operator/Approver se concede acesso por assumir sessão, fornecer header ou incluir seu ID no payload.
+
+O objeto de autorização é a raiz registrada: conversa ou execução independente. Sessões herdam somente a conversa pai confirmada no armazenamento confiável. Uma execução com conversa/sessão tem vínculo persistido e validado no momento de admissão; não basta confiar no `request.input` ou ID de sessão fornecido pelo cliente. Execuções independentes recebem atribuição própria. Não retirar suporte a execuções independentes para simplificar o guard.
+
+Uma atribuição identifica tenant, recurso, sujeito estável de identidade confiável, papel/escopo e estado/versionamento. Origem de login e sujeito seguem a autoridade escolhida em0152; fixture simulado continua restrito aos gates sintéticos. Revogação impede novos reads; a SPEC deverá definir linearização de read/revogação, concorrência e cache, sem prometer apagar conteúdo que já foi legitimamente entregue. Não existir atribuição, vínculo confiável ou autoridade vigente causa recusa antes de consulta/exposição do conteúdo. Isso é alvo da correção futura: **o produto atual ainda não o garante**.
+
+A gestão de atribuições introduz contrato/schema/autoridade novos e exige SPEC T3 própria. Não existe endpoint, tabela ou privilégio aprovado por este pacote. Quem pode conceder/revogar é parte desta proposta de produto, não inferência de `audit:view_full`.
+
+## Alternativa B — fonte externa institucional de atribuições
+
+Integrar uma fonte de atribuição mantida pela instituição, se ela existir. Antes da SPEC, nomear sistema/owner, identificadores, recursos cobertos, autoridade de concessão/revogação, regra de sincronização e comportamento stale/indisponível. O vínculo não pode chegar de header/browser ou claim arbitrário; precisa verificação de origem e tenant. Sem esses insumos, B permanece UNKNOWN e não permite BUILD do guard integrado. O uso de conta/dados reais continua T4 e fora desta rodada.
+
+## Matriz proposta para fechar o WHAT
+
+**Todas as células abaixo são propostas**, inclusive o acesso amplo de Supervisor/Admin às conversas/execuções: a matriz atual só nomeia `view_assigned` nesses recursos. `audit:view_full` não autoriza implicitamente leitura ampla de outros tipos.
+
+| Papel      | Conversa/timeline                                                                                  | Execução/trajectory                                                          | Auditoria                                                                                     |
+| ---------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Operator   | Apenas casos explicitamente atribuídos                                                             | Apenas execução própria do caso atribuído ou execução independente atribuída | Apenas sessão autorizada, projeção limited                                                    |
+| Approver   | Apenas casos explicitamente atribuídos; uma tarefa de approval por si só não concede toda conversa | Apenas casos atribuídos; decisão de approval continua no contrato específico | Apenas sessão autorizada, projeção limited; sem privilégio full implícito                     |
+| Supervisor | Proposta de leitura ampla no tenant ativo; decisão expressa antes da SPEC                          | Proposta de leitura ampla no tenant ativo; decisão expressa antes da SPEC    | Full já previsto na matriz atual, conservando tenant/identidade e regras de conteúdo vigentes |
+| Admin      | Proposta de leitura ampla no tenant ativo; decisão expressa antes da SPEC                          | Proposta de leitura ampla no tenant ativo; decisão expressa antes da SPEC    | Full já previsto na matriz atual, conservando tenant/identidade e regras de conteúdo vigentes |
+
+Aprovar uma raiz não autoriza mutation, execução de tool, aprovação de efeito ou consulta clínica/financeira. Os guards de leitura não substituem policy/approval, vínculo entre recurso e tenant, identidade ou revogação. Os negativos de mutação existentes devem permanecer; gaps adjacentes entram em tarefa própria, sem aprovação tácita.
+
+### Campos: proposta e decisões ainda necessárias
+
+- **Lista de conversas atribuídas:** manter id/channel/status/openSessionId/lastMessageAt/createdAt/updatedAt e paginação calculada no conjunto autorizado. `senderRef` e `lastMessageBody` são campos presentes que precisam escolha explícita de preview, não remoção silenciosa do contrato. Proposta inicial: permitidos apenas no conjunto atribuído e sujeitos à política de conteúdo aprovada.
+- **Timeline atribuída:** preservar leitura das mensagens necessárias ao atendimento e metadados das sessões, apenas da conversa autorizada. Não usar uma proibição de todo conteúdo como substituto da capacidade requerida. A SPEC deverá enumerar campos e validar schema/tenant, inclusive dados inesperados ou campos futuros; associação não torna um payload arbitrário automaticamente seguro.
+- **Auditoria limited:** proposta de allowlist `id`, `type`, `actorType`, `policyVersion`, `createdAt`. Omitir actorId/correlationId/payload e campos desconhecidos. Se o negócio precisar conteúdo adicional, nomeá-lo, definir classificação/finalidade e aprovar a extensão. Audit full conserva o contrato de acesso autorizado e suas regras de proteção; full não significa acesso entre tenants nem exposição livre de segredos.
+- **Execução:** state/attempt/approvalId e datas são a base de acompanhamento. **Projeções de result/failure/resume ainda precisam decisão de campos** e análise com o contrato de resposta009–016. Não omitir o resultado operacional necessário, nem entregar RuntimeResult/internals bruto por conveniência. Esse ponto permanece bloqueador de WHAT para essa operação, mesmo se a fonte A/B for escolhida.
+- **Trajectory:** preservar a projeção atual de executionId, versões/perfil, stepNumber/stepType/status/decisionType/reasonCode, stopReason e budgetUsage. Proibir adição de payload/observationRefs/chain-of-thought por associação.
+
+O vínculo audit→sessão também precisa origem persistida confiável; hoje o repositório seleciona por payload.sessionId. A futura SPEC deve distinguir o seletor atual da propriedade autorizada: nenhum payload controlável pelo cliente/provider pode associar evento a outro caso para ganhar acesso ou misturar conteúdo. Criar esse vínculo exige seu gate/schema pertinente, não uma mudança silenciosa de filtro.
+
+## Critérios preservados para a futura SPEC
+
+1. Dois Operators do mesmo tenant, com casos disjuntos: associados leem somente o permitido; não associados recusados antes de leitura de conteúdo.
+2. Lista/paginação/totais já restritos pela atribuição; não filtrar apenas após buscar a página de todo o tenant.
+3. Identidade/tenant/atribuição falsos, relação revogada, recurso inexistente, execução independente, associação de sessão forjada e audit payload malicioso têm negativos públicos.
+4. Provar Supervisor/Admin somente no escopo explicitamente decidido; Approver conserva seu papel sem privilégio geral criado por conveniência.
+5. Projeção limited não expõe payload/campos futuros; full conserva acesso autorizado e proteção do conteúdo. Provar schema com valores-canary e objetos inesperados.
+6. Claims, hash e revisão humana T3 antes de qualquer código/schema; Node22, PG/RLS/E2E e revisão independente no candidato pertinente. Server.ts continua sob PR-L04; não contornar a reserva.
+
+A presença destes critérios não é seu cumprimento. O [aceite original AUTH-01/UP91-018](../../../../03_build/0367_program_backlog_reaudit_2026-09-30.md#up91-018) permanece integral.
+
+## Decisão e próxima ação
+
+Escolher A ou fornecer os insumos de B; revisar a matriz de papéis e os campos propostos, especialmente result/failure/resume. Resposta ausente mantém WHAT_PENDING. Pode-se aceitar só a fonte/matriz e deixar projeções abertas; registrar exatamente o que foi decidido.
+
+Após o WHAT pertinente, preparar SPEC T3 própria com contratos, stores, erros, concorrência, joins e migração; obter revisão humana do seu hash antes de BUILD. Este pacote não declara PRODUCT_DEFINED ou TECHNICALLY_SPECIFIED e não reapresenta os pedidos T3 já pendentes de012/lote7/0170/0174/0175. Sem mudança de produto, dados reais, efeito externo, push ou deploy.

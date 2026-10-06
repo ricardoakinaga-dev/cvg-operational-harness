@@ -1,0 +1,115 @@
+{
+  "proof_id": "I15-SPEC-0162-INDEPENDENT-CRITIQUE",
+  "date": "2026-09-29",
+  "reviewer": {
+    "agent": "Codex",
+    "context": "fresh independent review",
+    "mode": "read-only documentary critique"
+  },
+  "claim": {
+    "id": "SPEC-PR301-WEBHOOK-CLOCK-I15-CRITIQUE-001",
+    "active_verified": true,
+    "coordination_path": "docs/08_runtime/agent_coordination.md",
+    "candidate_sha256_linked": "27d75256040419d8e8cda4145764ce837c447d3d646a07602e8977249507b6f5",
+    "current_response_proof_sha256_linked": "f9874fa3743d6d05b5a4b7243aca02d6238bac5f892b9a5b446a11341c80d4cd"
+  },
+  "scope": {
+    "candidate": "docs/02_spec/0162_webhook_clock_highwater_marker.md",
+    "inputs_read": [
+      "docs/02_spec/0162_webhook_clock_highwater_marker.md",
+      "docs/02_spec/0160_webhook_replay_window_and_processing_fence.md (A.2 excerpt)",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I14-review.md",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I14-proof.json",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I14-response.md",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I14-response-proof.json",
+      "docs/07_agents/AGENTS.md",
+      "docs/99_runtime_state.md",
+      "docs/20_master_execution_log.md",
+      "docs/30_backlog_master.md",
+      "docs/08_runtime/agent_coordination.md"
+    ],
+    "written_paths": [
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I15-review.md",
+      "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I15-proof.json"
+    ]
+  },
+  "input_sha256": {
+    "candidate": "27d75256040419d8e8cda4145764ce837c447d3d646a07602e8977249507b6f5",
+    "I14-review.md": "228bf9cb1e24a2a7978180d2a7ca007a4033c21e93a5ea285e3c9323f07916bc",
+    "I14-proof.json": "e1bbcac7b06bc886e5fa3b3d7f70f0de1cdd9813073ef5451fb2950b2eab5b9a",
+    "I14-response.md": "259cd619ada66b8eda2dad382c841ac3b5b15a1b0f2c83d233b47dfe7644b26a",
+    "I14-response-proof.json": "f9874fa3743d6d05b5a4b7243aca02d6238bac5f892b9a5b446a11341c80d4cd"
+  },
+  "response_proof_update_during_review": {
+    "sha256_before_update": "60179afc21d75b24df460124182de7dfe09c6799ad329c82fdab2d01e88d3474",
+    "sha256_current_verified": "f9874fa3743d6d05b5a4b7243aca02d6238bac5f892b9a5b446a11341c80d4cd",
+    "candidate_and_response_sha256_unchanged": true,
+    "current_proof_claims": {
+      "prettier": "PASS",
+      "git_diff_check": "PASS",
+      "docs_links": "PASS",
+      "evidence_hygiene": "PASS"
+    },
+    "independently_rerun": false
+  },
+  "candidate": {
+    "sha256_before": "27d75256040419d8e8cda4145764ce837c447d3d646a07602e8977249507b6f5",
+    "sha256_after": "27d75256040419d8e8cda4145764ce837c447d3d646a07602e8977249507b6f5",
+    "result": "MATCHED_AND_UNCHANGED"
+  },
+  "review_artifact": {
+    "path": "docs/04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I15-review.md",
+    "sha256": "cc0f28babe9fc0e41adb63f10253384a2c2eff8ca60f796376b63bb9cd57faab"
+  },
+  "review": {
+    "verdict": "REVISE",
+    "counts": {
+      "P0": 0,
+      "P1": 0,
+      "P2": 2,
+      "P3": 1
+    },
+    "findings": [
+      {
+        "id": "P2-01",
+        "severity": "P2",
+        "confidence": "HIGH for the documentary gap; MEDIUM for operational impact",
+        "summary": "The ingress deadline and slot budget use runtime CLOCK_BOOTTIME, witness expiry begins on a separate monotonic clock at request receipt, and the SQL compares a PostgreSQL wall-clock interval with a runtime monotonic budget. No bounded transport mapping or conservative conversion is specified. Timely receipt gating still prevents effects and 2xx after expiry, but deadline rejection and slot expiry by ingress_deadline are not proven."
+      },
+      {
+        "id": "P2-02",
+        "severity": "P2",
+        "confidence": "MEDIUM",
+        "summary": "UNKNOWN_COMMIT readback by operation_id has no specified terminal-negative proof tied to completion of the original PID/txid and the authoritative fenced primary/timeline. A readback that misses an in-flight transaction cannot alone justify SAMPLE_ABORTED. Effects and 2xx remain gated, but SQL and witness state can diverge."
+      },
+      {
+        "id": "P3-01",
+        "severity": "P3",
+        "confidence": "HIGH",
+        "summary": "SPEC 0162 still labels I14_REQUIRED and says I14 critique is pending while the current active coordination claim is I15. This is stale workflow metadata, not a protocol flaw."
+      }
+    ],
+    "I14_P2_disposition": {
+      "remote_apply_while_sql_lock_held": "CLOSED_DOCUMENTARILY: local COMMIT and lock release precede WAL fence/replay/receipt waits.",
+      "witness_slot_expiry_and_SAMPLE_ack_CAS": "CLOSED_DOCUMENTARILY for finite expiry and append/cancel CAS; relation to ingress_deadline remains under I15 P2-01."
+    },
+    "highwater": "The numeric maximum covers the specified witnessed records and is independent of their timestamp arrival order; terminal classification of an uncertain local COMMIT remains underspecified under P2-02.",
+    "performance": "NOT_MEASURED; the 64 req/s and p99 <= 800 ms criteria remain gates."
+  },
+  "not_run": [
+    "software tests",
+    "SQL or migration",
+    "PostgreSQL/database",
+    "runtime",
+    "load measurement",
+    "BUILD",
+    "Prettier, git diff check, docs links or evidence hygiene recheck"
+  ],
+  "authorization": {
+    "human_t3_approval_for_candidate_hash": false,
+    "build_0028_authorized": false,
+    "production": "NO_GO",
+    "next_gate": "Resolve both P2 findings, update and hash the exact candidate, obtain a fresh independent critique, then obtain explicit human T3 approval bound to the accepted hash."
+  },
+  "selfHash": "Omitted to avoid self-reference."
+}

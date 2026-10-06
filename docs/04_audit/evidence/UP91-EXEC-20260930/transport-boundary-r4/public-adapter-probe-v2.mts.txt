@@ -1,0 +1,21 @@
+import {createServer} from 'node:http'
+import {once} from 'node:events'
+import {OpenAICompatibleProvider,type ProviderRequest} from '@cvg/model-gateway'
+import {EvolutionChannelAdapter,CanonicalOutboundMessageSchema} from '@cvg/channel-gateway'
+let status=200;const requests:Array<{method:string|undefined,path:string|undefined,host:string|undefined,bytes:number}>=[];const dnsCalls:string[]=[]
+const server=createServer(async(req,res)=>{const chunks:Buffer[]=[];for await(const c of req)chunks.push(Buffer.from(c));requests.push({method:req.method,path:req.url,host:req.headers.host,bytes:Buffer.concat(chunks).length});res.statusCode=status;res.setHeader('content-type','application/json');if(status===204)res.end();else res.end(JSON.stringify(req.url?.includes('chat/completions')?{choices:[{message:{content:'synthetic-model-ok'},finish_reason:'stop'}],usage:{prompt_tokens:2,completion_tokens:1}}:{synthetic:true}))})
+server.listen(0,'127.0.0.1');await once(server,'listening');const addr=server.address();if(!addr||typeof addr==='string')throw Error('Fixtureaddress absent');const port=addr.port;const results=[]
+const lookup=async(host:string)=>{dnsCalls.push(host);return ['127.0.0.1']}
+const input:ProviderRequest={requestId:'synthetic-request',tenantId:'tenant.synthetic',correlationId:'synthetic-correlation',model:'synthetic-model',input:{messages:[{role:'user',content:'synthetic only'}]},temperature:0,maxTokens:16,promptSha256:'a'.repeat(64),signal:new AbortController().signal,timeoutMs:1000}
+const message=CanonicalOutboundMessageSchema.parse({messageId:'synthetic-message',tenantId:'tenant.synthetic',conversationId:'synthetic-conversation',channel:'whatsapp',recipient:{id:'synthetic-recipient',type:'user'},body:{text:'synthetic only'},correlationId:'synthetic-correlation',idempotencyKey:'synthetic-operation'})
+try {
+ for(const host of ['localhost','127.0.0.1']){
+  status=200;const before=requests.length;const provider=new OpenAICompatibleProvider({id:'synthetic-fixture',baseUrl:`http://${host}:${port}/v1`,model:'synthetic-model',location:'local',allowHttp:true,allowPrivateNetworks:true,dnsLookup:lookup})
+  try{const result=await provider.complete(input);results.push({adapter:'model',host,status:200,outcome:'RESOLVED',text:result.text,requests:requests.length-before})}catch(error){results.push({adapter:'model',host,status:200,outcome:'REJECTED',error:error instanceof Error?error.message:String(error),kind:typeof error==='object'&&error&&'kind' in error?error.kind:undefined,requests:requests.length-before})}
+ }
+ for(const c of [{host:'127.0.0.1',status:200},{host:'127.0.0.1',status:204}]){
+  status=c.status;const before=requests.length;const channel=new EvolutionChannelAdapter({enabled:true,baseUrl:`http://${c.host}:${port}`,apiKey:'synthetic-fixture-not-secret',instance:'synthetic-instance',allowPrivateNetworks:true,dnsLookup:lookup,clock:()=>new Date('2026-09-30T00:00:00Z')})
+  try{const result=await channel.send(message);results.push({adapter:'channel',...c,outcome:'RESOLVED',accepted:result.accepted,requests:requests.length-before})}catch(error){results.push({adapter:'channel',...c,outcome:'REJECTED',error:error instanceof Error?error.message:String(error),code:typeof error==='object'&&error&&'code' in error?error.code:undefined,effectUnknown:typeof error==='object'&&error&&'effectUnknown' in error?error.effectUnknown:undefined,requests:requests.length-before})}
+ }
+}finally{server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()))}
+console.log(JSON.stringify({results,requests,dnsCalls,fixtureClosed:!server.listening,scope:'Publicexportedadapters+realguard+defaultNode transport; explicitlocalhomologation options and syntheticloopback responder only. No realprovider/channel/recipient; no injectedfetch.'},null,2))

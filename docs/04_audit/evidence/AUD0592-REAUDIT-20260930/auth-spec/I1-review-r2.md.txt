@@ -1,0 +1,45 @@
+**REVISE** — dois findings materiais P2 precisam de correção antes do handoff para revisão T3 humana. Não identifiquei P0/P1 no recorte estático inspecionado. Este parecer não aprova gate CVG, BUILD, implementação ou produção.
+
+1. **I1-F01 · P2 — A classificação fechada omite códigos produzidos atualmente.**  
+   [SPEC0176:113](</home/ricardo/Área de trabalho/cvg-operational-harness/docs/02_spec/0176_case_assignment_read_authorization.md:113>), linhas 113–120: reconhece `CANCELLED/cancelled` e `POLICY_DENIED/policy_denied`, mas o cancelamento pelo operador persiste `CANCELLED/cancelled_by_operator` e a rejeição de approval persiste `POLICY_DENIED/approval_rejected`. Isso ocorre tanto em [memória:919](</home/ricardo/Área de trabalho/cvg-operational-harness/packages/harness/src/execution-spine.ts:919>), linha 999, quanto em [PostgreSQL:817](</home/ricardo/Área de trabalho/cvg-operational-harness/packages/persistence/src/operational-execution-postgres.ts:817>), linha 925. Aplicando literalmente a tabela, ambos caem em `execution_failed`, apresentando cancelamento ou recusa como falha genérica.  
+   **Correção:** incluir os dois pares explicitamente na allowlist, respectivamente como `execution_cancelled` e `execution_denied`, com `response=null` e mensagens estáticas. Definir que o resultado anterior retido após essas mutações não invalida essa classificação. Acrescentar esses casos ao oracle AUTH08/AUTH09.
+
+2. **I1-F02 · P2 — Elegibilidade para conceder e revogar atribuição está ambígua.**  
+   [SPEC0176:44](</home/ricardo/Área de trabalho/cvg-operational-harness/docs/02_spec/0176_case_assignment_read_authorization.md:44>), linhas 44, 54 e 80–84: o modelo exige “alvo ativo Operator/Approver”; o PUT aceita ACTIVE e REVOKED, valida principal e não distingue essas pré-condições. Já a linha 54 restringe expressamente o **grant**. Uma implementação que aplique a restrição do modelo a todo PUT impedirá o gerente de revogar atribuições existentes depois da desativação ou mudança de role do alvo. A atribuição ACTIVE poderá voltar a conceder leitura quando o principal recuperar elegibilidade.  
+   **Correção:** separar os contratos: concessão exige alvo ativo Operator/Approver; revogação de atribuição existente exige autoridade do gerente, tenant/root/principal persistidos e CAS, independentemente da elegibilidade atual do alvo para receber grant. Definir o comportamento para REVOKED sem atribuição existente. Acrescentar desativação/mudança de role → revoke → reativação ao aceite independente.
+
+Nos demais eixos, o contrato proposto é suficientemente explícito para avaliação humana: autoridade de principal separada da sessão e do cadastro; tenant-wide limitado a Supervisor/Admin; descoberta de roots sem atribuições; namespaces core/harness fixos; execução independente sem autoatribuição; lineage persistido sem autoridade do payload; projeções fechadas e precedência de UNKNOWN_EFFECT; snapshot única para principal/grant/dados; atomicidade e rollout com bloqueio dos readers antigos. A decisão humana fornecida define negócio e declara expressamente ausência de autorização BUILD/T3.
+
+Limitações: revisão estática dos inputs permitidos, com inspeção focada nos contratos e trechos pertinentes. Não executei testes, SQL, instalações, rede ou subagentes; não escrevi arquivos nem abri imports ou referências externas à allowlist. Não validei runtime, catálogo PostgreSQL, consumidores fora do pacote, produtores de resposta nem o contrato de sessão delegado a fontes não permitidas. Hashes iguais nas duas medições não detectam eventual alteração transitória entre elas.
+
+**Registro de leitura e integridade.** Root: `/home/ricardo/Área de trabalho/cvg-operational-harness`. Foram lidos exatamente os **22 caminhos** abaixo: estes três caminhos e os 19 da tabela.
+
+```text
+AGENTS.md
+docs/07_agents/AGENTS.md
+docs/04_audit/evidence/AUD0592-REAUDIT-20260930/auth-spec/review-packet-r2.json
+```
+
+Para cada linha, o hash registrado vale **tanto para PRE quanto para POST**; ambos coincidem com o manifesto. POST em `2026-09-30T16:44:45.605830+00:00`.
+
+| Input — caminho relativo exato | SHA256 PRE = POST |
+|---|---|
+| `packages/shared/src/auth.ts` | `6dec8799b7e82f181697a9b27ba09a6d62c77fe012548d4b99bef0fc1d945123` |
+| `apps/api/src/server.ts` | `76a588fbc40640638ede9a6c0f79b0926b7750557a06e9f36659150482fc38fa` |
+| `packages/persistence/src/schema.ts` | `642f684064451219b6b39d9c8bab5ffa48813f433af0ccf76de84a86d90b5461` |
+| `packages/persistence/src/repositories/conversation-repository.ts` | `b9fe48fdbac443bada5c68132192633b5fa10ccec6ef92a8bdefcafc6d23da53` |
+| `packages/persistence/src/repositories/audit-repository.ts` | `cdf6e7c77789b16c77046e41b4a7353479d5ebebe1d4728ab6ff97d5426c6a36` |
+| `packages/persistence/src/postgres-audit.ts` | `36361beecf45a2d4da8282b860d9fd60a51734876d3cf9e0240d3cd55bd5fa2b` |
+| `packages/agent-core/src/queries/get-conversation-timeline.ts` | `b634d2f61d894b0e8aad47f91d881a80b7cd55f311734047a59e97f573d90bde` |
+| `packages/harness/src/execution-spine.ts` | `4a63f55799d1549c79ddcaa50810c29d8e53963fa884737660f562d5c4b6a5dd` |
+| `packages/harness/src/trajectory.ts` | `c5ea6efc45814a033b806d28481d406261db783a6ebe2c7995739617d66f33f0` |
+| `docs/02_spec/0152_corporate_oidc_authority_contract.md` | `3dc167f24aeb9b8fab73ab5dae3313956c02e222636adb527d117501ba1055e6` |
+| `packages/contracts/src/contracts.ts` | `1191185725992dd349a0d19791666516dccd5633390aa26c11833b5bb31c589a` |
+| `packages/persistence/src/tenant-schema.ts` | `63b9b12b866d0148ba868b35bfa61b21e109a493b75be82e6b04794fcfd8a17d` |
+| `packages/persistence/src/operational-execution-postgres.ts` | `03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac` |
+| `packages/persistence/migrations/0000_initial.sql` | `0723d589cf121c75fcd587036c09423b9e3b49bf6f9a7c0b4d9b5b40131212b9` |
+| `packages/persistence/migrations/0001_tenant_isolation.sql` | `c418e96bec995414d8395fee5b4ff95e0f7197bec0b3801ae8795e7de1ff34af` |
+| `packages/persistence/migrations/0016_operational_execution_spine.sql` | `b36d08ae7a19dc324bb08cc382afaddf26107e857a11e739e7fa136acfbdfb86` |
+| `packages/persistence/migrations/0020_conversation_intelligence.sql` | `7b1fc15ef0cc9239d0ca45db7b0e1cf3e36d351c8f1f2ddcd407a699e6d5e907` |
+| `docs/04_audit/evidence/AUD0592-REAUDIT-20260930/auth-decision/decision-state.json` | `a399e6a980f3f078e0354ded62144402919335320c12cdd9c9a3ada9cb895503` |
+| `docs/02_spec/0176_case_assignment_read_authorization.md` | `d4915775195d16700b8cea7034cc70194e694c41da364dbaa62a050b4ca52e3e` |

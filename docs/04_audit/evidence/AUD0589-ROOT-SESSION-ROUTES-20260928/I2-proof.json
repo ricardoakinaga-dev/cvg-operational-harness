@@ -1,0 +1,274 @@
+{
+  "audit": "AUD-0589",
+  "review": "I2",
+  "date": "2026-09-29",
+  "verdict": "REVISE",
+  "severity": "P2",
+  "scope": "Independent read-only critique of the AUD-0589 report, R1-R8 evidence, exact hook/test hashes, and server composition limits.",
+  "claim": {
+    "id": "AUD-0589-I2-CRITIQUE-001",
+    "activeAtStart": true,
+    "activeAtFinalCheck": true,
+    "confirmedBeforeWriting": true,
+    "finalCoordinationFileSha256": "fd023d2b72db3604d8f1f6cf947c7384e189defa1f9f4870caebe3088fd4300f",
+    "authorizedOutputs": [
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/I2-review.md",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/I2-proof.json"
+    ],
+    "coordinationEdited": false
+  },
+  "independence": {
+    "initialAnalysisFormedBeforeAnyI1ReviewContents": true,
+    "I1ReviewContentsRead": false
+  },
+  "assessment": {
+    "R1": {
+      "status": "PASS",
+      "evidence": [
+        "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe.mts",
+        "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe-results.json#/routeRegistryChecked",
+        "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/route-tree.txt"
+      ],
+      "observed": "61 route templates, 108 method/path pairs, every parsed pair checked with app.hasRoute."
+    },
+    "R2": {
+      "status": "PASS",
+      "evidence": "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe-results.json#/protectedPairExpectedUnauthorizedCounts",
+      "observed": "98/98 protected pairs return 401 in each of no-cookie, forged/invalid-token, and unknown-cookie scenarios; this is not business authorization coverage."
+    },
+    "R3": {
+      "status": "PASS",
+      "evidence": "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe-results.json#/routeAudit/validCookieControls",
+      "observed": "Three valid-cookie GET controls return 200."
+    },
+    "R4": {
+      "status": "OBSERVED_CONTRACT_OPEN",
+      "evidence": [
+        "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe-results.json#/routeAudit/bootstrapToken",
+        "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe-results.json#/routeAudit/bootstrapReplay",
+        "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe-results.json#/routeAudit/validSignedTokenWithoutCookie",
+        "apps/api/src/operator-identity.ts"
+      ],
+      "observed": "Bootstrap is 200, replay is 401, and a valid signed token without a cookie authenticates two selected protected GETs. This is an alternate credential path outside session-store lookup; SPEC 0144 and current tests do not explicitly prohibit compatibility. Resolver defaults include a 300-second token lifetime and jti replay protection; production replay-store composition is not established by this probe."
+    },
+    "R5": {
+      "status": "PASS",
+      "evidence": "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe-results.json#/routeAudit/logoutWithoutCookie",
+      "observed": "Logout without cookie returns 200; revoke count is zero."
+    },
+    "R6": {
+      "status": "PASS_AT_EXECUTION_WITH_CURRENT_SEAL_DRIFT",
+      "evidence": [
+        "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe-results.json#/sourceStableDuringProbe",
+        "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/SHA256SUMS.txt",
+        "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/pg-20260928/SHA256SUMS.txt"
+      ],
+      "observed": "Probe recorded stable HEAD/source manifest during execution. At review time four entries of its 181-file source manifest have drifted; the main evidence manifest has six mismatches. The separate PostgreSQL supplement manifest verifies, includes the current report digest, and binds the requested hook/test hashes."
+    },
+    "R7": {
+      "status": "PASS",
+      "evidence": "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe-results.json#/profile",
+      "observed": "Synthetic identity, in-memory session store, Fastify.inject; no DB or external service in the route probe."
+    },
+    "R8": {
+      "status": "PASS_NARROW_STATUS_AND_LOOKUP_CRITERION",
+      "evidence": [
+        "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/quality-bar-addendum-v1.1.json#/criterion",
+        "apps/api/src/__tests__/operator-session-public-routes.test.ts",
+        "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe-results.json#/routeAudit/postFix"
+      ],
+      "observed": "Eight GET/HEAD cases assert the no-cookie status is preserved and zero session-store lookups. Response body/header equality is not asserted."
+    }
+  },
+  "findings": [
+    {
+      "id": "I2-F01",
+      "severity": "P2",
+      "category": "evidence-hash-integrity",
+      "status": "REVISE",
+      "evidence": {
+        "mainProofExpectedReportSha256": "94afe8d4fc99d59269eb996f369e7fbfb2e45662ba337a1b6ead86a9a09706e3",
+        "reviewedReportSha256": "a73b5a2accad177bb911dc434cebd01dc2b11c8bb4509c4f5884d523cb78b232",
+        "mainManifestCheck": "FAIL: six non-I1 manifest entries do not match current files",
+        "supplementProofReportSha256": "a73b5a2accad177bb911dc434cebd01dc2b11c8bb4509c4f5884d523cb78b232",
+        "supplementManifestCheck": "PASS"
+      },
+      "impact": "The primary AUD0589 proof/SHA256SUMS pair is not a coherent seal for the report now present. The PostgreSQL supplement mitigates this and binds the current report and exact code/test inputs, but the primary bundle remains ambiguous without versioning or resealing."
+    },
+    {
+      "id": "I2-F02",
+      "severity": "P2",
+      "category": "coverage-description",
+      "status": "REVISE",
+      "evidence": {
+        "reportLine": 9,
+        "testAssertions": [49, 50, 51],
+        "criterion": "R8 requires status equality and zero session-store lookups."
+      },
+      "impact": "The phrase 'same public response' can imply response body/header equality, which is not measured. R8 itself and the table at report line 24 state the narrower status-only claim accurately."
+    }
+  ],
+  "residualRisks": [
+    {
+      "id": "I2-R4-TOKEN-COMPATIBILITY",
+      "severity": "P2_POLICY_DECISION",
+      "status": "OBSERVED_NOT_CLASSIFIED_AS_UNAUTHORIZED_BYPASS",
+      "detail": "A valid signed token is accepted on protected reads without a session cookie. It is not forged authentication, but it does not use session-store revocation. Define whether trusted API clients may use this path before claiming cookie-only authority."
+    }
+  ],
+  "pendingExecutionBlockers": [
+    {
+      "id": "I2-PENDING-ROOT-PG-COMPOSITION",
+      "severity": "P1_FOR_RELEASE",
+      "status": "PENDING_NOT_EXECUTED",
+      "requiredEvidence": "After PR-L04 releases server.ts, exercise buildServerFromEnv with the durable PostgreSQL session store and rerun the route/session matrix on the same integrated Node 22 candidate.",
+      "reasonNotRun": "The user prohibited tests/SQL/BUILD in this review; production composition is outside the local synthetic audit scope."
+    }
+  ],
+  "environment": {
+    "primaryRouteProbe": {
+      "head": "eff8e0d8974f2c3222eb4602e4a37ff73c708245",
+      "node": "v24.20.0",
+      "profile": "NODE_ENV=development; trusted synthetic resolver; in-memory session store; Fastify.inject; no PostgreSQL or external provider"
+    },
+    "postgresSupplement": {
+      "baseHead": "eff8e0d8974f2c3222eb4602e4a37ff73c708245",
+      "node": "v22.23.2",
+      "postgres": "16-alpine, disposable, loopback 127.0.0.1:55511",
+      "resultsFromRecordedLogs": {
+        "focused": "27/27",
+        "testPostgres": "35 files / 258 tests, zero skips",
+        "operatorSessionPostgres": "18/18",
+        "phase4a": "1/1",
+        "fullSuite": "326 files / 2401 tests, zero skips"
+      },
+      "compositionLimit": "The final buildServerFromEnv + PostgreSQL session-store root was not exercised."
+    },
+    "primaryNode24Suite": {
+      "recordedSummary": "2241 passed, 162 skipped across 307 passed and 20 skipped files",
+      "fullStdoutArchived": false,
+      "note": "The summary is transcribed in verification.md; the count differs by two from the separate Node 22 full-suite profile and cannot be reconciled from retained Node 24 stdout."
+    }
+  },
+  "manifestComparison": {
+    "recordedSourceManifestSha256": "8172c077e97923e37d711270426fd5d5ed28e99fa845b130ebebae1bf4cbc70b",
+    "recordedSourceManifestEntries": 181,
+    "changedSinceProbeAtReview": [
+      {
+        "path": "apps/api/src/__tests__/postgres-persistence-mode.test.ts",
+        "sha256AtProbe": "e7afff21793a36053efbbfe7bdb6c13ebbe5d03ef47fe85445d02438c455b8a0",
+        "sha256AtReview": "144f7cd74870c1e964e63fd2d9f2bf63d49fce442992802fbd0ca57904c8fa55"
+      },
+      {
+        "path": "apps/api/src/__tests__/webhook-security.test.ts",
+        "sha256AtProbe": "4627fc5620b96eb86be7fc4c817209f0b9de5961a58862e494a4499b9967da0e",
+        "sha256AtReview": "ec7c256686520334ebed35cf9807fc4b26daa7f0c60ab97aeac5640646d106ce"
+      },
+      {
+        "path": "apps/api/src/tenant-preflight.ts",
+        "sha256AtProbe": "5b212afac027408bce01b86773045bbef106d9796c24fbc498e00c02441bda94",
+        "sha256AtReview": "45ca0e1f323b07f2e7a2c0f3cb9f82c4c895a0ad3b4b4cf1608f889ee7cbc260"
+      },
+      {
+        "path": "apps/api/src/webhook-security.ts",
+        "sha256AtProbe": "dd76b0107ab392fc77d754e7a41aefe51b998c2efe2488bf71a79975fe42db77",
+        "sha256AtReview": "682fd2e656e8b6048dfbcbec3c3dcb2a7372c600b5469ee24ec0cf4e5c65bc3b"
+      }
+    ],
+    "mainManifestMismatches": [
+      {
+        "path": "docs/03_build/0356_production_backlog_2026-09-26.md",
+        "sha256InManifest": "1107b1935c89024577f9afcedb8d35939f9fd677b78240c2dd23f1f54b045ad1",
+        "sha256AtReview": "4e577f5998d30d1c3851e7510f08d9f6977c9b0237999f0128b55d28c827fe12"
+      },
+      {
+        "path": "docs/04_audit/0589_root_session_route_boundary_2026-09-28.md",
+        "sha256InManifest": "94afe8d4fc99d59269eb996f369e7fbfb2e45662ba337a1b6ead86a9a09706e3",
+        "sha256AtReview": "a73b5a2accad177bb911dc434cebd01dc2b11c8bb4509c4f5884d523cb78b232"
+      },
+      {
+        "path": "docs/08_runtime/agent_coordination.md",
+        "sha256InManifest": "0265989067ae94c8e08f07260cd35354ff69a05e19a84c779fa43d326facfb7e",
+        "sha256AtReview": "fd023d2b72db3604d8f1f6cf947c7384e189defa1f9f4870caebe3088fd4300f"
+      },
+      {
+        "path": "docs/20_master_execution_log.md",
+        "sha256InManifest": "d47d0861c35d151e3718b6a62b83d63b86b7c8bc6e1cc2352171bff0ae577c87",
+        "sha256AtReview": "cf7349a3a4dfe6754fc135a03ceea0a2af6ba06900171e6998d58d15f29d2cf6"
+      },
+      {
+        "path": "docs/30_backlog_master.md",
+        "sha256InManifest": "0c45d2e32f7811b7079ee031e2ed5643937318e27d26ce67bc23e162de4d77b4",
+        "sha256AtReview": "4f8bc8edba1b89cb07effb1117b1d256e2f1a53801a4b8b024115c497277cd8e"
+      },
+      {
+        "path": "docs/99_runtime_state.md",
+        "sha256InManifest": "cd7102329a3edb7f20df8f9e1e372483d482ec44e3eb4b11d09a0dfa8f794161",
+        "sha256AtReview": "ddf1ef192936baca633f76ff4861b01d31edc1b2478aa9a4de0e277d287223f6"
+      }
+    ],
+    "mainManifestCheck": "FAIL on six non-I1 entries; I1 checksum lines were excluded so their contents were not opened or hashed.",
+    "postgresSupplementManifestCheck": "PASS on all listed entries; supplement proof includes the reviewed report, hook, test, and server hashes."
+  },
+  "hashes": {
+    "before": {
+      "docs/04_audit/0589_root_session_route_boundary_2026-09-28.md": "a73b5a2accad177bb911dc434cebd01dc2b11c8bb4509c4f5884d523cb78b232",
+      "apps/api/src/operator-session-hook.ts": "6702e8b659ffafbb9e3aa2fc7b554a4a67efa04286f839a896541786aa064706",
+      "apps/api/src/__tests__/operator-session-public-routes.test.ts": "a0943654c4419366735803188d0f8d129c1e48e40e5f47fee586b2100e1b157a",
+      "apps/api/src/server.ts": "76a588fbc40640638ede9a6c0f79b0926b7750557a06e9f36659150482fc38fa",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/proof.json": "0cb2a498b92b3d3bcfb3068104bac27cb2686abd2c401cd639c373ed17d7e53c",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/SHA256SUMS.txt": "4d0399889136a8d311e9104a9586f3ef861ce6a243b454581eb2ee92b47638a4",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/quality-bar-v1.json": "14961f91b7a0f262ffbba8d30fe2408506e39eb1e1a609dfa57e15d3b71bb8bd",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/quality-bar-addendum-v1.1.json": "97cab1bdb59159b20fe76bc18c54bb35c92cb2c299a7f5713b2a7cef01de532f",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe.mts": "230129b5a8b45e0965f2603aa500cd02aeba2d365f65a44aca81c245d319e69d",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe-results.json": "721c3ea57af83b36a3c4c89157f81e5de3adfe506b8f235699946502b0c260d8",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/exploratory-results.json": "10418fdc5690ae4b0dd90a32c167cf9cb5c23d3b1de76013ac2d941314764ab8",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/route-tree.txt": "6425acf9a83df499aa668bc16a6cf2923f08e06edcae389526b99ad8d227fd09",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/verification.md": "ad06182bbb8a6f962b48345c8e63afc85b0d16b52c2fb2620b8c3514cb5b411a",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/focused-tests.log": "dcbdffe9fec2428e2177c2d96612a425c3939effa7ee33d075aec42346cde083",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/pg-20260928/proof.json": "fbc4641365b90d5004f316877dfb5d0df6d2e5fa728bf46f926f236ed69b4201",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/pg-20260928/SHA256SUMS.txt": "f93ad97050ea9c690ca80340dda106d2c234421089d0abc4c06d4413603e961e",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/pg-20260928/verification.md": "3777472ee3c22b5c45191da907b6f5adbde9a06b30f1dfeb0e76443083a66bdc",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/pg-20260928/full-suite-patched-postgres.log": "74b896c4c6af6950cb21a67705be81857862727c8d14bcc88e3b0e226fba5ab2",
+      "apps/api/src/operator-identity.ts": "dc66e441757b83871be6b09e329fa3053c1fc4c249b9b1484d512782fceb46c4",
+      "docs/02_spec/0144_trusted_operator_session_production.md": "ed06b5f9f34ee08fa0a85653f321c186e2341ad328b5f3e6e210b1a462e84c82"
+    },
+    "after": {
+      "docs/04_audit/0589_root_session_route_boundary_2026-09-28.md": "a73b5a2accad177bb911dc434cebd01dc2b11c8bb4509c4f5884d523cb78b232",
+      "apps/api/src/operator-session-hook.ts": "6702e8b659ffafbb9e3aa2fc7b554a4a67efa04286f839a896541786aa064706",
+      "apps/api/src/__tests__/operator-session-public-routes.test.ts": "a0943654c4419366735803188d0f8d129c1e48e40e5f47fee586b2100e1b157a",
+      "apps/api/src/server.ts": "76a588fbc40640638ede9a6c0f79b0926b7750557a06e9f36659150482fc38fa",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/proof.json": "0cb2a498b92b3d3bcfb3068104bac27cb2686abd2c401cd639c373ed17d7e53c",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/SHA256SUMS.txt": "4d0399889136a8d311e9104a9586f3ef861ce6a243b454581eb2ee92b47638a4",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/quality-bar-v1.json": "14961f91b7a0f262ffbba8d30fe2408506e39eb1e1a609dfa57e15d3b71bb8bd",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/quality-bar-addendum-v1.1.json": "97cab1bdb59159b20fe76bc18c54bb35c92cb2c299a7f5713b2a7cef01de532f",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe.mts": "230129b5a8b45e0965f2603aa500cd02aeba2d365f65a44aca81c245d319e69d",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/probe-results.json": "721c3ea57af83b36a3c4c89157f81e5de3adfe506b8f235699946502b0c260d8",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/exploratory-results.json": "10418fdc5690ae4b0dd90a32c167cf9cb5c23d3b1de76013ac2d941314764ab8",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/route-tree.txt": "6425acf9a83df499aa668bc16a6cf2923f08e06edcae389526b99ad8d227fd09",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/verification.md": "ad06182bbb8a6f962b48345c8e63afc85b0d16b52c2fb2620b8c3514cb5b411a",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/focused-tests.log": "dcbdffe9fec2428e2177c2d96612a425c3939effa7ee33d075aec42346cde083",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/pg-20260928/proof.json": "fbc4641365b90d5004f316877dfb5d0df6d2e5fa728bf46f926f236ed69b4201",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/pg-20260928/SHA256SUMS.txt": "f93ad97050ea9c690ca80340dda106d2c234421089d0abc4c06d4413603e961e",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/pg-20260928/verification.md": "3777472ee3c22b5c45191da907b6f5adbde9a06b30f1dfeb0e76443083a66bdc",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/pg-20260928/full-suite-patched-postgres.log": "74b896c4c6af6950cb21a67705be81857862727c8d14bcc88e3b0e226fba5ab2",
+      "apps/api/src/operator-identity.ts": "dc66e441757b83871be6b09e329fa3053c1fc4c249b9b1484d512782fceb46c4",
+      "docs/02_spec/0144_trusted_operator_session_production.md": "ed06b5f9f34ee08fa0a85653f321c186e2341ad328b5f3e6e210b1a462e84c82"
+    },
+    "newReviewMarkdownSha256": "18a1515eda7bf75968f8a99029b4ed1d01a608366fdbe134b496a2efffae49a1",
+    "selfHash": "Omitted from this JSON to avoid self-reference; report the final file SHA externally."
+  },
+  "execution": {
+    "testsRun": false,
+    "sqlRun": false,
+    "migrationRun": false,
+    "buildRun": false,
+    "pushRun": false,
+    "deployRun": false,
+    "realDataUsed": false,
+    "writesPerformed": [
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/I2-review.md",
+      "docs/04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/I2-proof.json"
+    ]
+  }
+}

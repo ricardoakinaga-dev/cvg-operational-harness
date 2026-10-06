@@ -1,0 +1,278 @@
+--- 3859032a5b4ca45e5e45689bffda290997ba6176^:apps/api/src/__tests__/webhook-security.test.ts
++++ root:apps/api/src/__tests__/webhook-security.test.ts
+@@ -94,6 +94,86 @@
+ 
+     await expect(verifier.verify(request)).resolves.toBe(true)
+     await expect(verifier.verify(request)).resolves.toBe(false)
++  })
++
++  it('retains future-dated replays through the complete signature window', async () => {
++    let now = Math.floor(Date.now() / 1000) * 1000
++    const timestampSeconds = now / 1000 + 299
++    const replayStore = new InMemoryWebhookReplayStore(() => now)
++    const verifier = new HmacWebhookVerifier({
++      secret,
++      replayStore,
++      now: () => now,
++      toleranceSeconds: 300
++    })
++    const input = signingInput({ timestampSeconds })
++    const request = {
++      headers: signedHeaders(input),
++      body: input.body,
++      channel: input.channel
++    }
++
++    await expect(verifier.verify(request)).resolves.toBe(true)
++    await expect(verifier.verify(request)).resolves.toBe(false)
++
++    now += 301_000
++    await expect(verifier.verify(request)).resolves.toBe(false)
++
++    now = (timestampSeconds + 300) * 1000
++    await expect(verifier.verify(request)).resolves.toBe(false)
++
++    now += 1_000
++    await expect(verifier.verify(request)).resolves.toBe(false)
++  })
++
++  it('accepts a first delivery in the last valid millisecond and rejects the next millisecond', async () => {
++    const timestampSeconds = Math.floor(Date.now() / 1000)
++    const toleranceSeconds = 300
++    const exclusiveExpiryMs = (timestampSeconds + toleranceSeconds + 1) * 1000
++    let now = exclusiveExpiryMs - 1
++    const verifier = new HmacWebhookVerifier({
++      secret,
++      replayStore: new InMemoryWebhookReplayStore(() => now),
++      now: () => now,
++      toleranceSeconds
++    })
++    const input = signingInput({ timestampSeconds })
++    const request = {
++      headers: signedHeaders(input),
++      body: input.body,
++      channel: input.channel
++    }
++
++    await expect(verifier.verify(request)).resolves.toBe(true)
++    await expect(verifier.verify(request)).resolves.toBe(false)
++    now = exclusiveExpiryMs
++    await expect(verifier.verify(request)).resolves.toBe(false)
++  })
++
++  it('closes the in-memory ingress when its decision clock regresses', async () => {
++    const timestampSeconds = Math.floor(Date.now() / 1000)
++    let now = timestampSeconds * 1000
++    const verifier = new HmacWebhookVerifier({
++      secret,
++      now: () => now,
++      toleranceSeconds: 300
++    })
++    const verifyEvent = (eventId: string) => {
++      const input = signingInput({ eventId, timestampSeconds })
++      return verifier.verify({
++        headers: signedHeaders(input),
++        body: input.body,
++        channel: input.channel
++      })
++    }
++
++    await expect(verifyEvent('clock-1')).resolves.toBe(true)
++    now += 1_000
++    await expect(verifyEvent('clock-2')).resolves.toBe(true)
++    now -= 500
++    await expect(verifyEvent('clock-3')).resolves.toBe(false)
++    now += 1_500
++    await expect(verifyEvent('clock-4')).resolves.toBe(false)
+   })
+ 
+   it('rejects tampering, channel substitution, missing headers and stale timestamps', async () => {
+@@ -265,6 +345,188 @@
+       'DELETE FROM webhook_replay_events'
+     )
+   })
++
++  itWithPostgres(
++    'persists future-dated replay protection through the signature window',
++    async () => {
++      const client = new Client({ connectionString: testDatabaseUrl })
++      const schemaName = `cvg_webhook_future_replay_${Date.now()}`
++      const pool = new Pool({
++        connectionString: testDatabaseUrl,
++        options: `-c search_path=${schemaName}`
++      })
++      await client.connect()
++
++      try {
++        await client.query(`
++          CREATE SCHEMA ${schemaName};
++          SET search_path TO ${schemaName};
++          CREATE TABLE webhook_replay_events (
++            event_key text PRIMARY KEY CHECK (btrim(event_key) <> ''),
++            status text NOT NULL CHECK (status IN ('reserved', 'committed')),
++            expires_at timestamptz NOT NULL,
++            created_at timestamptz NOT NULL DEFAULT now(),
++            lease_generation bigint NOT NULL DEFAULT 0,
++            lease_token text,
++            CONSTRAINT webhook_replay_events_lease_generation_check
++              CHECK (lease_generation >= 0),
++            CONSTRAINT webhook_replay_events_fencing_check
++              CHECK (
++                (status = 'reserved' AND lease_generation > 0 AND lease_token IS NOT NULL AND btrim(lease_token) <> '')
++                OR (status = 'committed' AND lease_token IS NULL)
++              )
++          );
++        `)
++
++        let now = Math.floor(Date.now() / 1000) * 1000
++        const timestampSeconds = now / 1000 + 299
++        const input = signingInput({ timestampSeconds })
++        const request = {
++          headers: signedHeaders(input),
++          body: input.body,
++          channel: input.channel
++        }
++        const verifier = new HmacWebhookVerifier({
++          secret,
++          replayStore: new PostgresWebhookReplayStore(pool),
++          now: () => now,
++          toleranceSeconds: 300
++        })
++
++        await expect(verifier.verify(request)).resolves.toBe(true)
++        const stored = await client.query<{ expires_at: Date | string }>(
++          `SELECT expires_at
++           FROM ${schemaName}.webhook_replay_events
++           WHERE event_key = $1`,
++          [`webhook:${channel}:${input.eventId}`]
++        )
++        const exclusiveExpiryMs = (timestampSeconds + 300 + 1) * 1000
++        expect(new Date(stored.rows[0]!.expires_at).getTime()).toBe(
++          exclusiveExpiryMs
++        )
++        const boundary = await client.query<{
++          covers_last_valid: boolean
++          expires_at_first_invalid: boolean
++        }>(
++          `SELECT expires_at > $2::timestamptz AS covers_last_valid,
++                  expires_at <= $3::timestamptz AS expires_at_first_invalid
++             FROM ${schemaName}.webhook_replay_events
++            WHERE event_key = $1`,
++          [
++            `webhook:${channel}:${input.eventId}`,
++            new Date(exclusiveExpiryMs - 1),
++            new Date(exclusiveExpiryMs)
++          ]
++        )
++        expect(boundary.rows[0]).toEqual({
++          covers_last_valid: true,
++          expires_at_first_invalid: true
++        })
++
++        // The verifier's injected clock can still consider a signature valid
++        // while PostgreSQL's decision clock already considers it too early.
++        const farFutureTimestamp = Math.floor(Date.now() / 1000) + 10_000
++        const futureInput = signingInput({
++          eventId: 'event-db-clock-authority',
++          timestampSeconds: farFutureTimestamp
++        })
++        const futureVerifier = new HmacWebhookVerifier({
++          secret,
++          replayStore: new PostgresWebhookReplayStore(pool),
++          now: () => farFutureTimestamp * 1000,
++          toleranceSeconds: 300
++        })
++        await expect(
++          futureVerifier.verify({
++            headers: signedHeaders(futureInput),
++            body: futureInput.body,
++            channel: futureInput.channel
++          })
++        ).resolves.toBe(false)
++        const refused = await client.query<{ count: string }>(
++          `SELECT count(*)::text AS count
++           FROM ${schemaName}.webhook_replay_events
++           WHERE event_key = $1`,
++          [`webhook:${channel}:${futureInput.eventId}`]
++        )
++        expect(refused.rows[0]?.count).toBe('0')
++
++        now += 301_000
++        await expect(verifier.verify(request)).resolves.toBe(false)
++        now = (timestampSeconds + 300) * 1000
++        await expect(verifier.verify(request)).resolves.toBe(false)
++        now += 1_000
++        await expect(verifier.verify(request)).resolves.toBe(false)
++
++        // Shadow the unqualified clock_timestamp() only in this disposable
++        // schema, so the production INSERT predicate runs at exact millisecond
++        // boundaries. The real-clock assertions above remain a separate smoke.
++        const boundaryTimestamp = Math.floor(Date.now() / 1000) + 1_000
++        const lastValidMs = (boundaryTimestamp + 301) * 1000 - 1
++        await client.query(`
++          CREATE TABLE ${schemaName}.synthetic_clock (
++            clock_value timestamptz NOT NULL
++          );
++          INSERT INTO ${schemaName}.synthetic_clock (clock_value)
++          VALUES ('${new Date(lastValidMs).toISOString()}');
++          CREATE FUNCTION ${schemaName}.clock_timestamp()
++          RETURNS timestamptz LANGUAGE sql VOLATILE AS $$
++            SELECT clock_value FROM ${schemaName}.synthetic_clock LIMIT 1
++          $$;
++        `)
++        const boundaryPool = new Pool({
++          connectionString: testDatabaseUrl,
++          options: `-c search_path=${schemaName},pg_catalog`
++        })
++        try {
++          const boundaryVerifier = new HmacWebhookVerifier({
++            secret,
++            replayStore: new PostgresWebhookReplayStore(boundaryPool),
++            now: () => lastValidMs,
++            toleranceSeconds: 300
++          })
++          const boundaryRequest = (eventId: string) => {
++            const signed = signingInput({
++              eventId,
++              timestampSeconds: boundaryTimestamp
++            })
++            return {
++              headers: signedHeaders(signed),
++              body: signed.body,
++              channel: signed.channel
++            }
++          }
++          const sampled = await boundaryPool.query<{ sampled_at: Date }>(
++            'SELECT clock_timestamp() AS sampled_at'
++          )
++          expect(sampled.rows[0]?.sampled_at.getTime()).toBe(lastValidMs)
++          await expect(
++            boundaryVerifier.verify(boundaryRequest('sql-last-valid-ms'))
++          ).resolves.toBe(true)
++          await client.query(
++            `UPDATE ${schemaName}.synthetic_clock SET clock_value = $1`,
++            [new Date(lastValidMs + 1)]
++          )
++          await expect(
++            boundaryVerifier.verify(boundaryRequest('sql-first-invalid-ms'))
++          ).resolves.toBe(false)
++          const refusedAtBoundary = await client.query<{ count: string }>(
++            `SELECT count(*)::text AS count
++             FROM ${schemaName}.webhook_replay_events
++             WHERE event_key = $1`,
++            [`webhook:${channel}:sql-first-invalid-ms`]
++          )
++          expect(refusedAtBoundary.rows[0]?.count).toBe('0')
++        } finally {
++          await boundaryPool.end()
++        }
++      } finally {
++        await pool.end()
++        await client.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`)
++        await client.end()
++      }
++    }
++  )
+ 
+   itWithPostgres(
+     'recovers stale PostgreSQL replay leases and preserves committed replay retention',
