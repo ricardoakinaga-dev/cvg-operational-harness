@@ -1,3 +1,9 @@
+# SYNC-20261006 — pendências auditadas e commitadas — 06/10/2026
+
+- Claude Code, pedido do usuário: "verifica o que tem mais de código não commitado, faz uma auditoria e sincroniza tudo". As 174 pendências do checkout compartilhado foram auditadas num worktree isolado idêntico: typecheck, lint, links/higiene, build do produto e Prettier PASS; suíte completa 2.810 PASS + 2 falhas esperadas (`GovernedAgentRuntime` I6/I7), com 1 arquivo (`test-suite-catalog`) sem rodar por timeout de worker na máquina sobrecarregada; `boundary:products` 0 violações e `INCOMPLETE` por diagnósticos já conhecidos do HISO-005. Varredura gitleaks local: 105 falsos positivos (hashes, marcadores sintéticos), nenhum segredo.
+- Commits: `25881f3` extração do produto, `4950a27` extração do `agent-runtime` (Codex), `adb9679` correção AUD-0589, `347a622` documentação/evidência, mais este de ledgers. Ficaram de fora, por pedido da sessão Fable (`cvg-operational-harness-c6`), os arquivos da remediação AUD-0598 em andamento.
+- `next_action`: rodar `test:postgres` e o `test-suite-catalog` quando a máquina sair da sobrecarga (load ~650, 53 contêineres de outros projetos) e só então dar push para `origin/main`.
+
 # AUD0598 — reauditoria de 2356a25 — 06/10/2026
 
 - Task `AUD0598-KPLG004-REAUDIT-20261006`, Codex, auditoria documental `COMPLETED`. Pedido atual: reauditar a entrega em `2356a25`; barra I5/I6/I8/I12 e recovery da SPEC 0181 mantida. [AUD-0598](04_audit/0598_reauditoria_kplg004_2026-10-06.md) e evidências arquivadas, código compartilhado somente leitura.
@@ -13,15 +19,80 @@
 - Artefatos preparados para commit seletivo e push normal autorizado a `refs/heads/main`; o branch local observado é `aud0578-remediation-20260926`, não `main`. Destino remoto confirmado e ancestral; 423 commits anteriores à auditoria ainda não estavam em `origin/main`. Nenhum force, deploy ou release. Produção `NO_GO`.
 - `last_completed_action`: auditoria, evidências e seis cartões F01–F06; `next_action`: remediação coordenada sob SPEC 0181 e reauditoria, sem fechar a parte A pelo verde da suíte existente.
 
+# KERNEL-PLUGINS — auditoria do motor e direção de kernel de plugins — 06/10/2026
+
+- Task `KERNEL-PLUGINS-20261006` (Claude Code); `status: IN_PROGRESS`. Usuário definiu: o produto é o Operational Harness; o Assistente de Plantão existe para validá-lo; o motor serve agentes hospitalares semiautônomos (tudo menos diagnóstico e prescrição); linha de referência DeepSeek Harness (cópia local `~/deepseek-harness`). Medido: motor 31/520 PASS, assistente 2/37 PASS, typecheck PASS, `npm audit` 0. Correções ENG-001–018 já commitadas em `73669b8`. Produção `NO_GO`.
+- `last_completed_action`: remediação da [AUD-0597](04_audit/0597_auditoria_kplg004_2026-10-06.md) (Codex): F01–F06 e recontagem na retomada corrigidos sem mudar contrato; sondas originais 8/8 (antes 1/7), 13 regressões novas, suíte 2.732 PASS, PostgreSQL 288 PASS, typecheck/lint PASS ([evidência](04_audit/evidence/KERNEL-PLUGINS-20261006/baseline-and-conformance.md)). `next_action`: reauditoria independente da remediação; KPLG-004 parte B aguarda o commit da extração do Codex em `packages/agent-runtime`.
+
 # HARNESS-ISO-GREEN — checkpoint 62 — 05/10/2026
 
 - Task `HARNESS_ISO_GREEN_20261004`; `status: IN_PROGRESS`. R56 certificação terminou FAIL_ENOSPC: 5792/414 unit PASS zero skip; coverage/PG/E2E sem certificação válida. R58 e R61 REJECT por integridade de backup retido e restart pós-truncamento; R63 corrigido isoladamente, R65 payload aguardando freeze. R64 REJECT reproduziu falso PASS module-sync; R70 recusa contexto não comprovado e passou 89/2 focados zero skip, types/lint/sintaxe/formato; crítico R72 novo ativo. R66 cópia8354 exata+overlayR63+deps17394/48 preparada sem promoção. R50 gates locais/neutral finite aceitos parcialmente, N2 histórico INCOMPLETE; sem herdar inventário global. Liberadas apenas dependências próprias inativas R69/R71 com source/lock MATCH. GLOBAL FAIL, produção NO_GO, só HISO001 DONE; NO_MODEL e nenhum provider/push/dado real.
 - `last_completed_action`: R70 89 testes focados PASS, R72 crítico novo ativo; R64 REJECT preservado e recursos próprios liberados. `next_action`: concluir R65 freeze/R72 e integrar R66; certificar novamente com PostgreSQL/E2E e críticos novos; promoção/T4 separados.
 - [Evidência do checkpoint](04_audit/evidence/HARNESS-ISO-EXEC-20261003/green-20261004/checkpoint-62-module-sync-and-storage-continuation.json).
 
-# PR-301-WEBHOOK-CLOCK-GUARD — rascunho de SPEC T3 0162 — 28/09/2026
+# AP-LOCAL-20261001 — execução local solicitada pelo usuário — 01/10/2026
 
-- Criado rascunho documental da migration 0028 para o high-water do relógio PostgreSQL exigido pela SPEC 0160 A2. Define singleton global, grants limitados, monotonicidade, autocommit antes de reserve/receipt e negativos de regressão/crash/restart. A ferramenta recusou crítico independente (`agent thread limit reached`); não submetido à revisão humana nem autorizado para BUILD. [SPEC 0162](02_spec/0162_webhook_clock_highwater_marker.md), [evidência](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/report.md).
+Executada a demo da entrega `d46ab74` em Node 22, exit 0. Iniciado sandbox persistente com a composição real do assistente e simuladores HTTP existentes, sem alterar produto. Console temporário em http://127.0.0.1:3401 aberto pelo navegador; dez verificações PASS: ajuda, áudio/nota/exames, confirmação, texto/pendências, lembrete, conclusão, adiamento, pausa/retomada, listagem e tela móvel. Health saudável; processo permanece disponível.
+
+Helpers, documentos, logs, PID, evidências e comandos de parada/reinício no [handoff local](08_runtime/handoffs/ap_local_20261001.md). Somente dados fictícios e loopback; sem integração real, Docker, instalação, lockfile, certify, commit ou push.
+
+# PR301-WEBHOOK-CLOCK-GUARD — I11 aceita; decisão humana T3 pendente — 28/09/2026
+
+- A revisão independente fresh-context I11 verificou o SHA-256 exato `c33410876ef204faa655e41c663630bed127a9d9df274c50fd9427f86a07e53e` antes de ler a SPEC e retornou `ACCEPT`, sem findings. Parecer em [I11-review](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I11-review.md).
+- Estado `INDEPENDENT_SPEC_ACCEPTED / HUMAN_T3_REVIEW_PENDING / BUILD_NOT_AUTHORIZED / NO_GO`. O usuário exigiu nova crítica antes do BUILD; esse gate foi satisfeito. Falta aprovação humana T3 específica da SPEC 0162; sem migration 0028, código, SQL, testes comportamentais, BUILD, push ou deploy. Produção segue `NO_GO`.
+
+# PR301-WEBHOOK-CLOCK-GUARD — resposta documental I10 — 28/09/2026
+
+- I10 fresh-context verificou o SHA `9a262565656c935aa8217a094bbdef7a05ba1a74ecf289ff90d1ae681a938ed9` e retornou `REVISE` (5 P1/2 P2). Resposta documental atualizou a SPEC 0162 para `c33410876ef204faa655e41c663630bed127a9d9df274c50fd9427f86a07e53e`: ACL única via SECURITY DEFINER; formato UTC de microssegundos; assinatura HMAC/raw-body conforme 0160; protocolo de reconciliação; bound chrony/PG; rotação de attest; leases de serving por instância/boot. Evidência em [I10](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I10-review.md) e [resposta](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I10-response.md).
+- Estado `I10_REVISE_RESPONDED / I11_REQUIRED / HUMAN_T3_REVIEW_NOT_REQUESTED / BUILD_NOT_AUTHORIZED / NO_GO`. O usuário exigiu nova crítica independente antes do BUILD. Prettier direcionado, links/higiene e diff PASS; `format:check` global aponta somente o arquivo não reivindicado AUD-0590, que não foi alterado. Sem migration, código, testes comportamentais, SQL, BUILD, push ou deploy. B3, D-06, integração root/CI/staging e produção seguem abertos.
+
+# PR301-WEBHOOK-CLOCK-GUARD — resposta documental I9 — 28/09/2026
+
+- I9 fresh-context verificou o SHA 433c46bb7fe0c66c1b2926ed8592cca023209b3374439af8de5d603b04fae40a e retornou REVISE (3 P1, sem P0): conflito statement_timestamp/sample, bootstrap baseline em retry/crash e readiness antes de RECOVERY_REBASE. A [resposta](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I9-response.md) produziu o candidato 9a262565656c935aa8217a094bbdef7a05ba1a74ecf289ff90d1ae681a938ed9, com attestation one-use do receipt exato, baseline/revisões consistentes e sequência RECOVERY_REBASE/readback/GATE_OPEN. Nenhum código, SQL, migration 0028, teste comportamental ou BUILD. I10 fresh-context read-only está em andamento; aprovação humana T3 segue pendente e produção NO_GO. [I9](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I9-review.md), [SPEC](02_spec/0162_webhook_clock_highwater_marker.md), [prova](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/proof.json).
+
+# PR301-WEBHOOK-CLOCK-GUARD — resposta documental ao I8 — 28/09/2026
+
+- I8 fresh-context verificou `08892d7328ce6a7ce45943f5316f3e9de270fe21b11aeb18a55934469e520646` e retornou `REVISE` sem P0 (2 P1/1 P2). A resposta está na [matriz I8](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I8-response.md); o novo candidato 0162 tem SHA-256 `433c46bb7fe0c66c1b2926ed8592cca023209b3374439af8de5d603b04fae40a` e I9 read-only está em andamento antes de revisão humana T3. [I8](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I8-review.md), [prova](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/proof.json). Nenhuma migration/código/BUILD 0028; produção `NO_GO`.
+
+# AUD-0589 — fronteira de sessão e probes públicas — 28/09/2026
+
+- No root `eff8e0d`, a sonda Fastify registrou 61 templates/108 pares; 98 pares protegidos responderam 401 nos três cenários negativos, com três controles de cookie válido em 200. Um cookie inexistente causava 401 nas oito probes GET/HEAD públicas; patch em `operator-session-hook.ts` e teste cobrindo `/health`, `/health/metrics`, `/live` e `/ready` corrigem isso sem alterar `server.ts` da PR-L04. Suíte root 307 arquivos/2.241 testes PASS, 20/162 PG skipped; foco 27/27, typecheck/lint/formato/links PASS. Duas tentativas de crítica independente não retornaram veredito; escopo local `CONDITIONAL`, produção `NO_GO`. [Relatório](04_audit/0589_root_session_route_boundary_2026-09-28.md), [prova](04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/proof.json).
+- Suplemento `AUD-0589-PG`: no worktree isolado do HEAD `eff8e0d` com o patch AUD-0589 byte-matched, Node 22.23.2 + PostgreSQL descartável passaram 326/2.401 testes sem skips; barra PG 35/258, sessão 18/18, Phase4A 1/1, foco 27/27, typecheck/lint PASS. Ambiente removido. O teste persistido não compõe o entrypoint root, que segue no claim PR-L04. [Verificação](04_audit/evidence/AUD0589-ROOT-SESSION-ROUTES-20260928/pg-20260928/verification.md).
+
+# AUD-0588 — cobertura HTTP das rotas de execução — 28/09/2026
+
+- Claim registrado antes das alterações. Scanner estático sobre `server.ts` encontrou 60 paths literais e 3 paths de health por constante; 61/63 tinham referências de teste antes desta fatia. Os dois sem referência eram input e trajectory.
+- Adicionados testes sintéticos: retomada de execução WAITING_USER, isolamento tenant com 404 e estado inalterado, trajetória limitada a metadados com igualdade estrita da etapa e sem `observationRefs`. Scanner reproduzível encontra 63/63 referências estáticas após a mudança.
+- Testes focados 2/2, suíte root 306/2.233 PASS com 20/162 skipped sem PostgreSQL; typecheck, ESLint, Prettier, `format:check`, links/hygiene PASS. A suíte root começou antes da asserção estrita; o teste focado foi repetido na versão final. I1 foi respondido limitando o scanner a referências estáticas; I2 `ACCEPT_SCOPE` e o pedido de igualdade estrita foi resolvido e retestado. Evidências hash-bound em [AUD-0588](04_audit/0588_execution_route_coverage_2026-09-28.md). `server.ts` não foi alterado; sem PostgreSQL, IdP, dado real, push ou deploy. Produção `NO_GO`.
+
+# PR301-WEBHOOK-CLOCK-GUARD — resposta à crítica I6 — 28/09/2026
+
+- A crítica fresh-context I6 revisou o hash `215f5146eec6ecac8b07c9561f34487e1a33da5e030965c83af6b9ab4d6bc4a3` e retornou `REVISE` (4 P1/2 P2, sem P0): exceção autorizada do trigger para break-glass, identidade única da standby, testemunha monotônica para latest ledger head, caminho de restart primário sem `pg_last_wal_replay_lsn`, fence WAL por COMMIT e ordem do receipt PREPARED.
+- A resposta documental cobre os seis achados; candidato formatado SHA-256 `ee949d17daa04241131bae402bd49f5c28e61f4dcda38a5e81b772d2d497bc8e`. Duas tentativas independentes I7 não retornaram parecer; sentinel confirmou ausência de mutação durante as leituras. Formato e links/higiene finais passaram, mas SPEC continua sem aceitação, revisão humana ou BUILD 0028.
+- O gate do código webhook segue `I2_REVISE` (3 P1), sem alteração de `server.ts` por claim ativo PR-L04. Dados sintéticos, nenhum deploy/push; produção `NO_GO`.
+
+# PR301-WEBHOOK-REPLAY-FIX — fechamento da rodada local — 28/09/2026
+
+- Commit isolado `aad04d9ace6ed5b6d9c9902f4ddcad67b87a4abc` contém apenas cinco arquivos do claim de precisão/preflight/testes; não foi integrado nem enviado.
+- Suíte completa com PostgreSQL 341/2.594, `test:postgres` 36/273, typecheck, lint, build web sintético e teste de fencing em dois processos passaram, sem skips. Crítica I2 mantém três P1; veja [verificação](04_audit/evidence/PR301-WEBHOOK-REPLAY-FIX-20260928/verification.md) e [parecer](04_audit/evidence/PR301-WEBHOOK-REPLAY-FIX-20260928/I2-independent-review.md).
+- Container PG16 descartável e porta 55499 foram removidos/liberados. Sem mudança em `server.ts`, migration 0028, produção, push ou deploy.
+
+# PR301-WEBHOOK-REPLAY-FIX — rodada de verificação e crítica I2 — 28/09/2026
+
+- No worktree `/tmp/cvg-pr301-webhook-replay-20260928`, a suíte PostgreSQL passou 36 arquivos/273 testes e a suíte completa com PostgreSQL obrigatório passou 341 arquivos/2.594 testes, ambos sem skips. Logs preservados em [full-suite.log](04_audit/evidence/PR301-WEBHOOK-REPLAY-FIX-20260928/full-suite.log) e [postgres-suite.log](04_audit/evidence/PR301-WEBHOOK-REPLAY-FIX-20260928/postgres-suite.log). Typecheck, lint integral e build web de produção com origins HTTPS sintéticos passaram; digest do build `d972d26245690a3bece1970db670888b40813c44df4f67cdf8c4e5fec53e5b7f`. Vite mostrou aviso de externalização de `node:dns/promises`; bundle web inspecionado sem referência DNS/SSRF.
+- A revisão independente I2 aceitou as correções de precisão, hash completo do trigger, RLS/preflight e corrida de lease em processos distintos, mas retornou `REVISE` com três P1: high-water durável; reconciliador interno de pending após expiração HTTP; e resolução de COMMIT final incerto. `server.ts` segue reivindicado por PR-L04; o primeiro item depende da SPEC 0162/0028 ainda sem autorização.
+- A [decisão de fronteira B3/UNKNOWN_COMMIT](04_audit/evidence/PR301-WEBHOOK-REPLAY-FIX-20260928/recovery-boundary-decision.md) registra que o reconciliador deve compartilhar o mesmo serviço/finalizador transacional da rota; worker paralelo duplicaria a regra. Nenhuma implementação foi iniciada enquanto `server.ts` segue no claim PR-L04.
+- A SPEC 0162 recebeu resposta à crítica I5 no hash `215f5146eec6ecac8b07c9561f34487e1a33da5e030965c83af6b9ab4d6bc4a3`; I6 fresh-context está em andamento. PostgreSQL 16.15 descartável permanece ativo até os gates documentais finais. Sem dados/credenciais/provider reais, integração, push ou deploy. Produção `NO_GO`. [Verificação](04_audit/evidence/PR301-WEBHOOK-REPLAY-FIX-20260928/verification.md), [I2](04_audit/evidence/PR301-WEBHOOK-REPLAY-FIX-20260928/I2-independent-review.md), [resposta I5](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I5-response.md).
+
+# PR-301-WEBHOOK — correções focadas e crítica I4 — 28/09/2026
+
+- No worktree isolado aprovado pelas SPECs 0160/0161, corrigi a rejeição de amostras PostgreSQL com precisão submilissegundo e o preflight agora compara SHA-256 da função completa de trigger, com regressão que mantém comentários enganosos. Node 22.23.2: inbox PostgreSQL 16 descartável 6/6; preflight/trigger enfraquecido 1/1; typecheck, ESLint dos quatro arquivos e Node version preflight PASS. `format:check`, links/higiene e `git diff --check` PASS. Container removido e ausência confirmada.
+- I4 fresh-context da SPEC 0162 retornou `REVISE` (2 P1/2 P2): avanço high-water não estava persistido com a decisão; reserva e efeitos inbound conflitaram; faltavam gates de continuidade em failover/restore e identidades/trust root verificáveis. O candidato `fed7a46bce4dfcfd8fc97d63cc2655340e52b839d9b0e76cdbc1f274b993f822` responde com high-water+reserva/receipt no mesmo COMMIT, finalização em outra transação, failover fail-closed e identities/sink autenticados. Checks e I5 pendentes; [I4](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I4-review.md).
+- Primeiro I1 do patch foi `BLOCKED` porque o crítico abriu checkout errado; um novo I1 com caminho absoluto do worktree `/tmp/cvg-pr301-webhook-replay-20260928` está pendente. As alterações isoladas não foram integradas nem publicadas. Sem banco/dados/provider real, push ou deploy; produção `NO_GO`.
+
+# PR-301-WEBHOOK-CLOCK-GUARD — revisão I3 e reparo documental SPEC 0162 — 28/09/2026
+
+- I1 da SPEC 0162 deu `REVISE` (4 P1/1 P2), I2 `REVISE` (3 P1/2 P2), I3 `REVISE` (5 P1/1 P2), e I4 `REVISE` (2 P1/2 P2). I4 exigiu persistir sample/high-water com reserve/receipt antes do comando, separar a transação final fenced, tratar failover/restore com continuidade comprovada e ancorar identidade/export fora do banco. O candidato responde; links/formato/higiene e crítica I5 pendentes. Sem aprovação T3/BUILD 0028. [SPEC 0162](02_spec/0162_webhook_clock_highwater_marker.md), [I1](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I1-review.md), [I2](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I2-review.md), [I3](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I3-review.md), [I4](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/I4-review.md), [prova](04_audit/evidence/PR301-WEBHOOK-CLOCK-SPEC-20260928/proof.json).
 
 # PR-301-WEBHOOK-REPLAY-SCHEMA — BUILD local SPEC 0161 — 28/09/2026
 
