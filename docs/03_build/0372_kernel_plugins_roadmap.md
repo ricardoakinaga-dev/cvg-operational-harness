@@ -13,7 +13,9 @@
 
 ## KPLG-001 — Consolidar e ter uma linha de base verde
 
-- Estado: `IN_PROGRESS`. Gate: T1/T2. Dependências: nenhuma.
+- Estado: `DONE` em 06/10/2026: `a7dd030`, 2.646 testes passaram (1 pulado),
+  PostgreSQL 288 passaram, typecheck e lint passaram
+  ([evidência](../04_audit/evidence/KERNEL-PLUGINS-20261006/baseline-and-conformance.md)). Gate: T1/T2. Dependências: nenhuma.
 - O quê: as correções ENG-001 a ENG-018 já estão em `73669b8`. O código não
   commitado restante é do Codex e não é tocado. A linha de base roda em worktree
   isolado de `HEAD`, com Node 22.23.2 e PostgreSQL descartável próprio: suíte
@@ -24,7 +26,10 @@
 
 ## KPLG-002 — Contrato de plugins, conformidade e barra do harness
 
-- Estado: `TODO`. Gate: T3 para a SPEC; revisão do usuário antes do KPLG-003.
+- Estado: `IN_PROGRESS`. Feito: [SPEC 0181](../02_spec/0181_kernel_plugin_contract.md)
+  em rascunho; suíte de conformidade em `tests/conformance/` executada contra os
+  três runtimes (26 PASS, 7 lacunas confirmadas). Falta: revisão da SPEC pelo
+  usuário e rascunho da barra de produção do harness. Gate: T3 para a SPEC; revisão do usuário antes do KPLG-003.
   Dependências: KPLG-001.
 - O quê:
   - SPEC curta do contrato: tipos de plugin, chaves de serviço, pontos de

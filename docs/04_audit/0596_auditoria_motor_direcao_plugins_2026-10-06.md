@@ -183,3 +183,44 @@ Seguir o [roteiro 0372](../03_build/0372_kernel_plugins_roadmap.md), na ordem:
 4. Unificar as pilhas.
 5. Modelo e canais como plugins.
 6. Assistente como plugins.
+
+## 8. Validação do núcleo contra o dsh (06/10/2026)
+
+O usuário definiu a ordem: validar todo o núcleo usando o dsh como referência
+de arquitetura, e só depois construir camada a camada até o agente.
+
+**Linha de base (KPLG-001)**, no commit `a7dd030` em worktree isolado, com Node
+22.23.2 e PostgreSQL próprio:
+
+- suíte completa: 2.646 testes passaram, 1 pulado;
+- `test:postgres`: 288 testes passaram;
+- typecheck e lint passaram.
+
+**Suíte de conformidade (KPLG-002)**, em `tests/conformance/`: 26 testes
+passaram e 7 lacunas foram confirmadas com `it.fails`, nos três runtimes.
+Resultado completo em
+[evidência](evidence/KERNEL-PLUGINS-20261006/baseline-and-conformance.md).
+
+| Invariante                                                  | Single-pass  | Iterativo    | `GovernedAgentRuntime` |
+| ----------------------------------------------------------- | ------------ | ------------ | ---------------------- |
+| Aprovação ausente vira negação; uso único                   | PASS         | PASS         | PASS                   |
+| Chamada registrada antes de executar                        | LACUNA       | PASS         | PASS                   |
+| Requisição ao modelo reconstruível pelo log                 | LACUNA       | LACUNA       | LACUNA                 |
+| Exceção vira desfecho normalizado                           | PASS         | PASS         | LACUNA                 |
+| Cancelamento antes do despacho                              | LACUNA       | LACUNA       | PASS                   |
+| Auditoria falhando após efeito não vira sucesso             | PASS         | PASS         | PASS                   |
+| Guardas que só negam; pausa; controles obrigatórios no boot | inexistentes | inexistentes | inexistentes           |
+
+Achados novos:
+
+- **Dois contratos de governança.** Os runtimes do `harness` usam
+  `@cvg/harness-contracts`; o `GovernedAgentRuntime` usa `@cvg/policy-engine`,
+  `@cvg/approval-engine` e `runTurn`. O kernel precisa de um contrato só.
+- **A mesma falha gera desfechos diferentes** em cada runtime. Por exemplo, com
+  o canal de aprovação fora do ar, o iterativo responde `APPROVAL_REQUIRED`, como
+  se estivesse esperando aprovação.
+- O `GovernedAgentRuntime` responde `denied` quando o efeito chegou a acontecer
+  e ficou incerto, em vez de reportar os dois fatos separados.
+
+Cada lacuna é coberta por um teste que hoje falha de propósito. Quando o kernel
+fechar a lacuna, o teste avisa e vira teste comum.
