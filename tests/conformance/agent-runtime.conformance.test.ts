@@ -25,7 +25,12 @@ const MODEL_INPUT = 'synthetic conformance cancel'
 
 interface Faults {
   /** Durable pause switch read by the runtime (I12). */
-  readonly pause?: { paused: boolean; throws?: boolean }
+  readonly pause?: {
+    paused: boolean
+    throws?: boolean
+    /** Runs inside each read of the switch, with the read's 1-based index. */
+    onRead?: (read: number) => void
+  }
   /** Turns the pause on once, right after this step commits (AUD-0601 F01). */
   readonly pauseAfter?:
     | 'approval_reserve'
@@ -38,7 +43,12 @@ interface Faults {
 }
 
 function build(faults: Faults = {}) {
-  const now = () => NOW
+  let clockOffsetMs = 0
+  const now = () => new Date(NOW.getTime() + clockOffsetMs)
+  const advanceClock = (ms: number) => {
+    clockOffsetMs += ms
+  }
+  let pauseReads = 0
   const prompts = new PromptRegistry()
   prompts.register({
     promptId: 'conformance',
@@ -143,6 +153,8 @@ function build(faults: Faults = {}) {
       ? {
           pause: {
             isPaused: () => {
+              pauseReads += 1
+              faults.pause?.onRead?.(pauseReads)
               if (faults.pause?.throws) throw new Error('pause store down')
               return faults.pause?.paused ?? false
             }
@@ -170,7 +182,18 @@ function build(faults: Faults = {}) {
       }
     }
   }
-  return { runtime, approvals, toolExecutor, audit, telemetry, arm }
+  return {
+    runtime,
+    approvals,
+    toolExecutor,
+    audit,
+    telemetry,
+    arm,
+    advanceClock,
+    resetPauseReads: () => {
+      pauseReads = 0
+    }
+  }
 }
 
 function turn(overrides: Partial<GovernedTurnInput> = {}): GovernedTurnInput {
@@ -377,4 +400,55 @@ describe('conformidade SPEC 0181 — GovernedAgentRuntime', () => {
       expect(h.toolExecutor).toHaveBeenCalledTimes(1)
     })
   }
+
+  it('I8/I11 — cancelamento durante a última leitura da pausa não executa; a retomada executa uma vez (AUD-0602 F01)', async () => {
+    const controller = new AbortController()
+    const h = build({
+      pause: {
+        paused: false,
+        // Read 1 precedes the reservation; read 2 is the last boundary.
+        onRead: (read) => {
+          if (read === 2) controller.abort()
+        }
+      }
+    })
+    const approvalId = await approved(h)
+    h.resetPauseReads()
+    const cancelled = await h.runtime.runTurn(
+      turn({ approvalId, cancelSignal: controller.signal })
+    )
+    expect(cancelled.outcome).toBe('denied')
+    expect(cancelled.reason).toBe('turn_cancelled')
+    expect(h.toolExecutor).not.toHaveBeenCalled()
+    expect(h.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
+
+    const resumed = await h.runtime.runTurn(turn({ approvalId }))
+    expect(resumed.outcome).toBe('executed')
+    expect(h.toolExecutor).toHaveBeenCalledTimes(1)
+  })
+
+  it('I11 — prazo vencido durante a última leitura da pausa não executa (AUD-0602 F01)', async () => {
+    let armed = false
+    const h = build({
+      pause: {
+        paused: false,
+        onRead: (read) => {
+          if (armed && read === 2) h.advanceClock(31_000)
+        }
+      }
+    })
+    const approvalId = await approved(h)
+    h.resetPauseReads()
+    armed = true
+    const late = await h.runtime.runTurn(turn({ approvalId }))
+    expect(late.outcome).toBe('denied')
+    expect(late.reason).toBe('loop_deadline_exceeded')
+    expect(h.toolExecutor).not.toHaveBeenCalled()
+    expect(h.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
+
+    armed = false
+    const resumed = await h.runtime.runTurn(turn({ approvalId }))
+    expect(resumed.outcome).toBe('executed')
+    expect(h.toolExecutor).toHaveBeenCalledTimes(1)
+  })
 })

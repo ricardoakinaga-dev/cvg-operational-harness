@@ -1300,6 +1300,34 @@ export class GovernedAgentRuntime {
       }
     }
 
+    // I12 at the last boundary (AUD-0601 F01): the switch is read again after
+    // the approval, the journal and the effect start were recorded. A pause
+    // committed meanwhile settles the reservation as no effect, so the same
+    // approval executes once after resume (the journal re-arms EFFECT_FAILED).
+    // The read is awaited, so cancellation and the deadline are checked again
+    // after it, in beginStage, with no await before the body (AUD-0602 F01).
+    const pausedBeforeBody = await readPause()
+    if (pausedBeforeBody !== undefined) {
+      if (effectJournal !== undefined && journalAttemptId !== undefined) {
+        try {
+          await effectJournal.failEffect({
+            tenantId: input.tenantId,
+            operationKey,
+            attemptId: journalAttemptId,
+            errorCode: pausedBeforeBody
+          })
+        } catch {
+          // The EFFECT_STARTED record remains for the TTL sweep.
+        }
+      }
+      await this.#recovery.releaseApproval(
+        input,
+        approvalId,
+        reservation.reservationId,
+        `pause:${pausedBeforeBody}`
+      )
+      return finishPaused(pausedBeforeBody, decision, 'effect', { approvalId })
+    }
     const toolStage = beginStage('tool.execute', decision)
     if ('denied' in toolStage) {
       const denialReason = toolStage.denied.reason
@@ -1324,34 +1352,6 @@ export class GovernedAgentRuntime {
       return toolStage.denied
     }
     const toolSpan = toolStage.span
-    // I12 at the last boundary (AUD-0601 F01): the switch is read again right
-    // before the body, with no await between this read and the call. A pause
-    // committed while the approval, the journal or the effect start were
-    // being recorded settles the reservation as no effect, so the same
-    // approval executes once after resume (the journal re-arms EFFECT_FAILED).
-    const pausedBeforeBody = await readPause()
-    if (pausedBeforeBody !== undefined) {
-      if (effectJournal !== undefined && journalAttemptId !== undefined) {
-        try {
-          await effectJournal.failEffect({
-            tenantId: input.tenantId,
-            operationKey,
-            attemptId: journalAttemptId,
-            errorCode: pausedBeforeBody
-          })
-        } catch {
-          // The EFFECT_STARTED record remains for the TTL sweep.
-        }
-      }
-      await this.#recovery.releaseApproval(
-        input,
-        approvalId,
-        reservation.reservationId,
-        `pause:${pausedBeforeBody}`
-      )
-      endSpan(toolSpan, 'error', pausedBeforeBody)
-      return finishPaused(pausedBeforeBody, decision, 'effect', { approvalId })
-    }
     let toolResult: unknown
     try {
       const executed = await this.#options.toolExecutor({
