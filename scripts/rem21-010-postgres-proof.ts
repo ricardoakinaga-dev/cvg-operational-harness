@@ -67,9 +67,17 @@ const preRollForwardMigrations = [
   '0022_conversation_policy_standardization',
   '0023_rate_limit_buckets',
   '0024_approval_decision_causality',
-  '0025_webhook_replay_fencing'
+  '0025_webhook_replay_fencing',
+  '0026_rate_limit_key_hardening'
 ]
-const rollForwardMigration = '0026_rate_limit_key_hardening'
+// The proof always rolls forward the newest migration over a dump of the one
+// before it; keep both in step with packages/persistence/migrations.
+const rollForwardMigration = '0027_worker_operations'
+const preRollForwardVersion = preRollForwardMigrations.at(-1)
+// Documented rollback of the roll-forward migration (its file header): run
+// before restoring the pre-migration backup over the rolled-forward schema.
+const rollForwardRollbackSql =
+  'DROP TABLE IF EXISTS worker_heartbeats, kernel_pause_switches'
 
 type ManagedPostgres = {
   name: string
@@ -594,7 +602,7 @@ async function main(): Promise<void> {
     stage = 'ensure-roles'
     await ensureSyntheticRole(sourceAdmin)
     await ensureSyntheticRole(targetAdmin)
-    stage = 'migrate-source-pre-0026'
+    stage = 'migrate-source-pre-roll-forward'
     await runPreMigrations(sourceAdmin)
     stage = 'grant-source-role'
     await grantSyntheticRole(sourceAdmin)
@@ -606,12 +614,16 @@ async function main(): Promise<void> {
     })
     stage = 'run-synthetic-workload'
     const workload = await runSyntheticWorkload(sourcePool, args.events)
-    stage = 'dump-pre-0026'
+    stage = 'dump-pre-roll-forward'
     const preDump = dumpDatabase(source, database)
 
     stage = 'roll-forward-source'
     await runRollForward(sourceAdmin)
-    stage = 'dump-post-0026'
+    // Grants are reapplied after every migration, as a deployment does, so
+    // tables added by the roll-forward are covered in the backup too.
+    stage = 'grant-source-role-after-roll-forward'
+    await grantSyntheticRole(sourceAdmin)
+    stage = 'dump-post-roll-forward'
     const postDump = dumpDatabase(source, database)
 
     stage = 'restore-target'
@@ -670,14 +682,17 @@ async function main(): Promise<void> {
     await runRollForward(rollbackAdmin)
     stage = 'rollback-re-restore'
     const firstRollForwardVersion = await migrationVersion(rollbackAdmin)
+    await rollbackAdmin.query(
+      `SET search_path TO ${quoteIdentifier(schema)}; ${rollForwardRollbackSql}`
+    )
     restoreDatabase(target, rollbackDatabase, preDump)
     const restoredPreMigrationVersion = await migrationVersion(rollbackAdmin)
     await runRollForward(rollbackAdmin)
     const secondRollForwardVersion = await migrationVersion(rollbackAdmin)
     const migrationRecovery =
-      rolledBackVersion === '0025_webhook_replay_fencing' &&
+      rolledBackVersion === preRollForwardVersion &&
       firstRollForwardVersion === rollForwardMigration &&
-      restoredPreMigrationVersion === '0025_webhook_replay_fencing' &&
+      restoredPreMigrationVersion === preRollForwardVersion &&
       secondRollForwardVersion === rollForwardMigration
 
     const pass =

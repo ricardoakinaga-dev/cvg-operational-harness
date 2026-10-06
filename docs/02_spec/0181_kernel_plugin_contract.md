@@ -230,7 +230,7 @@ Testes: `tests/conformance/aud0599-blocked-close.conformance.test.ts`.
 
 ## 13. Adendo — encerramento terminal e kernel durável (AUD-0600, PROD-0373)
 
-Origem: [AUD-0600](../04_audit/0600_reauditoria_remediacao_aud0599_2026-10-06.md)
+Origem: AUD-0600 (`docs/04_audit/0600_reauditoria_remediacao_aud0599_2026-10-06.md`, relatório do Codex)
 F01/F02 e a barra [0373](../03_build/0373_barra_producao_harness.md),
 condições 1 e 10. Nenhuma invariante é relaxada.
 
