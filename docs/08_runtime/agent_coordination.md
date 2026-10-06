@@ -8,13 +8,15 @@
 
 ## AUD-0602 — reauditoria AUD-0601 e publicação autorizada — 06/10/2026
 
-- Task `AUD0602-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT / PUBLISH_PREPARED / NO_GO_ONE_P1_ONE_P2`; pedido: nova auditoria, commit e push. Congelado `81f01e87a63996f3afe4f55641ebb5e2ea84a39b`, 11 commits posteriores ao main recebido dc4a3cb. Sem release operacional.
+- Task `AUD0602-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT_AND_PUBLICATION / NO_GO_ONE_P1_ONE_P2`; pedido: nova auditoria, commit e push. Congelado `81f01e87a63996f3afe4f55641ebb5e2ea84a39b`, 11 commits posteriores ao main recebido dc4a3cb. Sem release operacional.
 - Escrita exclusiva: `docs/04_audit/0602_reauditoria_aud0601_2026-10-06.md`, `docs/04_audit/evidence/AUD0602-REMEDIATION-20261006/**`, esta seção e entradas novas próprias nos ledgers 99/20/30. Publicar também relatórios/evidências/entradas próprias AUD0600/AUD0601 pendentes, com staging explícito. Fonte e lockfile somente leitura; preservar entradas e commits Claude.
 - Worktree/dependências/outputs próprios `/tmp/cvg-aud0602-20261006/**`; PostgreSQL sintético `cvg-aud0602-pg-20261006` em loopback55724. Revisores somente leitura sessão e pausa/heartbeat; outputs próprios em subpastas, sem descendentes. Smoke/restore somente recursos próprios sintéticos.
 - Follow-up concorrente `8652319`: remoção do campo privado clock não lido em channel-gateway; auditar o delta/rodar foco antes de publicar os 12 commits existentes. Snapshot/gates principais continuam 81f01e8, follow-up registrado separadamente.
 - Critérios: F01–F07 e novo contrato HTTPS/live; suítes completa/PG, cobertura crítica≥95%, skips e backup/rollback; imagem API/worker healthy; cadeia estrita/âncoras e restore real; CI remoto corretamente pendente. Sem certify/E2E/SBOM/licenças locais, segredo real, deploy, proteção de branch ou dismissals. Push normal `origin HEAD:main` autorizado pelo pedido atual; nenhum force/rewrite.
 
 - Fechamento: casos originais passam; novo P1 guarda cancel/deadline e P2 troca de identidade503 confirmados.2.940 testes com cobertura, PG298, mutation10/10, smoke18/18 e demais gates pertinentes PASS; follow-up119/typecheck PASS. Own PG/smokes removidos, revisores encerrados; publicações AUD0600/0601/0602 e histórico recebido autorizadas. Fonte/lockfile/registros anteriores preservados; nenhum release/deploy/proteção alterados.
+
+- Publicação: commit96ff418 e follow-up documental d76691c publicados por push normal autorizado, main confirmado d76691c. Recibo/ledgers finais commitados em seguida, apenas documentação própria. Próximo passo CI e remediação P1/P2, sem GO.
 
 ## AUD-0601 — auditoria da entrega publicada e configuração de produção — 06/10/2026
 

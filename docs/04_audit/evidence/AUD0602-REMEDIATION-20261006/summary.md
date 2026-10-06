@@ -25,3 +25,5 @@ Preservadas rodadas inválidas: worker com journals reutilizados; observador de 
 E2E/browser/certify/SBOM/licenças locais NOT_RUN. Os25 gates declarados pelo builder não foram todos reemitidos nesta auditoria. CI remoto do novo histórico e infraestrutura real permanecem pendentes; mesmo CI verde não elimina os contraexemplos. Alerta desligado conforme decisão declarada do usuário.
 
 [Follow-up8652319](followup.json):119 testes/12 arquivos e typecheck PASS, dependências/worktree próprios. Reemissão integral dos gates no SHA final segue pendente do CI.
+
+[Publicação verificada](publication.json): push normal exit0, main dc4a3cb→d76691c confirmado por ls-remote.12 commits recebidos e commits de auditoria/empacotamento publicados; recibo e ledgers finais são commit documental subsequente. CI ainda pendente, P1/P2 abertos, sem release.

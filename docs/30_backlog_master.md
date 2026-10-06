@@ -12,6 +12,8 @@
 
 - Verificação principal81f01e8:358 arquivos/2.940 PASS com cobertura, PG37/298 PASS, sem skips; type/lint/formato/mutation10/10/audit0 PASS; smoke18/18, restore e backup0027 PASS. Follow-up8652319:119 testes e typecheck PASS. 25 gates do builder não reemitidos integralmente; E2E/browser/certify/SBOM/licenças locais NOT_RUN. Alerta desligado conforme decisão declarada do usuário.
 
+- Publicação Git DONE: main confirmado d76691c no primeiro push; recibo/ledgers documentais seguem no fechamento. P1/P2 e CI/proteção/implantação continuam OPEN; nenhum release foi concedido.
+
 # PROD-0373 rodada 2 — Verify publicado e AUD-0601 corrigidos — 06/10/2026
 
 - Task `PROD-0373-20261006` rodada 2: `DONE_LOCAL`. Supersede a disposição OPEN de AUD0601-F01–F07 e da falha de cobertura crítica do Verify `37524247242`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-2--verify-publicado-e-aud-0601).

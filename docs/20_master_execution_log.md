@@ -1,10 +1,12 @@
-# AUD-0602 — reauditoria e preparação de publicação autorizada — 06/10/2026
+# AUD-0602 — reauditoria e publicação autorizada — 06/10/2026
 
 - Codex, task `AUD0602-REMEDIATION-PUBLISH-20261006`; congelado81f01e8,11 commits recebidos; follow-up concorrente8652319 inspecionado separadamente. [Parecer](04_audit/0602_reauditoria_aud0601_2026-10-06.md), [provas](04_audit/evidence/AUD0602-REMEDIATION-20261006/summary.md). Casos originais confirmados; PARTIAL/NO_GO por um P1 de cancelamento/deadline e um P2 herdado de troca de identidade503. Pedido atual autoriza commit/push normal; não concede produção.
 - Node22.23.2, own deps/PG16.15:358 arquivos/2.940 PASS com cobertura,37 arquivos/298 PASS PG, zero skips/falhas; type/lint/formato PASS; mutation10/10 killed, audit0; branches críticos≥96,48%, barra95% só branches. Corrigida interpretação da AUD0601: funções channel94,59% são informativas, não causa adicional do Verify anterior. 12 arquivos/119 PASS channel e typecheck no follow-up.
 - Smoke reconstruído18/18/API e worker healthy, imagem distroless uid10001/read-only e gitleaks0 no escopo padrão. Backup/rollback0027 PASS, restore cadeia16 eventos PASS/tamper payload+metadado, perfil ausente recusado. PGpausa lead body0/APPROVED→resume1/EXECUTED→replay1; restore de controle21 eventos. HTTPS14inject+3socket e seis cenários cadeia/âncoras PASS.
 - Dois revisores independentes: sessão13cenários,10 conformes/três variantes de um P2 +ambiente/cleanup; lead repetiu15registros. Worker35sondas27PASS/8FAIL brutos; dois FAIL suportam P1, seis não promovidos; lead confirma corpo1 após cancel/deadline na leitura final. Liquidação com dependência falha body0 sem replay inseguro; TTL/shutdown não certificados. Rodadas de runner inválidas preservadas e excluídas.
 - Apenas artefatos/entradas próprias alterados; registros/implementação/lock preservados, own PG/smokes removidos e revisores encerrados. Fontes antigas sintéticas com falsos positivos foram compactadas byte-exatas e mapeadas; sem alteração de scanner. Commit seletivo publica também AUD0600/AUD0601 pendentes. Sem E2E/certify/SBOM/licenças locais, proteção remota ou deploy; CI final/infraestrutura permanecem pendentes.
+
+- Publicação executada: git push origin HEAD:main exit0, dc4a3cb→d76691c, remoto igual HEAD verificado por ls-remote.12 commits recebidos mais96ff418/d76691c. [Recibo](04_audit/evidence/AUD0602-REMEDIATION-20261006/publication.json); CI observado queued/in_progress, não PASS. Primeiro commit dos artefatos entrou antes de corrigir whitespace de diffs; bytes foram conservados em gzip e staged check passou no follow-up, sem reescrever histórico. Recibo/ledgers finais são documentação subsequente.
 
 # PROD-0373 rodada 2 — Verify publicado e AUD-0601 corrigidos — 06/10/2026
 
