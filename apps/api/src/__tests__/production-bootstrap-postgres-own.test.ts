@@ -351,6 +351,104 @@ describe.skipIf(!databaseUrl)(
       })
     }, 60_000)
 
+    it('rotation keeps the family: logout with the predecessor revokes the successor (AUD-0601 F02)', async () => {
+      await withDatabase(async ({ open }) => {
+        const app = await open()
+        const login = (cookie?: string) =>
+          app.inject({
+            url: '/v1/session',
+            headers: {
+              ...headers,
+              ...(cookie ? { cookie } : {}),
+              'x-cvg-operator-token': createTrustedOperatorIdentityToken(
+                identity,
+                key
+              )
+            }
+          })
+        const cookieOf = (response: { headers: Record<string, unknown> }) =>
+          String(response.headers['set-cookie']).split(';')[0]!
+        const first = await login()
+        expect(first.statusCode).toBe(200)
+        const a = cookieOf(first)
+        const second = await login(a)
+        expect(second.statusCode).toBe(200)
+        const b = cookieOf(second)
+        expect(b).not.toBe(a)
+        const url = '/v1/admin/agents'
+        // A was rotated out; B is the live session.
+        expect(
+          (await app.inject({ url, headers: { ...headers, cookie: a } }))
+            .statusCode
+        ).toBe(401)
+        expect(
+          (await app.inject({ url, headers: { ...headers, cookie: b } }))
+            .statusCode
+        ).toBe(200)
+        // A delayed logout carrying the predecessor ends the whole lineage.
+        const logout = await app.inject({
+          method: 'POST',
+          url: '/v1/session/logout',
+          headers: { ...headers, cookie: a }
+        })
+        expect(logout.statusCode).toBe(200)
+        expect(
+          (await app.inject({ url, headers: { ...headers, cookie: b } }))
+            .statusCode
+        ).toBe(401)
+      })
+    }, 60_000)
+
+    it('a failed logout keeps the cookie and the session usable for a retry (AUD-0601 F03)', async () => {
+      await withDatabase(async ({ open, admin, auth, sessionRole }) => {
+        const app = await open()
+        const created = await app.inject({
+          url: '/v1/session',
+          headers: {
+            ...headers,
+            'x-cvg-operator-token': createTrustedOperatorIdentityToken(
+              identity,
+              key
+            )
+          }
+        })
+        const cookie = String(created.headers['set-cookie']).split(';')[0]!
+        await admin.query(
+          `REVOKE EXECUTE ON FUNCTION ${auth}.operator_session_revoke(bytea) FROM ${sessionRole}`
+        )
+        try {
+          const failed = await app.inject({
+            method: 'POST',
+            url: '/v1/session/logout',
+            headers: { ...headers, cookie }
+          })
+          expect(failed.statusCode).toBe(503)
+          expect(failed.headers['set-cookie']).toBeUndefined()
+        } finally {
+          await admin.query(
+            `GRANT EXECUTE ON FUNCTION ${auth}.operator_session_revoke(bytea) TO ${sessionRole}`
+          )
+        }
+        const retried = await app.inject({
+          method: 'POST',
+          url: '/v1/session/logout',
+          headers: { ...headers, cookie }
+        })
+        expect(retried.statusCode).toBe(200)
+        expect(String(retried.headers['set-cookie'])).toMatch(
+          /cvg_operator_session=;/
+        )
+        expect(
+          (
+            await app.inject({
+              url: '/v1/admin/agents',
+              headers: { ...headers, cookie }
+            })
+          ).statusCode
+        ).toBe(401)
+      })
+    }, 60_000)
+
     it('fails readiness, cookie and token-only requests on auth outage, then recovers', async () => {
       await withDatabase(async ({ open, admin, auth, sessionRole }) => {
         const app = await open()

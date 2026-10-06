@@ -802,12 +802,26 @@ export function buildServer(options: BuildServerOptions = {}) {
           'A valid trusted bootstrap token is required'
         )
       }
+      // Rotation keeps the session family (SPEC 0144, AUD-0601 F02): logout
+      // with any digest of the lineage then revokes every successor. A token
+      // for another operator starts a new family and retires the old one.
+      const sameOperator =
+        existing !== undefined &&
+        existing.identity.tenantId === identity.tenantId &&
+        existing.identity.operatorId === identity.operatorId &&
+        existing.identity.role === identity.role
+      const rotate =
+        sameOperator && options.operatorSessionStore.replace !== undefined
       let record: OperatorSessionRecord
       try {
-        record = await options.operatorSessionStore.create({
-          identity,
-          expiresAt: Number(claims.exp) * 1000
-        })
+        const next = { identity, expiresAt: Number(claims.exp) * 1000 }
+        record =
+          rotate && existing
+            ? await options.operatorSessionStore.replace!(
+                existing.sessionId,
+                next
+              )
+            : await options.operatorSessionStore.create(next)
       } catch {
         reply.code(503)
         return fail(
@@ -820,7 +834,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         'set-cookie',
         serializeOperatorSessionCookie(record, httpSecurity.enforceHttps)
       )
-      if (existing) {
+      if (existing && !rotate) {
         try {
           await options.operatorSessionStore.revoke(existing.sessionId)
         } catch {
@@ -864,15 +878,17 @@ export function buildServer(options: BuildServerOptions = {}) {
   app.post('/v1/session/logout', async (request, reply) => {
     const correlationId = createCorrelationId()
     reply.header('cache-control', 'no-store')
-    reply.header(
-      'set-cookie',
-      clearOperatorSessionCookie(httpSecurity.enforceHttps)
-    )
     try {
       const sessionId = parseOperatorSessionCookie(request.headers.cookie)
       if (sessionId && options.operatorSessionStore) {
         await options.operatorSessionStore.revoke(sessionId)
       }
+      // The cookie is cleared only after the revocation committed; a failed
+      // revocation keeps it so the operator can retry (AUD-0601 F03).
+      reply.header(
+        'set-cookie',
+        clearOperatorSessionCookie(httpSecurity.enforceHttps)
+      )
       return ok({ loggedOut: true }, correlationId)
     } catch {
       reply.code(503)
