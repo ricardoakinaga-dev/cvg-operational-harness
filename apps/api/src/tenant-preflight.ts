@@ -85,7 +85,8 @@ const tenantIsolationMigrationVersions = [
   '0023_rate_limit_buckets',
   '0024_approval_decision_causality',
   '0025_webhook_replay_fencing',
-  '0026_rate_limit_key_hardening'
+  '0026_rate_limit_key_hardening',
+  '0027_worker_operations'
 ] as const
 
 const tenantIsolationRequiredConstraints = [

@@ -67,6 +67,12 @@ export type GovernedOutcome =
   | 'approval_required'
   | 'denied'
   | 'shadowed'
+  /**
+   * The kernel pause switch was on (SPEC 0181 I12): no new effect started and
+   * no approval was consumed. The caller keeps the work and retries it after
+   * the pause is lifted.
+   */
+  | 'paused'
 
 export interface ToolInvocation {
   tenantId: string
@@ -156,4 +162,14 @@ export interface GovernedAgentRuntimeOptions {
   realEffectAuthorizations?: readonly string[]
   effectJournal?: EffectJournalPort
   reservationTtlMs?: number
+  /**
+   * Durable kernel pause switch (SPEC 0181 I12, barra 0373 condição 10).
+   * Checked before the model call and before any effect; an unreadable
+   * switch counts as paused.
+   */
+  pause?: KernelPauseCheck
+}
+
+export interface KernelPauseCheck {
+  isPaused(tenantId: string): boolean | Promise<boolean>
 }

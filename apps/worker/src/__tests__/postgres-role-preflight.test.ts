@@ -454,9 +454,12 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
             rows: WORKER_CRITICAL_TABLES.map((table) => {
               const tenantExpression =
                 "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
-              const expression = ['outbox_effects', 'outbox_attempts'].includes(
-                table
-              )
+              const expression = [
+                'outbox_effects',
+                'outbox_attempts',
+                'worker_heartbeats',
+                'kernel_pause_switches'
+              ].includes(table)
                 ? tenantExpression
                 : `tenant_isolation_quarantined = false AND ${tenantExpression}`
               return {

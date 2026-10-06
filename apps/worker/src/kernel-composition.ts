@@ -24,6 +24,7 @@ import {
 import {
   PostgresApprovalAuthority,
   PostgresEffectJournal,
+  PostgresWorkerOperations,
   TenantScopedPostgresRuntimeRepository,
   withTenantContext,
   type InboundRuntimeContext,
@@ -325,6 +326,7 @@ export function createPostgresKernelRuntime(
   let ledgerId = randomUUID()
   const modelGateway = createControlledModelGateway()
   const conversations = new TenantScopedPostgresRuntimeRepository(pool)
+  const workerOperations = new PostgresWorkerOperations(pool)
 
   const toolInvocations: ToolInvocation[] = []
   const turnResults: GovernedTurnResult[] = []
@@ -380,7 +382,11 @@ export function createPostgresKernelRuntime(
         effectJournal,
         requireDurable: true,
         durableApprovals: true,
-        effectScopes: CONTROLLED_KERNEL_EFFECT_SCOPES
+        effectScopes: CONTROLLED_KERNEL_EFFECT_SCOPES,
+        pause: {
+          isPaused: (pausedTenant) =>
+            workerOperations.isPaused(TenantIdSchema.parse(pausedTenant))
+        }
       })
       return composition.runtime.runTurn(turnInput)
     })
@@ -545,6 +551,21 @@ function kernelOutcomeStatus(outcome: GovernedTurnResult['outcome']): string {
       return 'shadowed'
     case 'denied':
       return 'denied'
+    case 'paused':
+      return 'paused'
+  }
+}
+
+/**
+ * The kernel pause switch was on: nothing ran and nothing was consumed. The
+ * inbound message stays pending and the outbox event goes back through the
+ * retry path, so the work runs after the pause is lifted (I12).
+ */
+export class KernelPausedError extends Error {
+  public readonly code = 'kernel_paused'
+  public constructor(reason: string) {
+    super(`Kernel is paused (${reason}); the event is retried after resume`)
+    this.name = 'KernelPausedError'
   }
 }
 
@@ -606,6 +627,8 @@ export function createPostgresKernelHandlers(
         envelope
       })
       const result = await runtime.runTurn(turnInput)
+      if (result.outcome === 'paused')
+        throw new KernelPausedError(result.reason)
       await runtime.conversations.markInboundRuntimeCompleted(
         inboundMessageId,
         tenantId

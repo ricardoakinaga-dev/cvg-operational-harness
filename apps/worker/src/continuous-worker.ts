@@ -63,7 +63,23 @@ export interface ContinuousWorkerOptions extends Partial<ContinuousWorkerTuning>
   sweeps?: ContinuousSweepHandle
   telemetry?: WorkerTelemetry
   takeoverActive?: boolean | (() => boolean | Promise<boolean>)
+  /**
+   * Liveness heartbeat and the durable kernel pause switch (barra 0373,
+   * condições 9 e 10). While paused nothing is claimed, so pending work stays
+   * in the outbox; an unreadable switch counts as paused.
+   */
+  operations?: WorkerOperationsHooks
+  /** Heartbeat cadence; defaults to 10 s. */
+  operationsIntervalMs?: number
 }
+
+export interface WorkerOperationsHooks {
+  beat(input: { startedAt: Date; progressed: number }): Promise<void>
+  isPaused(): Promise<boolean>
+}
+
+/** How long one reading of the pause switch is reused by the pump. */
+export const WORKER_PAUSE_CHECK_TTL_MS = 1_000
 
 export type OutboxBacklogProbe = (
   tenantId: TenantId
@@ -154,6 +170,15 @@ export function createContinuousWorker(
   let pumpPromise: Promise<void> | undefined
   let summaryTimer: ReturnType<typeof setInterval> | undefined
   let lastLagSampleAt = 0
+  let operationsTimer: ReturnType<typeof setInterval> | undefined
+  let startedAt = new Date()
+  let settledReported = 0
+  let paused = false
+  let pauseCheckedAt = Number.NEGATIVE_INFINITY
+  const operationsIntervalMs = requirePositiveInteger(
+    options.operationsIntervalMs ?? 10_000,
+    'operationsIntervalMs'
+  )
   const inFlight = new Map<Promise<void>, OutboxEventRecord>()
   const sleepers = new Set<() => void>()
 
@@ -440,6 +465,62 @@ export function createContinuousWorker(
     )
   }
 
+  function settledCount(): number {
+    return (
+      counters.processed +
+      counters.failed +
+      counters.deadLettered +
+      counters.handoffs
+    )
+  }
+
+  async function beat(): Promise<void> {
+    const operations = options.operations
+    if (!operations) return
+    const settled = settledCount()
+    try {
+      await operations.beat({
+        startedAt,
+        progressed: settled - settledReported
+      })
+      settledReported = settled
+    } catch (error) {
+      telemetry.log(
+        'worker.heartbeat_failed',
+        { workerId, error: sanitizeOutboxError(error) },
+        'error'
+      )
+    }
+  }
+
+  /** Reads the pause switch at most once per TTL; failures pause. */
+  async function isPausedNow(): Promise<boolean> {
+    const operations = options.operations
+    if (!operations) return false
+    if (nowMs() - pauseCheckedAt < WORKER_PAUSE_CHECK_TTL_MS) return paused
+    let next: boolean
+    try {
+      next = await operations.isPaused()
+    } catch (error) {
+      telemetry.log(
+        'worker.pause_state_unavailable',
+        { workerId, error: sanitizeOutboxError(error) },
+        'error'
+      )
+      next = true
+    }
+    pauseCheckedAt = nowMs()
+    if (next !== paused) {
+      paused = next
+      telemetry.log(paused ? 'worker.paused' : 'worker.resumed', {
+        workerId,
+        inFlight: inFlight.size
+      })
+      telemetry.metric('worker_paused', paused ? 1 : 0, {})
+    }
+    return paused
+  }
+
   async function pump(): Promise<void> {
     let idleBackoff = 0
     let errorBackoff = 0
@@ -447,6 +528,14 @@ export function createContinuousWorker(
       if (inFlight.size >= tuning.concurrency) {
         await sampleLag()
         await abortableDelay(tuning.pollIntervalMs)
+        continue
+      }
+      if (await isPausedNow()) {
+        // Nothing is claimed while paused: pending work stays in the outbox.
+        await sampleLag()
+        await abortableDelay(
+          Math.min(tuning.idleMaxBackoffMs, WORKER_PAUSE_CHECK_TTL_MS)
+        )
         continue
       }
       let event: OutboxEventRecord | null
@@ -553,6 +642,14 @@ export function createContinuousWorker(
       durable: true
     })
     options.sweeps?.start()
+    if (options.operations) {
+      startedAt = new Date()
+      void beat()
+      operationsTimer = setInterval(() => {
+        void beat()
+      }, operationsIntervalMs)
+      operationsTimer.unref?.()
+    }
     logSummary('start')
     summaryTimer = setInterval(() => {
       logSummary('interval')
@@ -579,6 +676,10 @@ export function createContinuousWorker(
       if (summaryTimer) {
         clearInterval(summaryTimer)
         summaryTimer = undefined
+      }
+      if (operationsTimer) {
+        clearInterval(operationsTimer)
+        operationsTimer = undefined
       }
       await options.sweeps?.stop().catch((error: unknown) => {
         telemetry.log(

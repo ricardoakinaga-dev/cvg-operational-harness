@@ -22,7 +22,11 @@ export const WORKER_CRITICAL_TABLES = [
   'audit_events',
   'outbox_events',
   'outbox_attempts',
-  'outbox_effects'
+  'outbox_effects',
+  // PROD-0373: liveness heartbeat and the kernel pause switch (0027). An
+  // unreadable switch keeps the worker paused, so the grant is required.
+  'worker_heartbeats',
+  'kernel_pause_switches'
 ] as const
 
 export const OPERATIONAL_HARNESS_CRITICAL_TABLES = [
@@ -65,7 +69,11 @@ const ROLE_QUERY = `SELECT rolname, rolsuper, rolbypassrls, rolcreatedb,
                       WHERE rolname = current_user
                       LIMIT 1`
 
-const TENANT_ONLY_POLICY_TABLES = new Set(['runtime_approvals'])
+const TENANT_ONLY_POLICY_TABLES = new Set([
+  'runtime_approvals',
+  'worker_heartbeats',
+  'kernel_pause_switches'
+])
 
 /**
  * Verifies the effective PostgreSQL role and tenant-isolation schema before the

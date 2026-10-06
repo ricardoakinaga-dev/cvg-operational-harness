@@ -70,7 +70,10 @@ export const TENANT_SCHEMA_INVENTORY: readonly TenantScopedTable[] = [
   entry('cvg_conversation_messages'),
   entry('cvg_conversation_turns'),
   entry('cvg_conversation_execution_claims'),
-  entry('cvg_conversation_deliveries')
+  entry('cvg_conversation_deliveries'),
+  // PROD-0373: worker liveness and the kernel pause switch.
+  entry('worker_heartbeats', 'tenant-only'),
+  entry('kernel_pause_switches', 'tenant-only')
 ]
 
 export const TENANT_SCHEMA_TABLES: readonly string[] =

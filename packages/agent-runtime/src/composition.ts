@@ -206,6 +206,8 @@ export interface GovernedRuntimeCompositionInput {
   effectScopes?: Partial<Record<Capability, EffectScope>>
   realEffectAuthorizations?: readonly string[]
   reservationTtlMs?: number
+  /** Durable kernel pause switch (SPEC 0181 I12). */
+  pause?: import('./contracts.ts').KernelPauseCheck
 }
 
 export interface GovernedRuntimeComposition {
@@ -313,7 +315,8 @@ export function createGovernedRuntimeComposition(
       : {}),
     ...(input.effectJournal !== undefined
       ? { effectJournal: input.effectJournal }
-      : {})
+      : {}),
+    ...(input.pause !== undefined ? { pause: input.pause } : {})
   })
 
   return { runtime, requireDurable }

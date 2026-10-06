@@ -411,6 +411,30 @@ export class GovernedAgentRuntime {
         : deny(reason, decision, extra, phase)
     }
 
+    // I12: a recognized pause stops the turn before its next step or effect;
+    // nothing is consumed, so the caller retries after the pause is lifted.
+    const pausedStop = async (
+      decision: PolicyDecision,
+      phase: string,
+      extra: FinishExtra = {}
+    ): Promise<GovernedTurnResult | undefined> => {
+      const pause = this.#options.pause
+      if (pause === undefined) return undefined
+      let paused: boolean
+      try {
+        paused = await pause.isPaused(input.tenantId)
+      } catch {
+        appendAudit('runtime.paused', {
+          phase,
+          code: 'pause_state_unavailable'
+        })
+        return finish('paused', 'pause_state_unavailable', decision, extra)
+      }
+      if (!paused) return undefined
+      appendAudit('runtime.paused', { phase, code: 'operator_paused' })
+      return finish('paused', 'operator_paused', decision, extra)
+    }
+
     const assertBudget = (
       stage: BudgetedStage,
       decision: PolicyDecision,
@@ -627,12 +651,16 @@ export class GovernedAgentRuntime {
           endSpan,
           stopReason,
           stopDenial,
+          pausedStop,
           clock,
           deadline,
           traceId,
           limits
         })
       }
+
+      const pausedBeforeModel = await pausedStop(decision, 'model')
+      if (pausedBeforeModel !== undefined) return pausedBeforeModel
 
       const modelStage = beginStage('model.generate', decision)
       if ('denied' in modelStage) return modelStage.denied
@@ -779,6 +807,11 @@ export class GovernedAgentRuntime {
         })
       }
 
+      const pausedBeforeTool = await pausedStop(decision, 'tool', {
+        modelResult
+      })
+      if (pausedBeforeTool !== undefined) return pausedBeforeTool
+
       const toolStage = beginStage('tool.execute', decision, { modelResult })
       if ('denied' in toolStage) return toolStage.denied
       const toolSpan = toolStage.span
@@ -923,6 +956,7 @@ export class GovernedAgentRuntime {
       assertBudget,
       stopReason,
       stopDenial,
+      pausedStop,
       endSpan,
       clock,
       traceId
@@ -1104,6 +1138,12 @@ export class GovernedAgentRuntime {
     if (preToolBudget !== undefined) return preToolBudget
     const preToolStop = stopDenial(decision)
     if (preToolStop !== undefined) return preToolStop
+    // I12: checked before the reservation, so a pause never consumes the
+    // approval and the same approval executes once after resume.
+    const prePausedStop = await pausedStop(decision, 'approval', {
+      approvalId
+    })
+    if (prePausedStop !== undefined) return prePausedStop
 
     let reservation: ApprovalReservation | undefined
     let journalAttemptId: string | undefined

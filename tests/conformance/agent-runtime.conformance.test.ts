@@ -24,6 +24,8 @@ const NOW = new Date('2026-10-06T12:00:00.000Z')
 const MODEL_INPUT = 'synthetic conformance cancel'
 
 interface Faults {
+  /** Durable pause switch read by the runtime (I12). */
+  readonly pause?: { paused: boolean; throws?: boolean }
   readonly policyThrows?: boolean
   readonly approvalRequestThrows?: boolean
   readonly toolThrows?: boolean
@@ -101,7 +103,17 @@ function build(faults: Faults = {}) {
     outbox: async (event) => ({ eventId: `evt_${event.idempotencyKey}` }),
     clock: now,
     effectJournal: new InMemoryEffectJournal({ clock: now }),
-    effectScopes: { 'record.cancel': 'controlled_fake' }
+    effectScopes: { 'record.cancel': 'controlled_fake' },
+    ...(faults.pause
+      ? {
+          pause: {
+            isPaused: () => {
+              if (faults.pause?.throws) throw new Error('pause store down')
+              return faults.pause?.paused ?? false
+            }
+          }
+        }
+      : {})
   })
   // Falhas injetadas só depois do pedido de aprovação, para isolar a fase.
   const arm = () => {
@@ -268,5 +280,39 @@ describe('conformidade SPEC 0181 — GovernedAgentRuntime', () => {
       .catch((error: unknown) => `threw:${(error as Error).message}`)
     expect(h.toolExecutor).toHaveBeenCalledTimes(1)
     expect(outcome).not.toBe('executed')
+  })
+
+  it('C12/I12 — pausa antes da execução aprovada não executa nem consome a aprovação; a retomada executa uma vez', async () => {
+    const pause = { paused: false }
+    const h = build({ pause })
+    const approvalId = await approved(h)
+    pause.paused = true
+    const paused = await h.runtime.runTurn(turn({ approvalId }))
+    expect(paused.outcome).toBe('paused')
+    expect(paused.reason).toBe('operator_paused')
+    expect(h.toolExecutor).not.toHaveBeenCalled()
+    expect(h.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
+    expect(auditTypes(h)).toContain('runtime.paused')
+
+    pause.paused = false
+    const resumed = await h.runtime.runTurn(turn({ approvalId }))
+    expect(resumed.outcome).toBe('executed')
+    expect(h.toolExecutor).toHaveBeenCalledTimes(1)
+  })
+
+  it('C12/I12 — pausa antes do modelo não chama o modelo nem pede aprovação', async () => {
+    const h = build({ pause: { paused: true } })
+    const result = await h.runtime.runTurn(turn())
+    expect(result.outcome).toBe('paused')
+    expect(result.modelResult).toBeUndefined()
+    expect(h.approvals.list(TENANT)).toHaveLength(0)
+  })
+
+  it('C12/I12 — estado de pausa ilegível conta como pausa, sem efeito', async () => {
+    const h = build({ pause: { paused: false, throws: true } })
+    const result = await h.runtime.runTurn(turn())
+    expect(result.outcome).toBe('paused')
+    expect(result.reason).toBe('pause_state_unavailable')
+    expect(h.toolExecutor).not.toHaveBeenCalled()
   })
 })

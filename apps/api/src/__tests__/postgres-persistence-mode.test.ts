@@ -344,7 +344,8 @@ describe('api PostgreSQL persistence mode', () => {
       '0023_rate_limit_buckets',
       '0024_approval_decision_causality',
       '0025_webhook_replay_fencing',
-      '0026_rate_limit_key_hardening'
+      '0026_rate_limit_key_hardening',
+      '0027_worker_operations'
     ] as const
     const rows: Array<{
       version: string
@@ -1007,7 +1008,9 @@ describe('api PostgreSQL persistence mode', () => {
               table_name === 'effect_journal' ||
               table_name === 'journey_owner_drafts' ||
               table_name === 'journey_patient_drafts' ||
-              table_name === 'journey_appointment_drafts'
+              table_name === 'journey_appointment_drafts' ||
+              table_name === 'worker_heartbeats' ||
+              table_name === 'kernel_pause_switches'
                 ? []
                 : [
                     { table_name, column_name: 'tenant_isolation_quarantined' }
@@ -1073,7 +1076,9 @@ describe('api PostgreSQL persistence mode', () => {
               tablename === 'effect_journal' ||
               tablename === 'journey_owner_drafts' ||
               tablename === 'journey_patient_drafts' ||
-              tablename === 'journey_appointment_drafts'
+              tablename === 'journey_appointment_drafts' ||
+              tablename === 'worker_heartbeats' ||
+              tablename === 'kernel_pause_switches'
                 ? "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
                 : "tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')",
             with_check:
@@ -1085,7 +1090,9 @@ describe('api PostgreSQL persistence mode', () => {
               tablename === 'effect_journal' ||
               tablename === 'journey_owner_drafts' ||
               tablename === 'journey_patient_drafts' ||
-              tablename === 'journey_appointment_drafts'
+              tablename === 'journey_appointment_drafts' ||
+              tablename === 'worker_heartbeats' ||
+              tablename === 'kernel_pause_switches'
                 ? "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
                 : "tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
           }))

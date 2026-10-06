@@ -2,6 +2,7 @@ import { Pool } from 'pg'
 import { executePublishedAgent, getConversationTimeline } from '@cvg/agent-core'
 import { resolveWorkflowCoordinator } from '@cvg/agent-runtime'
 import {
+  PostgresWorkerOperations,
   TenantScopedPostgresControlPlaneRepository,
   TenantScopedPostgresRuntimeRepository,
   withTenantContext,
@@ -28,7 +29,8 @@ import {
   type ContinuousSweepHandle,
   type ContinuousWorker,
   type ContinuousWorkerTuning,
-  type OutboxBacklogProbe
+  type OutboxBacklogProbe,
+  type WorkerOperationsHooks
 } from './continuous-worker.ts'
 import {
   KERNEL_WORKER_RUNTIME,
@@ -64,6 +66,8 @@ export interface PostgresContinuousWorkerOptions {
   tuning?: Partial<ContinuousWorkerTuning>
   heartbeatIntervalMs?: number
   lagSampleIntervalMs?: number
+  /** Liveness heartbeat cadence (worker_heartbeats); defaults to 10 s. */
+  operationsIntervalMs?: number
   sweeps?: ContinuousSweepHandle
 }
 
@@ -187,6 +191,14 @@ export function createPostgresContinuousWorker(
       connection.pool,
       connection.tenantId
     ),
+    operations: createPostgresWorkerOperationsHooks(
+      connection.pool,
+      connection.tenantId,
+      connection.workerId
+    ),
+    ...(options.operationsIntervalMs !== undefined
+      ? { operationsIntervalMs: options.operationsIntervalMs }
+      : {}),
     ...(options.sweeps ? { sweeps: options.sweeps } : {})
   })
   return {
@@ -196,6 +208,24 @@ export function createPostgresContinuousWorker(
     tenantId: connection.tenantId,
     workerId: connection.workerId,
     tuning
+  }
+}
+
+/**
+ * Heartbeat and kernel pause switch over the tenant-scoped tables of
+ * migration 0027 (barra 0373, condições 9 e 10).
+ */
+export function createPostgresWorkerOperationsHooks(
+  pool: Pool,
+  tenantId: TenantId,
+  workerId: string
+): WorkerOperationsHooks {
+  const operations = new PostgresWorkerOperations(
+    pool as unknown as PostgresPoolLike
+  )
+  return {
+    beat: (input) => operations.beat(tenantId, { workerId, ...input }),
+    isPaused: () => operations.isPaused(tenantId)
   }
 }
 

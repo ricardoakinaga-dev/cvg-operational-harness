@@ -61,6 +61,11 @@ export interface ExecutionContext {
     extra?: FinishExtra,
     phase?: string
   ) => GovernedTurnResult | undefined
+  pausedStop: (
+    decision: PolicyDecision,
+    phase: string,
+    extra?: FinishExtra
+  ) => Promise<GovernedTurnResult | undefined>
   clock: () => Date
   deadline: number
   traceId: string
