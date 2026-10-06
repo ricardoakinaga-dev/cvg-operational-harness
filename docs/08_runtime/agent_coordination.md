@@ -8,11 +8,13 @@
 
 ## AUD-0599 — auditoria da entrega Fable e publicação — 06/10/2026
 
-- Task `AUD0599-FABLE-DELIVERY-20261006`, Codex, `IN_PROGRESS`. Pedido explícito do usuário: auditar a entrega recuperada e fazer commit/push para `ricardoakinaga-dev/cvg-operational-harness`.
+- Task `AUD0599-FABLE-DELIVERY-20261006`, Codex, `COMPLETED_AUDIT_AND_PUBLICATION / TWO_P2_OPEN`. Pedido explícito do usuário: auditar a entrega recuperada e fazer commit/push para `ricardoakinaga-dev/cvg-operational-harness`.
 - Escrita: `docs/04_audit/0599_auditoria_entrega_fable_2026-10-06.md`, `docs/04_audit/evidence/AUD0599-FABLE-20261006/**`, esta seção e entradas próprias novas no topo dos ledgers 99/20/30. Cópia isolada e logs em `/tmp/cvg-aud0599-20261006/**`; PostgreSQL próprio `cvg-aud0599-pg-20261006`, loopback 55721. Revisão auxiliar independente somente leitura do delta AUD-0598, sem descendentes.
 - Os oito arquivos pendentes AUD-0598 do Fable são insumos congelados, inicialmente somente leitura. O pedido atual autoriza sua revisão e publicação seletiva após auditoria, preservando os bytes recebidos e registrando a adoção para commit; não autoriza misturar outras frentes ou promover bootstrap do claim HARNESS-ISO. Histórico local existente será publicado por push normal, sem force.
 - Extensão de escrita: adoção dos oito arquivos recebidos para commit seletivo após revisão; somente formatação Prettier no novo `tests/conformance/durable-approval-resume.conformance.test.ts`, cujo check falhou. Os sete demais ficam byte-exatos; mudanças semânticas exigem achado e contrato próprios.
 - Executar suíte completa, PostgreSQL efetivo, sondas anteriores, typecheck/lint, catálogo e checks documentais em Node 22. Sem lockfile, certify, E2E, SBOM, licenças, deploy, dados reais, canal ou provider. A barra proporcional 0373 dispensa certify integral; esta rodada verifica a entrega, sem implementar as dez condições nem conceder release.
+
+- Fechamento: entrega `28ffc26` e sete commits anteriores publicados por fast-forward em origin/main, sem force. Suíte exata 2.830 PASS ordinários + 2 falhas esperadas/349 arquivos, zero skips; PostgreSQL 288 PASS; typecheck/lint/formato e docs PASS. Hume e lead confirmaram dois P2 residuais; R01–R03 fechados no escopo, R04 parcial, produção NO_GO. PostgreSQL próprio removido, crítico encerrado; cópia de evidência retida, sem recursos de serving ativos. Adendo documental de recibo será commitado/publicado; nenhum caminho de runtime continua reservado a esta auditoria.
 
 ## AUD-0598 — reauditoria de 2356a25 — 06/10/2026
 

@@ -1,6 +1,6 @@
 # AUD-0599 — disposição atual da entrega Fable — 06/10/2026
 
-- Task `AUD0599-FABLE-DELIVERY-20261006`: auditoria `DONE`, publicação `IN_PROGRESS`; aceite integral da parte A `REJECT_TWO_P2`, produção `NO_GO`. [Relatório](04_audit/0599_auditoria_entrega_fable_2026-10-06.md) e [evidência](04_audit/evidence/AUD0599-FABLE-20261006/proof.json). Esta entrada supersede a disposição OPEN anterior de R01–R03 no escopo medido; os registros anteriores permanecem históricos, sem reescrita.
+- Task `AUD0599-FABLE-DELIVERY-20261006`: auditoria `DONE`, publicação `DONE` em `28ffc26` e `origin/main`; aceite integral da parte A `REJECT_TWO_P2`, produção `NO_GO`. [Relatório](04_audit/0599_auditoria_entrega_fable_2026-10-06.md) e [evidência](04_audit/evidence/AUD0599-FABLE-20261006/proof.json). Esta entrada supersede a disposição OPEN anterior de R01–R03 no escopo medido; os registros anteriores permanecem históricos, sem reescrita.
 
 | Task        | Prioridade/estado | O quê e onde                                                          | Como e dependência                                                                      | Critério de pronto                                                                      |
 | ----------- | ----------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |

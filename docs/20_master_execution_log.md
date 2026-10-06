@@ -1,9 +1,10 @@
 # AUD-0599 — entrega Fable auditada e publicação autorizada — 06/10/2026
 
-- Task `AUD0599-FABLE-DELIVERY-20261006`, Codex; `status: IN_PROGRESS_PUBLICATION`. Auditoria [AUD-0599](04_audit/0599_auditoria_entrega_fable_2026-10-06.md) concluída; aceite integral da parte A `REJECT_TWO_P2`; produção `NO_GO`.
+- Task `AUD0599-FABLE-DELIVERY-20261006`, Codex; `status: COMPLETED_AUDIT_AND_PUBLICATION`. Auditoria [AUD-0599](04_audit/0599_auditoria_entrega_fable_2026-10-06.md) concluída; aceite integral da parte A `REJECT_TWO_P2`; produção `NO_GO`.
 - `last_completed_action`: oito arquivos recebidos revisados; sete byte-exatos e somente Prettier no teste de retomada. Dois handbacks Opus recuperados e arquivados; parte B sem entrega. R01–R03 fechados nos cenários verificados; R04 parcial e fechamento de etapa com falha de log abertos. Hume revisou 12 cenários próprios, reproduzidos pelo lead; porta release com PostgreSQL real passou dois cenários adicionais, sem alegação de pausa/crash integral com PostgreSQL.
 - `verification_state`: 349 arquivos; 2.830 PASS ordinários + 2 falhas esperadas do worker, zero skips; PostgreSQL 35 arquivos/288 PASS, zero skips; foco 109 PASS ordinários + 2 falhas esperadas, sondas anteriores 8+5 PASS; 31 regressões PASS; catálogo/manifests 4 PASS; typecheck/lint/formato PASS. Gitleaks da entrega/evidências zero achados; npm audit produção zero e audit completo high em source-map-js de desenvolvimento. Primeiro FAIL geral por sonda temporária no workspace preservado e não imputado à entrega.
-- `next_action`: concluir commit seletivo e push normal autorizado de HEAD para origin/main; registrar o SHA efetivamente publicado e consultar CI. Proteção de main, dismissals CodeQL, bootstrap reservado, parte B, imagem, backup e alertas continuam fora desta execução. Entradas anteriores são históricas e permanecem byte-exatas.
+- `publication_state`: entrega `28ffc26` e sete commits anteriores publicados por fast-forward em `origin/main`, confirmado por ls-remote. [Recibo](04_audit/evidence/AUD0599-FABLE-20261006/publication.json). PostgreSQL próprio removido e revisor encerrado; nenhum deploy. Verify do SHA publicado falhou por zod antes de install (run 37502885930); Security em execução na captura, sem aceite remoto.
+- `next_action`: owner KERNEL-PLUGINS remediar AUD0599-F01/F02 e repetir as sondas no próximo candidato. Bootstrap, parte B e demais condições 0373 continuam pendentes; registros anteriores permanecem históricos e byte-exatos.
 
 # SYNC-20261006 — pendências auditadas e commitadas — 06/10/2026
 
