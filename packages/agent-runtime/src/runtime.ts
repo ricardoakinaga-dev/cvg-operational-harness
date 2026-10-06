@@ -413,26 +413,38 @@ export class GovernedAgentRuntime {
 
     // I12: a recognized pause stops the turn before its next step or effect;
     // nothing is consumed, so the caller retries after the pause is lifted.
+    // An unreadable switch counts as paused.
+    const readPause = async (): Promise<
+      'operator_paused' | 'pause_state_unavailable' | undefined
+    > => {
+      const pause = this.#options.pause
+      if (pause === undefined) return undefined
+      try {
+        return (await pause.isPaused(input.tenantId))
+          ? 'operator_paused'
+          : undefined
+      } catch {
+        return 'pause_state_unavailable'
+      }
+    }
+    const finishPaused = (
+      code: 'operator_paused' | 'pause_state_unavailable',
+      decision: PolicyDecision,
+      phase: string,
+      extra: FinishExtra = {}
+    ): GovernedTurnResult => {
+      appendAudit('runtime.paused', { phase, code })
+      return finish('paused', code, decision, extra)
+    }
     const pausedStop = async (
       decision: PolicyDecision,
       phase: string,
       extra: FinishExtra = {}
     ): Promise<GovernedTurnResult | undefined> => {
-      const pause = this.#options.pause
-      if (pause === undefined) return undefined
-      let paused: boolean
-      try {
-        paused = await pause.isPaused(input.tenantId)
-      } catch {
-        appendAudit('runtime.paused', {
-          phase,
-          code: 'pause_state_unavailable'
-        })
-        return finish('paused', 'pause_state_unavailable', decision, extra)
-      }
-      if (!paused) return undefined
-      appendAudit('runtime.paused', { phase, code: 'operator_paused' })
-      return finish('paused', 'operator_paused', decision, extra)
+      const code = await readPause()
+      return code === undefined
+        ? undefined
+        : finishPaused(code, decision, phase, extra)
     }
 
     const assertBudget = (
@@ -652,6 +664,8 @@ export class GovernedAgentRuntime {
           stopReason,
           stopDenial,
           pausedStop,
+          readPause,
+          finishPaused,
           clock,
           deadline,
           traceId,
@@ -957,6 +971,8 @@ export class GovernedAgentRuntime {
       stopReason,
       stopDenial,
       pausedStop,
+      readPause,
+      finishPaused,
       endSpan,
       clock,
       traceId
@@ -1308,6 +1324,34 @@ export class GovernedAgentRuntime {
       return toolStage.denied
     }
     const toolSpan = toolStage.span
+    // I12 at the last boundary (AUD-0601 F01): the switch is read again right
+    // before the body, with no await between this read and the call. A pause
+    // committed while the approval, the journal or the effect start were
+    // being recorded settles the reservation as no effect, so the same
+    // approval executes once after resume (the journal re-arms EFFECT_FAILED).
+    const pausedBeforeBody = await readPause()
+    if (pausedBeforeBody !== undefined) {
+      if (effectJournal !== undefined && journalAttemptId !== undefined) {
+        try {
+          await effectJournal.failEffect({
+            tenantId: input.tenantId,
+            operationKey,
+            attemptId: journalAttemptId,
+            errorCode: pausedBeforeBody
+          })
+        } catch {
+          // The EFFECT_STARTED record remains for the TTL sweep.
+        }
+      }
+      await this.#recovery.releaseApproval(
+        input,
+        approvalId,
+        reservation.reservationId,
+        `pause:${pausedBeforeBody}`
+      )
+      endSpan(toolSpan, 'error', pausedBeforeBody)
+      return finishPaused(pausedBeforeBody, decision, 'effect', { approvalId })
+    }
     let toolResult: unknown
     try {
       const executed = await this.#options.toolExecutor({

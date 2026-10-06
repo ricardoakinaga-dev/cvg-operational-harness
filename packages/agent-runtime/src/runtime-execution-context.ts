@@ -66,6 +66,15 @@ export interface ExecutionContext {
     phase: string,
     extra?: FinishExtra
   ) => Promise<GovernedTurnResult | undefined>
+  readPause: () => Promise<
+    'operator_paused' | 'pause_state_unavailable' | undefined
+  >
+  finishPaused: (
+    code: 'operator_paused' | 'pause_state_unavailable',
+    decision: PolicyDecision,
+    phase: string,
+    extra?: FinishExtra
+  ) => GovernedTurnResult
   clock: () => Date
   deadline: number
   traceId: string

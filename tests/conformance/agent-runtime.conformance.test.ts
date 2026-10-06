@@ -26,6 +26,11 @@ const MODEL_INPUT = 'synthetic conformance cancel'
 interface Faults {
   /** Durable pause switch read by the runtime (I12). */
   readonly pause?: { paused: boolean; throws?: boolean }
+  /** Turns the pause on once, right after this step commits (AUD-0601 F01). */
+  readonly pauseAfter?:
+    | 'approval_reserve'
+    | 'journal_reserve'
+    | 'effect_started'
   readonly policyThrows?: boolean
   readonly approvalRequestThrows?: boolean
   readonly toolThrows?: boolean
@@ -86,6 +91,36 @@ function build(faults: Faults = {}) {
     clock: now
   })
   const audit = new HashChainedAuditLedger()
+  const journal = new InMemoryEffectJournal({ clock: now })
+  if (faults.pauseAfter !== undefined) {
+    let armed = true
+    const pauseOnce = () => {
+      if (armed && faults.pause) faults.pause.paused = true
+      armed = false
+    }
+    if (faults.pauseAfter === 'approval_reserve') {
+      const reserve = approvals.reserve.bind(approvals)
+      approvals.reserve = (request) => {
+        const reserved = reserve(request)
+        pauseOnce()
+        return reserved
+      }
+    } else if (faults.pauseAfter === 'journal_reserve') {
+      const reserve = journal.reserve.bind(journal)
+      journal.reserve = async (request) => {
+        const reserved = await reserve(request)
+        pauseOnce()
+        return reserved
+      }
+    } else {
+      const started = journal.markEffectStarted.bind(journal)
+      journal.markEffectStarted = async (request) => {
+        const record = await started(request)
+        pauseOnce()
+        return record
+      }
+    }
+  }
   const telemetry = new InMemoryTelemetry({ clock: now })
   let effectDone = false
   const toolExecutor = vi.fn(async () => {
@@ -102,7 +137,7 @@ function build(faults: Faults = {}) {
     toolExecutor,
     outbox: async (event) => ({ eventId: `evt_${event.idempotencyKey}` }),
     clock: now,
-    effectJournal: new InMemoryEffectJournal({ clock: now }),
+    effectJournal: journal,
     effectScopes: { 'record.cancel': 'controlled_fake' },
     ...(faults.pause
       ? {
@@ -315,4 +350,31 @@ describe('conformidade SPEC 0181 — GovernedAgentRuntime', () => {
     expect(result.reason).toBe('pause_state_unavailable')
     expect(h.toolExecutor).not.toHaveBeenCalled()
   })
+
+  for (const window of [
+    'approval_reserve',
+    'journal_reserve',
+    'effect_started'
+  ] as const) {
+    it(`C12/I12 — pausa ligada depois de ${window} não executa; a retomada executa uma vez (AUD-0601 F01)`, async () => {
+      const pause = { paused: false }
+      const h = build({ pause, pauseAfter: window })
+      const approvalId = await approved(h)
+      const paused = await h.runtime.runTurn(turn({ approvalId }))
+      expect(paused.outcome).toBe('paused')
+      expect(paused.reason).toBe('operator_paused')
+      expect(h.toolExecutor).not.toHaveBeenCalled()
+      expect(h.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
+
+      pause.paused = false
+      const resumed = await h.runtime.runTurn(turn({ approvalId }))
+      expect(resumed.outcome).toBe('executed')
+      expect(h.toolExecutor).toHaveBeenCalledTimes(1)
+      expect(h.approvals.get(TENANT, approvalId).status).toBe('EXECUTED')
+      // A repeated presentation replays the recorded result, never the body.
+      const replay = await h.runtime.runTurn(turn({ approvalId }))
+      expect(replay.outcome === 'executed' ? replay.replayed : true).toBe(true)
+      expect(h.toolExecutor).toHaveBeenCalledTimes(1)
+    })
+  }
 })
