@@ -194,6 +194,11 @@ export interface RuntimeInput {
   readonly resume?:
     | { readonly kind: 'approval'; readonly approvalId: string }
     | { readonly kind: 'user_input'; readonly message: string }
+  /**
+   * Cooperative cancellation from the caller (SPEC 0181 I8). The kernel links
+   * it to its own deadline signal; cancellation before dispatch runs no tool.
+   */
+  readonly signal?: AbortSignal
 }
 
 export interface RuntimeResult {

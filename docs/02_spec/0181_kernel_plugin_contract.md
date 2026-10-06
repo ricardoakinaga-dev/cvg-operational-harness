@@ -1,8 +1,7 @@
 # SPEC 0181 — Contrato do kernel de plugins
 
-- Data: 06/10/2026. Status: `REVISADA_PELO_USUARIO / AGUARDANDO_OK_DE_BUILD`
-  (T3). As três perguntas da §9 foram respondidas pelo usuário em 06/10/2026. O
-  BUILD do kernel (KPLG-003) começa com o ok explícito do usuário.
+- Data: 06/10/2026. Status: `APPROVED` (T3). Perguntas da §9 respondidas e
+  BUILD do kernel (KPLG-003) autorizado pelo usuário em 06/10/2026.
 - Decisão: [ADR-011](../architecture/adrs/ADR-011-kernel-de-plugins-com-controles-obrigatorios.md).
   Roteiro: [0372](../03_build/0372_kernel_plugins_roadmap.md), cartão KPLG-002.
 - Referência: DeepSeek Harness, `~/deepseek-harness` (`docs/cordis-primer.md`,

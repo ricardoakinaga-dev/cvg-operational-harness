@@ -26,11 +26,11 @@
 
 ## KPLG-002 — Contrato de plugins, conformidade e barra do harness
 
-- Estado: `IN_PROGRESS`. Feito: [SPEC 0181](../02_spec/0181_kernel_plugin_contract.md)
+- Estado: `DONE`. Feito: [SPEC 0181](../02_spec/0181_kernel_plugin_contract.md)
   em rascunho; suíte de conformidade em `tests/conformance/` executada contra os
   três runtimes (26 PASS, 7 lacunas confirmadas); SPEC revisada pelo usuário
   (decisões D-0181-1 a 3); [barra 0373](0373_barra_producao_harness.md) em
-  rascunho. Falta: ok do usuário para o BUILD do kernel e aprovação da barra. Gate: T3 para a SPEC; revisão do usuário antes do KPLG-003.
+  rascunho. SPEC e barra aprovadas pelo usuário em 06/10/2026. Gate: T3 para a SPEC; revisão do usuário antes do KPLG-003.
   Dependências: KPLG-001.
 - O quê:
   - SPEC curta do contrato: tipos de plugin, chaves de serviço, pontos de
@@ -45,7 +45,12 @@
 
 ## KPLG-003 — Kernel com host de plugins
 
-- Estado: `TODO`. Gate: T3. Dependências: KPLG-002 aprovado.
+- Estado: `DONE` em 06/10/2026. Código em `packages/harness/src/kernel/`;
+  `SinglePassGovernedRuntime` virou fachada do kernel. Suíte completa 2.697
+  PASS, PostgreSQL 288 PASS, typecheck e lint PASS; conformidade 51 PASS e 4
+  lacunas restantes, todas no iterativo e no `GovernedAgentRuntime`
+  ([evidência](../04_audit/evidence/KERNEL-PLUGINS-20261006/baseline-and-conformance.md)).
+  Gate: T3. Dependências: KPLG-002 aprovado.
 - O quê: implementar o kernel mínimo (loop + host + pontos de interceptação).
   Política, aprovação, orçamento, auditoria e journal atuais são embrulhados
   como plugins de controle, **sem mudar comportamento**.

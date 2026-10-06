@@ -12,6 +12,44 @@ export type {
 export * from './effect-journal.ts'
 export * from './execution-spine.ts'
 export * from './runtime.ts'
+export {
+  InMemoryEffectLedger,
+  InMemoryKernelLog,
+  InMemoryPauseSwitch,
+  KernelBootError,
+  KernelHost,
+  KernelRuntime,
+  PAUSED_RESPONSE,
+  REQUIRED_SERVICES,
+  approvalsControl,
+  auditControl,
+  budgetControl,
+  createKernelRuntime,
+  effectsControl,
+  logControl,
+  modelCapability,
+  pauseControl,
+  plannerCapability,
+  policyControl,
+  standardKernelPlugins,
+  telemetryCapability,
+  toolsCapability
+} from './kernel/index.ts'
+export type {
+  EffectLedger,
+  GuardVerdict,
+  HookMap,
+  HookPoint,
+  KernelContext,
+  KernelLog,
+  KernelLogEvent,
+  KernelPlugin,
+  PauseSwitch,
+  PluginKind,
+  ServiceKey,
+  StandardKernelOptions,
+  ToolGuard
+} from './kernel/index.ts'
 export * from './context-engine.ts'
 export * from './completion.ts'
 export * from './step-store.ts'
