@@ -1,3 +1,10 @@
+# PROD-0373 rodada 2 — Verify publicado e AUD-0601 corrigidos — 06/10/2026
+
+- Task `PROD-0373-20261006`, Claude Code; `status: DONE_LOCAL / CONDITION_5_PENDING_PUSH`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-2--verify-publicado-e-aud-0601).
+- `last_completed_action`: Verify de `dc4a3cb` falhou em cobertura crítica (`channel` 94,85%); gates pulados rodados localmente revelaram catálogo de skips, prova rem21-010 e link de docs desatualizados — todos corrigidos. AUD-0601 (Codex) F01–F07 corrigidos: pausa relida antes do corpo, rotação de sessão na mesma família, cookie limpo só após revogação, healthcheck do worker, heartbeat serializado, verificação estrita de payload com âncoras e perfil explícito da prova de restore. Extra: sonda `/live` da imagem recebia 426 com HTTPS obrigatório.
+- `verification_state`: 25 gates locais no worktree isolado do HEAD PASS — suíte 358 arquivos/2.939 PASS, PostgreSQL 37/298 PASS, cobertura crítica ≥ 96,48% por grupo, skips, rem21-010, caos, fases, docs, licenças, SBOM, audit; smoke 18/18 e inspeção PASS na imagem `sha256:a0f647b1…`. E2E/browser/certify só no CI.
+- `next_action`: push pelo usuário, Verify/Security verdes no SHA, proteção do `main` com `REM21 CI bar (Node 22)`, `codeql`, `secret-scan`, `supply-chain`; reauditoria. Implantação real (ambiente, segredos, papéis, proxy TLS, backup agendado) continua fora do repositório. Produção `NO_GO` até lá.
+
 # PROD-0373 — AUD-0600 corrigida e barra 0373 executada — 06/10/2026
 
 - Task `PROD-0373-20261006`, Claude Code; `status: DONE_LOCAL / CONDITION_5_PENDING_PUSH`. Pedido do usuário: "avalia as colocações do auditor e faz as correções necessárias para colocar o programa em produção". [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md), [operação](08_runtime/0802_harness_production_operations.md).

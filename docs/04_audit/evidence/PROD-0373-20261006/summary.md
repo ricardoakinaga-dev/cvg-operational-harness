@@ -46,3 +46,35 @@ Imagem verificada: `sha256:416d227edd8b7aae1997a5cac643cffcc07ac4e05076d6d62cd40
 - Instabilidade conhecida: `chaos-postgres` encerra conexões do banco
   compartilhado e já derrubou, numa rodada, um teste de
   `postgres-persistence-mode` que passa isolado.
+
+## Rodada 2 — Verify publicado e AUD-0601
+
+O Verify de `dc4a3cb` falhou em `coverage-critical` (grupo `channel` 94,85%,
+mínimo 95%) e pulou os gates seguintes. Rodados localmente num worktree
+isolado, apareceram três falhas latentes, todas corrigidas:
+
+| Gate | Causa | Correção |
+| --- | --- | --- |
+| coverage-critical | Ramos novos de `baseUrl` ausente nos adaptadores | Testes de configuração e de erro de envio: `channel` 96,48% |
+| skip governance | Hashes de 5 arquivos (3 de outras frentes) e 2 suítes PostgreSQL novas fora do catálogo | Catálogo atualizado com contagens remedidas |
+| postgres-proof (rem21-010) | Prova fixa na 0026; a 0027 criava tabelas fora do dump | Avanço para a 0027, permissões reaplicadas e rollback documentado |
+| docs | Link para o relatório AUD-0600, ainda não commitado | Citado como caminho |
+
+AUD-0601 (Codex) — todos os achados procedem e foram corrigidos:
+
+| Achado | Correção | Prova |
+| --- | --- | --- |
+| F01 P1 | Pausa relida imediatamente antes do corpo; reserva liquidada sem efeito; retomada executa uma vez | Conformidade C12 nas três janelas (aprovação e journal reais) |
+| F02 P1 | Rotação de sessão com `replace` na mesma família; logout de qualquer elo revoga a linhagem | Teste PostgreSQL com os papéis do bootstrap |
+| F03 P2 | Cookie limpo só depois da revogação confirmada | Teste PostgreSQL com `EXECUTE` revogado e retry |
+| F04 P2 | Healthcheck único: `/live` na API, arquivo de vida no worker | Smoke: os dois contêineres `healthy` |
+| F05 P2 | Um heartbeat por vez, delta reservado antes do `await` e devolvido em falha | Teste com persistência lenta e falha |
+| F06 P2 | Worker sanitiza o payload antes de encadear; verificador estrito e com âncoras | Testes; restore com adulteração de payload detectada |
+| F07 P3 | Prova de restore exige `NODE_ENV=test` explicitamente | Recusa sem o perfil; PASS com ele |
+
+Achado extra no smoke: com `API_REQUIRE_HTTPS=true` a sonda `/live` da própria
+imagem recebia 426 (também na sonda antiga), deixando a API `unhealthy`. Só
+`GET`/`HEAD /live` por loopback sem cabeçalhos de proxy ficou isento.
+
+Imagem final: `sha256:a0f647b1eaa75b2ced1b59e42886d83ef72b737f783b78f5d5613aa61a1b627c`
+— smoke 18/18 e inspeção PASS (gitleaks 0).

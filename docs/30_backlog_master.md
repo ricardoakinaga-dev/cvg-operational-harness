@@ -1,3 +1,19 @@
+# PROD-0373 rodada 2 — Verify publicado e AUD-0601 corrigidos — 06/10/2026
+
+- Task `PROD-0373-20261006` rodada 2: `DONE_LOCAL`. Supersede a disposição OPEN de AUD0601-F01–F07 e da falha de cobertura crítica do Verify `37524247242`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-2--verify-publicado-e-aud-0601).
+
+| Task                | Estado       | Critério atendido                                                                                                      |
+| ------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| AUD0601-F01         | FIXED_LOCAL  | Pausa após reserva da aprovação, do journal ou do início: corpo não roda, aprovação APPROVED, retomada executa uma vez |
+| AUD0601-F02         | FIXED_LOCAL  | Logout com o cookie anterior revoga o sucessor (PostgreSQL real)                                                       |
+| AUD0601-F03         | FIXED_LOCAL  | Logout 503 preserva cookie; retry revoga                                                                               |
+| AUD0601-F04         | FIXED_LOCAL  | API e worker `healthy` pela sonda da imagem no smoke                                                                   |
+| AUD0601-F05         | FIXED_LOCAL  | Heartbeats lentos não duplicam nem perdem progresso                                                                    |
+| AUD0601-F06         | FIXED_LOCAL  | Payload adulterado invalida; âncoras detectam cauda truncada                                                           |
+| AUD0601-F07         | FIXED_LOCAL  | Prova de restore exige `NODE_ENV=test`                                                                                 |
+| CI-COVERAGE-CHANNEL | FIXED_LOCAL  | `channel` 96,48%; 25 gates locais PASS                                                                                 |
+| 0373-C5             | PENDING_PUSH | Push, CI verde e proteção do `main`                                                                                    |
+
 # PROD-0373 — AUD-0600 corrigida e barra 0373 executada — 06/10/2026
 
 - Task `PROD-0373-20261006`, Claude Code: `DONE_LOCAL`, condição 5 pendente de publicação. Supersede a disposição OPEN de AUD0600-F01/F02 e das condições 1, 3, 4, 6, 7, 8, 9 e 10 da [0373](03_build/0373_barra_producao_harness.md); registros anteriores ficam como histórico. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md).

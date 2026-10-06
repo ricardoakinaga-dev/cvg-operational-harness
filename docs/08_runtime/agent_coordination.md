@@ -33,6 +33,14 @@
   `claude-prod0373-pg` removido; contêineres das provas removidos. Condição 5
   depende do push, que a permissão do terminal bloqueou. As entradas AUD-0600
   do Codex nos ledgers e nesta coordenação não foram commitadas por mim.
+- Rodada 2 (06/10/2026): Verify de `dc4a3cb` falhou em cobertura crítica;
+  gates locais completos revelaram e corrigiram catálogo de skips, prova
+  rem21-010 e link de docs. AUD-0601 F01–F07 corrigidos, mais a sonda `/live`
+  com HTTPS obrigatório. Escrita adicional: `apps/api/src/server.ts` (rotas de
+  sessão), `apps/api/src/http-security.ts` (sonda de loopback),
+  `scripts/runtime-healthcheck.mjs`, `scripts/skip-catalog.json`,
+  `scripts/rem21-010-postgres-proof.ts`, testes de channel-gateway.
+  Worktrees e PostgreSQL próprios removidos. Push pendente do usuário.
 
 ## AUD0599-REMEDIATION — correções da AUD-0599 e dos levantamentos — 06/10/2026
 
