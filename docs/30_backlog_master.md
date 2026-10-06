@@ -1,3 +1,16 @@
+# AUD0599-REMEDIATION — correções da AUD-0599 — 06/10/2026
+
+- Task `AUD0599-REMEDIATION-20261006`, Claude Code: `DONE_LOCAL`, aguardando reauditoria. [Evidência](04_audit/evidence/AUD0599-REMEDIATION-20261006/summary.md). Supersede a disposição OPEN de AUD0599-F01/F02 e AUD0598-R04; os registros anteriores ficam como histórico.
+
+| Task              | Prioridade/estado  | O quê e onde                                                              | Critério de pronto atendido                                                                |
+| ----------------- | ------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| AUD0599-F01       | P2 / FIXED_LOCAL   | `kernel-runtime.ts`, `pipeline.ts` (`unrecordedBlock`)                    | Guarda nega após begin e log falha: motivo presente, body0, aprovação FAILED, 1 fechamento |
+| AUD0599-F02       | P2 / FIXED_LOCAL   | `pipeline.ts` (`blocked`), `iterative-dispatch.ts`                        | WAITING e RUNNING com log rejeitado: mesma etapa FAILED, errorCode da negação, body0       |
+| CI-ZOD-PREINSTALL | P1 / FIXED_LOCAL   | `scripts/ci-bar.mjs`, `scripts/lib/test-log-summaries.mjs`                | `ci-bar.mjs init` sem node_modules exit 0; teste do grafo de imports                       |
+| DEP-SOURCE-MAP-JS | P1 / FIXED_LOCAL   | `package-lock.json`                                                       | `npm audit --audit-level=high` 0                                                           |
+| CODEQL-ACTIVE     | P1 / FIXED_LOCAL   | #17 auditor de alias; #1/#2/#4/#9 URLs; #8 `state.ts`                     | Testes negativos e de tempo linear; fechamento no GitHub depende do próximo scan           |
+| CODEQL-DECISION   | P2 / OPEN_DECISION | #6/#7 rate limit, 11 alertas em evidências históricas, proteção do `main` | Decisão do usuário                                                                         |
+
 # AUD-0599 — disposição atual da entrega Fable — 06/10/2026
 
 - Task `AUD0599-FABLE-DELIVERY-20261006`: auditoria `DONE`, publicação `DONE` em `28ffc26` e `origin/main`; aceite integral da parte A `REJECT_TWO_P2`, produção `NO_GO`. [Relatório](04_audit/0599_auditoria_entrega_fable_2026-10-06.md) e [evidência](04_audit/evidence/AUD0599-FABLE-20261006/proof.json). Esta entrada supersede a disposição OPEN anterior de R01–R03 no escopo medido; os registros anteriores permanecem históricos, sem reescrita.

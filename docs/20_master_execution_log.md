@@ -1,3 +1,10 @@
+# AUD0599-REMEDIATION — correções da AUD-0599 — 06/10/2026
+
+- Task `AUD0599-REMEDIATION-20261006`, Claude Code (owner KERNEL-PLUGINS); `status: DONE_LOCAL`. Pedido do usuário: "faça as correções apontadas nesses relatorios". [Evidência](04_audit/evidence/AUD0599-REMEDIATION-20261006/summary.md).
+- `last_completed_action`: AUD0599-F01 (single-pass preserva o motivo após reserva e log perdido) e F02 (iterativo fecha a etapa aberta como FAILED com o código da decisão, também com log saudável quando o checkpoint a abriu), adendo §12 da SPEC 0181; CI sem `zod` antes do install (`scripts/lib/test-log-summaries.mjs`); `source-map-js` 1.2.2 no lockfile; CodeQL ativos #17, #1/#2/#4/#9 e #8 corrigidos com testes.
+- `verification_state`: suíte completa com PostgreSQL obrigatório 352 arquivos, 2.844 PASS + 2 falhas esperadas, zero skips; `test:postgres` 288 PASS; typecheck/lint/formato/links PASS; `npm audit` completo 0; sonda do lead AUD-0599 reexecutada, 12 cenários com os dois P2 fechados.
+- `next_action`: reauditoria independente de F01/F02; push e CI remoto só com autorização do usuário; decisões pendentes: alertas #6/#7, config CodeQL para evidências históricas, proteção do `main`. Condições 4/7/8/9 e parte B continuam abertas. Produção `NO_GO`.
+
 # AUD-0599 — entrega Fable auditada e publicação autorizada — 06/10/2026
 
 - Task `AUD0599-FABLE-DELIVERY-20261006`, Codex; `status: COMPLETED_AUDIT_AND_PUBLICATION`. Auditoria [AUD-0599](04_audit/0599_auditoria_entrega_fable_2026-10-06.md) concluída; aceite integral da parte A `REJECT_TWO_P2`; produção `NO_GO`.

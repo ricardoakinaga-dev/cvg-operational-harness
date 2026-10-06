@@ -6,6 +6,35 @@
 - Vale para qualquer agente. Em conflito entre este arquivo e uma instrução
   direta do usuário, vale a instrução do usuário.
 
+## AUD0599-REMEDIATION — correções da AUD-0599 e dos levantamentos — 06/10/2026
+
+- Task `AUD0599-REMEDIATION-20261006`, Claude Code (owner KERNEL-PLUGINS),
+  `DONE_LOCAL`. Pedido do usuário: "faça as correções apontadas nesses
+  relatorios" (AUD-0599 e levantamentos Opus arquivados).
+- Escopo: F01/F02 (kernel), bootstrap do CI sem `zod` antes do install,
+  `source-map-js` ≥1.2.2 no lockfile e os alertas CodeQL high ativos
+  (#17 alias, #1/#2/#4/#9 regex de URL, #8 regex de conversa).
+- Escrita: `packages/harness/src/kernel/{pipeline,kernel-runtime}.ts`,
+  `packages/harness/src/iterative-dispatch.ts`,
+  `packages/harness/src/__tests__/aud0599-*.test.ts`, `scripts/ci-bar.mjs`,
+  `scripts/lib/**`, `scripts/workspace-dependency-audit.mjs` e seu teste,
+  `package-lock.json` (só `source-map-js`, claim próprio),
+  `packages/channel-gateway/src/adapters/{chatwoot,evolution}.ts`,
+  `packages/model-gateway/src/providers/{openai-compatible,ollama}.ts`,
+  `packages/conversation/src/state.ts` e testes adjacentes, adendo na SPEC
+  0181, linhas AUD0599 do backlog, esta seção e entradas novas no topo dos
+  ledgers. Sem push, deploy, certify, E2E, dado real; dispensa de alertas
+  #6/#7, config CodeQL e proteção do `main` ficam para decisão do usuário.
+  Bootstrap de sessão (claim HARNESS-ISO do Codex) não é tocado.
+- Extensão: `packages/shared/src/{url.ts,index.ts}` e
+  `packages/shared/src/__tests__/url.test.ts` (o helper saiu de `ssrf.ts`,
+  preso ao manifesto de mutação REM21-013), `tests/ci-bar-bootstrap.test.js`,
+  `tests/conformance/aud0599-blocked-close.conformance.test.ts` e
+  `docs/04_audit/evidence/AUD0599-REMEDIATION-20261006/**`.
+- Fechamento: suíte completa 352 arquivos, 2.844 PASS + 2 falhas esperadas,
+  zero skips; PostgreSQL 288 PASS em `claude-aud0599r-pg` (55730, removido);
+  typecheck/lint/formato/links PASS. Commit seletivo local, sem push.
+
 ## AUD-0599 — auditoria da entrega Fable e publicação — 06/10/2026
 
 - Task `AUD0599-FABLE-DELIVERY-20261006`, Codex, `COMPLETED_AUDIT_AND_PUBLICATION / TWO_P2_OPEN`. Pedido explícito do usuário: auditar a entrega recuperada e fazer commit/push para `ricardoakinaga-dev/cvg-operational-harness`.
