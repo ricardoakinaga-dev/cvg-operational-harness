@@ -1,3 +1,15 @@
+# PROD-0373 rodada 3 — AUD-0602, secret-scan e certificação corrigidos — 06/10/2026
+
+- Task `PROD-0373-20261006` rodada 3: `DONE_LOCAL`. Supersede a disposição OPEN de AUD0602-F01/F02 e das falhas de `secret-scan` e `certify` do CI de `4aa4d8f`.
+
+| Task                   | Estado       | Critério atendido                                                                                                                  |
+| ---------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| AUD0602-F01            | FIXED_LOCAL  | Cancelamento e prazo durante a última leitura da pausa: corpo 0, aprovação APPROVED, retomada executa uma vez                      |
+| AUD0602-F02            | FIXED_LOCAL  | Troca de papel com revogação falhando: 503 sem Set-Cookie, sessão antiga válida, nenhuma nova; retry troca limpo (PostgreSQL real) |
+| CI-SECRET-SCAN-SHALLOW | FIXED_LOCAL  | `fetch-depth: 0`; intervalo do push sem achados                                                                                    |
+| CI-CERTIFY-ANSI        | FIXED_LOCAL  | Resumo colorido do Vitest lido; `metrics.unit` preenchido                                                                          |
+| 0373-C5                | PENDING_PUSH | Push, CI verde e proteção do `main`                                                                                                |
+
 # AUD-0602 — remediações originais confirmadas; novo P1/P2 — 06/10/2026
 
 - Task `AUD0602-REMEDIATION-PUBLISH-20261006`, Codex; auditoria DONE, entrega PARTIAL, núcleo NO_GO. [Parecer](04_audit/0602_reauditoria_aud0601_2026-10-06.md), [evidências](04_audit/evidence/AUD0602-REMEDIATION-20261006/summary.md). Casos originais F01–F07 da AUD0601 passam; contraexemplos novos não são apagados pelas suítes verdes. Publicação Git autorizada pelo pedido atual, sem release.

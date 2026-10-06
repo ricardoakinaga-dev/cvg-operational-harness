@@ -62,6 +62,10 @@
   `scripts/runtime-healthcheck.mjs`, `scripts/skip-catalog.json`,
   `scripts/rem21-010-postgres-proof.ts`, testes de channel-gateway.
   Worktrees e PostgreSQL próprios removidos. Push pendente do usuário.
+- Rodada 3 (06/10/2026): AUD0602-F01/F02 corrigidos; `secret-scan` com
+  histórico completo (`.github/workflows/security.yml`); parser do resumo do
+  Vitest sem ANSI (`scripts/lib/test-log-summaries.mjs`). Worktrees e
+  PostgreSQL próprios removidos. Push pendente do usuário.
 
 ## AUD-0600 — reauditoria dos três commits de remediação — 06/10/2026
 

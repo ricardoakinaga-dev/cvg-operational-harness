@@ -1,3 +1,10 @@
+# PROD-0373 rodada 3 — AUD-0602, secret-scan e certificação corrigidos — 06/10/2026
+
+- Task `PROD-0373-20261006`, Claude Code; `status: DONE_LOCAL / CONDITION_5_PENDING_PUSH`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-3--aud-0602-e-ci-de-4aa4d8f).
+- `last_completed_action`: AUD0602-F01 (cancelamento/prazo durante a última leitura da pausa) e F02 (troca de identidade revoga a família anterior antes de emitir cookie) corrigidos. CI de `4aa4d8f`: secret-scan falhava por checkout raso (árvore inteira revarrida) — `fetch-depth: 0`; certificação quebrava com `metrics.unit` nulo porque o resumo do Vitest vem colorido no Actions — parser remove ANSI.
+- `verification_state`: worktree isolado do HEAD: suíte com cobertura 358/2.943 PASS, PostgreSQL 37/299, cobertura crítica, skips, mutação, docs, startup do worker; varredura de segredos do intervalo do push: zero; certify local monta o resultado (unit lido do resumo colorido) e o verificador só acusa o E2E visual desta máquina (o E2E passou no CI de `4aa4d8f`).
+- `next_action`: push pelo usuário; Verify e Security verdes no SHA; proteção do `main`; reauditoria. Ambiente real de produção continua fora do repositório; `NO_GO` até lá.
+
 # AUD-0602 — reauditoria e publicação autorizada — 06/10/2026
 
 - Codex, task `AUD0602-REMEDIATION-PUBLISH-20261006`; congelado81f01e8,11 commits recebidos; follow-up concorrente8652319 inspecionado separadamente. [Parecer](04_audit/0602_reauditoria_aud0601_2026-10-06.md), [provas](04_audit/evidence/AUD0602-REMEDIATION-20261006/summary.md). Casos originais confirmados; PARTIAL/NO_GO por um P1 de cancelamento/deadline e um P2 herdado de troca de identidade503. Pedido atual autoriza commit/push normal; não concede produção.

@@ -78,3 +78,18 @@ imagem recebia 426 (também na sonda antiga), deixando a API `unhealthy`. Só
 
 Imagem final: `sha256:a0f647b1eaa75b2ced1b59e42886d83ef72b737f783b78f5d5613aa61a1b627c`
 — smoke 18/18 e inspeção PASS (gitleaks 0).
+
+## Rodada 3 — AUD-0602 e CI de `4aa4d8f`
+
+| Item | Causa | Correção |
+| --- | --- | --- |
+| AUD0602-F01 P1 | A última leitura da pausa é assíncrona e vinha depois da checagem de cancelamento/prazo | Leitura da pausa antes do `beginStage`; a checagem síncrona de cancelamento/prazo fica imediatamente antes do corpo; negação liquida a reserva sem efeito |
+| AUD0602-F02 P2 | Troca de operador/papel emitia o cookie novo antes de revogar a família antiga | Família anterior revogada primeiro; falha responde 503 sem `Set-Cookie` e sem sessão nova; cookie só depois da mudança durável |
+| Security `secret-scan` | Checkout raso: um push de um commit parecia commit raiz e a árvore inteira era revarrida (101 achados heurísticos, todos sintéticos/prosa/evidência), sem casar as impressões digitais | `fetch-depth: 0`; simulação local do intervalo do push: 3 commits, zero achados |
+| Verify `certify` | No Actions o Vitest colore o resumo mesmo em pipe; `parseVitestSummary` não removia ANSI e `metrics.unit` virava nulo | Remoção de ANSI no parser, como o de Playwright; regressão com o resumo colorido real |
+
+Regressões: cancelamento e prazo vencidos durante a última leitura (corpo 0,
+aprovação `APPROVED`, retomada executa uma vez); troca de papel com revogação
+falhando e retry (PostgreSQL real com os papéis do bootstrap). Gates locais
+no worktree isolado: suíte com cobertura 358 arquivos/2.943 PASS, PostgreSQL
+37/299, cobertura crítica, skips, mutação, docs, startup do worker.
