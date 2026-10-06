@@ -1420,13 +1420,64 @@ export class IterativeGovernedRuntime {
     }
   }
 
+  /**
+   * A terminal stop never leaves its pending tool step open (AUD-0600 F02).
+   * A WAITING step never reached its effect (approval wait, or parked by an
+   * operator pause), so it closes with the stop's own code. A step still
+   * RUNNING here may have started its effect before a crash or a failure
+   * after dispatch, so it is closed as `unknown_effect` for reconciliation
+   * instead of being declared not executed.
+   */
+  private async closePendingStep(
+    run: LoopRun,
+    stopReason: StopReason
+  ): Promise<void> {
+    const stepNumber = run.state.pendingStepNumber
+    if (!stepNumber) return
+    const steps = await this.options.stepStore.listSteps(
+      run.input.tenantId,
+      run.executionId
+    )
+    const step = steps.find(
+      (candidate) =>
+        candidate.stepNumber === stepNumber && candidate.stepType === 'TOOL'
+    )
+    if (!step || (step.status !== 'WAITING' && step.status !== 'RUNNING')) {
+      return
+    }
+    await this.recordStep(run, {
+      stepNumber,
+      stepType: 'TOOL',
+      status: 'FAILED',
+      sideEffecting: step.sideEffecting,
+      ...(step.reasonCode ? { reasonCode: step.reasonCode } : {}),
+      errorCode:
+        step.status === 'RUNNING'
+          ? 'unknown_effect'
+          : stopReason === 'CANCELLED'
+            ? 'cancelled'
+            : stopReason === 'MAX_DURATION'
+              ? 'deadline'
+              : 'not_started'
+    })
+  }
+
   private async finalize(
     run: LoopRun,
     outcome: Extract<DispatchOutcome, { kind: 'stop' }>,
     startedAtMs: number
   ): Promise<RuntimeResult> {
-    const stopReason = outcome.stopReason ?? 'INSUFFICIENT_EVIDENCE'
+    let stopReason = outcome.stopReason ?? 'INSUFFICIENT_EVIDENCE'
     run.usage.activeDurationMs += Date.now() - startedAtMs
+    if (!outcome.preserveCheckpoint && TERMINAL_STOPS.has(stopReason)) {
+      try {
+        await this.closePendingStep(run, stopReason)
+      } catch {
+        // The open step could not be closed: the terminal checkpoint must not
+        // claim a clean stop while the step store disagrees.
+        stopReason = 'INSUFFICIENT_EVIDENCE'
+      }
+    }
     run.state = { ...run.state, stopReason }
     let checkpointProven = true
     if (outcome.preserveCheckpoint) {

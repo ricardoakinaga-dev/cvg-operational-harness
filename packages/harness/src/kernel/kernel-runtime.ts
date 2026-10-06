@@ -650,9 +650,15 @@ class Turn {
     })
     if (unrecorded) {
       // F04: a turn whose closing record failed is never reported as done.
+      // A turn that had already stopped keeps why it stopped (AUD-0600 F01).
       return {
         ...current,
-        response: unrecorded.response,
+        response:
+          current.stopReason === 'COMPLETED'
+            ? unrecorded.response
+            : current.response.startsWith(unrecorded.response)
+              ? current.response
+              : `${unrecorded.response} The turn had already stopped (${current.stopReason}): ${current.response}`,
         stopReason: 'INSUFFICIENT_EVIDENCE'
       }
     }

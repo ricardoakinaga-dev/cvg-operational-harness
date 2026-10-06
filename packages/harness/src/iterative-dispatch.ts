@@ -362,6 +362,21 @@ export async function dispatchTool(
   // recording a second one under the same number, or leaving it open while
   // the checkpoint ends (AUD-0599 F02).
   let stepOpen = run.state.pendingStepNumber === stepNumber
+  // Opened as RUNNING by this invocation's dispatch checkpoint.
+  let openedHere = false
+  // An operator pause proves that nothing ran and nothing stays reserved: the
+  // step waits for the resume instead of looking in flight, so a later
+  // terminal stop can close it as not executed (AUD-0600 F02).
+  const parkForResume = async (): Promise<void> => {
+    if (!openedHere) return
+    await ctx.recordStep(run, {
+      stepNumber,
+      stepType: 'TOOL',
+      status: 'WAITING',
+      sideEffecting: true,
+      reasonCode: decision.reasonCode
+    })
+  }
   const recordDenial = (record: StepRecord): Promise<void> =>
     ctx.recordStep(
       run,
@@ -446,6 +461,7 @@ export async function dispatchTool(
         reasonCode: decision.reasonCode
       })
       stepOpen = true
+      openedHere = true
       return undefined
     }
   })
@@ -482,6 +498,7 @@ export async function dispatchTool(
     }
     if (gate.cause === 'operator_paused') {
       // Nothing ran and nothing is reserved: keep the step resumable (F03).
+      await parkForResume()
       return {
         ...ctx.stop(gate.stopReason, gate.response),
         preserveCheckpoint: true
@@ -552,6 +569,7 @@ export async function dispatchTool(
       }
       if (gate.cause === 'operator_paused') {
         // The reservation was released as certain; the step resumes later.
+        await parkForResume()
         return {
           ...ctx.stop(gate.stopReason, gate.response),
           preserveCheckpoint: true
