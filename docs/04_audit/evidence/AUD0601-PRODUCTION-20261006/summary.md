@@ -35,3 +35,5 @@ Código/lockfile compartilhados intactos; registros anteriores preservados. Post
 [Preservação e concorrência](preservation.json): ao encerrar, HEAD local já era d3ca659 após novos commits de outra sessão. O candidato auditado continua dc4a3cb; não foram incluídas nem validadas as correções concorrentes. Sufixos dos três ledgers recebidos foram preservados byte-exatos.
 
 Preparação para publicação na AUD-0602: duas fontes com credenciais explicitamente sintéticas foram conservadas em `.txt.gz`, byte-exatas ao descompactar, porque a heurística generic-api-key as marcava. [Mapa de arquivamento](source-archival.json) guarda nomes e hashes originais. Nenhuma regra de scanner foi alterada. O manifesto anterior também foi conservado compactado; a reprodução dessas duas fontes requer descompactação.
+
+Os dois diffs scoped históricos também ficam compactados byte-exatos: linhas de contexto vazias do formato diff continham espaço final e acionavam o gate de whitespace ao adicionar os artefatos. O mapa acima inclui seus hashes; o primeiro commit documental foi seguido por correção de empacotamento, antes do push.
