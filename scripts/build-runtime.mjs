@@ -24,7 +24,10 @@ export const RUNTIME_WORKSPACES = [
   'packages/agent-core',
   'legacy/packages/secretary-profile',
   'legacy/packages/secretary-journeys',
-  'apps/api'
+  'apps/api',
+  // PROD-0373 (barra 0373, condições 3 e 7): the worker ships in the same
+  // hardened image as the API.
+  'apps/worker'
 ]
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
