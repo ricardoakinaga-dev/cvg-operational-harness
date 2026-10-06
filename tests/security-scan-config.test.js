@@ -29,4 +29,13 @@ describe('secret scan configuration (PR-011)', () => {
       expect(fingerprint).toMatch(/^[0-9a-f]{40}:[^:]+:generic-api-key:\d+$/)
     }
   })
+
+  it('keeps CodeQL on the product and off the frozen audit evidence copies', () => {
+    expect(read('.github/workflows/security.yml')).toContain(
+      'config-file: ./.github/codeql/codeql-config.yml'
+    )
+    const config = read('.github/codeql/codeql-config.yml')
+    const ignored = [...config.matchAll(/^\s+- (.+)$/gm)].map((m) => m[1])
+    expect(ignored).toEqual(['docs/04_audit/evidence/**'])
+  })
 })
