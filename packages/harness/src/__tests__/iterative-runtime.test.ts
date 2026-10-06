@@ -1369,10 +1369,12 @@ describe('P3-BOUNDARY — iterative runtime rejection paths', () => {
         }
       } as never
     })
+    // SPEC 0181 §10: an unavailable control has one canonical outcome in
+    // every runtime — insufficient evidence to act, never a policy verdict.
     await expect(
       throwing.runtime.execute(decisionInput)
     ).resolves.toMatchObject({
-      stopReason: 'POLICY_DENIED'
+      stopReason: 'INSUFFICIENT_EVIDENCE'
     })
   })
 

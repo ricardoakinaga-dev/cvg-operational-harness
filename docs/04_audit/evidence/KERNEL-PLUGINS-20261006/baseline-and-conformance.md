@@ -117,3 +117,37 @@ fora do kernel.
 
 As quatro lacunas restantes fecham no KPLG-004, quando o iterativo e o kernel
 durável do worker passarem a rodar sobre o kernel.
+
+## KPLG-004 (parte A) — iterativo sobre o kernel (06/10/2026)
+
+- Novo `packages/harness/src/kernel/pipeline.ts`: pipeline de ferramenta e de
+  modelo compartilhado. O loop do single-pass e o loop iterativo chamam as
+  mesmas funções (`runToolCall`, `runModelCall`, `runGate`), então política,
+  aprovação, guardas, pausa, cancelamento, log e ledger de efeitos têm uma
+  implementação só.
+- Aprovação em duas fases: decisão em `tool/pre-execute`; reserva de uso único em
+  `tool/execute`, depois do checkpoint do iterativo e imediatamente antes do
+  corpo. Preserva a ordem anti-crash do iterativo; guardas e pausa negam antes de
+  qualquer reserva.
+- Paradas têm `cause` (`policy_denied`, `approval_pending`, …) para o loop
+  registrar o passo certo; `approval_pending` continua virando pausa durável.
+- O iterativo checa cancelamento e `turn/before-step` (pausa) antes de cada
+  passo, e mantém o orçamento de duração ativa entre retomadas por um adaptador
+  de `TurnBudget`.
+- Desfecho canônico (SPEC 0181 §10): exceção da política no iterativo passa de
+  `POLICY_DENIED` para `INSUFFICIENT_EVIDENCE`, igual ao single-pass. Uma
+  asserção de `iterative-runtime.test.ts` foi atualizada com a referência.
+
+Verificação no worktree isolado (`b62f726` + estas mudanças), Node 22.23.2,
+PostgreSQL 16.15 próprio (removido):
+
+| Gate | Resultado |
+| --- | --- |
+| `npm test` | 2.709 passaram, 2 falhas esperadas, 1 pulado, **1 falha**: `tests/architecture/dependency-direction` achou o texto `pg` dentro do nome de variável `stepGate`. Variável renomeada; arquitetura + `harness` + conformidade reexecutados: 203 passaram, 2 falhas esperadas |
+| `npm run test:postgres` | 35 arquivos / 288 testes passaram (inclui os testes iterativos do worker) |
+| `npm run typecheck` | exit 0 |
+| `eslint .` | exit 0 |
+
+Conformidade: as lacunas I6 e I8 do iterativo fecharam; C12 (pausa) agora roda
+nos três alvos. Restam 2 lacunas, ambas no `GovernedAgentRuntime` (I6 e I7), que
+dependem da extração do Codex em `packages/agent-runtime` (KPLG-004 parte B).

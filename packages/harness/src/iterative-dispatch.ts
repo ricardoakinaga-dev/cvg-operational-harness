@@ -1,7 +1,4 @@
 import type {
-  ApprovalExecutionHandle,
-  ApprovalExecutionRequest,
-  ApprovalId,
   ClaimValidation,
   CompletionEvaluator,
   DecisionValidationResult,
@@ -10,8 +7,7 @@ import type {
   KnowledgeSearchResult,
   LoopDecision,
   Observation,
-  StopReason,
-  ToolResult
+  StopReason
 } from '@cvg/harness-contracts'
 import {
   MAX_CHECKPOINT_OBSERVATIONS,
@@ -19,7 +15,6 @@ import {
 } from '@cvg/harness-contracts'
 import {
   DEADLINE_EXCEEDED,
-  bindCapabilityFingerprint,
   boundedPayload,
   errorMessage,
   mapEvaluationToStopReason,
@@ -29,6 +24,13 @@ import {
   type LoopRun
 } from './iterative-runtime.ts'
 import { agentExposesTool } from './runtime.ts'
+import type { KernelHost } from './kernel/host.ts'
+import {
+  CANCELLED_RESPONSE,
+  runModelCall,
+  runToolCall
+} from './kernel/pipeline.ts'
+import type { ToolCallState, TurnState } from './kernel/types.ts'
 
 /**
  * Explicit dependency surface for the extracted dispatch domain. The runtime
@@ -91,6 +93,9 @@ export interface IterativeDispatchContext {
   ): Promise<
     { response: string } | { stopReason: StopReason; response: string }
   >
+  /** Kernel host and turn view for the shared governed pipelines. */
+  kernel(run: LoopRun): KernelHost
+  turn(run: LoopRun): TurnState
 }
 
 export function validateDecision(
@@ -275,437 +280,230 @@ export async function dispatchTool(
     input: decision.toolInput ?? {},
     operationKey
   }
-  const remaining = ctx.remainingDuration(run)
-  if (remaining <= 0) {
+  if (ctx.remainingDuration(run) <= 0) {
     return ctx.stop(
       'MAX_DURATION',
       'Duration budget exhausted before tool execution.'
     )
   }
 
-  let policyDecision
-  try {
-    const policyOrDeadline = await ctx.withDeadline(
-      ctx.options.policy.evaluate({
-        tenantId: run.input.tenantId,
-        agentId: run.input.agent.id,
-        action: 'tool.execute',
-        tool,
-        invocation,
-        correlationId: run.input.correlationId
-      }),
-      remaining
-    )
-    if (policyOrDeadline === DEADLINE_EXCEEDED) {
-      return ctx.stop(
-        'MAX_DURATION',
-        'Duration budget exhausted during policy evaluation.'
-      )
-    }
-    policyDecision = policyOrDeadline
-  } catch (error) {
-    return ctx.stop(
-      'POLICY_DENIED',
-      `Policy evaluation failed: ${errorMessage(error)}.`
-    )
+  const stepId = `step_${run.executionId}_${stepNumber}_tool`
+  const call: ToolCallState = {
+    turn: ctx.turn(run),
+    tool,
+    invocation,
+    needsApproval: forceApproval,
+    executionRef: run.executionId
   }
-  if (
-    policyDecision.outcome !== 'ALLOW' &&
-    policyDecision.outcome !== 'DENY' &&
-    policyDecision.outcome !== 'REQUIRE_APPROVAL' &&
-    policyDecision.outcome !== 'HANDOFF'
-  ) {
+  let policyRecorded = false
+  const recordPolicy = async (): Promise<void> => {
+    if (policyRecorded || !call.policyDecision) return
+    policyRecorded = true
     await ctx.recordObservation(
       run,
       ctx.makeObservation(run, {
-        stepId: `step_${run.executionId}_${stepNumber}_tool`,
+        stepId,
         stepNumber,
         type: 'POLICY_DECISION',
         source: 'POLICY',
         trust: 'TRUSTED',
-        payload: { outcome: 'UNSUPPORTED' },
-        summary: 'Policy returned an unsupported outcome.',
+        payload: {
+          outcome: call.policyDecision.outcome,
+          policyVersion: call.policyDecision.policyVersion
+        },
+        summary: `Policy outcome ${call.policyDecision.outcome}.`,
         provenance: { sourceId: 'policy-engine' }
       })
     )
-    await ctx.recordStep(run, {
-      stepNumber,
-      stepType: 'POLICY',
-      status: 'FAILED',
-      sideEffecting: false,
-      reasonCode: 'POLICY_REQUIRED',
-      errorCode: 'policy_outcome_invalid'
-    })
-    return ctx.stop(
-      'INSUFFICIENT_EVIDENCE',
-      'Policy returned an unsupported decision.'
-    )
   }
 
-  await ctx.recordObservation(
-    run,
-    ctx.makeObservation(run, {
-      stepId: `step_${run.executionId}_${stepNumber}_tool`,
-      stepNumber,
-      type: 'POLICY_DECISION',
-      source: 'POLICY',
-      trust: 'TRUSTED',
-      payload: {
-        outcome: policyDecision.outcome,
-        policyVersion: policyDecision.policyVersion
-      },
-      summary: `Policy outcome ${policyDecision.outcome}.`,
-      provenance: { sourceId: 'policy-engine' }
-    })
-  )
-
-  if (policyDecision.outcome === 'DENY') {
-    await ctx.recordStep(run, {
-      stepNumber,
-      stepType: 'POLICY',
-      status: 'FAILED',
-      sideEffecting: false,
-      reasonCode: 'POLICY_REQUIRED',
-      errorCode: 'policy_denied'
-    })
-    return ctx.stop('POLICY_DENIED', policyDecision.reason)
-  }
-  if (policyDecision.outcome === 'HANDOFF') {
-    await ctx.recordStep(run, {
-      stepNumber,
-      stepType: 'HANDOFF',
-      status: 'SUCCEEDED',
-      sideEffecting: false,
-      reasonCode: 'HANDOFF_REQUIRED'
-    })
-    return ctx.stop('HUMAN_TAKEOVER', policyDecision.reason)
-  }
-
-  const requiresApproval =
-    forceApproval ||
-    policyDecision.outcome === 'REQUIRE_APPROVAL' ||
-    tool.requiresApproval
-  let approvalId: ApprovalId | undefined
-  let approvalExecutionRequest: ApprovalExecutionRequest | undefined
-  let approvalExecution: ApprovalExecutionHandle | undefined
-
-  if (requiresApproval) {
-    const approvalRemaining = ctx.remainingDuration(run)
-    if (approvalRemaining <= 0) {
-      return ctx.stop(
-        'MAX_DURATION',
-        'Duration budget exhausted before approval evaluation.'
-      )
-    }
-    let approval
-    try {
-      const approvalOrDeadline = await ctx.withDeadline(
-        ctx.options.approvals.request({
-          tenantId: run.input.tenantId,
-          agentId: run.input.agent.id,
-          operationKey,
-          toolId: tool.id,
-          summary: tool.description,
-          correlationId: run.input.correlationId,
-          executionRef: run.executionId,
-          operatorId: run.input.agent.id,
-          agentVersion: run.input.agent.version,
-          action: 'tool.execute',
-          resource: { type: 'tool', id: tool.id },
-          payload: bindCapabilityFingerprint(
-            invocation.input,
-            ctx.options.capabilityFingerprint
-          ),
-          policyVersion: policyDecision.policyVersion
-        }),
-        approvalRemaining
-      )
-      if (approvalOrDeadline === DEADLINE_EXCEEDED) {
-        return ctx.stop(
-          'MAX_DURATION',
-          'Duration budget exhausted during approval evaluation.'
-        )
+  // Policy, approval, guards (pause) and cancellation run in the kernel
+  // pipeline (SPEC 0181); this loop only adds its checkpoint and its steps.
+  const pipeline = await runToolCall(ctx.kernel(run), call, {
+    beforeDispatch: async () => {
+      await recordPolicy()
+      const approvalId = call.grant?.approvalId
+      if (
+        approvalId &&
+        run.state.pendingApprovalId &&
+        run.state.pendingApprovalId !== approvalId
+      ) {
+        return {
+          kind: 'stop',
+          stopReason: 'STATE_CONFLICT',
+          response: 'Approval identity changed while resuming the execution.'
+        }
       }
-      approval = approvalOrDeadline
-    } catch (error) {
-      return ctx.stop(
-        'APPROVAL_REQUIRED',
-        `Approval could not be evaluated: ${errorMessage(error)}.`
-      )
-    }
-    if (approval.status === 'PENDING') {
-      return {
-        kind: 'pause',
-        pausedKind: 'APPROVAL_REQUIRED',
-        decision,
-        ...(approval.approvalId ? { approvalId: approval.approvalId } : {}),
-        pauseStepNumber: stepNumber
+      // Budget accounting is committed with the in-flight decision so a crash
+      // cannot replay the same step against an unconsumed counter; the
+      // approval is only reserved after this checkpoint.
+      run.usage.toolCalls += 1
+      run.state = {
+        ...run.state,
+        pendingDecision: decision,
+        pendingStepNumber: stepNumber,
+        ...(approvalId ? { pendingApprovalId: approvalId } : {})
       }
-    }
-    if (approval.status === 'DENIED') {
+      await ctx.persistCheckpoint(run)
       await ctx.recordStep(run, {
         stepNumber,
-        stepType: 'APPROVAL',
+        stepType: 'TOOL',
+        status: 'RUNNING',
+        sideEffecting: true,
+        reasonCode: decision.reasonCode
+      })
+      return undefined
+    }
+  })
+
+  if (pipeline.kind === 'stopped') {
+    const gate = pipeline.gate
+    if (gate.cause === 'policy_unsupported') {
+      await ctx.recordObservation(
+        run,
+        ctx.makeObservation(run, {
+          stepId,
+          stepNumber,
+          type: 'POLICY_DECISION',
+          source: 'POLICY',
+          trust: 'TRUSTED',
+          payload: { outcome: 'UNSUPPORTED' },
+          summary: 'Policy returned an unsupported outcome.',
+          provenance: { sourceId: 'policy-engine' }
+        })
+      )
+      await ctx.recordStep(run, {
+        stepNumber,
+        stepType: 'POLICY',
         status: 'FAILED',
         sideEffecting: false,
         reasonCode: 'POLICY_REQUIRED',
-        errorCode: 'approval_denied'
+        errorCode: 'policy_outcome_invalid'
       })
-      return ctx.stop('POLICY_DENIED', approval.reason)
+      return ctx.stop(gate.stopReason, gate.response)
     }
-    if (!approval.approvalId) {
-      return ctx.stop(
-        'INSUFFICIENT_EVIDENCE',
-        'Approved execution has no approval identifier.'
-      )
-    }
-    approvalId = approval.approvalId
-    if (
-      run.state.pendingApprovalId &&
-      run.state.pendingApprovalId !== approvalId
-    ) {
-      return ctx.stop(
-        'STATE_CONFLICT',
-        'Approval identity changed while resuming the execution.'
-      )
-    }
-    approvalExecutionRequest = {
-      tenantId: run.input.tenantId,
-      approvalId,
-      agentId: run.input.agent.id,
-      agentVersion: run.input.agent.version,
-      action: 'tool.execute',
-      resource: { type: 'tool', id: tool.id },
-      payload: bindCapabilityFingerprint(
-        invocation.input,
-        ctx.options.capabilityFingerprint
-      ),
-      policyVersion: policyDecision.policyVersion,
-      operationKey,
-      executionRef: run.executionId
-    }
-    if (!ctx.options.approvals.execution) {
-      // Without the execution port an approval cannot be consumed once, so
-      // the same approval could authorize the effect again (ENG-002).
-      return ctx.stop(
-        'INSUFFICIENT_EVIDENCE',
-        'Approved execution requires a single-use approval execution port.'
-      )
-    }
-  }
-
-  // Budget accounting is committed with the in-flight decision so a crash
-  // cannot replay the same step against an unconsumed counter.
-  run.usage.toolCalls += 1
-  run.state = {
-    ...run.state,
-    pendingDecision: decision,
-    pendingStepNumber: stepNumber,
-    ...(approvalId ? { pendingApprovalId: approvalId } : {})
-  }
-  await ctx.persistCheckpoint(run)
-  await ctx.recordStep(run, {
-    stepNumber,
-    stepType: 'TOOL',
-    status: 'RUNNING',
-    sideEffecting: true,
-    reasonCode: decision.reasonCode
-  })
-
-  if (approvalExecutionRequest && ctx.options.approvals.execution) {
-    const beginRemaining = ctx.remainingDuration(run)
-    if (beginRemaining <= 0) {
-      return ctx.stop(
-        'MAX_DURATION',
-        'Duration budget exhausted before approval execution.'
-      )
-    }
-    try {
-      const handleOrDeadline = await ctx.withDeadline(
-        ctx.options.approvals.execution.begin(approvalExecutionRequest),
-        beginRemaining
-      )
-      if (handleOrDeadline === DEADLINE_EXCEEDED) {
-        return ctx.stop(
-          'MAX_DURATION',
-          'Approval execution reservation timed out.'
-        )
-      }
-      approvalExecution = handleOrDeadline
-    } catch (error) {
-      return ctx.stop(
-        'STATE_CONFLICT',
-        `Approval could not be consumed safely: ${errorMessage(error)}.`
-      )
-    }
-  }
-
-  const abortController = new AbortController()
-  let toolResult: ToolResult
-  let toolThrew = false
-  try {
-    const toolRemaining = ctx.remainingDuration(run)
-    if (toolRemaining <= 0) {
-      if (
-        approvalExecution &&
-        approvalExecutionRequest &&
-        ctx.options.approvals.execution
-      ) {
-        // The tool never started, so the reservation is released as a certain
-        // failure instead of leaving the approval held.
-        await ctx.options.approvals.execution
-          .fail({
-            request: approvalExecutionRequest,
-            reservationId: approvalExecution.reservationId,
-            evidenceRef: `${run.executionId}:tool_not_started`
-          })
-          .catch(() => undefined)
-      }
-      await ctx.recordStep(run, {
-        stepNumber,
-        stepType: 'TOOL',
-        status: 'FAILED',
-        sideEffecting: true,
-        reasonCode: decision.reasonCode,
-        errorCode: 'deadline'
-      })
-      return ctx.stop(
-        'MAX_DURATION',
-        'Duration budget exhausted before tool execution.'
-      )
-    }
-    const resultOrDeadline = await ctx.withDeadline(
-      tool.execute(invocation.input, {
-        tenantId: run.input.tenantId,
-        agentId: run.input.agent.id,
-        correlationId: run.input.correlationId,
-        traceId: run.input.traceId,
-        operationKey,
-        signal: abortController.signal
-      }),
-      toolRemaining
-    )
-    if (resultOrDeadline === DEADLINE_EXCEEDED) {
-      abortController.abort()
-      if (
-        approvalExecution &&
-        approvalExecutionRequest &&
-        ctx.options.approvals.execution
-      ) {
-        await ctx.options.approvals.execution
-          .uncertain({
-            request: approvalExecutionRequest,
-            reservationId: approvalExecution.reservationId,
-            reason:
-              'Tool exceeded its deadline after approval execution started.',
-            evidenceRef: `${run.executionId}:tool_deadline`
-          })
-          .catch(() => undefined)
-      }
-      await ctx.recordStep(run, {
-        stepNumber,
-        stepType: 'TOOL',
-        status: 'FAILED',
-        sideEffecting: true,
-        reasonCode: decision.reasonCode,
-        errorCode: approvalExecution ? 'unknown_effect' : 'deadline'
-      })
-      return ctx.stop(
-        approvalExecution ? 'TOOL_FAILURE' : 'MAX_DURATION',
-        approvalExecution
-          ? 'unknown_effect: duration budget exhausted during tool execution.'
-          : 'Duration budget exhausted during tool execution.'
-      )
-    }
-    toolResult = resultOrDeadline
-  } catch (error) {
-    toolThrew = true
-    toolResult = { status: 'FAILED', error: errorMessage(error) }
-  }
-
-  if (toolResult.status !== 'SUCCEEDED') {
-    if (
-      approvalExecution &&
-      approvalExecutionRequest &&
-      ctx.options.approvals.execution
-    ) {
-      const port = ctx.options.approvals.execution
-      if (toolThrew) {
-        await port
-          .uncertain({
-            request: approvalExecutionRequest,
-            reservationId: approvalExecution.reservationId,
-            reason: `Tool executor threw after approval execution started: ${toolResult.error ?? 'unknown failure'}`,
-            evidenceRef: `${run.executionId}:tool_uncertain`
-          })
-          .catch(() => undefined)
-      } else {
-        await port
-          .fail({
-            request: approvalExecutionRequest,
-            reservationId: approvalExecution.reservationId,
-            evidenceRef: `${run.executionId}:tool_failed`
-          })
-          .catch(() => undefined)
-      }
-    }
-    const unknownEffect =
-      toolThrew || toolResult.error?.startsWith('unknown_effect:') === true
-    await ctx.recordObservation(
-      run,
-      ctx.makeObservation(run, {
-        stepId: `step_${run.executionId}_${stepNumber}_tool`,
-        stepNumber,
-        type: 'TOOL_RESULT',
-        source: 'TOOL',
-        trust: 'UNTRUSTED',
-        payload: {
-          status: unknownEffect ? 'REJECTED' : toolResult.status,
-          error: toolResult.error ?? 'tool execution failed'
-        },
-        summary: unknownEffect
-          ? 'Tool outcome is uncertain and requires reconciliation.'
-          : 'Tool execution failed.',
-        provenance: {
-          sourceId: tool.id,
-          ...(tool.version ? { sourceVersion: tool.version } : {}),
-          operationKey,
-          ...(unknownEffect ? { effectRef: operationKey } : {})
+    await recordPolicy()
+    switch (gate.cause) {
+      case 'policy_denied':
+        await ctx.recordStep(run, {
+          stepNumber,
+          stepType: 'POLICY',
+          status: 'FAILED',
+          sideEffecting: false,
+          reasonCode: 'POLICY_REQUIRED',
+          errorCode: 'policy_denied'
+        })
+        break
+      case 'policy_handoff':
+        await ctx.recordStep(run, {
+          stepNumber,
+          stepType: 'HANDOFF',
+          status: 'SUCCEEDED',
+          sideEffecting: false,
+          reasonCode: 'HANDOFF_REQUIRED'
+        })
+        break
+      case 'approval_pending':
+        return {
+          kind: 'pause',
+          pausedKind: 'APPROVAL_REQUIRED',
+          decision,
+          ...(gate.approvalId ? { approvalId: gate.approvalId } : {}),
+          pauseStepNumber: stepNumber
         }
-      })
-    )
-    await ctx.recordStep(run, {
+      case 'approval_denied':
+        await ctx.recordStep(run, {
+          stepNumber,
+          stepType: 'APPROVAL',
+          status: 'FAILED',
+          sideEffecting: false,
+          reasonCode: 'POLICY_REQUIRED',
+          errorCode: 'approval_denied'
+        })
+        break
+      default:
+        break
+    }
+    return ctx.stop(gate.stopReason, gate.response)
+  }
+
+  const outcome = pipeline.outcome
+  const reserved = call.approval !== undefined
+  const failStep = (errorCode: string) =>
+    ctx.recordStep(run, {
       stepNumber,
       stepType: 'TOOL',
       status: 'FAILED',
       sideEffecting: true,
       reasonCode: decision.reasonCode,
-      errorCode: unknownEffect ? 'unknown_effect' : 'tool_failed'
+      errorCode
     })
-    return ctx.stop(
-      'TOOL_FAILURE',
-      unknownEffect
-        ? `unknown_effect: ${toolResult.error ?? 'Tool execution outcome is uncertain.'}`
-        : (toolResult.error ?? 'Tool execution failed.')
-    )
-  }
 
-  if (
-    approvalExecution &&
-    approvalExecutionRequest &&
-    ctx.options.approvals.execution
-  ) {
-    try {
-      await ctx.options.approvals.execution.complete({
-        request: approvalExecutionRequest,
-        reservationId: approvalExecution.reservationId,
-        evidenceRef: `${run.executionId}:tool_confirmed`
-      })
-    } catch (error) {
+  switch (outcome.kind) {
+    case 'not_started':
+      await failStep('deadline')
+      return ctx.stop(outcome.gate.stopReason, outcome.gate.response)
+    case 'deadline':
+      await failStep(reserved ? 'unknown_effect' : 'deadline')
+      return ctx.stop(
+        reserved ? 'TOOL_FAILURE' : 'MAX_DURATION',
+        reserved
+          ? 'unknown_effect: duration budget exhausted during tool execution.'
+          : 'Duration budget exhausted during tool execution.'
+      )
+    case 'cancelled':
+      await failStep(reserved ? 'unknown_effect' : 'cancelled')
+      return ctx.stop(
+        reserved ? 'TOOL_FAILURE' : 'CANCELLED',
+        reserved ? `unknown_effect: ${CANCELLED_RESPONSE}` : CANCELLED_RESPONSE
+      )
+    case 'threw':
+    case 'failed': {
+      const toolError =
+        outcome.kind === 'threw' ? outcome.error : outcome.result.error
+      const unknownEffect =
+        outcome.kind === 'threw' ||
+        toolError?.startsWith('unknown_effect:') === true
       await ctx.recordObservation(
         run,
         ctx.makeObservation(run, {
-          stepId: `step_${run.executionId}_${stepNumber}_tool`,
+          stepId,
+          stepNumber,
+          type: 'TOOL_RESULT',
+          source: 'TOOL',
+          trust: 'UNTRUSTED',
+          payload: {
+            status: unknownEffect
+              ? 'REJECTED'
+              : outcome.kind === 'failed'
+                ? outcome.result.status
+                : 'FAILED',
+            error: toolError ?? 'tool execution failed'
+          },
+          summary: unknownEffect
+            ? 'Tool outcome is uncertain and requires reconciliation.'
+            : 'Tool execution failed.',
+          provenance: {
+            sourceId: tool.id,
+            ...(tool.version ? { sourceVersion: tool.version } : {}),
+            operationKey,
+            ...(unknownEffect ? { effectRef: operationKey } : {})
+          }
+        })
+      )
+      await failStep(unknownEffect ? 'unknown_effect' : 'tool_failed')
+      return ctx.stop(
+        'TOOL_FAILURE',
+        unknownEffect
+          ? `unknown_effect: ${toolError ?? 'Tool execution outcome is uncertain.'}`
+          : (toolError ?? 'Tool execution failed.')
+      )
+    }
+    case 'confirm_failed':
+      await ctx.recordObservation(
+        run,
+        ctx.makeObservation(run, {
+          stepId,
           stepNumber,
           type: 'TOOL_RESULT',
           source: 'TOOL',
@@ -722,55 +520,51 @@ export async function dispatchTool(
           }
         })
       )
+      await failStep('unknown_effect')
+      return ctx.stop(
+        'TOOL_FAILURE',
+        `unknown_effect: approval confirmation failed: ${outcome.error}.`
+      )
+    case 'succeeded': {
+      const observation = ctx.makeObservation(run, {
+        stepId,
+        stepNumber,
+        type: 'TOOL_RESULT',
+        source: 'TOOL',
+        trust: 'UNTRUSTED',
+        payload: {
+          status: 'SUCCEEDED',
+          sideEffect: tool.sideEffect,
+          output: boundedPayload(
+            outcome.result.output,
+            ctx.maxObservationPayloadChars
+          )
+        },
+        summary: stringifySummary(
+          outcome.result.output,
+          'Tool completed successfully.'
+        ),
+        provenance: {
+          sourceId: tool.id,
+          ...(tool.version ? { sourceVersion: tool.version } : {}),
+          operationKey,
+          effectRef: operationKey
+        }
+      })
+      await ctx.recordObservation(run, observation)
+      run.lastToolObservation = observation
+      run.state = { ...run.state, pendingApprovalId: undefined }
       await ctx.recordStep(run, {
         stepNumber,
         stepType: 'TOOL',
-        status: 'FAILED',
+        status: 'SUCCEEDED',
         sideEffecting: true,
         reasonCode: decision.reasonCode,
-        errorCode: 'unknown_effect'
+        observationRefs: [observation.observationId]
       })
-      return ctx.stop(
-        'TOOL_FAILURE',
-        `unknown_effect: approval confirmation failed: ${errorMessage(error)}.`
-      )
+      return { kind: 'continue' }
     }
   }
-
-  const observation = ctx.makeObservation(run, {
-    stepId: `step_${run.executionId}_${stepNumber}_tool`,
-    stepNumber,
-    type: 'TOOL_RESULT',
-    source: 'TOOL',
-    trust: 'UNTRUSTED',
-    payload: {
-      status: 'SUCCEEDED',
-      sideEffect: tool.sideEffect,
-      output: boundedPayload(toolResult.output, ctx.maxObservationPayloadChars)
-    },
-    summary: stringifySummary(
-      toolResult.output,
-      'Tool completed successfully.'
-    ),
-    provenance: {
-      sourceId: tool.id,
-      ...(tool.version ? { sourceVersion: tool.version } : {}),
-      operationKey,
-      effectRef: operationKey
-    }
-  })
-  await ctx.recordObservation(run, observation)
-  run.lastToolObservation = observation
-  run.state = { ...run.state, pendingApprovalId: undefined }
-  await ctx.recordStep(run, {
-    stepNumber,
-    stepType: 'TOOL',
-    status: 'SUCCEEDED',
-    sideEffecting: true,
-    reasonCode: decision.reasonCode,
-    observationRefs: [observation.observationId]
-  })
-  return { kind: 'continue' }
 }
 
 export async function dispatchKnowledge(
@@ -997,50 +791,53 @@ export async function composeResponse(
       response: 'Duration budget exhausted before the response was composed.'
     }
   }
-  const modelAbortController = new AbortController()
-  try {
-    const modelOrDeadline = await ctx.withDeadline(
-      ctx.options.modelGateway.complete({
-        signal: modelAbortController.signal,
-        messages: [
-          {
-            role: 'system',
-            content: [
-              'Compose the final user-facing answer.',
-              'Use only the structured observations as facts.',
-              'Never claim an external action succeeded without an effect observation.',
-              `Response intent: ${decision.responseIntent ?? ''}`
-            ].join(' ')
-          },
-          { role: 'user', content: run.input.userMessage }
-        ],
-        context: run.input.context,
-        budget: run.input.budget,
-        correlationId: run.input.correlationId,
-        purpose: 'RESPONSE'
-      }),
-      remaining
-    )
-    if (modelOrDeadline === DEADLINE_EXCEEDED) {
-      modelAbortController.abort()
+  const outcome = await runModelCall(ctx.kernel(run), ctx.turn(run), {
+    messages: [
+      {
+        role: 'system',
+        content: [
+          'Compose the final user-facing answer.',
+          'Use only the structured observations as facts.',
+          'Never claim an external action succeeded without an effect observation.',
+          `Response intent: ${decision.responseIntent ?? ''}`
+        ].join(' ')
+      },
+      { role: 'user', content: run.input.userMessage }
+    ],
+    context: run.input.context,
+    budget: run.input.budget,
+    correlationId: run.input.correlationId,
+    purpose: 'RESPONSE'
+  })
+  switch (outcome.kind) {
+    case 'stopped':
+      return {
+        stopReason: outcome.gate.stopReason,
+        response: outcome.gate.response
+      }
+    case 'deadline':
       return {
         stopReason: 'MAX_DURATION',
         response: 'Duration budget exhausted during response composition.'
       }
-    }
-    run.usage.modelCalls += 1
-    run.usage.inputTokens += modelOrDeadline.inputTokens
-    run.usage.outputTokens += modelOrDeadline.outputTokens
-    run.usage.costUsd += modelOrDeadline.costUsd
-    const afterUsage = ctx.checkAfterUsage(run)
-    if (afterUsage) {
-      return { stopReason: afterUsage.reason, response: afterUsage.response }
-    }
-    return { response: modelOrDeadline.text }
-  } catch (error) {
-    return {
-      stopReason: 'MODEL_FAILURE',
-      response: `Response composition failed: ${errorMessage(error)}.`
+    case 'cancelled':
+      return { stopReason: 'CANCELLED', response: CANCELLED_RESPONSE }
+    case 'failed':
+      return {
+        stopReason: 'MODEL_FAILURE',
+        response: `Response composition failed: ${outcome.error}.`
+      }
+    case 'completed': {
+      const model = outcome.result
+      run.usage.modelCalls += 1
+      run.usage.inputTokens += model.inputTokens
+      run.usage.outputTokens += model.outputTokens
+      run.usage.costUsd += model.costUsd
+      const afterUsage = ctx.checkAfterUsage(run)
+      if (afterUsage) {
+        return { stopReason: afterUsage.reason, response: afterUsage.response }
+      }
+      return { response: model.text }
     }
   }
 }

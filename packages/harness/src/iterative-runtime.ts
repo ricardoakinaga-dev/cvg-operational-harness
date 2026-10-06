@@ -44,6 +44,33 @@ import { DeterministicCompletionEvaluator } from './completion.ts'
 import { decisionSignature, detectDecisionCycle } from './loop-detection.ts'
 import { sealCheckpoint } from './step-store.ts'
 import { agentExposesTool } from './runtime.ts'
+import { KernelHost } from './kernel/host.ts'
+import {
+  CANCELLED_RESPONSE,
+  createTurnState,
+  runGate
+} from './kernel/pipeline.ts'
+import {
+  approvalsControl,
+  auditControl,
+  budgetControl,
+  effectsControl,
+  logControl,
+  modelCapability,
+  pauseControl,
+  policyControl,
+  telemetryCapability,
+  toolsCapability
+} from './kernel/controls.ts'
+import {
+  CONTROL_SERVICES,
+  DEADLINE,
+  type EffectLedger,
+  type KernelLog,
+  type PauseSwitch,
+  type ServiceKey,
+  type TurnState
+} from './kernel/types.ts'
 import {
   applyResume,
   composeResponse,
@@ -80,7 +107,19 @@ export interface IterativeGovernedRuntimeOptions {
   readonly maxObservationPayloadChars?: number
   readonly clock?: () => Date
   readonly orchestratorVersion?: string
+  /** Kernel controls (SPEC 0181); in-memory defaults when omitted. */
+  readonly pause?: PauseSwitch
+  readonly log?: KernelLog
+  readonly effects?: EffectLedger
 }
+
+/** Services the iterative mode needs from the kernel (no single-pass planner). */
+const ITERATIVE_REQUIRED_SERVICES: readonly ServiceKey[] = [
+  ...CONTROL_SERVICES,
+  'model',
+  'tools',
+  'telemetry'
+]
 
 export const DEADLINE_EXCEEDED = Symbol('iterative-deadline-exceeded')
 
@@ -316,6 +355,11 @@ export class IterativeGovernedRuntime {
   private readonly repeatThreshold: number
   private readonly maxSignatures: number
   private readonly maxObservationPayloadChars: number
+  #kernel: Promise<KernelHost> | undefined
+  readonly #turns = new WeakMap<
+    LoopRun,
+    { host: KernelHost; signal: AbortSignal }
+  >()
 
   public constructor(
     private readonly options: IterativeGovernedRuntimeOptions
@@ -361,8 +405,68 @@ export class IterativeGovernedRuntime {
       recordStep: (run, input) => this.recordStep(run, input),
       persistCheckpoint: (run) => this.persistCheckpoint(run),
       safeAudit: (run, action, extras) => this.safeAudit(run, action, extras),
-      composeResponse: (run, decision) => this.composeResponse(run, decision)
+      composeResponse: (run, decision) => this.composeResponse(run, decision),
+      kernel: (run) => this.kernelFor(run),
+      turn: (run) => this.turnFor(run)
     }
+  }
+
+  /** Boots the kernel profile of the iterative mode once (SPEC 0181). */
+  private bootKernel(): Promise<KernelHost> {
+    this.#kernel ??= KernelHost.boot(
+      [
+        budgetControl(),
+        pauseControl(this.options.pause),
+        logControl(this.options.log),
+        effectsControl(this.options.effects),
+        policyControl(this.options.policy),
+        approvalsControl(
+          this.options.approvals,
+          this.options.capabilityFingerprint
+            ? { capabilityFingerprint: this.options.capabilityFingerprint }
+            : {}
+        ),
+        auditControl(this.options.audit, { action: 'harness.iterative' }),
+        modelCapability(this.options.modelGateway),
+        toolsCapability(this.options.tools),
+        telemetryCapability(this.options.telemetry, {
+          name: 'harness.iterative'
+        })
+      ],
+      ITERATIVE_REQUIRED_SERVICES
+    )
+    return this.#kernel
+  }
+
+  private kernelFor(run: LoopRun): KernelHost {
+    const entry = this.#turns.get(run)
+    if (!entry) throw new Error('Kernel turn is not bound to this run.')
+    return entry.host
+  }
+
+  /**
+   * Kernel view of the current run: the iterative active-duration budget and
+   * the caller's cancel signal drive the shared pipelines.
+   */
+  private turnFor(run: LoopRun): TurnState {
+    const entry = this.#turns.get(run)
+    if (!entry) throw new Error('Kernel turn is not bound to this run.')
+    return createTurnState(
+      run.input,
+      run.startedAtMs,
+      {
+        remainingMs: () => this.remainingDuration(run),
+        withDeadline: async (operation, ms = this.remainingDuration(run)) => {
+          const outcome = await this.withDeadline(
+            ms <= 0 ? new Promise<never>(() => undefined) : operation(),
+            ms
+          )
+          return outcome === DEADLINE_EXCEEDED ? DEADLINE : outcome
+        },
+        afterModel: () => undefined
+      },
+      entry.signal
+    )
   }
 
   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
@@ -401,6 +505,18 @@ export class IterativeGovernedRuntime {
         input,
         'Execution duration budget is not available.',
         'MAX_DURATION',
+        startedAtMs
+      )
+    }
+
+    let host: KernelHost
+    try {
+      host = await this.bootKernel()
+    } catch (error) {
+      return this.earlyFinish(
+        input,
+        `Kernel could not start: ${errorMessage(error)}.`,
+        'INTERNAL_FAILURE',
         startedAtMs
       )
     }
@@ -465,6 +581,12 @@ export class IterativeGovernedRuntime {
       countedSteps: new Set<number>()
     }
     run.state.observations = run.observations
+    const controller = new AbortController()
+    if (input.signal?.aborted) controller.abort()
+    input.signal?.addEventListener('abort', () => controller.abort(), {
+      once: true
+    })
+    this.#turns.set(run, { host, signal: controller.signal })
 
     const resumeOutcome = this.applyResume(run, checkpoint)
     if (resumeOutcome) {
@@ -547,6 +669,19 @@ export class IterativeGovernedRuntime {
       })
     }
     while (true) {
+      // I8: cancellation is honored before every step.
+      if (this.#turns.get(run)?.signal.aborted) {
+        return this.stop('CANCELLED', CANCELLED_RESPONSE)
+      }
+      // I12: pause (and any other step control) is checked before each step.
+      const beforeStep = await runGate(
+        this.kernelFor(run),
+        'turn/before-step',
+        this.turnFor(run)
+      )
+      if (beforeStep.kind === 'stop') {
+        return this.stop(beforeStep.stopReason, beforeStep.response)
+      }
       const budgetStop = this.checkBudget(run)
       if (budgetStop) return this.stop(budgetStop.reason, budgetStop.response)
 

@@ -1,6 +1,5 @@
 import type {
   HarnessRuntime,
-  ModelRequest,
   RuntimeInput,
   RuntimeResult,
   ToolDescriptor,
@@ -10,14 +9,20 @@ import type {
 } from '@cvg/harness-contracts'
 import { KernelHost } from './host.ts'
 import {
+  CANCELLED,
+  CANCELLED_RESPONSE,
+  appendLog,
+  createTurnState,
+  race,
+  runGate,
+  runModelCall,
+  runToolCall
+} from './pipeline.ts'
+import {
   CONTROL_SERVICES,
   DEADLINE,
   LOOP_CAPABILITIES,
-  PROCEED,
   stop,
-  type GuardVerdict,
-  type KernelGate,
-  type KernelLogEvent,
   type KernelPlugin,
   type KernelStop,
   type ToolCallState,
@@ -30,11 +35,6 @@ export const REQUIRED_SERVICES = [
   ...CONTROL_SERVICES,
   ...LOOP_CAPABILITIES
 ] as const
-
-type GatePoint = 'turn/before-step' | 'model/before-call' | 'tool/pre-execute'
-
-const CANCELLED_RESPONSE = 'Execution was cancelled by the caller.'
-const CANCELLED = Symbol('kernel-cancelled')
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'unknown failure'
@@ -222,22 +222,12 @@ class Turn {
     input.signal?.addEventListener('abort', () => this.#controller.abort(), {
       once: true
     })
-    this.#state = {
+    this.#state = createTurnState(
       input,
       startedAt,
-      signal: this.#controller.signal,
-      budget: host.get('budget').begin(input, startedAt),
-      metadata: {
-        policy: null,
-        approval: null,
-        tool: null,
-        provider: null,
-        inputTokens: 0,
-        outputTokens: 0,
-        costUsd: 0,
-        toolDurationMs: 0
-      }
-    }
+      host.get('budget').begin(input, startedAt),
+      this.#controller.signal
+    )
   }
 
   public async run(): Promise<RuntimeResult> {
@@ -267,13 +257,13 @@ class Turn {
       )
     }
 
-    const logged = await this.#log({
+    const logged = await appendLog(this.#host, {
       type: 'turn/start',
       correlationId: input.correlationId
     })
     if (logged) return this.#finish(fromStop(logged))
 
-    const gate = await this.#gate('turn/before-step', this.#state)
+    const gate = await runGate(this.#host, 'turn/before-step', this.#state)
     if (gate.kind === 'stop') return this.#finish(fromStop(gate))
 
     try {
@@ -287,7 +277,7 @@ class Turn {
           )
         )
       }
-      const decision = await this.#race(() =>
+      const decision = await race(this.#state, () =>
         this.#host.get('planner').decideNextStep({
           runtime: input,
           availableTools: this.#availableTools(),
@@ -386,9 +376,7 @@ class Turn {
       )
     }
     const input = this.#state.input
-    const modelController = new AbortController()
-    const request: ModelRequest = {
-      signal: AbortSignal.any([modelController.signal, this.#state.signal]),
+    const outcome = await runModelCall(this.#host, this.#state, {
       messages: [
         {
           role: 'system',
@@ -399,82 +387,53 @@ class Turn {
       context: input.context,
       budget: input.budget,
       correlationId: input.correlationId
-    }
-    const gate = await this.#gate('model/before-call', {
-      turn: this.#state,
-      request
     })
-    if (gate.kind === 'stop') return this.#finish(fromStop(gate))
-    if (this.#state.signal.aborted) {
-      return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
-    }
-
-    const { signal: _signal, ...loggedRequest } = request
-    void _signal
-    const logged = await this.#log({
-      type: 'model/request',
-      correlationId: input.correlationId,
-      request: loggedRequest
-    })
-    if (logged) return this.#finish(fromStop(logged))
-
-    try {
-      const outcome = await this.#race(() =>
-        this.#host.get('model').complete(request)
-      )
-      if (outcome === CANCELLED || outcome === DEADLINE) {
-        modelController.abort()
+    switch (outcome.kind) {
+      case 'stopped':
+        return this.#finish(fromStop(outcome.gate))
+      case 'cancelled':
+        return this.#finish(
+          fromStop(stop('CANCELLED', CANCELLED_RESPONSE, { modelCalls: 1 }))
+        )
+      case 'deadline':
         return this.#finish(
           fromStop(
-            outcome === CANCELLED
-              ? stop('CANCELLED', CANCELLED_RESPONSE, { modelCalls: 1 })
-              : stop(
-                  'MAX_DURATION',
-                  'Duration budget exhausted during model execution.',
-                  {
-                    modelCalls: 1
-                  }
-                )
+            stop(
+              'MAX_DURATION',
+              'Duration budget exhausted during model execution.',
+              { modelCalls: 1 }
+            )
           )
+        )
+      case 'failed':
+        return this.#finish(
+          fromStop(
+            stop('MODEL_FAILURE', `Model execution failed: ${outcome.error}.`, {
+              modelCalls: 1
+            })
+          )
+        )
+      case 'completed': {
+        const model = outcome.result
+        const metadata = this.#state.metadata
+        metadata.provider = model.provider
+        metadata.inputTokens = model.inputTokens
+        metadata.outputTokens = model.outputTokens
+        metadata.costUsd = model.costUsd
+        const exhausted = this.#state.budget.afterModel(model)
+        if (exhausted) return this.#finish(fromStop(exhausted))
+        return this.#finish(
+          result({
+            response: model.text,
+            stopReason: 'COMPLETED',
+            modelCalls: 1,
+            toolCalls: 0,
+            inputTokens: model.inputTokens,
+            outputTokens: model.outputTokens,
+            costUsd: model.costUsd
+          })
         )
       }
-      const metadata = this.#state.metadata
-      metadata.provider = outcome.provider
-      metadata.inputTokens = outcome.inputTokens
-      metadata.outputTokens = outcome.outputTokens
-      metadata.costUsd = outcome.costUsd
-      await this.#log({
-        type: 'model/result',
-        correlationId: input.correlationId,
-        provider: outcome.provider,
-        inputTokens: outcome.inputTokens,
-        outputTokens: outcome.outputTokens
-      })
-      const exhausted = this.#state.budget.afterModel(outcome)
-      if (exhausted) return this.#finish(fromStop(exhausted))
-      return this.#finish(
-        result({
-          response: outcome.text,
-          stopReason: 'COMPLETED',
-          modelCalls: 1,
-          toolCalls: 0,
-          inputTokens: outcome.inputTokens,
-          outputTokens: outcome.outputTokens,
-          costUsd: outcome.costUsd
-        })
-      )
-    } catch (error) {
-      return this.#finish(
-        fromStop(
-          stop(
-            'MODEL_FAILURE',
-            `Model execution failed: ${errorMessage(error)}.`,
-            {
-              modelCalls: 1
-            }
-          )
-        )
-      )
     }
   }
 
@@ -529,154 +488,24 @@ class Turn {
       needsApproval: false
     }
 
-    // I5: the call is on the log before any policy runs or the body starts.
-    const logged = await this.#log({
-      type: 'tool/call',
-      correlationId: input.correlationId,
-      toolId: tool.id,
-      operationKey: invocation.operationKey,
-      input: invocation.input
-    })
-    if (logged) return this.#finish(fromStop(logged))
-
-    const gate = await this.#gate('tool/pre-execute', call)
-    if (gate.kind === 'stop') return this.#finish(fromStop(gate))
-
-    const denial = (await this.#guard(call)) ?? this.#cancelledBeforeDispatch()
-    const outcome: ToolOutcome = denial
-      ? { kind: 'not_started', gate: denial }
-      : await this.#dispatch(call)
-
-    const settled = await this.#postExecute(call, outcome)
+    const pipeline = await runToolCall(this.#host, call)
+    if (pipeline.kind === 'stopped') {
+      const approvalId = pipeline.gate.approvalId ?? call.grant?.approvalId
+      return this.#finish(
+        fromStop({
+          ...pipeline.gate,
+          ...(approvalId !== undefined ? { approvalId } : {})
+        })
+      )
+    }
+    const settled = pipeline.outcome
     this.#state.metadata.toolDurationMs =
       'durationMs' in settled ? settled.durationMs : 0
-    await this.#log({
-      type: 'tool/result',
-      correlationId: input.correlationId,
-      toolId: tool.id,
-      outcome: settled.kind
-    })
     return this.#finish(this.#toolResult(call, settled))
   }
 
-  #cancelledBeforeDispatch(): KernelStop | undefined {
-    return this.#state.signal.aborted
-      ? stop('CANCELLED', CANCELLED_RESPONSE)
-      : undefined
-  }
-
-  async #dispatch(call: ToolCallState): Promise<ToolOutcome> {
-    const ref = {
-      tenantId: this.#state.input.tenantId,
-      correlationId: this.#state.input.correlationId,
-      toolId: call.tool.id,
-      operationKey: call.invocation.operationKey
-    }
-    const terminal = async (): Promise<ToolOutcome> => {
-      if (this.#state.budget.remainingMs() <= 0) {
-        return {
-          kind: 'not_started',
-          gate: stop(
-            'MAX_DURATION',
-            'Duration budget exhausted before tool execution.'
-          )
-        }
-      }
-      await this.#host.get('effects').started(ref)
-      const startedAt = Date.now()
-      const toolController = new AbortController()
-      try {
-        const value = await this.#race(() =>
-          call.tool.execute(call.invocation.input, {
-            tenantId: this.#state.input.tenantId,
-            agentId: this.#state.input.agent.id,
-            correlationId: this.#state.input.correlationId,
-            traceId: this.#state.input.traceId,
-            operationKey: call.invocation.operationKey,
-            signal: AbortSignal.any([toolController.signal, this.#state.signal])
-          })
-        )
-        const durationMs = Date.now() - startedAt
-        if (value === DEADLINE || value === CANCELLED) {
-          toolController.abort()
-          return {
-            kind: value === DEADLINE ? 'deadline' : 'cancelled',
-            durationMs
-          }
-        }
-        return value.status === 'SUCCEEDED'
-          ? { kind: 'succeeded', result: value, durationMs }
-          : { kind: 'failed', result: value, durationMs }
-      } catch (error) {
-        return {
-          kind: 'threw',
-          error: errorMessage(error),
-          durationMs: Date.now() - startedAt
-        }
-      }
-    }
-    const listeners = this.#host.listeners('tool/execute')
-    const run = (index: number): Promise<ToolOutcome> => {
-      const entry = listeners[index]
-      if (!entry) return terminal()
-      return entry
-        .fn(call, () => run(index + 1))
-        .catch(
-          (error: unknown): ToolOutcome => ({
-            kind: 'threw',
-            error: `${entry.plugin} failed: ${errorMessage(error)}`,
-            durationMs: 0
-          })
-        )
-    }
-    const outcome = await run(0)
-    if (outcome.kind !== 'not_started') {
-      await Promise.resolve(
-        this.#host.get('effects').finished(ref, outcome.kind)
-      ).catch(() => undefined)
-    }
-    return outcome
-  }
-
-  async #postExecute(
-    call: ToolCallState,
-    outcome: ToolOutcome
-  ): Promise<ToolOutcome> {
-    let current = outcome
-    for (const entry of this.#host.listeners('tool/post-execute')) {
-      try {
-        current = await entry.fn(call, current)
-      } catch (error) {
-        // I7: a failing settlement after an effect never reads as success.
-        if (current.kind === 'succeeded') {
-          current = {
-            kind: 'confirm_failed',
-            result: current.result,
-            error: `${entry.plugin} failed: ${errorMessage(error)}`,
-            durationMs: current.durationMs
-          }
-        }
-      }
-    }
-    return current
-  }
-
-  async #guard(call: ToolCallState): Promise<KernelStop | undefined> {
-    for (const guard of this.#host.guards()) {
-      let verdict: GuardVerdict
-      try {
-        verdict = await guard(call)
-      } catch (error) {
-        verdict = `A guard failed: ${errorMessage(error)}.`
-      }
-      if (typeof verdict === 'string') return stop('POLICY_DENIED', verdict)
-      if (verdict) return stop(verdict.stopReason, verdict.reason)
-    }
-    return undefined
-  }
-
   #toolResult(call: ToolCallState, outcome: ToolOutcome): RuntimeResult {
-    const approvalId = call.approval?.request.approvalId
+    const approvalId = call.grant?.approvalId
     const withApproval = approvalId !== undefined ? { approvalId } : {}
     switch (outcome.kind) {
       case 'not_started':
@@ -763,62 +592,6 @@ class Turn {
     }
   }
 
-  /** Waterfall over a gate point; listener failures become a stop (I7). */
-  async #gate<S>(point: GatePoint, state: S): Promise<KernelGate> {
-    const listeners = this.#host.listeners(point) as unknown as readonly {
-      readonly plugin: string
-      readonly fn: (
-        state: S,
-        next: () => Promise<KernelGate>
-      ) => Promise<KernelGate>
-    }[]
-    const run = (index: number): Promise<KernelGate> => {
-      const entry = listeners[index]
-      if (!entry) return Promise.resolve(PROCEED)
-      return entry
-        .fn(state, () => run(index + 1))
-        .catch((error: unknown) =>
-          stop(
-            'INSUFFICIENT_EVIDENCE',
-            `${entry.plugin} failed at ${point}: ${errorMessage(error)}.`
-          )
-        )
-    }
-    return run(0)
-  }
-
-  async #log(event: KernelLogEvent): Promise<KernelStop | undefined> {
-    try {
-      await this.#host.get('log').append(event)
-      return undefined
-    } catch (error) {
-      return stop(
-        'INSUFFICIENT_EVIDENCE',
-        `Kernel log could not record the turn: ${errorMessage(error)}.`
-      )
-    }
-  }
-
-  async #race<T>(
-    operation: () => Promise<T>
-  ): Promise<T | typeof DEADLINE | typeof CANCELLED> {
-    const signal = this.#state.signal
-    if (signal.aborted) return CANCELLED
-    let onAbort: (() => void) | undefined
-    const cancelled = new Promise<typeof CANCELLED>((resolve) => {
-      onAbort = () => resolve(CANCELLED)
-      signal.addEventListener('abort', onAbort, { once: true })
-    })
-    try {
-      return await Promise.race([
-        this.#state.budget.withDeadline(operation),
-        cancelled
-      ])
-    } finally {
-      if (onAbort) signal.removeEventListener('abort', onAbort)
-    }
-  }
-
   #availableTools(): readonly ToolDescriptor[] {
     const allowed = this.#state.input.agent.tools
     return this.#host
@@ -843,7 +616,7 @@ class Turn {
         }
       }
     }
-    await this.#log({
+    await appendLog(this.#host, {
       type: 'turn/end',
       correlationId: this.#state.input.correlationId,
       stopReason: current.stopReason

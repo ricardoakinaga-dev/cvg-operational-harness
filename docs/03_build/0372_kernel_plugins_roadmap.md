@@ -60,7 +60,12 @@
 
 ## KPLG-004 — Unificar as pilhas
 
-- Estado: `TODO`. Gate: T3. Dependências: KPLG-003. Fecha o ENG-007.
+- Estado: `IN_PROGRESS`. Parte A `DONE` em 06/10/2026: iterativo sobre o
+  pipeline compartilhado do kernel (`kernel/pipeline.ts`), lacunas I6/I8 do
+  iterativo fechadas, PostgreSQL 288 PASS
+  ([evidência](../04_audit/evidence/KERNEL-PLUGINS-20261006/baseline-and-conformance.md)).
+  Parte B (kernel durável do worker, `GovernedAgentRuntime`) aguarda o commit da
+  extração do Codex em `packages/agent-runtime`. Gate: T3. Dependências: KPLG-003. Fecha o ENG-007.
 - O quê: single-pass, iterativo e o kernel durável do worker passam a usar o
   mesmo loop. `policy`/`policy-engine` e `agent-core` são consolidados ou
   removidos. A migração é coordenada com a extração do Codex em

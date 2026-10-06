@@ -300,17 +300,23 @@ export function policyControl(policy: PolicyEngine): KernelPlugin {
           }
           decision = decisionOrDeadline
           turn.metadata.policy = decision.outcome
+          call.policyDecision = decision
         } catch (error) {
           return stop(
             'INSUFFICIENT_EVIDENCE',
-            `Policy evaluation failed: ${errorMessage(error)}.`
+            `Policy evaluation failed: ${errorMessage(error)}.`,
+            { cause: 'policy_failed' }
           )
         }
         switch (decision.outcome) {
           case 'DENY':
-            return stop('POLICY_DENIED', decision.reason)
+            return stop('POLICY_DENIED', decision.reason, {
+              cause: 'policy_denied'
+            })
           case 'HANDOFF':
-            return stop('HUMAN_TAKEOVER', decision.reason)
+            return stop('HUMAN_TAKEOVER', decision.reason, {
+              cause: 'policy_handoff'
+            })
           case 'REQUIRE_APPROVAL':
             call.needsApproval = true
             break
@@ -319,10 +325,10 @@ export function policyControl(policy: PolicyEngine): KernelPlugin {
           default:
             return stop(
               'INSUFFICIENT_EVIDENCE',
-              'Policy returned an unsupported decision.'
+              'Policy returned an unsupported decision.',
+              { cause: 'policy_unsupported' }
             )
         }
-        call.policyDecision = decision
         return next()
       })
     }
@@ -353,18 +359,27 @@ export function approvalsControl(
       ctx.provide('approvals', approvals)
       ctx.on('tool/pre-execute', async (call, next) => {
         if (!call.needsApproval && !call.tool.requiresApproval) return next()
-        const gate = await reserve(call)
+        const gate = await decide(call)
         return gate ?? next()
+      })
+      // The reservation happens around dispatch, after every control and the
+      // loop's own bookkeeping (iterative checkpoint) ran, and before the body.
+      ctx.on('tool/execute', async (call, next) => {
+        if (!call.grant) return next()
+        const gate = await reserve(call, call.grant)
+        return gate ? { kind: 'not_started', gate } : next()
       })
       ctx.on('tool/post-execute', (call, outcome) => settle(call, outcome))
     }
   }
 
-  async function reserve(call: ToolCallState): Promise<KernelStop | undefined> {
+  /** Asks once; a missing, failing or unsupported answer never proceeds (I4). */
+  async function decide(call: ToolCallState): Promise<KernelStop | undefined> {
     const { turn, tool, invocation } = call
     const input = turn.input
     const policyVersion = call.policyDecision?.policyVersion ?? 'unknown'
-    let request: ApprovalExecutionRequest
+    const executionRef =
+      call.executionRef ?? input.executionId ?? input.correlationId
     try {
       if (turn.budget.remainingMs() <= 0) {
         return stop(
@@ -380,7 +395,7 @@ export function approvalsControl(
           toolId: tool.id,
           summary: tool.description,
           correlationId: input.correlationId,
-          executionRef: input.executionId ?? input.correlationId,
+          executionRef,
           operatorId: input.agent.id,
           agentVersion: input.agent.version,
           action: 'tool.execute',
@@ -403,25 +418,33 @@ export function approvalsControl(
         ? { approvalId: approval.approvalId }
         : {}
       if (approval.status === 'PENDING') {
-        return stop('APPROVAL_REQUIRED', approval.reason, approvalId)
+        return stop('APPROVAL_REQUIRED', approval.reason, {
+          ...approvalId,
+          cause: 'approval_pending'
+        })
       }
       if (approval.status === 'DENIED') {
-        return stop('POLICY_DENIED', approval.reason, approvalId)
+        return stop('POLICY_DENIED', approval.reason, {
+          ...approvalId,
+          cause: 'approval_denied'
+        })
       }
       if (approval.status !== 'APPROVED') {
         return stop(
           'INSUFFICIENT_EVIDENCE',
-          'Approval returned an unsupported decision.'
+          'Approval returned an unsupported decision.',
+          { cause: 'approval_failed' }
         )
       }
       if (!approval.approvalId) {
         return stop(
           'INSUFFICIENT_EVIDENCE',
-          'Approved execution has no approval identifier.'
+          'Approved execution has no approval identifier.',
+          { cause: 'approval_failed' }
         )
       }
       turn.metadata.approval = approval.approvalId
-      request = {
+      call.grant = {
         tenantId: input.tenantId,
         approvalId: approval.approvalId,
         agentId: input.agent.id,
@@ -434,22 +457,38 @@ export function approvalsControl(
         ),
         policyVersion,
         operationKey: invocation.operationKey,
-        executionRef: input.executionId ?? input.correlationId
+        executionRef
       }
     } catch (error) {
       return stop(
         'INSUFFICIENT_EVIDENCE',
-        `Approval evaluation failed: ${errorMessage(error)}.`
+        `Approval evaluation failed: ${errorMessage(error)}.`,
+        { cause: 'approval_failed' }
       )
     }
-
-    const port = approvals.execution
-    if (!port) {
+    if (!approvals.execution) {
       // Without the execution port an approval cannot be consumed once (I9).
       return stop(
         'INSUFFICIENT_EVIDENCE',
         'Approved execution requires a single-use approval execution port.',
-        { approvalId: request.approvalId }
+        { approvalId: call.grant.approvalId, cause: 'approval_unbound' }
+      )
+    }
+    return undefined
+  }
+
+  /** Consumes the single-use reservation right before the body runs. */
+  async function reserve(
+    call: ToolCallState,
+    request: ApprovalExecutionRequest
+  ): Promise<KernelStop | undefined> {
+    const { turn } = call
+    const port = approvals.execution
+    if (!port) {
+      return stop(
+        'INSUFFICIENT_EVIDENCE',
+        'Approved execution requires a single-use approval execution port.',
+        { approvalId: request.approvalId, cause: 'approval_unbound' }
       )
     }
     if (turn.budget.remainingMs() <= 0) {
@@ -467,7 +506,7 @@ export function approvalsControl(
         return stop(
           'INSUFFICIENT_EVIDENCE',
           'Approval execution reservation timed out.',
-          { approvalId: request.approvalId }
+          { approvalId: request.approvalId, cause: 'approval_failed' }
         )
       }
       call.approval = { request, handle: handleOrDeadline }
@@ -476,7 +515,7 @@ export function approvalsControl(
       return stop(
         'INSUFFICIENT_EVIDENCE',
         `Approval could not be consumed safely: ${errorMessage(error)}.`,
-        { approvalId: request.approvalId }
+        { approvalId: request.approvalId, cause: 'approval_failed' }
       )
     }
   }

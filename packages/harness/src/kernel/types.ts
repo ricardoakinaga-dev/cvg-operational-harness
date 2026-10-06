@@ -62,7 +62,19 @@ export interface KernelStop {
     readonly outputTokens: number
     readonly costUsd: number
   }
+  /** Which control decided, so a loop can record the right step. */
+  readonly cause?: StopCause
 }
+
+export type StopCause =
+  | 'policy_denied'
+  | 'policy_handoff'
+  | 'policy_unsupported'
+  | 'policy_failed'
+  | 'approval_pending'
+  | 'approval_denied'
+  | 'approval_failed'
+  | 'approval_unbound'
 
 export interface KernelProceed {
   readonly kind: 'proceed'
@@ -89,6 +101,10 @@ export interface ToolCallState {
   policyDecision?: PolicyDecision
   /** Set by the policy control when the decision asks for approval. */
   needsApproval: boolean
+  /** Granted approval, bound to this call; reserved only at dispatch. */
+  grant?: ApprovalExecutionRequest
+  /** Execution reference for approvals; defaults to the input's. */
+  readonly executionRef?: string
   /** Single-use approval reservation, held until post-execute settles it. */
   approval?: {
     readonly request: ApprovalExecutionRequest

@@ -34,10 +34,8 @@ import {
 /**
  * KERNEL-PLUGINS-20261006 — suíte de conformidade da SPEC 0181. Invariantes
  * derivadas do DeepSeek Harness (ADR-011), executadas contra o kernel de
- * plugins, o single-pass (agora fachada do kernel) e o iterativo (ainda
- * independente até o KPLG-004). Lacuna testável que continua aberta usa
- * `it.fails`: o teste descreve o comportamento exigido e passa a falhar,
- * avisando, quando a lacuna for fechada.
+ * plugins, o single-pass (fachada do kernel) e o iterativo (sobre o pipeline
+ * do kernel desde o KPLG-004).
  */
 
 const TOOL = 'synthetic.conformance.write'
@@ -45,6 +43,7 @@ const TENANT = 'tenant_00000000-0000-4000-8000-000000000096'
 const USER_MESSAGE = 'synthetic conformance request'
 
 type Kind = 'kernel' | 'single_pass' | 'iterative'
+/** Kernel log is checked directly; the iterative loop records steps too. */
 const ON_KERNEL = (kind: Kind) => kind !== 'iterative'
 
 interface Setup {
@@ -57,6 +56,7 @@ interface Setup {
   /** Plan a model-composed answer instead of a tool call. */
   readonly respond?: boolean
   readonly signal?: AbortSignal
+  readonly pause?: InMemoryPauseSwitch
 }
 
 class Audit implements AuditSink {
@@ -172,7 +172,8 @@ function build(kind: Kind, setup: Setup = {}) {
     approvals: setup.approvals ?? denyingApprovals,
     tools,
     audit,
-    telemetry
+    telemetry,
+    ...(setup.pause ? { pause: setup.pause } : {})
   }
   const singlePassPlanner = {
     decideNextStep: async () =>
@@ -225,7 +226,8 @@ function build(kind: Kind, setup: Setup = {}) {
             ]
       }),
       stepStore: new InMemoryExecutionStepStore(),
-      contextEngine: new DefaultContextEngine()
+      contextEngine: new DefaultContextEngine(),
+      log
     })
   }
   return {
@@ -325,18 +327,10 @@ describe.each<Kind>(['kernel', 'single_pass', 'iterative'])(
       ])
       expect(logged).toContain(USER_MESSAGE)
     }
-    if (ON_KERNEL(kind)) {
-      it(
-        'C06/I6 — requisição ao modelo registrada antes do envio',
-        modelRequestLogged
-      )
-    } else {
-      // O iterativo não registra a requisição; fecha no KPLG-004.
-      it.fails(
-        'C06/I6 — requisição ao modelo registrada (LACUNA iterativo)',
-        modelRequestLogged
-      )
-    }
+    it(
+      'C06/I6 — requisição ao modelo registrada antes do envio',
+      modelRequestLogged
+    )
 
     it('C07/I7 — exceção da política não derruba o processo nem executa', async () => {
       const h = build(kind, { policy: { evaluate: failing('policy down') } })
@@ -353,15 +347,7 @@ describe.each<Kind>(['kernel', 'single_pass', 'iterative'])(
       expect(h.executions).toEqual([])
       expect(result.stopReason).toBe('CANCELLED')
     }
-    if (ON_KERNEL(kind)) {
-      it('C08/I8 — cancelamento antes do despacho', cancelledBeforeDispatch)
-    } else {
-      // O iterativo ignora `RuntimeInput.signal`; fecha no KPLG-004.
-      it.fails(
-        'C08/I8 — cancelamento antes do despacho (LACUNA iterativo)',
-        cancelledBeforeDispatch
-      )
-    }
+    it('C08/I8 — cancelamento antes do despacho', cancelledBeforeDispatch)
 
     it('C09/I9 — aprovação concedida sem porta de uso único é recusada', async () => {
       const h = build(kind, {
@@ -385,6 +371,15 @@ describe.each<Kind>(['kernel', 'single_pass', 'iterative'])(
       const result = await h.run()
       expect(h.executions).toEqual(['executed'])
       expect(result.stopReason).not.toBe('COMPLETED')
+    })
+
+    it('C12/I12 — agente pausado não executa nada', async () => {
+      const pause = new InMemoryPauseSwitch()
+      pause.pause(TENANT)
+      const h = build(kind, { pause })
+      const result = await h.run()
+      expect(h.executions).toEqual([])
+      expect(result.stopReason).toBe('HUMAN_TAKEOVER')
     })
 
     it('C11/I11 — orçamento de ferramenta zero impede a execução', async () => {
