@@ -6,6 +6,15 @@
 - Vale para qualquer agente. Em conflito entre este arquivo e uma instrução
   direta do usuário, vale a instrução do usuário.
 
+## AUD-0598 — reauditoria de 2356a25 — 06/10/2026
+
+- Task `AUD0598-KPLG004-REAUDIT-20261006`, Codex, `COMPLETED_AUDIT / TWO_P1_TWO_P2_OPEN`; pedido atual: reauditar a remediação de AUD-0597 em `2356a25`.
+- Escrita exclusiva: `docs/04_audit/0598_reauditoria_kplg004_2026-10-06.md`, `docs/04_audit/evidence/AUD0598-KPLG004-20261006/**`, cópia isolada `/tmp/cvg-aud0598-20261006/**` e, nesta coordenação e nos três ledgers, somente entrada própria nova. Código/contratos/testes do produto somente leitura no root; sondas adicionais só na cópia própria e arquivadas como evidência textual.
+- Barra mantida: F01–F06/I5/I6/I8/I12, retomada e orçamento, ordering checkpoint/reserva, estado de efeito após falha de log e regressão da SPEC 0181. Oito sondas anteriores byte-exatas; revisão independente read-only separada.
+- Node 22, dependências próprias; PostgreSQL 16 descartável próprio `cvg-aud0598-pg-20261006` em loopback 55717, dados sintéticos. Sem certify, E2E, SBOM, licenças, lockfile compartilhado, provider/deploy/produção. Push não faz parte desta reauditoria.
+
+- Fechamento: AUD-0598 REJECT integral; 2733 PASS + 2 falhas esperadas do worker, zero skips; PostgreSQL 288 PASS; typecheck/lint PASS; oito sondas originais e 13 regressões PASS; cinco sondas adicionais: 1 PASS/4 FAIL. Revisão independente concluída e agente encerrado; PostgreSQL próprio removido. Commit seletivo apenas do relatório, evidências e entradas próprias; sem push. Remediação R01–R04 com owner KERNEL-PLUGINS.
+
 ## AUD-KPLG004-20261006 — auditoria independente e publicação autorizada
 
 - Codex, `COMPLETED_AUDIT / FINDINGS_OPEN`; usuário autorizou auditoria de `ee7b3f9`, commit e push para `ricardoakinaga-dev/cvg-operational-harness` nesta sessão.

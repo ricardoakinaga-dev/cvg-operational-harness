@@ -1,0 +1,155 @@
+import { ApprovalEngine as ApprovalAuthorityEngine } from '@cvg/approval-engine'
+import { DurableApprovalEngineAdapter } from '../../../persistence/src/operational-approval-adapter.ts'
+import { describe, expect, it } from 'vitest'
+import type { ApprovalEngine, ExecutionCheckpoint, ToolDefinition } from '@cvg/harness-contracts'
+import { ScriptedModelGateway, ScriptedOrchestrator } from '@cvg/harness-orchestrator'
+import { IterativeGovernedRuntime } from '../iterative-runtime.ts'
+import { InMemoryExecutionStepStore } from '../step-store.ts'
+import { InMemoryEffectLedger, InMemoryKernelLog, InMemoryPauseSwitch, KernelRuntime, standardKernelPlugins } from '../kernel/index.ts'
+import { phase3RuntimeInput, PHASE3_TOOL_RESERVE } from './fixtures/phase3-fixtures.ts'
+
+const input = phase3RuntimeInput()
+const decision = { decisionType: 'CALL_TOOL', reasonCode: 'TOOL_REQUIRED', toolId: PHASE3_TOOL_RESERVE, toolInput: {} } as const
+
+function harness(options: { checkpoint?: () => void; reserve?: () => void; pending?: () => boolean; logFails?: boolean; approved?: boolean; approvals?: ApprovalEngine } = {}) {
+  const order: string[] = []
+  const pause = new InMemoryPauseSwitch()
+  const effects = new InMemoryEffectLedger()
+  const log = new InMemoryKernelLog()
+  class Store extends InMemoryExecutionStepStore {
+    override async saveCheckpoint(checkpoint: ExecutionCheckpoint) {
+      if (checkpoint.state.pendingDecision && (!checkpoint.state.stopReason || checkpoint.state.stopReason === 'APPROVAL_REQUIRED')) {
+        order.push('checkpoint')
+        options.checkpoint?.()
+      }
+      await super.saveCheckpoint(checkpoint)
+    }
+  }
+  const store = new Store()
+  const approvals: ApprovalEngine = options.approvals ?? {
+    request: async () => options.pending?.()
+      ? { status: 'PENDING', approvalId: 'approval-audit' as never, reason: 'waiting' }
+      : { status: 'APPROVED', approvalId: 'approval-audit' as never, reason: 'synthetic' },
+    execution: {
+      begin: async () => { order.push('reserve'); options.reserve?.(); return { reservationId: 'reservation-audit' } as never },
+      complete: async () => { order.push('complete') },
+      fail: async () => { order.push('fail') },
+      uncertain: async () => { order.push('uncertain') }
+    }
+  }
+  const tool: ToolDefinition = {
+    id: PHASE3_TOOL_RESERVE, version: 'v1', description: 'synthetic only', inputSchema: {}, outputSchema: {}, risk: 'LOW', sideEffect: 'WRITE', idempotent: false, requiresApproval: options.approved ?? true,
+    execute: async () => { order.push('body'); return { status: 'SUCCEEDED', output: { ok: true } } }
+  }
+  const runtime = new IterativeGovernedRuntime({
+    orchestrator: new ScriptedOrchestrator({ script: [decision, { decisionType: 'RESPOND', reasonCode: 'GOAL_SATISFIED', responseText: 'ok' }] }),
+    modelGateway: new ScriptedModelGateway({ responses: ['synthetic'] }),
+    policy: { evaluate: async () => ({ outcome: 'ALLOW', reason: 'synthetic', policyVersion: 'v1' }) },
+    approvals, tools: { list: () => [tool], resolve: id => id === tool.id ? tool : undefined },
+    audit: { append: async () => {} }, telemetry: { record: () => {} }, stepStore: store, pause, effects,
+    log: { append: async event => { if (options.logFails && event.type === 'tool/result') throw new Error('synthetic result log failure'); log.append(event) } }
+  })
+  return { runtime, order, pause, effects, store, log }
+}
+
+
+describe('AUD0598 — adversarial follow-up', () => {
+  it('control: real durable approval completes without pause', async () => {
+    const authority = new ApprovalAuthorityEngine()
+    const adapter = new DurableApprovalEngineAdapter(authority)
+    const h = harness({ approvals: adapter })
+    const first = await h.runtime.execute(input)
+    expect(first.stopReason).toBe('APPROVAL_REQUIRED')
+    const approvalId = authority.list(input.tenantId)[0]!.approvalId
+    authority.approve(input.tenantId, approvalId, { approverId: 'operator.synthetic.independent' })
+    const completed = await h.runtime.execute({ ...input, resume: { kind: 'approval', approvalId: approvalId as never } })
+    console.info('AUD0598-DURABLE-CONTROL', JSON.stringify({ stopReason: completed.stopReason, status: authority.get(input.tenantId, approvalId).status, bodies: h.order.filter(value => value === 'body').length }))
+    expect(completed.stopReason).toBe('COMPLETED')
+    expect(authority.get(input.tenantId, approvalId).status).toBe('EXECUTED')
+    expect(h.order.filter(value => value === 'body')).toHaveLength(1)
+  })
+
+  it('resume budget: pause during approved checkpoint must preserve the last tool slot', async () => {
+    const authority = new ApprovalAuthorityEngine()
+    const adapter = new DurableApprovalEngineAdapter(authority)
+    let pauseOnCheckpoint = true
+    const h = harness({ approvals: adapter, checkpoint: () => { if (pauseOnCheckpoint && authority.list(input.tenantId)[0]?.status === 'APPROVED') h.pause.pause(input.tenantId) } })
+    const boundedInput = { ...input, budget: { ...input.budget, maxToolCalls: 1 } }
+    const first = await h.runtime.execute(boundedInput)
+    expect(first.stopReason).toBe('APPROVAL_REQUIRED')
+    const approvalId = authority.list(input.tenantId)[0]!.approvalId
+    authority.approve(input.tenantId, approvalId, { approverId: 'operator.synthetic.independent' })
+    const resume = { kind: 'approval' as const, approvalId: approvalId as never }
+    const paused = await h.runtime.execute({ ...boundedInput, resume })
+    expect(paused.stopReason).toBe('HUMAN_TAKEOVER')
+    expect(authority.get(input.tenantId, approvalId).status).toBe('APPROVED')
+    pauseOnCheckpoint = false
+    h.pause.resume(input.tenantId)
+    const completed = await h.runtime.execute({ ...boundedInput, resume })
+    console.info('AUD0598-DURABLE-CHECKPOINT-CONTROL', JSON.stringify({ stopReason: completed.stopReason, status: authority.get(input.tenantId, approvalId).status, toolCalls: completed.toolCalls, bodies: h.order.filter(value => value === 'body').length }))
+    expect(completed.stopReason).toBe('COMPLETED')
+    expect(completed.toolCalls).toBe(1)
+    expect(h.order.filter(value => value === 'body')).toHaveLength(1)
+  })
+
+  it('F03: real durable approval remains resumable after pause during reservation', async () => {
+    const authority = new ApprovalAuthorityEngine()
+    const adapter = new DurableApprovalEngineAdapter(authority)
+    let pauseOnReserve = true
+    const approvals: ApprovalEngine = {
+      request: request => adapter.request(request),
+      execution: {
+        ...adapter.execution,
+        begin: async request => {
+          const handle = await adapter.execution.begin(request)
+          if (pauseOnReserve) h.pause.pause(input.tenantId)
+          return handle
+        }
+      }
+    }
+    const h = harness({ approvals })
+    const first = await h.runtime.execute(input)
+    expect(first.stopReason).toBe('APPROVAL_REQUIRED')
+    const approvalId = authority.list(input.tenantId)[0]!.approvalId
+    authority.approve(input.tenantId, approvalId, { approverId: 'operator.synthetic.independent' })
+    const resume = { kind: 'approval' as const, approvalId: approvalId as never }
+    const paused = await h.runtime.execute({ ...input, resume })
+    expect(paused.stopReason).toBe('HUMAN_TAKEOVER')
+    expect(h.order).not.toContain('body')
+    const statusAfterPause = authority.get(input.tenantId, approvalId).status
+    pauseOnReserve = false
+    h.pause.resume(input.tenantId)
+    const resumed = await h.runtime.execute({ ...input, resume })
+    console.info('AUD0598-DURABLE-RESUME', JSON.stringify({ first: first.stopReason, paused: paused.stopReason, statusAfterPause, resumed: resumed.stopReason, response: resumed.response, order: h.order, effects: h.effects.entries }))
+    expect(resumed.stopReason).toBe('COMPLETED')
+    expect(h.order.filter(value => value === 'body')).toHaveLength(1)
+  })
+
+  it('F06: throwing checkpoint must close a previously logged call once', async () => {
+    const h = harness({ checkpoint: () => { throw new Error('synthetic checkpoint storage outage') } })
+    const result = await h.runtime.execute(input)
+    const calls = h.log.events.filter(event => event.type === 'tool/call')
+    const ends = h.log.events.filter(event => event.type === 'tool/result')
+    console.info('AUD0598-CHECKPOINT-CLOSURE', JSON.stringify({ stopReason: result.stopReason, calls: calls.length, ends: ends.length, order: h.order, effects: h.effects.entries }))
+    expect(h.order).not.toContain('body')
+    expect(calls).toHaveLength(1)
+    expect(ends).toHaveLength(1)
+  })
+
+  it('F04: failure recording a denied tool result must report insufficient evidence', async () => {
+    const log = new InMemoryKernelLog()
+    const tool: ToolDefinition = { id: PHASE3_TOOL_RESERVE, version: 'v1', description: 'synthetic only', inputSchema: {}, outputSchema: {}, risk: 'LOW', sideEffect: 'WRITE', idempotent: false, requiresApproval: false, execute: async () => { throw new Error('body must not run') } }
+    const runtime = await KernelRuntime.boot(standardKernelPlugins({
+      orchestrator: { decideNextStep: async () => ({ action: 'CALL_TOOL', toolInvocation: { toolId: tool.id, input: {}, operationKey: 'audit-denial' } }) },
+      modelGateway: new ScriptedModelGateway({ responses: ['unused'] }),
+      policy: { evaluate: async () => ({ outcome: 'ALLOW', reason: 'synthetic', policyVersion: 'v1' }) },
+      approvals: { request: async () => ({ status: 'DENIED', reason: 'unused' }) },
+      tools: { list: () => [tool], resolve: () => tool }, audit: { append: async () => {} }, telemetry: { record: () => {} },
+      log: { append: async event => { if (event.type === 'tool/result') throw new Error('synthetic denied-result log outage'); log.append(event) } },
+      plugins: [{ name: 'control.deny', kind: 'control', apply: ctx => { ctx.guard(() => 'synthetic denial') } }]
+    }))
+    const result = await runtime.execute({ ...input, runtimeProfile: 'single_pass' })
+    console.info('AUD0598-DENIED-RESULT-LOG', JSON.stringify({ stopReason: result.stopReason, events: log.events.map(event => event.type) }))
+    expect(result.stopReason).toBe('INSUFFICIENT_EVIDENCE')
+  })
+})

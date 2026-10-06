@@ -1,3 +1,17 @@
+# AUD0598 — reauditoria de 2356a25 — 06/10/2026
+
+- Task `AUD0598-KPLG004-REAUDIT-20261006`: auditoria `DONE`; aceite integral da remediação `REJECT`. [AUD-0598](04_audit/0598_reauditoria_kplg004_2026-10-06.md). Casos originais F01–F06 passam, mas settlement retomável de F01/F03, observação de orçamento e promessas ampliadas de logging continuam incompletos. Esta entrada registra a disposição independente atual sem reescrever os cartões históricos/linhas de outros agentes.
+- Verificação: 2733 PASS + 2 falhas esperadas do worker, zero skips; PostgreSQL 288 PASS; typecheck/lint PASS; oito sondas originais e 13 regressões PASS; cinco sondas adicionais: 1 PASS/4 FAIL. Revisão independente confirma dois P1 e dois P2. Owner de código continua KERNEL-PLUGINS; produção `NO_GO`, parte B e duas lacunas do worker abertas.
+
+| Task        | Prioridade/estado | O quê e onde                                                              | Como e dependência                                                                                                               | Critério de pronto                                                                   |
+| ----------- | ----------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| AUD0598-R01 | P1 / OPEN         | Aprovação FAILED após pausa sem efeito; controls e adaptador de aprovação | Reconciliar settlement not_started e retomada na máquina de estados real; owner KERNEL-PLUGINS, gate aplicável se contrato mudar | Pausa após reserva: body0; unpause/resume: autorização utilizável, body1, sem replay |
+| AUD0598-R02 | P1 / OPEN         | Recontagem depois de aprovação pendente; iterative-runtime/dispatch       | Reconhecer contador de chamada em andamento com stopReason anterior; owner KERNEL-PLUGINS, SPEC 0181                             | APPREQ→approve→pausecheckpoint→resume com max1 termina COMPLETED, toolCalls1/body1   |
+| AUD0598-R03 | P2 / OPEN         | Exceção de beforeDispatch não fecha tool/call; pipeline                   | Encerrar uma vez no erro de checkpoint/recordStep sem reservar/executar; owner KERNEL-PLUGINS, I5                                | Store rejeita: um call e uma tentativa not_started, body0                            |
+| AUD0598-R04 | P2 / OPEN         | closeNotStarted ignora erro de appendLog; pipeline                        | Propagar erro normalizado conservando negação e ausência de efeito; owner KERNEL-PLUGINS, I5                                     | Log de chamada negada falha: INSUFFICIENT_EVIDENCE, uma tentativa final, body0       |
+
+- `next_action`: corrigir R01–R04 e repetir sondas antigas/novas, conformidade e regressão no próximo candidato. Sem push nesta rodada.
+
 # AUD-KPLG004 — auditoria de ee7b3f9 — 06/10/2026
 
 - Task `AUD-KPLG004-20261006`: auditoria `DONE`; aceite integral do código `FAIL`, produção `NO_GO`. [AUD-0597](04_audit/0597_auditoria_kplg004_2026-10-06.md). Publicação Git autorizada pelo usuário; nenhum código de runtime alterado, nenhum fechamento por suíte verde.

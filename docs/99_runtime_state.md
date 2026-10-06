@@ -1,3 +1,9 @@
+# AUD0598 — reauditoria de 2356a25 — 06/10/2026
+
+- Task `AUD0598-KPLG004-REAUDIT-20261006`; `status: COMPLETED` para a auditoria; código `REJECT_INTEGRAL_PART_A / TWO_P1_TWO_P2_OPEN`. [AUD-0598](04_audit/0598_reauditoria_kplg004_2026-10-06.md); produção `NO_GO`.
+- `last_completed_action`: reauditoria independente do SHA `2356a2518ab82c6bfea9f8cfb7277170cb02aa7f`; 2733 PASS + 2 falhas esperadas do worker, zero skips; PostgreSQL 288 PASS; typecheck/lint PASS; oito sondas originais e 13 regressões PASS; cinco sondas adicionais: 1 PASS/4 FAIL. Aquinas reproduziu os três primeiros achados em Node 24 e confirmou R04 estaticamente; lead reproduziu os quatro em Node 22. Aprovação durável após pausa vira FAILED; recontagem após APPROVAL_REQUIRED persiste; exceção de checkpoint não encerra chamada; erro de log de negação não é propagado.
+- `next_action`: owner KERNEL-PLUGINS remediar R01–R04, repetir sondas antigas/novas e gates no próximo SHA; não aceitar parte A pelo verde das oito sondas antigas. Apenas artefatos e entradas próprias de ledgers nesta rodada; sem código, push ou release. Estados de outras frentes abaixo não foram alterados.
+
 # AUD-KPLG004 — auditoria de ee7b3f9 — 06/10/2026
 
 - Task `AUD-KPLG004-20261006`; `status: COMPLETED` para a auditoria, código `FAIL_INVARIANTS_PART_A`, remediações `OPEN`. [AUD-0597](04_audit/0597_auditoria_kplg004_2026-10-06.md); produção `NO_GO`.

@@ -1,3 +1,10 @@
+# AUD0598 — reauditoria de 2356a25 — 06/10/2026
+
+- Task `AUD0598-KPLG004-REAUDIT-20261006`, Codex, auditoria documental `COMPLETED`. Pedido atual: reauditar a entrega em `2356a25`; barra I5/I6/I8/I12 e recovery da SPEC 0181 mantida. [AUD-0598](04_audit/0598_reauditoria_kplg004_2026-10-06.md) e evidências arquivadas, código compartilhado somente leitura.
+- Resultado `REJECT` integral: R01 P1 (pausa após reserva torna aprovação FAILED e resume INTERNAL_FAILURE), R02 P1 (retomada após aprovação pendente retorna MAX_TOOL_CALLS), R03 P2 (checkpoint rejeitado deixa tool/call sem resultado), R04 P2 (erro ao registrar chamada negada retorna POLICY_DENIED). Oito reproduções anteriores passam sem mudanças, hash preservado; mocks não equivalem ao adaptador durável.
+- Verificação isolada Node 22/PostgreSQL 16 sintético: 2733 PASS + 2 falhas esperadas do worker, zero skips; PostgreSQL 288 PASS; typecheck/lint PASS; oito sondas originais e 13 regressões PASS; cinco sondas adicionais: 1 PASS/4 FAIL. As duas falhas esperadas não são conformidade atendida. Sondas adicionais usam adaptador/máquina de estados reais com store de memória; PG separado. A tentativa intermediária cujo callback não disparou foi corrigida e preservada como diagnóstico, sem achado de produto.
+- Revisão independente Aquinas `REJECT`, dois P1/dois P2; agente read-only encerrado. Banco descartável próprio removido após as verificações. Relatório/ledgers próprios preparados para commit seletivo local; sem push, certify, E2E, SBOM, licenças ou deploy. `last_completed_action`: relatório, quatro cartões e evidências; `next_action`: remediação owner KERNEL-PLUGINS e reauditoria no SHA final.
+
 # AUD-KPLG004 — auditoria de ee7b3f9 — 06/10/2026
 
 - Task `AUD-KPLG004-20261006`, Codex, `COMPLETED` para a auditoria documental. Pedido do usuário: auditar `ee7b3f9`, commit e push para `ricardoakinaga-dev/cvg-operational-harness`. Relatório [AUD-0597](04_audit/0597_auditoria_kplg004_2026-10-06.md) e manifesto de evidências arquivados; nenhum código do produto ou alterações concorrentes incluídos nos artefatos próprios.
