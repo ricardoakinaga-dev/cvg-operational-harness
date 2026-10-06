@@ -182,12 +182,21 @@ export function pauseControl(
       ctx.provide('pause', pause)
       ctx.on('turn/before-step', async (turn, next) =>
         (await pause.isPaused(turn.input.tenantId))
-          ? stop('HUMAN_TAKEOVER', PAUSED_RESPONSE)
+          ? stop('HUMAN_TAKEOVER', PAUSED_RESPONSE, {
+              cause: 'operator_paused'
+            })
           : next()
       )
+      // Guards run again after the loop's checkpoint and after the approval
+      // reservation, so a pause acknowledged in those windows still blocks the
+      // body (AUD-0597 F01).
       ctx.guard(async (call) =>
         (await pause.isPaused(call.turn.input.tenantId))
-          ? { reason: PAUSED_RESPONSE, stopReason: 'HUMAN_TAKEOVER' }
+          ? {
+              reason: PAUSED_RESPONSE,
+              stopReason: 'HUMAN_TAKEOVER',
+              cause: 'operator_paused'
+            }
           : undefined
       )
     }

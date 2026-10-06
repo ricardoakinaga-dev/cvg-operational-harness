@@ -151,3 +151,36 @@ PostgreSQL 16.15 próprio (removido):
 Conformidade: as lacunas I6 e I8 do iterativo fecharam; C12 (pausa) agora roda
 nos três alvos. Restam 2 lacunas, ambas no `GovernedAgentRuntime` (I6 e I7), que
 dependem da extração do Codex em `packages/agent-runtime` (KPLG-004 parte B).
+
+## Remediação da AUD-0597 (06/10/2026)
+
+A [auditoria 0597](../../0597_auditoria_kplg004_2026-10-06.md) (Codex) reprovou o
+aceite da parte A com 5 P1 e 1 P2. Correções, sem mudar contrato nem estado
+durável:
+
+| Achado | Correção |
+| --- | --- |
+| F01 pausa entre guardas e despacho | `revalidate` (guardas + cancelamento) roda de novo depois do hook do loop (checkpoint) e no último instante antes do corpo, depois da reserva. Reserva já feita é liberada como falha certa (`fail`), nunca incerta |
+| F02 cancelamento com reserva/efeito fantasma | mesma revalidação; `effects.started` só depois do ponto de decisão, e daí em diante o corpo é sempre invocado (`raceInvoked`), então início registrado nunca fica sem corpo |
+| F03 pausa torna pendência terminal | pausa do operador tem causa `operator_paused`; o iterativo devolve a parada com o `preserveCheckpoint` já existente, então a aprovação ou pergunta pendente continua retomável |
+| Observação de recontagem | retomada de passo que já passou do checkpoint de despacho não gasta o orçamento de ferramenta de novo (`inFlightCounted`, derivado do checkpoint existente) |
+| F04 falha no log do resultado vira sucesso | falhas em `tool/result`, `model/result` e `turn/end` propagam como `INSUFFICIENT_EVIDENCE`, preservando o fato do efeito (`toolCalls`, `toolResult`) e sem replay (checkpoint terminal) |
+| F05 log do modelo diverge do enviado | o log grava uma cópia da requisição efetiva depois de `model/before-call`, só sem o `signal` |
+| F06 negação sem `tool/result` | toda chamada registrada é encerrada uma vez: negações de política, guarda, cancelamento e hook gravam `not_started` |
+
+Verificação no worktree isolado (`283ab74` + remediação), Node 22.23.2,
+PostgreSQL 16.15 próprio (removido):
+
+| Gate | Resultado |
+| --- | --- |
+| Sondas originais da AUD-0597, sem alteração | 8/8 passaram (antes 1 passou, 7 falharam) |
+| Regressões novas (`aud0597-kplg004-regressions.test.ts`) | 13/13; antes da correção 12 falhavam pelo motivo de cada achado |
+| `npm test` | 341 arquivos passaram, 1 pulado; 2.732 testes passaram, 2 falhas esperadas (`GovernedAgentRuntime` I6/I7), 1 pulado |
+| `npm run test:postgres` | 35 arquivos / 288 testes passaram |
+| `npm run typecheck` / `eslint .` | exit 0 / exit 0 |
+
+Conformidade reforçada como pedido na auditoria: C06 compara campo a campo a
+requisição enviada e a registrada; C05 exige que toda chamada (executada, negada
+ou com exceção) seja encerrada exatamente uma vez no log, nos três alvos.
+
+Estado: `FIXED_LOCAL`. O aceite da parte A depende de reauditoria independente.

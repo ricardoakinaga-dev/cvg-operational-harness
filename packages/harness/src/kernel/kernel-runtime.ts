@@ -413,6 +413,18 @@ class Turn {
             })
           )
         )
+      case 'unrecorded':
+        return this.#finish(
+          fromStop({
+            ...outcome.gate,
+            modelCalls: 1,
+            usage: {
+              inputTokens: outcome.result.inputTokens,
+              outputTokens: outcome.result.outputTokens,
+              costUsd: outcome.result.costUsd
+            }
+          })
+        )
       case 'completed': {
         const model = outcome.result
         const metadata = this.#state.metadata
@@ -501,7 +513,16 @@ class Turn {
     const settled = pipeline.outcome
     this.#state.metadata.toolDurationMs =
       'durationMs' in settled ? settled.durationMs : 0
-    return this.#finish(this.#toolResult(call, settled))
+    const toolResult = this.#toolResult(call, settled)
+    if (pipeline.logFailure) {
+      // F04: the effect fact stays in the result; the turn is not a success.
+      return this.#finish({
+        ...toolResult,
+        response: pipeline.logFailure.response,
+        stopReason: 'INSUFFICIENT_EVIDENCE'
+      })
+    }
+    return this.#finish(toolResult)
   }
 
   #toolResult(call: ToolCallState, outcome: ToolOutcome): RuntimeResult {
@@ -616,11 +637,19 @@ class Turn {
         }
       }
     }
-    await appendLog(this.#host, {
+    const unrecorded = await appendLog(this.#host, {
       type: 'turn/end',
       correlationId: this.#state.input.correlationId,
       stopReason: current.stopReason
     })
+    if (unrecorded) {
+      // F04: a turn whose closing record failed is never reported as done.
+      return {
+        ...current,
+        response: unrecorded.response,
+        stopReason: 'INSUFFICIENT_EVIDENCE'
+      }
+    }
     return current
   }
 }

@@ -75,6 +75,7 @@ export type StopCause =
   | 'approval_denied'
   | 'approval_failed'
   | 'approval_unbound'
+  | 'operator_paused'
 
 export interface KernelProceed {
   readonly kind: 'proceed'
@@ -157,6 +158,7 @@ export type GuardVerdict =
   | {
       readonly reason: string
       readonly stopReason: RuntimeResult['stopReason']
+      readonly cause?: StopCause
     }
   | undefined
 

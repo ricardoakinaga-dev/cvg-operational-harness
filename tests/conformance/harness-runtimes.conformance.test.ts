@@ -43,8 +43,6 @@ const TENANT = 'tenant_00000000-0000-4000-8000-000000000096'
 const USER_MESSAGE = 'synthetic conformance request'
 
 type Kind = 'kernel' | 'single_pass' | 'iterative'
-/** Kernel log is checked directly; the iterative loop records steps too. */
-const ON_KERNEL = (kind: Kind) => kind !== 'iterative'
 
 interface Setup {
   readonly policy?: PolicyEngine
@@ -298,39 +296,47 @@ describe.each<Kind>(['kernel', 'single_pass', 'iterative'])(
       const order: string[] = []
       const h = build(kind, {
         execute: async () => {
-          order.push(
-            ON_KERNEL(kind)
-              ? `log:${h.log.events.map((event) => event.type).join(',')}`
-              : 'body'
-          )
+          order.push(h.log.events.map((event) => event.type).join(','))
           return { status: 'SUCCEEDED', output: { ok: true } }
         }
       })
       await h.run()
-      if (ON_KERNEL(kind)) {
-        expect(order[0]).toContain('tool/call')
-        expect(order[0]).not.toContain('tool/result')
-      } else {
-        const results = (h.audit as Audit).events.map((event) => event.result)
-        expect(results.some((value) => /RUNNING/.test(value))).toBe(true)
-      }
+      expect(order[0]).toContain('tool/call')
+      expect(order[0]).not.toContain('tool/result')
     })
 
-    const modelRequestLogged = async () => {
+    it.each([
+      ['executada', {}],
+      ['negada pela política', { policy: policy('DENY') }],
+      ['com exceção da ferramenta', { execute: failing('boom') }]
+    ] as const)(
+      'C05/I5 — chamada %s é encerrada exatamente uma vez no log',
+      async (_label, setup) => {
+        const h = build(kind, setup)
+        await h.run()
+        const calls = h.log.events.filter((event) => event.type === 'tool/call')
+        const results = h.log.events.filter(
+          (event) => event.type === 'tool/result'
+        )
+        expect(calls).toHaveLength(1)
+        expect(results).toHaveLength(1)
+      }
+    )
+
+    it('C06/I6 — requisição registrada é igual, campo a campo, à enviada', async () => {
       const h = build(kind, { respond: true })
       await h.run()
-      expect(h.model.requests.length).toBeGreaterThan(0)
-      const logged = JSON.stringify([
-        h.log.events,
-        (h.audit as Audit).events,
-        h.telemetry.events
-      ])
-      expect(logged).toContain(USER_MESSAGE)
-    }
-    it(
-      'C06/I6 — requisição ao modelo registrada antes do envio',
-      modelRequestLogged
-    )
+      expect(h.model.requests).toHaveLength(1)
+      const { signal, ...sent } = h.model.requests[0] as ModelRequest
+      void signal
+      const logged = h.log.events.filter(
+        (event) => event.type === 'model/request'
+      )
+      expect(logged).toHaveLength(1)
+      expect(logged[0]?.type === 'model/request' && logged[0].request).toEqual(
+        sent
+      )
+    })
 
     it('C07/I7 — exceção da política não derruba o processo nem executa', async () => {
       const h = build(kind, { policy: { evaluate: failing('policy down') } })

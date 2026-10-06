@@ -315,6 +315,12 @@ export interface LoopRun {
   lastDecisionErrors: readonly string[]
   skipEvaluationOnce: boolean
   countedSteps: Set<number>
+  /**
+   * The checkpoint holds a step that already passed the dispatch checkpoint
+   * (its tool call was counted) but never settled: a crash or an operator
+   * pause. Resuming it must not spend the tool budget again.
+   */
+  inFlightCounted: boolean
 }
 
 export type DispatchOutcome =
@@ -578,7 +584,10 @@ export class IterativeGovernedRuntime {
       lastSufficiency: null,
       lastDecisionErrors: [],
       skipEvaluationOnce: false,
-      countedSteps: new Set<number>()
+      countedSteps: new Set<number>(),
+      inFlightCounted: Boolean(
+        checkpoint?.state.pendingDecision && !checkpoint.state.stopReason
+      )
     }
     run.state.observations = run.observations
     const controller = new AbortController()
@@ -680,7 +689,14 @@ export class IterativeGovernedRuntime {
         this.turnFor(run)
       )
       if (beforeStep.kind === 'stop') {
-        return this.stop(beforeStep.stopReason, beforeStep.response)
+        // An operator pause is not terminal: the durable checkpoint, with any
+        // pending approval or question, stays resumable (AUD-0597 F03).
+        return {
+          ...this.stop(beforeStep.stopReason, beforeStep.response),
+          ...(beforeStep.cause === 'operator_paused'
+            ? { preserveCheckpoint: true }
+            : {})
+        }
       }
       const budgetStop = this.checkBudget(run)
       if (budgetStop) return this.stop(budgetStop.reason, budgetStop.response)

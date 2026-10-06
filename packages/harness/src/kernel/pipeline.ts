@@ -58,6 +58,15 @@ export function createTurnState(
   }
 }
 
+/** Detached copy for the log, so later mutation cannot rewrite history. */
+function snapshot<T>(value: T): T {
+  try {
+    return structuredClone(value)
+  } catch {
+    return value
+  }
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'unknown failure'
 }
@@ -125,6 +134,33 @@ export async function race<T>(
   }
 }
 
+/**
+ * Like `race`, but always starts the operation first: used once the kernel has
+ * committed to dispatch, so the cancel signal is passed to the body instead of
+ * skipping it.
+ */
+async function raceInvoked<T>(
+  turn: TurnState,
+  operation: () => Promise<T>
+): Promise<T | typeof DEADLINE | typeof CANCELLED> {
+  const running = operation()
+  const signal = turn.signal
+  let onAbort: (() => void) | undefined
+  const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+    if (signal.aborted) resolve(CANCELLED)
+    onAbort = () => resolve(CANCELLED)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    return await Promise.race([
+      turn.budget.withDeadline(() => running),
+      cancelled
+    ])
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort)
+  }
+}
+
 /** Monotonic guards: the first denial wins; a throwing guard denies. */
 export async function runGuards(
   host: KernelHost,
@@ -138,16 +174,47 @@ export async function runGuards(
       verdict = `A guard failed: ${errorMessage(error)}.`
     }
     if (typeof verdict === 'string') return stop('POLICY_DENIED', verdict)
-    if (verdict) return stop(verdict.stopReason, verdict.reason)
+    if (verdict) {
+      return stop(
+        verdict.stopReason,
+        verdict.reason,
+        verdict.cause ? { cause: verdict.cause } : {}
+      )
+    }
   }
   return undefined
 }
 
+/**
+ * Guards and cancellation, re-run at every point where the world may have
+ * changed before dispatch: after the loop's checkpoint and after the approval
+ * reservation (AUD-0597 F01/F02).
+ */
+export async function revalidate(
+  host: KernelHost,
+  call: ToolCallState
+): Promise<KernelStop | undefined> {
+  return (
+    (await runGuards(host, call)) ??
+    (call.turn.signal.aborted
+      ? stop('CANCELLED', CANCELLED_RESPONSE)
+      : undefined)
+  )
+}
+
 export type ToolPipelineResult =
-  /** Nothing ran and nothing is reserved. */
+  /** Nothing ran and nothing is reserved; the call is closed as not started. */
   | { readonly kind: 'stopped'; readonly gate: KernelStop }
-  /** Dispatch was attempted; the outcome is already settled. */
-  | { readonly kind: 'settled'; readonly outcome: ToolOutcome }
+  /**
+   * Dispatch was attempted; the outcome is already settled. `logFailure` is
+   * set when the final record could not be written: the outcome stays the
+   * fact of what happened, and the loop must not report success (F04).
+   */
+  | {
+      readonly kind: 'settled'
+      readonly outcome: ToolOutcome
+      readonly logFailure?: KernelStop
+    }
 
 export interface ToolPipelineHooks {
   /**
@@ -180,23 +247,42 @@ export async function runToolCall(
   })
   if (logged) return { kind: 'stopped', gate: logged }
 
-  const gate = await runGate(host, 'tool/pre-execute', call)
-  if (gate.kind === 'stop') return { kind: 'stopped', gate }
+  // Every call that was logged is closed exactly once (I5, AUD-0597 F06).
+  const closeNotStarted = async (
+    blocked: KernelStop
+  ): Promise<ToolPipelineResult> => {
+    await appendLog(host, {
+      type: 'tool/result',
+      correlationId,
+      toolId: tool.id,
+      outcome: 'not_started'
+    })
+    return { kind: 'stopped', gate: blocked }
+  }
 
-  const denial =
-    (await runGuards(host, call)) ??
-    (turn.signal.aborted ? stop('CANCELLED', CANCELLED_RESPONSE) : undefined) ??
-    (await hooks.beforeDispatch?.(call))
-  if (denial) return { kind: 'stopped', gate: denial }
+  const gate = await runGate(host, 'tool/pre-execute', call)
+  if (gate.kind === 'stop') return closeNotStarted(gate)
+
+  const denial = await revalidate(host, call)
+  if (denial) return closeNotStarted(denial)
+
+  const hooked = await hooks.beforeDispatch?.(call)
+  if (hooked) return closeNotStarted(hooked)
+
+  // The hook may have taken time (checkpoint): re-check before reserving.
+  const late = await revalidate(host, call)
+  if (late) return closeNotStarted(late)
 
   const settled = await postExecute(host, call, await dispatch(host, call))
-  await appendLog(host, {
+  const logFailure = await appendLog(host, {
     type: 'tool/result',
     correlationId,
     toolId: tool.id,
     outcome: settled.kind
   })
-  return { kind: 'settled', outcome: settled }
+  return logFailure
+    ? { kind: 'settled', outcome: settled, logFailure }
+    : { kind: 'settled', outcome: settled }
 }
 
 async function dispatch(
@@ -221,12 +307,18 @@ async function dispatch(
         )
       }
     }
+    // Last decision point: after every wrapper (the approval reservation),
+    // a pause or a cancellation still prevents the effect (F01/F02).
+    const blocked = await revalidate(host, call)
+    if (blocked) return { kind: 'not_started', gate: blocked }
     await host.get('effects').started(ref)
     started = true
     const startedAt = Date.now()
     const toolController = new AbortController()
     try {
-      const value = await race(turn, () =>
+      // Past the decision point the body is always invoked, so a recorded
+      // start never pairs with a body that did not run.
+      const value = await raceInvoked(turn, () =>
         call.tool.execute(call.invocation.input, {
           tenantId: turn.input.tenantId,
           agentId: turn.input.agent.id,
@@ -317,6 +409,12 @@ export type ModelPipelineResult =
   | { readonly kind: 'cancelled' }
   | { readonly kind: 'failed'; readonly error: string }
   | { readonly kind: 'completed'; readonly result: ModelResult }
+  /** The model answered but the result could not be logged (F04). */
+  | {
+      readonly kind: 'unrecorded'
+      readonly result: ModelResult
+      readonly gate: KernelStop
+    }
 
 /**
  * `model/before-call` → log `model/request` (I6) → call raced against the
@@ -335,10 +433,13 @@ export async function runModelCall(
   const gate = await runGate(host, 'model/before-call', { turn, request: full })
   if (gate.kind === 'stop') return { kind: 'stopped', gate }
   if (turn.signal.aborted) return { kind: 'cancelled' }
+  // I6: log the request as it will be sent, after every control adjusted it.
+  const { signal: _signal, ...effective } = full
+  void _signal
   const logged = await appendLog(host, {
     type: 'model/request',
     correlationId: turn.input.correlationId,
-    request
+    request: snapshot(effective)
   })
   if (logged) return { kind: 'stopped', gate: logged }
   try {
@@ -347,13 +448,16 @@ export async function runModelCall(
       controller.abort()
       return { kind: outcome === DEADLINE ? 'deadline' : 'cancelled' }
     }
-    await appendLog(host, {
+    const unrecorded = await appendLog(host, {
       type: 'model/result',
       correlationId: turn.input.correlationId,
       provider: outcome.provider,
       inputTokens: outcome.inputTokens,
       outputTokens: outcome.outputTokens
     })
+    if (unrecorded) {
+      return { kind: 'unrecorded', result: outcome, gate: unrecorded }
+    }
     return { kind: 'completed', result: outcome }
   } catch (error) {
     return { kind: 'failed', error: errorMessage(error) }

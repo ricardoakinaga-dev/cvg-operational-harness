@@ -257,7 +257,13 @@ export async function dispatchTool(
   stepNumber: number,
   forceApproval: boolean
 ): Promise<DispatchOutcome> {
-  if (run.usage.toolCalls + 1 > run.input.budget.maxToolCalls) {
+  // A resumed in-flight step was already counted when it reached dispatch.
+  const alreadyCounted =
+    run.inFlightCounted && run.state.pendingStepNumber === stepNumber
+  if (
+    !alreadyCounted &&
+    run.usage.toolCalls + 1 > run.input.budget.maxToolCalls
+  ) {
     return ctx.stop(
       'MAX_TOOL_CALLS',
       'Tool-call budget exhausted before the tool could run.'
@@ -337,7 +343,8 @@ export async function dispatchTool(
       // Budget accounting is committed with the in-flight decision so a crash
       // cannot replay the same step against an unconsumed counter; the
       // approval is only reserved after this checkpoint.
-      run.usage.toolCalls += 1
+      if (!alreadyCounted) run.usage.toolCalls += 1
+      run.inFlightCounted = false
       run.state = {
         ...run.state,
         pendingDecision: decision,
@@ -358,6 +365,13 @@ export async function dispatchTool(
 
   if (pipeline.kind === 'stopped') {
     const gate = pipeline.gate
+    if (gate.cause === 'operator_paused') {
+      // Nothing ran and nothing is reserved: keep the step resumable (F03).
+      return {
+        ...ctx.stop(gate.stopReason, gate.response),
+        preserveCheckpoint: true
+      }
+    }
     if (gate.cause === 'policy_unsupported') {
       await ctx.recordObservation(
         run,
@@ -440,9 +454,24 @@ export async function dispatchTool(
     })
 
   switch (outcome.kind) {
-    case 'not_started':
-      await failStep('deadline')
-      return ctx.stop(outcome.gate.stopReason, outcome.gate.response)
+    case 'not_started': {
+      const gate = outcome.gate
+      if (gate.cause === 'operator_paused') {
+        // The reservation was released as certain; the step resumes later.
+        return {
+          ...ctx.stop(gate.stopReason, gate.response),
+          preserveCheckpoint: true
+        }
+      }
+      await failStep(
+        gate.stopReason === 'MAX_DURATION'
+          ? 'deadline'
+          : gate.stopReason === 'CANCELLED'
+            ? 'cancelled'
+            : 'not_started'
+      )
+      return ctx.stop(gate.stopReason, gate.response)
+    }
     case 'deadline':
       await failStep(reserved ? 'unknown_effect' : 'deadline')
       return ctx.stop(
@@ -562,6 +591,11 @@ export async function dispatchTool(
         reasonCode: decision.reasonCode,
         observationRefs: [observation.observationId]
       })
+      if (pipeline.logFailure) {
+        // F04: the effect is recorded as done (no replay), but the run stops
+        // terminally instead of continuing on an unlogged result.
+        return ctx.stop('INSUFFICIENT_EVIDENCE', pipeline.logFailure.response)
+      }
       return { kind: 'continue' }
     }
   }
@@ -826,6 +860,16 @@ export async function composeResponse(
       return {
         stopReason: 'MODEL_FAILURE',
         response: `Response composition failed: ${outcome.error}.`
+      }
+    case 'unrecorded':
+      // F04: the call happened; count it, but never treat it as an answer.
+      run.usage.modelCalls += 1
+      run.usage.inputTokens += outcome.result.inputTokens
+      run.usage.outputTokens += outcome.result.outputTokens
+      run.usage.costUsd += outcome.result.costUsd
+      return {
+        stopReason: outcome.gate.stopReason,
+        response: outcome.gate.response
       }
     case 'completed': {
       const model = outcome.result
