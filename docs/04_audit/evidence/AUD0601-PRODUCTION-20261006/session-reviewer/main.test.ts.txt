@@ -1,0 +1,34 @@
+import { EventEmitter } from 'node:events'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
+const seam=vi.hoisted(()=>({build:vi.fn(),resolver:vi.fn()}))
+vi.mock('/tmp/cvg-aud0601-20261006/candidate/apps/api/src/production-bootstrap.ts',()=>({buildApiWithProductionSessions:seam.build}))
+vi.mock('/tmp/cvg-aud0601-20261006/candidate/apps/api/src/operator-identity.ts',()=>({createConfiguredOperatorIdentityResolver:seam.resolver}))
+const env={NODE_ENV:'production',API_PERSISTENCE_MODE:'postgres',POSTGRES_RLS_ENFORCEMENT:'true',OUTBOX_DURABLE_INBOUND:'true',INBOUND_TENANT_ID:'tenant_11111111-1111-4111-8111-111111111111',INBOUND_AGENT_ID:'agent_11111111-1111-4111-8111-111111111111',WEBHOOK_SIGNING_SECRET:'aud0601-synthetic-webhook-signing-secret-0123456789',API_ALLOWED_ORIGINS:'https://review.test',API_REQUIRE_HTTPS:'true',CVG_STOP_ALERT_WEBHOOK_URL:''}
+let signals:EventEmitter; let app:any; let exit:any
+beforeEach(()=>{
+ vi.resetModules();vi.resetAllMocks();for(const [k,v]of Object.entries(env))vi.stubEnv(k,v)
+ app={listen:vi.fn().mockResolvedValue(undefined),close:vi.fn().mockResolvedValue(undefined)};seam.build.mockResolvedValue(app);seam.resolver.mockReturnValue(()=>({}))
+ signals=new EventEmitter();const once=process.once.bind(process)
+ vi.spyOn(process,'once').mockImplementation((e,l)=>{if(e==='SIGTERM'||e==='SIGINT'){signals.once(e,l);return process};return once(e,l)})
+ exit=vi.spyOn(process,'exit').mockImplementation(()=>undefined as never);vi.spyOn(console,'error').mockImplementation(()=>{})
+})
+afterEach(()=>{vi.restoreAllMocks();vi.unstubAllEnvs()})
+async function load(){await import('/tmp/cvg-aud0601-20261006/candidate/apps/api/src/main.ts');await vi.dynamicImportSettled()}
+describe('Independent official main lifecycle; true env parser, mocked listening/composition only',()=>{
+ it('production passes configured resolver into session composition and closes once',async()=>{
+  await load();expect(seam.build).toHaveBeenCalledTimes(1);expect(seam.build.mock.calls[0][1].operatorIdentityResolver).toBe(seam.resolver.mock.results[0].value);expect(app.listen).toHaveBeenCalledTimes(1)
+  signals.emit('SIGTERM');signals.emit('SIGINT');await vi.waitFor(()=>expect(exit).toHaveBeenCalledExactlyOnceWith(0));expect(app.close).toHaveBeenCalledTimes(1)
+ })
+ it('production missing keyring resolver exits before building/listening',async()=>{
+  seam.resolver.mockReturnValue(undefined);await load();await vi.waitFor(()=>expect(exit).toHaveBeenCalledWith(1));expect(seam.build).not.toHaveBeenCalled();expect(app.listen).not.toHaveBeenCalled()
+ })
+ it('invalid production profile is rejected by true parser before resolver/build',async()=>{
+  vi.stubEnv('API_REQUIRE_HTTPS','false');await load();await vi.waitFor(()=>expect(exit).toHaveBeenCalledWith(1));expect(seam.resolver).not.toHaveBeenCalled();expect(seam.build).not.toHaveBeenCalled()
+ })
+ it('signal before preflight completes prevents listen and closes acquired app',async()=>{
+  let resolve:any;seam.build.mockImplementation(()=>new Promise(r=>{resolve=r}));await load();signals.emit('SIGTERM');resolve(app);await vi.waitFor(()=>expect(exit).toHaveBeenCalledWith(0));expect(app.listen).not.toHaveBeenCalled();expect(app.close).toHaveBeenCalledTimes(1)
+ })
+ it('listen failure triggers close and redacted startup log',async()=>{
+  app.listen.mockRejectedValue(new Error('postgresql://reviewer:FAULT_SECRET@db invalid password=FAULT_SECRET'));await load();await vi.waitFor(()=>expect(exit).toHaveBeenCalledWith(1));expect(app.close).toHaveBeenCalledTimes(1);expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain('FAULT_SECRET')
+ })
+})

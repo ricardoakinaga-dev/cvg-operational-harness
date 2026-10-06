@@ -1,0 +1,16 @@
+import './loader.mjs';
+import assert from 'node:assert/strict';
+import {writeFileSync} from 'node:fs';
+const root='/tmp/cvg-aud0601-20261006/candidate';
+const {HashChainedAuditLedger}=await import(root+'/packages/observability/src/audit-ledger.ts');
+const {verifyKernelAuditRows}=await import(root+'/apps/worker/src/kernel-audit-chain.ts');
+const ledger=new HashChainedAuditLedger();
+for(let n=0;n<3;n++)ledger.append({eventId:'evt-aud0601-'+n,type:'runtime.denied',actor:'synthetic-auditor',tenantId:'tenant_00000000-0000-4000-8000-000000000601',correlationId:'correlation-aud0601',timestamp:'2026-10-06T20:00:00.000Z',payload:{outcome:'denied',reason:'synthetic-control-marker',count:n}});
+const rows=ledger.records().map(r=>({correlation_id:r.correlationId,payload:{tenantId:r.tenantId,kernelAudit:{ledgerId:'aud0601-ledger',sequence:r.sequence,eventId:r.eventId,eventType:r.type,actor:r.actor,timestamp:r.timestamp,previousHash:'sha256-'+r.previousHash,payloadHash:'sha256-'+r.payloadHash,eventHash:'sha256-'+r.eventHash,payload:r.payload}}}));
+const intact=verifyKernelAuditRows(rows);assert.equal(intact.valid,true);assert.equal(intact.payloadMismatches,0);
+const payloadTamper=structuredClone(rows);payloadTamper[1].payload.kernelAudit.payload={outcome:'executed',reason:'forged-nonsecret-marker',count:99};
+const report=verifyKernelAuditRows(payloadTamper);assert.equal(report.valid,true);assert.equal(report.payloadMismatches,1);assert.equal(report.ledgers[0].headHash,intact.ledgers[0].headHash);
+const metadataTamper=structuredClone(rows);metadataTamper[1].payload.kernelAudit.eventType='runtime.executed';assert.equal(verifyKernelAuditRows(metadataTamper).valid,false);
+const truncated=verifyKernelAuditRows(rows.slice(0,-1));assert.equal(truncated.valid,true);
+writeFileSync('/tmp/cvg-aud0601-20261006/audit-chain-probe.json',JSON.stringify({candidate:'dc4a3cb',intact,payloadTampered:report,metadataTampered:verifyKernelAuditRows(metadataTamper),tailTruncated:truncated,criterionPass:false,limit:'Standalone verifier reports payload mismatches without invalidating; tail truncation requires external expected head/count. Restore proof compares heads/counts but not standalone authenticity or scheduled backup.'},null,2)+'\n');
+console.log(JSON.stringify({payloadTamperAccepted:report.valid,payloadMismatches:report.payloadMismatches,tailTruncationAccepted:truncated.valid}));

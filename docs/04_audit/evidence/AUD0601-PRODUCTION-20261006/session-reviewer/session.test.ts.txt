@@ -1,0 +1,159 @@
+import { EventEmitter } from 'node:events'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
+import { buildApiWithProductionSessions, createProductionOperatorSessionBootstrap } from '/tmp/cvg-aud0601-20261006/candidate/apps/api/src/production-bootstrap.ts'
+import { createConfiguredOperatorIdentityResolver, createTrustedOperatorIdentityToken } from '/tmp/cvg-aud0601-20261006/candidate/apps/api/src/operator-identity.ts'
+import { PostgresOperatorSessionStore } from '/tmp/cvg-aud0601-20261006/candidate/apps/api/src/operator-session-postgres.ts'
+import { evaluateReadinessWithProbes } from '/tmp/cvg-aud0601-20261006/candidate/apps/api/src/readiness.ts'
+
+const seam = vi.hoisted(() => ({ pool: vi.fn(), boundary: vi.fn(), build: vi.fn() }))
+vi.mock('/tmp/cvg-aud0601-20261006/candidate/apps/api/src/operator-session-postgres.ts', async (actual) => ({
+  ...await actual(), createPostgresOperatorSessionPool: seam.pool
+}))
+vi.mock('/tmp/cvg-aud0601-20261006/candidate/apps/api/src/operator-session-preflight.ts', () => ({ assertPostgresOperatorSessionBoundary: seam.boundary }))
+vi.mock('/tmp/cvg-aud0601-20261006/candidate/apps/api/src/server.ts', async (actual) => {
+  const m = await actual<any>()
+  return { ...m, buildServerFromEnv: seam.build }
+})
+import { buildServer } from '/tmp/cvg-aud0601-20261006/candidate/apps/api/src/server.ts'
+
+const base = {
+  NODE_ENV: 'production', API_PERSISTENCE_MODE: 'postgres', DATABASE_URL: 'postgresql://data:synthetic@127.0.0.1/db',
+  DATABASE_MIGRATION_URL: 'postgresql://ddl:synthetic@127.0.0.1/db', POSTGRES_SCHEMA: 'product',
+  CVG_OPERATOR_SESSION_DATABASE_URL: 'postgresql://session:synthetic@127.0.0.1/db',
+  CVG_OPERATOR_AUTH_SCHEMA: 'auth', CVG_OPERATOR_SESSION_ROLE: 'session',
+  CVG_IDENTITY_MODE: 'trusted', CVG_OPERATOR_IDENTITY_KEYRING: JSON.stringify({current: {keyId:'reviewer', secret:'aud0601-synthetic-identity-signing-key-0123456789'}})
+}
+const tenant = 'tenant_11111111-1111-4111-8111-111111111111'
+const identity = {operatorId:'reviewer.operator', role:'Operator' as const, tenantId:tenant}
+const key = JSON.parse(base.CVG_OPERATOR_IDENTITY_KEYRING).current
+const headers = { origin:'https://review.test', 'x-forwarded-proto':'https' }
+const apps:any[]=[]
+let state:any
+const observations:any[]=[]
+function fixture() {
+  const records = new Map<string, any>()
+  const client = {query:vi.fn(async () => ({rows:[]})), release:vi.fn()}
+  const fault = {health:false, create:false, get:false, revoke:false, shutdown:false}
+  client.query.mockImplementation(async () => { if(fault.health) throw new Error('postgresql://reviewer:FAULT_SECRET@db/auth'); return {rows:[]} })
+  const pool = Object.assign(new EventEmitter(), {
+    connect:vi.fn(async () => client),
+    query:vi.fn(async (sql:string, values:any[]=[]) => {
+      if(sql.includes('rolreplication')) return {rows:[{replication:false}]}
+      if(sql.includes('operator_session_create')) {
+        if(fault.create) throw new Error('password=FAULT_SECRET')
+        records.set(values[0].toString('hex'), {tenant_id:values[1],operator_id:values[2],role:values[3],expires_at:values[4],revoked:false})
+        return {rows:[]}
+      }
+      if(sql.includes('operator_session_get')) {
+        if(fault.get) throw new Error('password=FAULT_SECRET')
+        const row=records.get(values[0].toString('hex'))
+        return {rows: row && !row.revoked ? [row] : []}
+      }
+      if(sql.includes('operator_session_revoke')) {
+        if(fault.revoke) throw new Error('password=FAULT_SECRET')
+        const row=records.get(values[0].toString('hex')); if(row) row.revoked=true
+        return {rows:[]}
+      }
+      throw new Error('unexpected SQL in reviewer fixture')
+    }),
+    end:vi.fn(async () => {if(fault.shutdown) throw new Error('password=FAULT_SECRET')})
+  })
+  seam.pool.mockReturnValue(pool)
+  return {pool,client,records,fault}
+}
+beforeEach(() => { vi.resetAllMocks(); seam.boundary.mockResolvedValue(undefined); state=fixture(); vi.stubEnv('NODE_ENV','production');
+  seam.build.mockImplementation(async (_env, options) => buildServer({...options, identityMode:'trusted', durableInbound:true,
+    httpSecurity:{allowedOrigins:[headers.origin],enforceHttps:true,trustedProxyAddresses:['127.0.0.1'],trustedProxyHops:0}}))
+})
+afterEach(async () => { for(const app of apps.splice(0)) await app.close(); vi.unstubAllEnvs(); writeFileSync('/tmp/cvg-aud0601-20261006/session-reviewer/http-observations.json',JSON.stringify(observations,null,2)+'\n') })
+async function open() {const app=await buildApiWithProductionSessions(base,{operatorIdentityResolver:createConfiguredOperatorIdentityResolver(base)!}); apps.push(app); return app}
+async function login(app:any, who=identity, cookie?:string) {
+  return app.inject({url:'/v1/session',headers:{...headers,...(cookie?{cookie}:{}),'x-cvg-operator-token':createTrustedOperatorIdentityToken(who,key)}})
+}
+function cookieOf(r:any) {return String(r.headers['set-cookie']).split(';')[0]}
+function capture(name:string,r:any) { observations.push({name,status:r.statusCode,body:r.body,setCookie:r.headers['set-cookie']??null}); return r }
+
+describe('Independent auth HTTP with real route/resolver/store and isolated persistence seams',()=>{
+  it('production bootstrap injects PostgreSQL class and bounded read-only health before server',async()=>{
+    const b=await createProductionOperatorSessionBootstrap(base)
+    expect(b!.operatorSessionStore).toBeInstanceOf(PostgresOperatorSessionStore)
+    expect(seam.boundary).toHaveBeenCalledBefore(state.client.query)
+    expect(state.client.query.mock.calls.map((c:any)=>c[0].text)).toEqual(['BEGIN READ ONLY; SET LOCAL statement_timeout = 1000','SELECT * FROM "auth".operator_session_get($1)','COMMIT'])
+    expect(state.client.query.mock.calls.every((c:any)=>c[0].query_timeout===1000)).toBe(true)
+    await Promise.all([b!.close(),b!.close()]); expect(state.pool.end).toHaveBeenCalledTimes(1)
+    expect(state.pool.listenerCount('error')).toBe(0)
+    await expect(b!.readinessProbe.check()).rejects.toThrow('closed')
+  })
+  it('creates opaque session; reads with cookie; unauthenticated and forged identities receive 401',async()=>{
+    const app=await open()
+    for(const forged of [{},{'x-operator-id':'attacker','x-operator-role':'Admin','x-tenant-id':tenant}]) {
+      expect(capture('no-cookie',await app.inject({url:'/v1/tasks',headers:{...headers,...forged}})).statusCode).toBe(401)
+    }
+    const r=capture('login-operator',await login(app)); expect(r.statusCode).toBe(200)
+    expect(r.headers['set-cookie']).toMatch(/HttpOnly/); expect(r.headers['set-cookie']).toMatch(/Secure/); expect(r.headers['set-cookie']).toMatch(/SameSite=Strict/)
+    const cookie=cookieOf(r)
+    expect(cookie).toMatch(/^cvg_operator_session=opsess_[A-Za-z0-9_-]{43}$/)
+    expect(capture('cookie-task-read',await app.inject({url:'/v1/tasks',headers:{...headers,cookie}})).statusCode).toBe(200)
+    expect(capture('operator-cannot-admin',await app.inject({url:'/v1/admin/agents',headers:{...headers,cookie,'x-operator-role':'Admin'}})).statusCode).toBe(403)
+    expect(capture('cross-tenant-denied',await app.inject({url:'/v1/tasks',headers:{...headers,cookie,'x-tenant-id':'tenant_22222222-2222-4222-8222-222222222222'}})).statusCode).toBe(403)
+    expect(state.records.size).toBe(1)
+  })
+  it('tampered role, bad signature and replay cannot mint sessions',async()=>{
+    const app=await open(); const valid=createTrustedOperatorIdentityToken(identity,key)
+    const [body,sig]=valid.split('.'); const claims=JSON.parse(Buffer.from(body,'base64url').toString()); claims.role='Admin'
+    for(const token of [Buffer.from(JSON.stringify(claims)).toString('base64url')+'.'+sig,body+'.bad-signature']) {
+      expect(capture('tampered-token',await app.inject({url:'/v1/session',headers:{...headers,'x-cvg-operator-token':token}})).statusCode).toBe(401)
+    }
+    expect(state.records.size).toBe(0)
+    expect((await app.inject({url:'/v1/session',headers:{...headers,'x-cvg-operator-token':valid}})).statusCode).toBe(200)
+    expect((await app.inject({url:'/v1/session',headers:{...headers,'x-cvg-operator-token':valid}})).statusCode).toBe(401)
+    expect(state.records.size).toBe(1)
+  })
+  it('session DB read/create and health failures yield sanitized 503; health recovery preserves cookie',async()=>{
+    const app=await open(); const cookie=cookieOf(await login(app))
+    state.fault.health=true
+    for(const url of ['/v1/tasks','/v1/session','/v1/admin/agents']) {
+      const r=capture('health-outage-'+url,await app.inject({url,headers})); expect(r.statusCode).toBe(503); expect(r.body).not.toContain('FAULT_SECRET'); expect(r.headers['set-cookie']).toBeUndefined()
+    }
+    expect((await app.inject({url:'/live',headers})).statusCode).toBe(200)
+    state.fault.health=false; state.fault.get=true
+    const r=capture('cookie-DB-outage',await app.inject({url:'/v1/session',headers:{...headers,cookie}})); expect(r.statusCode).toBe(503); expect(r.headers['set-cookie']).toBeUndefined(); expect(r.body).not.toContain('FAULT_SECRET')
+    state.fault.get=false; state.fault.create=true
+    expect(capture('mint-outage',await login(app)).statusCode).toBe(503)
+    state.fault.create=false
+    expect((await app.inject({url:'/v1/tasks',headers:{...headers,cookie}})).statusCode).toBe(200)
+  })
+  it('startup preflight and server rejection close allocated pool exactly once and sanitize secrets',async()=>{
+    seam.boundary.mockRejectedValueOnce(new Error('postgresql://bad:FAULT_SECRET@db'))
+    await expect(buildApiWithProductionSessions(base)).rejects.toThrow('Production operator-session bootstrap failed')
+    expect(seam.build).not.toHaveBeenCalled(); expect(state.pool.end).toHaveBeenCalledTimes(1)
+    state=fixture(); seam.boundary.mockResolvedValue(undefined); seam.build.mockRejectedValueOnce(new Error('data boundary failed'))
+    await expect(buildApiWithProductionSessions(base)).rejects.toThrow('data boundary failed'); expect(state.pool.end).toHaveBeenCalledTimes(1)
+  })
+  it.each(['DATABASE_URL','DATABASE_MIGRATION_URL','CVG_OPERATOR_SESSION_DATABASE_URL','CVG_OPERATOR_AUTH_SCHEMA','CVG_OPERATOR_SESSION_ROLE'])('missing %s refuses before pool',async(name)=>{
+    await expect(createProductionOperatorSessionBootstrap({...base,[name]:''})).rejects.toThrow(); expect(seam.pool).not.toHaveBeenCalled()
+  })
+  it.each([
+    {CVG_OPERATOR_AUTH_SCHEMA:'product'}, {CVG_OPERATOR_AUTH_SCHEMA:'public'}, {CVG_OPERATOR_AUTH_SCHEMA:'pg_auth'},
+    {CVG_OPERATOR_SESSION_DATABASE_URL:base.DATABASE_URL,CVG_OPERATOR_SESSION_ROLE:'data'},
+    {CVG_OPERATOR_SESSION_DATABASE_URL:base.DATABASE_MIGRATION_URL,CVG_OPERATOR_SESSION_ROLE:'ddl'},
+    {CVG_OPERATOR_SESSION_DATABASE_URL:base.CVG_OPERATOR_SESSION_DATABASE_URL+'?options=-c%20role%3Dddl'},
+    {CVG_OPERATOR_SESSION_DATABASE_URL:base.CVG_OPERATOR_SESSION_DATABASE_URL+'?query_timeout=0'}
+  ])('unsafe auth config refuses before connection: %j',async patch=>{
+    await expect(createProductionOperatorSessionBootstrap({...base,...patch})).rejects.toThrow(); expect(seam.pool).not.toHaveBeenCalled()
+  })
+  it('failed health transaction destroys client and readiness errors reveal no raw DB message',async()=>{
+    const b=await createProductionOperatorSessionBootstrap(base); state.fault.health=true
+    const result=await evaluateReadinessWithProbes({production:true,persistenceMode:'postgres-pool',durableInbound:true,probes:[b!.readinessProbe]})
+    expect(result.ready).toBe(false); expect(JSON.stringify(result)).not.toContain('FAULT_SECRET'); expect(state.client.release).toHaveBeenLastCalledWith(true)
+    state.fault.health=false; await b!.readinessProbe.check(); expect(state.client.release).toHaveBeenLastCalledWith(false); await b!.close()
+  })
+  it('logout revocation failure preserves browser cookie per auth contract',async()=>{
+    const app=await open(); const cookie=cookieOf(await login(app)); state.fault.revoke=true
+    const r=capture('logout-revoke-failure',await app.inject({method:'POST',url:'/v1/session/logout',headers:{...headers,cookie}}))
+    expect(r.statusCode).toBe(503); expect(r.body).not.toContain('FAULT_SECRET'); expect([...state.records.values()][0].revoked).toBe(false)
+    expect(r.headers['set-cookie'], '503 must preserve the recoverable browser session').toBeUndefined()
+  })
+})

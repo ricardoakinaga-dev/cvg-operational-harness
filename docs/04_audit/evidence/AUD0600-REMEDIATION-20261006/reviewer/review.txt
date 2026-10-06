@@ -1,0 +1,47 @@
+Parecer independente AUD0600 — kernel — 06/10/2026
+
+REVISE para aderência integral à SPEC0181 §11/§12. A remediação resolve F01/F02 nos cenários originais; permanecem dois achados P2 reproduzidos. Nenhuma regressão diferencial foi demonstrada nas 31 sondas principais nem nas duas sondas suplementares de viabilidade. O parecer não concede release.
+
+Escopo: código congelado 5c97b40a751233a2fdd2babcbabba80387faa7cc, diff d893ea9..b9cf7b6 completo dos três arquivos de runtime (incluindo as 185 linhas do iterative-dispatch) e seus callers. Não há delta posterior nesses arquivos entre b9cf7b6 e 5c97b40. Regras AGENTS, constituição, runtime99/log20/backlog30 e claim AUD0600 consultados; critério em SPEC0181 §11/§12 e I4/I5/I9/I11/I12. Nenhuma alteração no root ou candidato; outputs somente neste diretório.
+
+Método: 31 sondas próprias em Node v22.23.2, esbuild resolvido por createRequire a partir das dependências já instaladas no candidato. Imports @cvg apontam ao src do candidato; não a dist. ApprovalEngine e DurableApprovalEngineAdapter reais, stores e ledger em memória, dados sintéticos. 26 PASS / 5 FAIL por asserções individuais armazenadas em results.json. O runner captura falhas para registrar todas as observações e retorna exit 0; seu exit não significa que as sondas passaram. comparison-and-hashes.json confirma bytes de sete arquivos centrais iguais ao SHA congelado no root e no candidato.
+
+Comparação parent: a mesma sonda é bundled substituindo somente pipeline.ts, kernel-runtime.ts e iterative-dispatch.ts pelos bytes de git show d893ea9. Não é uma execução da suíte completa do parent. 14 sondas FAIL→PASS, zero PASS→FAIL, cinco FAIL→FAIL.
+
+Achado R01 — P2 — motivo de F01 ainda perdido quando a indisponibilidade atinge também turn/end.
+
+Esperado: SPEC0181 §11.3/§12.1 preserva o motivo da chamada bloqueada na resposta quando tool/result falha, inclusive single-pass após reserva.
+Repro: F01_after_reserve_result_and_turn_end_log_outage. Aprovação real concedida → begin → guarda nega com AUD0600_INDEPENDENT_BLOCK_REASON → mesmo log rejeita tool/result e turn/end. Resultado INSUFFICIENT_EVIDENCE; resposta apenas “Kernel log could not record the turn: independent closing loss.” O marcador foi apagado. Corpo 0, ledger de efeitos vazio, aprovação FAILED, settlement fail uma vez, tool/result uma tentativa, turn/end uma tentativa.
+Código: packages/harness/src/kernel/kernel-runtime.ts:522–528 preserva corretamente o motivo inicialmente. #finish, linhas 646–660, substitui depois response por unrecorded.response; perda na linha 655. A decisão preservada pelo novo unrecordedBlock não sobrevive à finalização.
+Comparação: FAIL no parent e no candidato; lacuna residual de cobertura, sem regressão atribuída ao patch. A sonda equivalente com somente tool/result rejeitado passa no candidato e falha no parent.
+Impacto: operador perde a explicação de controle durante indisponibilidade do próprio log. Nenhum efeito indevido observado. Ação mínima: manter a explicação já estabelecida ao acrescentar a falha de fechamento do turno, sem alterar INSUFFICIENT_EVIDENCE ou settlement; adicionar negativo com os dois fechamentos rejeitados.
+
+Achado R02 — P2 — terminais antes de dispatchTool deixam a etapa aberta e checkpoint terminal.
+
+Esperado: SPEC0181 §12.3, checkpoint terminal e etapa aberta não divergem em cancelamento/conflito de retomada.
+Repros: WAITING_cancel_before_loop, RUNNING_cancel_before_loop, WAITING_missing_tool, RUNNING_missing_tool. Criar espera real de aprovação e aprovar; para RUNNING, pausar durante saveCheckpoint de despacho e retomar o switch. Em seguida, executar resume com AbortSignal já abortado, ou retirar a ferramenta do catálogo antes da retomada. Cancelamento retorna CANCELLED; catálogo ausente retorna STATE_CONFLICT. O checkpoint recebe o respectivo stop terminal, mas step_exec_phase3_fixture_1_tool / stepNumber=1 continua WAITING ou RUNNING, sem completedAt/errorCode. Corpo 0; nenhuma segunda etapa.
+Código: packages/harness/src/iterative-runtime.ts:681–683 retorna antes do pipeline no cancelamento; :722–739 terminaliza decisão pendente inválida. :1428–1437 persiste stopReason no checkpoint sem fechar a etapa. O novo fechamento em iterative-dispatch.ts:364–378 e :522–525 só cobre caminhos que entram no pipeline. Duas sondas suplementares pela entrada pública runtime.execute confirmam também iterative-dispatch.ts:338–342 (ferramenta resolvida na validação, indisponível ao resolver no despacho) e :351–355 (prazo esgotado durante audit.append de orchestrator.decided, antes do despacho). Ambas partem de RUNNING com checkpoint sem stopReason e aprovação APPROVED, retornam STATE_CONFLICT/MAX_DURATION, persistem checkpoint terminal e mantêm a mesma etapa RUNNING. Corpo0, efeitos vazios, nenhuma chamada/log nova nesta tentativa. As duas também falham no parent. Não classifico a guarda maxToolCalls nas linhas 325–332 como achado para um RUNNING legítimo: alreadyCounted a desvia quando o checkpoint em voo já contabilizou a chamada, conforme §11.2.
+Comparação: os quatro cenários falham igualmente no parent; não são regressões do diff. Impacto de integridade de estado/diagnóstico, sem efeito indevido observado. O fechamento da mesma identidade precisa cobrir esses terminais, com tratamento explícito de certeza/incerteza de efeito na recuperação; não basta marcar genericamente todo checkpoint em voo como ausência de efeito. Ação mínima: encaminhar os terminais viáveis anteriores ao pipeline pelo fechamento da etapa pendente, conservando stepId/stepNumber e o código do controle, sem atingir preserveCheckpoint de pausa/conflito retomável; adicionar as variantes WAITING/RUNNING e os dois retornos de despacho reproduzidos.
+
+Verificações positivas:
+
+- F01 original: single-pass após reserva, tool/result rejeitado, motivo preservado, body0, aprovação FAILED, uma tentativa de fechamento.
+- F02 original: política nega WAITING; aprovação expirada nega RUNNING; mesma stepId e stepNumber, FAILED e policy_denied/approval_denied, checkpoint INSUFFICIENT_EVIDENCE na perda de log. Controles com log saudável passam.
+- HANDOFF e política inválida na etapa retomada: mesma identidade FAILED, policy_handoff/policy_outcome_invalid; perda de log vira INSUFFICIENT_EVIDENCE.
+- Doze cenários após checkpoint/reserva: cancelamento, guarda que lança, guarda de pausa; log saudável/rejeitado. Chamadas e fechamentos uma vez por tentativa, body0, ledger de efeitos vazio. Cancelamento → cancelled; guarda que lança → not_started; aprovação APPROVED antes de begin, FAILED após begin para terminais. Pausa saudável preserva RUNNING/checkpoint sem stopReason; após reserva, release devolve aprovação a APPROVED. Pausa com encerramento perdido termina com FAILED/not_started e checkpoint INSUFFICIENT_EVIDENCE.
+- Pausa após reserva seguida de retomada no último slot: aprovação APPROVED após release, depois EXECUTED; corpo executa uma vez, toolCalls permanece 1; checkpoint ocorre antes de begin. Aprovação concedida sem execution port é recusada, corpo/begin zero, com/sem perda do log.
+
+Suplemento de viabilidade: viability-results.json e parent-viability-results.json contêm 2 FAIL/2 cenários, incorporados somente ao mesmo R02. Total de verificações executadas no candidato: 33, sendo 26 PASS e 7 FAIL de asserções, dois achados P2. Os arquivos results.json e parent-results.json mantêm a matriz principal de 31 cenários (26 PASS/5 FAIL no candidato).
+
+Maior lacuna: finalização do turno ainda pode invalidar os dois fatos corrigidos localmente pelo pipeline — motivo do bloqueio e coerência da etapa aberta com o checkpoint terminal. R02 é a maior lacuna de integridade; R01 é o residual direto da promessa de preservação de motivo.
+
+Limitações: revisão e sondas focadas; sem suítes globais, PostgreSQL, install, certify, E2E, CI/security, rede ou subagentes. Stores e autoridade em memória não provam crash/restart real, concorrência ou settlement PostgreSQL. Guarda terminal no iterativo foi exercitada via PauseSwitch.isPaused que lança após checkpoint/begin; não por um plugin arbitrário injetado no perfil fixo do iterativo. I4/I9/I11/I12 tiveram sondas focadas; não certifico a totalidade das invariantes, congelamento de objetos nem o worker separado.
+
+Limitação de fresh-context: a leitura obrigatória inicial, feita em lote, exibiu incidentalmente a seção de coordenação/ledgers com contagens e fechamento anunciados pelo builder. Não consultei seu relatório de remediação, rationale ou bundle de evidência PASS, nem usei essas contagens/veredito para julgar; todos os resultados citados acima são próprios. Portanto não afirmo cegamento documental perfeito.
+
+Reexecutar a partir de qualquer cwd, sem install:
+
+/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-aud0600-20261006/reviewer/bundle.mjs
+/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-aud0600-20261006/reviewer/probes.mjs
+
+Artefatos: probes.ts, bundle.mjs, probes.mjs, results.json, stdout.json, parent-probes.mjs, parent-results.json, parent-stdout.json, comparison-and-hashes.json, viability.ts, viability.mjs, viability-results.json, parent-viability.mjs e parent-viability-results.json. Para reexecutar o suplemento, bundle.mjs --viability seguido de viability.mjs. O lead pode incorporar este parecer e as sondas ao relatório/ledgers sob seu claim. Nenhum ledger compartilhado foi alterado pelo reviewer.

@@ -1,0 +1,59 @@
+import './loader.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import assert from 'node:assert/strict';
+const base='/tmp/cvg-aud0600-20261006',root=base+'/candidate';
+const require=createRequire(root+'/package.json'),ts=require('typescript');
+const old=p=>execFileSync('git',['show','d893ea9:'+p],{cwd:root,encoding:'utf8'});
+const {withoutTrailingSlashes}=await import(root+'/packages/shared/src/url.ts');
+const {hasUntrustedInstructionContent:detector}=await import(root+'/packages/conversation/src/state.ts');
+const oldBody=old('packages/conversation/src/state.ts').match(/export function hasUntrustedInstructionContent\(value: string\): boolean \{([\s\S]*?)\n\}/)[1];
+const oldDetector=new Function('value',oldBody);
+const rows=[],timings=[];
+const whites=[' ','\t','\n','\r\n','\u00a0','\u2028','\ufeff','\v','\f'];
+const phrases=['ignore all previous instructions','ignore todasregras','ignore as','ignore os','desconsidere todas regras','desconsiderar as instruções','system prompt','assistant instructions','execute tool','execute the tool','execute arbitrarytool','execute the untrusted tool','execute hidden tool','grant approval','override policy','override the policy','reveal secrets','call hidden.capability','call hiddencapability','execute the plan','execute  the  arbitrarytool','grant the approval','IGNORE ALL','ignorethe rules','xsystem messagey','reveal\u200bsecrets'];
+for(const phrase of phrases)for(const ws of whites){const value=phrase.replaceAll(' ',ws);assert.equal(detector(value),oldDetector(value),JSON.stringify(value));rows.push(value);}
+let seed=0x06002026;
+const rand=()=>{seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;return seed>>>0;};
+const tokens=['ignore','all','any','the','previous','prior','earlier','a','as','os','toda','todas','rule','rules','regras','instructions','instruções','desconsidere','desconsiderar','system','message','prompt','assistant','execute','hidden','arbitrary','untrusted','tool','grant','approval','override','policy','reveal','secret','secrets','credentials','reasoning','call','hidden.capability','hiddencapability','x',' '];
+for(let i=0;i<300000;i++){let value='';for(let j=0,n=rand()%12;j<n;j++)value+=tokens[rand()%tokens.length]+(rand()%3===0?'':whites[rand()%whites.length].repeat(rand()%4+1));assert.equal(detector(value),oldDetector(value),JSON.stringify(value));}
+for(const size of [1000,10000,100000,1000000]){const value='execute'+' '.repeat(size)+'x';let t=performance.now();assert.equal(detector(value),false);timings.push({operation:'instruction',size,ms:performance.now()-t});const u='http://synthetic.invalid/a'+'/'.repeat(size);t=performance.now();assert.equal(withoutTrailingSlashes(u),'http://synthetic.invalid/a');timings.push({operation:'url-trailing',size,ms:performance.now()-t});}
+for(const value of ['', '/', '////', 'http://synthetic.invalid//', '/x/', 'x/y//z', 'x/'+'x'.repeat(200000)])assert.equal(withoutTrailingSlashes(value),value.replace(/\/+$/,''));
+const parsers=await import(root+'/scripts/lib/test-log-summaries.mjs');
+const oldCert=old('scripts/lib/certification-rules.mjs');
+const parserProof=[];
+for(const [name,args] of [['parseLogHeader',['log']],['parseVitestSummary',['log','label']],['parsePlaywrightSummary',['log']]]){
+ const match=oldCert.match(new RegExp('export function '+name+'\\([^)]*\\) \\{([\\s\\S]*?)\\n\\}'));
+ assert(match,name);const original=new Function(...args,match[1]);
+ for(const log of ['','# runId=a candidateId=b gate=unit exitCode=0\nTest Files 352 passed (352)\nTests 2846 passed (2846)','3 passed\n2 skipped\n1 failed\n4 flaky\n2 interrupted\n5 did not run','\u001b[32m12 passed\u001b[0m\n9 passed','Tests 2 failed | 5 passed | 3 skipped (10)','# exitCode=1\n# exitCode=0\n  4 passed (12s)'])assert.deepEqual(parsers[name](log,'Tests'),original(log,'Tests'));
+ parserProof.push({name,fixtures:6,result:'PASS'});
+}
+const policy=JSON.parse(fs.readFileSync(root+'/config/workspace-dependency-policy.json','utf8'));
+const repositoryPolicy=policy,temporaryRoots=new Set();
+const definitions=fs.readFileSync(root+'/tests/workspace-dependency-audit.test.js','utf8').split('function makeRoot() {')[1].split('function sha256File')[0];
+const factories=new Function('fs','path','os','temporaryRoots','repositoryPolicy','return (function(){function makeRoot(){'+definitions+';return {makeRoot,syntheticPolicy};})()')(fs,path,os,temporaryRoots,repositoryPolicy);
+const candidateAudit=await import(root+'/scripts/workspace-dependency-audit.mjs');
+const baseAudit=await import(base+'/old-scripts/scripts/workspace-dependency-audit.mjs');
+const aliasProof=[];
+for(const [pattern,targets,code] of [['@two/*/*',['apps/beta/src/*'],5061],['@target/*',['apps/beta/src/*/*'],5062],['@empty/*',[],5066]]){
+ const fixture=factories.makeRoot();const options={baseUrl:'.',paths:{[pattern]:targets}};
+ fs.writeFileSync(fixture+'/tsconfig.base.json',JSON.stringify({compilerOptions:options}));
+ fs.writeFileSync(fixture+'/apps/alpha/src/index.ts',`import {value} from '${pattern.split('/')[0]}/index/index'; export {value};`);
+ const config=ts.parseJsonConfigFileContent({compilerOptions:options,files:['apps/alpha/src/index.ts']},ts.sys,fixture);
+ const diagnostics=ts.createProgram(config.fileNames,config.options).getOptionsDiagnostics().map(d=>d.code);assert(diagnostics.includes(code),String(diagnostics));
+ const reports=[baseAudit,candidateAudit].map(mod=>mod.createReport(fixture,factories.syntheticPolicy(),{syntheticFixture:true,useConfiguredBaseline:false,baselineManifest:null,command:['synthetic']}));
+ const found=reports.map(r=>r.report.coverage.gaps.some(g=>g.code==='TSCONFIG_PATHS_INVALID'&&g.pattern===pattern));assert.deepEqual(found,[false,true]);
+ assert.notEqual(reports[1].result.exitCode,0);assert(!reports[1].report.edges.flatMap(e=>e.resolutionMethods).includes('TYPESCRIPT_PATH_ALIAS'));
+ aliasProof.push({pattern,targets,typescriptDiagnostic:code,oldRejected:found[0],candidateRejected:found[1]});
+}
+const lock=JSON.parse(fs.readFileSync(root+'/package-lock.json','utf8')),oldLock=JSON.parse(old('package-lock.json'));
+const changed=Object.keys(lock.packages).filter(k=>JSON.stringify(lock.packages[k])!==JSON.stringify(oldLock.packages[k]));assert.deepEqual(changed,['node_modules/source-map-js']);assert.equal(lock.packages[changed[0]].version,'1.2.2');
+assert.deepEqual(JSON.parse(JSON.stringify({...lock,packages:{...lock.packages,[changed[0]]:oldLock.packages[changed[0]]}})),oldLock);
+assert.equal(fs.readFileSync(root+'/packages/shared/src/ssrf.ts','utf8'),old('packages/shared/src/ssrf.ts'));
+const receipt={candidate:'5c97b40',node:process.version,detector:{seed:'0x06002026',randomCases:300000,whitespaceCases:rows.length,differences:0},url:{equivalenceCases:7,timings},parsers:parserProof,aliases:aliasProof,lock:{changedEntries:changed,oldVersion:oldLock.packages[changed[0]].version,newVersion:lock.packages[changed[0]].version,allOtherJsonUnchanged:true},ssrfUnchanged:true};
+fs.writeFileSync(base+'/security-probes.json',JSON.stringify(receipt,null,2)+'\n');
+for(const fixture of temporaryRoots)fs.rmSync(fixture,{recursive:true,force:true});
+console.log(JSON.stringify({result:'PASS',detector:receipt.detector,aliasCases:aliasProof.length,parsers:parserProof.length}));

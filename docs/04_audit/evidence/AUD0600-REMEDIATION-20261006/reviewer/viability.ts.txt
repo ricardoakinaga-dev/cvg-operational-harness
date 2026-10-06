@@ -1,0 +1,60 @@
+import assert from 'node:assert/strict'
+import { writeFileSync } from 'node:fs'
+import { IterativeGovernedRuntime } from '/tmp/cvg-aud0600-20261006/candidate/packages/harness/src/iterative-runtime.ts'
+import { InMemoryExecutionStepStore } from '/tmp/cvg-aud0600-20261006/candidate/packages/harness/src/step-store.ts'
+import { KernelRuntime, standardKernelPlugins, InMemoryPauseSwitch, InMemoryEffectLedger } from '/tmp/cvg-aud0600-20261006/candidate/packages/harness/src/kernel/index.ts'
+import { ApprovalEngine } from '/tmp/cvg-aud0600-20261006/candidate/packages/approval-engine/src/index.ts'
+import { DurableApprovalEngineAdapter } from '/tmp/cvg-aud0600-20261006/candidate/packages/persistence/src/operational-approval-adapter.ts'
+import { ScriptedModelGateway, ScriptedOrchestrator } from '/tmp/cvg-aud0600-20261006/candidate/packages/orchestrator/src/index.ts'
+import { phase3RuntimeInput, PHASE3_TOOL_RESERVE } from '/tmp/cvg-aud0600-20261006/candidate/packages/harness/src/__tests__/fixtures/phase3-fixtures.ts'
+
+const input = phase3RuntimeInput()
+const marker = 'AUD0600_INDEPENDENT_BLOCK_REASON'
+const call = { decisionType:'CALL_TOOL', reasonCode:'TOOL_REQUIRED', toolId:PHASE3_TOOL_RESERVE, toolInput:{} }
+const results = []
+function harness() {
+ const authority = new ApprovalEngine()
+ const adapter = new DurableApprovalEngineAdapter(authority)
+ const pause = new InMemoryPauseSwitch()
+ const events = [], writes = [], ordering = [], settlements = []; const effects=new InMemoryEffectLedger()
+ let bodies=0, outcome='ALLOW', failLog=false, available=true, onCheckpoint=()=>{}, onBegin=()=>{}, reserved=false
+ class Store extends InMemoryExecutionStepStore {
+  async saveCheckpoint(cp) { await super.saveCheckpoint(cp); ordering.push('checkpoint'); if(cp.state.pendingDecision && !cp.state.stopReason) onCheckpoint() }
+  async recordStep(s) { writes.push(structuredClone(s)); await super.recordStep(s) }
+ }
+ const store = new Store()
+ const tool = { id:PHASE3_TOOL_RESERVE, version:'v1', description:'independent synthetic write', inputSchema:{}, outputSchema:{}, risk:'LOW', sideEffect:'WRITE', idempotent:false, requiresApproval:true, execute:async()=>{bodies++; ordering.push('body'); return {status:'SUCCEEDED', output:{synthetic:true}}} }
+ const opts = {
+  orchestrator: new ScriptedOrchestrator({script:[call,{decisionType:'RESPOND',reasonCode:'GOAL_SATISFIED',responseText:'done'}]}),
+  modelGateway: new ScriptedModelGateway({responses:['unused']}),
+  policy:{evaluate:async()=>({outcome,reason:marker,policyVersion:'v1'})},
+  approvals:{request:r=>adapter.request(r),execution:{...adapter.execution,fail:async r=>{settlements.push('fail');return adapter.execution.fail(r)},release:async r=>{settlements.push('release');return adapter.execution.release(r)},begin:async r=>{ordering.push('begin');const h=await adapter.execution.begin(r);reserved=true;onBegin();return h}}},
+  tools:{list:()=>available?[tool]:[],resolve:id=>available&&id===tool.id?tool:undefined},
+  audit:{append:async()=>{}},telemetry:{record:()=>{}},pause,effects,log:{append:async e=>{events.push(e);if(failLog && e.type==='tool/result')throw Error('independent closing loss')}}, stepStore:store
+ }
+ const runtime = new IterativeGovernedRuntime(opts)
+ const run = o=>runtime.execute({...input,...o})
+ const steps = ()=>store.listSteps(input.tenantId,input.executionId)
+ const checkpoint = ()=>store.loadCheckpoint(input.tenantId,input.executionId)
+ const approve = async()=>{const first=await run();assert.equal(first.stopReason,'APPROVAL_REQUIRED');const id=authority.list(input.tenantId)[0].approvalId;authority.approve(input.tenantId,id,{approverId:'operator.aud0600.independent'});return id}
+ return {opts,tool,authority,adapter,pause,events,writes,ordering,settlements,effects,run,steps,checkpoint,approve,
+  setOutcome:v=>outcome=v,setFailLog:v=>failLog=v,setAvailable:v=>available=v,setCheckpoint:f=>onCheckpoint=f,setBegin:f=>onBegin=f,
+  get bodies(){return bodies},get reserved(){return reserved}}
+}
+async function probe(name, fn) {try {const observed=await fn();results.push({name,status:'PASS',observed})}catch(e){results.push({name,status:'FAIL',error:e.message,observed:e.observed})}}
+async function closeAssert(h, result, errorCode, before) {
+ const steps=await h.steps(),cp=await h.checkpoint()
+ const observed={stop:result.stopReason,response:result.response,body:h.bodies,steps,checkpointStop:cp.state.stopReason,closingAttempts:h.events.filter(e=>e.type==='tool/result').length}
+ try {assert.equal(h.bodies,0);assert.equal(steps.length,1);assert.equal(steps[0].stepId,before.stepId);assert.equal(steps[0].stepNumber,before.stepNumber);assert.equal(steps[0].status,'FAILED');assert.equal(steps[0].errorCode,errorCode);assert.equal(cp.state.stopReason,result.stopReason)} catch(e){e.observed=observed;throw e}
+ return observed
+}
+
+for(const scenario of ['tool_disappears_between_validation_and_dispatch','deadline_during_pre_dispatch_audit'])await probe(`RUNNING_${scenario}`,async()=>{
+ const h=harness();const id=await h.approve();h.setCheckpoint(()=>h.pause.pause(input.tenantId));await h.run({resume:{kind:'approval',approvalId:id}});h.setCheckpoint(()=>{});h.pause.resume(input.tenantId);const [before]=await h.steps();assert.equal(before.status,'RUNNING');const initial=await h.checkpoint();assert.equal(initial.state.stopReason,undefined);const n=h.events.length;let resolves=0
+ let budget=input.budget
+ if(scenario==='tool_disappears_between_validation_and_dispatch')h.opts.tools.resolve=()=>++resolves===1?h.tool:undefined
+ else{budget={...input.budget,maxDurationMs:initial.budgetUsage.activeDurationMs+50};h.opts.audit.append=async e=>{if(e.action==='orchestrator.decided')await new Promise(resolve=>setTimeout(resolve,80))}}
+ const r=await h.run({resume:{kind:'approval',approvalId:id},budget});assert.equal(r.stopReason,scenario==='tool_disappears_between_validation_and_dispatch'?'STATE_CONFLICT':'MAX_DURATION');assert.equal(r.response,scenario==='tool_disappears_between_validation_and_dispatch'?`Tool "${h.tool.id}" is unavailable.`:'Duration budget exhausted before tool execution.');assert.equal(h.events.length,n);assert.equal(h.reserved,false);assert.equal(h.bodies,0)
+ try{return await closeAssert(h,r,scenario==='tool_disappears_between_validation_and_dispatch'?'not_started':'deadline',before)}catch(e){e.observed={...e.observed,resolves,eventsThisAttempt:h.events.length-n,approval:h.authority.get(input.tenantId,id).status,effects:h.effects.entries};throw e}
+})
+const output={node:process.version,candidate:process.env.AUD0600_CANDIDATE || '5c97b40',results};writeFileSync(new URL(process.env.AUD0600_RESULT || './viability-results.json',import.meta.url),JSON.stringify(output,null,2));console.log(JSON.stringify(output,null,2))

@@ -1,0 +1,11 @@
+# Lane lead — pedido de sonda PostgreSQL específica AUD0601
+
+Revisor não executou PG/network. Sonda própria pronta: `pg-probe.ts`; `pg.config.mts` mantém root/cache/output externos. Usar somente o PostgreSQL sintético AUD0601 do lead, informando a URL pelo ambiente `CVG_AUD0601_SESSION_PG_URL` (não imprimir credencial). Cria/apaga schemas e roles próprios `aud0601_sr_*`; sem alterar PUBLIC ou objetos alheios. Sem install ou escrita no candidato.
+
+Executar da raiz do candidato com Node22:
+
+```sh
+/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-aud0601-20261006/candidate/node_modules/vitest/vitest.mjs run --config /tmp/cvg-aud0601-20261006/session-reviewer/pg.config.mts --reporter=verbose --reporter=json --outputFile=/tmp/cvg-aud0601-20261006/session-reviewer/pg-result.json > /tmp/cvg-aud0601-20261006/session-reviewer/pg.log 2>&1
+```
+
+Cenários: composição real do builder de produção; login/401/403/restart; get EXECUTE revogado => ready/rotas503 e live200, restauração; revoke EXECUTE seletivamente revogado => logout503 preserva sessão ativa (asserção de cookie poderá falhar); troca de cookie seguida de logout antigo => sucessora deve401 conforme SPEC0144; BYPASSRLS e RLS disabled => preflight rejeita; teardown connections0 e schemas/roles removidos. Duas asserções finais são soft para manter todos os cenários e evidência; não enfraquecer contrato para PASS. Retornar exit code/log/observações e confirmar teardown.

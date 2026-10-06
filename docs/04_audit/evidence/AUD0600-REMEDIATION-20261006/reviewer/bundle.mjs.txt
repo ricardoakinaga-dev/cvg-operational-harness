@@ -1,0 +1,11 @@
+import { createRequire } from 'node:module'
+const require=createRequire('/tmp/cvg-aud0600-20261006/candidate/package.json')
+const {build}=require('esbuild')
+import { readdirSync,readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+const root='/tmp/cvg-aud0600-20261006/candidate';const alias={}
+for(const d of readdirSync(root+'/packages')){try{const pkg=JSON.parse(readFileSync(root+'/packages/'+d+'/package.json'));alias[pkg.name]=root+'/packages/'+d+'/src/index.ts'}catch{}}
+const parent=process.argv.includes('--parent');const viability=process.argv.includes('--viability')
+const changed=['packages/harness/src/kernel/pipeline.ts','packages/harness/src/kernel/kernel-runtime.ts','packages/harness/src/iterative-dispatch.ts']
+const plugins=parent?[{name:'frozen-parent',setup(b){b.onLoad({filter:/\.ts$/},a=>{const rel=a.path.slice(root.length+1);if(changed.includes(rel))return {contents:execFileSync('git',['show','d893ea9:'+rel],{cwd:'/home/ricardo/Área de trabalho/cvg-operational-harness',encoding:'utf8'}),loader:'ts',resolveDir:a.path.slice(0,a.path.lastIndexOf('/'))}})}}]:[]
+await build({plugins,entryPoints:[new URL(viability?'./viability.ts':'./probes.ts',import.meta.url).pathname],bundle:true,platform:'node',format:'esm',target:'node22',alias,outfile:new URL(viability?(parent?'./parent-viability.mjs':'./viability.mjs'):(parent?'./parent-probes.mjs':'./probes.mjs'),import.meta.url).pathname,packages:'bundle',external:['pg'],logLevel:'warning'})

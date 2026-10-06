@@ -1,0 +1,39 @@
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { buildServerFromEnv } from '/tmp/cvg-aud0601-20261006/candidate/apps/api/src/server.ts'
+import { createConfiguredOperatorIdentityResolver } from '/tmp/cvg-aud0601-20261006/candidate/apps/api/src/operator-identity.ts'
+import { assertPostgresOperatorSessionBoundary } from '/tmp/cvg-aud0601-20261006/candidate/apps/api/src/operator-session-preflight.ts'
+const env={NODE_ENV:'production',API_PERSISTENCE_MODE:'postgres',DATABASE_URL:'postgresql://data:synthetic@127.0.0.1/db',POSTGRES_RLS_ENFORCEMENT:'true',OUTBOX_DURABLE_INBOUND:'true',INBOUND_TENANT_ID:'tenant_11111111-1111-4111-8111-111111111111',INBOUND_AGENT_ID:'agent_11111111-1111-4111-8111-111111111111'}
+afterEach(()=>vi.unstubAllEnvs())
+describe('Independent fail-closed profiles and actual preflight early rejection (no socket)',()=>{
+ it.each([undefined,'',' Production','prod'])('invalid NODE_ENV %s refuses',async value=>{
+  await expect(buildServerFromEnv({...env,NODE_ENV:value})).rejects.toThrow('NODE_ENV must be explicitly set')
+ })
+ it.each([
+  [{CVG_IDENTITY_MODE:'simulation'},'simulation is forbidden'],
+  [{API_PERSISTENCE_MODE:'memory'},'in-memory mode is forbidden'],
+  [{POSTGRES_RLS_ENFORCEMENT:'false'},'RLS enforcement'],
+  [{OUTBOX_DURABLE_INBOUND:'false'},'OUTBOX_DURABLE_INBOUND=true']
+ ])('unsafe production profile %j refuses before DB',async(patch,message)=>{
+  await expect(buildServerFromEnv({...env,...patch})).rejects.toThrow(message)
+ })
+ it('missing identity resolver refuses before DB construction',async()=>{
+  await expect(buildServerFromEnv(env)).rejects.toThrow('injected operator identity resolver')
+ })
+ it.each(['','{','{"current":{"keyId":"x","secret":"weak"}}'])('missing/malformed keyring fails closed %s',raw=>{
+  if(!raw) expect(createConfiguredOperatorIdentityResolver({...env,CVG_OPERATOR_IDENTITY_KEYRING:raw})).toBeUndefined()
+  else expect(()=>createConfiguredOperatorIdentityResolver({...env,CVG_OPERATOR_IDENTITY_KEYRING:raw})).toThrow('CVG_OPERATOR_IDENTITY_KEYRING is invalid')
+ })
+ const role={oid:'901',name:'session',login_name:'session',can_login:true,superuser:false,bypass_rls:false,create_db:false,create_role:false,database_create:false,memberships:0,granted_to:0}
+ it.each([
+  {superuser:true},{bypass_rls:true},{create_db:true},{create_role:true},{database_create:true},{memberships:1},{granted_to:1},{can_login:false},{login_name:'ddl'}, {name:'ddl'}
+ ])('actual catalog guard rejects role authority %j',async patch=>{
+  const query=vi.fn().mockResolvedValue({rows:[{...role,...patch}]})
+  await expect(assertPostgresOperatorSessionBoundary({query} as any,{authSchemaName:'auth',expectedSessionRole:'session',productSchemaName:'product'})).rejects.toThrow('session role')
+  expect(query).toHaveBeenCalledTimes(1)
+ })
+ it.each([{can_use:true,can_create:false},{can_use:false,can_create:true}])('actual guard rejects product schema access %j',async row=>{
+  const query=vi.fn().mockResolvedValueOnce({rows:[role]}).mockResolvedValueOnce({rows:[row]})
+  await expect(assertPostgresOperatorSessionBoundary({query} as any,{authSchemaName:'auth',expectedSessionRole:'session',productSchemaName:'product'})).rejects.toThrow('product schema access')
+  expect(query).toHaveBeenCalledTimes(2)
+ })
+})

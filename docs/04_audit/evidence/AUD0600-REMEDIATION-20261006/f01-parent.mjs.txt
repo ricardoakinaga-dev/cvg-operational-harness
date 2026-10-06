@@ -1,0 +1,60 @@
+import './loader-parent.mjs';
+const root='/tmp/cvg-aud0600-20261006/candidate';
+const {IterativeGovernedRuntime}=await import(root+'/packages/harness/src/iterative-runtime.ts');
+const {InMemoryExecutionStepStore}=await import(root+'/packages/harness/src/step-store.ts');
+const {InMemoryPauseSwitch,InMemoryEffectLedger,KernelRuntime,standardKernelPlugins}=await import(root+'/packages/harness/src/kernel/index.ts');
+const {ApprovalEngine}=await import(root+'/packages/approval-engine/src/engine.ts');
+const {DurableApprovalEngineAdapter}=await import(root+'/packages/persistence/src/operational-approval-adapter.ts');
+const {phase3RuntimeInput,PHASE3_TOOL_RESERVE}=await import(root+'/packages/harness/src/__tests__/fixtures/phase3-fixtures.ts');
+const {ScriptedOrchestrator}=await import(root+'/packages/orchestrator/src/scripted.ts');
+const {writeFileSync,readFileSync}=await import('node:fs');
+const {createHash}=await import('node:crypto');
+const assert=(await import('node:assert/strict')).default;
+const input=phase3RuntimeInput();
+const callTool={decisionType:'CALL_TOOL',reasonCode:'TOOL_REQUIRED',toolId:PHASE3_TOOL_RESERVE,toolInput:{}};
+const respond={decisionType:'RESPOND',reasonCode:'GOAL_SATISFIED',responseText:'ok'};
+function harness(o={}) {
+ const pause=new InMemoryPauseSwitch(),effects=new InMemoryEffectLedger(),authority=new ApprovalEngine(),adapter=new DurableApprovalEngineAdapter(authority);
+ let body=0,deny=false,logFail=false,checkpointFail=false,stepFail=false,pauseOnce=true;
+ const attempts=[],order=[];
+ class Store extends InMemoryExecutionStepStore {
+  async saveCheckpoint(c) {
+   if(c.state.pendingDecision&&!c.state.stopReason) {
+    order.push('checkpoint');
+    if(checkpointFail) throw new Error('checkpoint outage');
+    await super.saveCheckpoint(c);
+    if(o.pauseCheckpoint&&pauseOnce) {pause.pause(input.tenantId);pauseOnce=false;}
+   } else await super.saveCheckpoint(c);
+  }
+  async recordStep(s) {if(s.status==='RUNNING'&&stepFail)throw new Error('recordStep outage');await super.recordStep(s);}
+ }
+ const store=new Store();
+ const approvals={request:r=>adapter.request(r),execution:{...adapter.execution,begin:async r=>{
+  order.push('reserve');const handle=await adapter.execution.begin(r);
+  if(o.pauseReserve&&pauseOnce){pause.pause(input.tenantId);pauseOnce=false;}return handle;
+ }}};
+ const tool={id:PHASE3_TOOL_RESERVE,version:'v1',description:'synthetic',inputSchema:{},outputSchema:{},risk:'LOW',sideEffect:'WRITE',idempotent:false,requiresApproval:true,execute:async()=>{body++;return{status:'SUCCEEDED',output:{ok:true}};}};
+ const runtime=new IterativeGovernedRuntime({orchestrator:new ScriptedOrchestrator({script:[callTool,respond]}),modelGateway:{complete:async()=>{throw new Error('unused');}},policy:{evaluate:async()=>({outcome:deny?'DENY':'ALLOW',reason:deny?'denial-retained-marker':'synthetic',policyVersion:'v1'})},approvals,tools:{list:()=>[tool],resolve:()=>tool},audit:{append:async()=>{}},telemetry:{record:()=>{}},stepStore:store,pause,effects,log:{append:event=>{attempts.push(event);if(logFail&&event.type==='tool/result')throw new Error('closing outage');}}});
+ const run=async(overrides={})=>runtime.execute({...input,budget:{...input.budget,maxToolCalls:o.maxToolCalls??4},...overrides});
+ return {run,store,authority,pause,effects,attempts,order,body:()=>body,setDeny:v=>deny=v,setLogFail:v=>logFail=v,setCheckpointFail:v=>checkpointFail=v,setStepFail:v=>stepFail=v,steps:()=>store.listSteps(input.tenantId,input.executionId),checkpoint:()=>store.loadCheckpoint(input.tenantId,input.executionId)};
+}
+async function approved(h) {
+ const first=await h.run();assert.equal(first.stopReason,'APPROVAL_REQUIRED');
+ const record=h.authority.list(input.tenantId)[0];
+ h.authority.approve(input.tenantId,record.approvalId,{approverId:'independent.synthetic'});
+ return record.approvalId;
+}
+const out=[];
+for(const afterReserve of [false,true]){
+ let reserved=false,body=0;const attempts=[];
+ const tool={id:PHASE3_TOOL_RESERVE,version:'v1',description:'synthetic',inputSchema:{},outputSchema:{},risk:'LOW',sideEffect:'WRITE',idempotent:false,requiresApproval:true,execute:async()=>{body++;return {status:'SUCCEEDED',output:{}};}};
+ const singleAuthority=new ApprovalEngine(),singleAdapter=new DurableApprovalEngineAdapter(singleAuthority);
+ const initial=await singleAdapter.request({tenantId:input.tenantId,agentId:input.agent.id,operationKey:'single.synthetic',toolId:tool.id,summary:tool.description,correlationId:input.correlationId,executionRef:input.executionId,operatorId:input.agent.id,agentVersion:input.agent.version,action:'tool.execute',resource:{type:'tool',id:tool.id},payload:{},policyVersion:'v1'});
+ singleAuthority.approve(input.tenantId,initial.approvalId,{approverId:'independent.synthetic'});
+ const approvals={request:r=>singleAdapter.request(r),execution:{...singleAdapter.execution,begin:async r=>{const handle=await singleAdapter.execution.begin(r);reserved=true;return handle;}}};
+ const plugins=standardKernelPlugins({orchestrator:{decideNextStep:async()=>({action:'CALL_TOOL',toolInvocation:{toolId:tool.id,input:{},operationKey:'single.synthetic'}})},modelGateway:{complete:async()=>{throw new Error('unused');}},policy:{evaluate:async()=>({outcome:'ALLOW',reason:'synthetic',policyVersion:'v1'})},approvals,tools:{list:()=>[tool],resolve:()=>tool},audit:{append:async()=>{}},telemetry:{record:()=>{}},log:{append:e=>{attempts.push(e);if(e.type==='tool/result')throw new Error('closing outage');}},plugins:[{name:'control.deny.synthetic',kind:'control',apply:ctx=>{ctx.guard(()=>!afterReserve||reserved?'denial-retained-marker':undefined);}}]});
+ const runtime=await KernelRuntime.boot(plugins);const result=await runtime.execute({...input,runtimeProfile:'single_pass'});
+ out.push({case:'single-denial-closing-error',afterReserve,result,body,approval:singleAuthority.get(input.tenantId,initial.approvalId).status,closingAttempts:attempts.filter(e=>e.type==='tool/result').length});await runtime.dispose();
+}
+
+for(const p of out)assert.match(p.result.response,/denial-retained-marker/);

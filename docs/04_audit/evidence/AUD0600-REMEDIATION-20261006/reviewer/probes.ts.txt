@@ -1,0 +1,117 @@
+import assert from 'node:assert/strict'
+import { writeFileSync } from 'node:fs'
+import { IterativeGovernedRuntime } from '/tmp/cvg-aud0600-20261006/candidate/packages/harness/src/iterative-runtime.ts'
+import { InMemoryExecutionStepStore } from '/tmp/cvg-aud0600-20261006/candidate/packages/harness/src/step-store.ts'
+import { KernelRuntime, standardKernelPlugins, InMemoryPauseSwitch, InMemoryEffectLedger } from '/tmp/cvg-aud0600-20261006/candidate/packages/harness/src/kernel/index.ts'
+import { ApprovalEngine } from '/tmp/cvg-aud0600-20261006/candidate/packages/approval-engine/src/index.ts'
+import { DurableApprovalEngineAdapter } from '/tmp/cvg-aud0600-20261006/candidate/packages/persistence/src/operational-approval-adapter.ts'
+import { ScriptedModelGateway, ScriptedOrchestrator } from '/tmp/cvg-aud0600-20261006/candidate/packages/orchestrator/src/index.ts'
+import { phase3RuntimeInput, PHASE3_TOOL_RESERVE } from '/tmp/cvg-aud0600-20261006/candidate/packages/harness/src/__tests__/fixtures/phase3-fixtures.ts'
+
+const input = phase3RuntimeInput()
+const marker = 'AUD0600_INDEPENDENT_BLOCK_REASON'
+const call = { decisionType:'CALL_TOOL', reasonCode:'TOOL_REQUIRED', toolId:PHASE3_TOOL_RESERVE, toolInput:{} }
+const results = []
+function harness() {
+ const authority = new ApprovalEngine()
+ const adapter = new DurableApprovalEngineAdapter(authority)
+ const pause = new InMemoryPauseSwitch()
+ const events = [], writes = [], ordering = [], settlements = []; const effects=new InMemoryEffectLedger()
+ let bodies=0, outcome='ALLOW', failLog=false, available=true, onCheckpoint=()=>{}, onBegin=()=>{}, reserved=false
+ class Store extends InMemoryExecutionStepStore {
+  async saveCheckpoint(cp) { await super.saveCheckpoint(cp); ordering.push('checkpoint'); if(cp.state.pendingDecision && !cp.state.stopReason) onCheckpoint() }
+  async recordStep(s) { writes.push(structuredClone(s)); await super.recordStep(s) }
+ }
+ const store = new Store()
+ const tool = { id:PHASE3_TOOL_RESERVE, version:'v1', description:'independent synthetic write', inputSchema:{}, outputSchema:{}, risk:'LOW', sideEffect:'WRITE', idempotent:false, requiresApproval:true, execute:async()=>{bodies++; ordering.push('body'); return {status:'SUCCEEDED', output:{synthetic:true}}} }
+ const opts = {
+  orchestrator: new ScriptedOrchestrator({script:[call,{decisionType:'RESPOND',reasonCode:'GOAL_SATISFIED',responseText:'done'}]}),
+  modelGateway: new ScriptedModelGateway({responses:['unused']}),
+  policy:{evaluate:async()=>({outcome,reason:marker,policyVersion:'v1'})},
+  approvals:{request:r=>adapter.request(r),execution:{...adapter.execution,fail:async r=>{settlements.push('fail');return adapter.execution.fail(r)},release:async r=>{settlements.push('release');return adapter.execution.release(r)},begin:async r=>{ordering.push('begin');const h=await adapter.execution.begin(r);reserved=true;onBegin();return h}}},
+  tools:{list:()=>available?[tool]:[],resolve:id=>available&&id===tool.id?tool:undefined},
+  audit:{append:async()=>{}},telemetry:{record:()=>{}},pause,effects,log:{append:async e=>{events.push(e);if(failLog && e.type==='tool/result')throw Error('independent closing loss')}}, stepStore:store
+ }
+ const runtime = new IterativeGovernedRuntime(opts)
+ const run = o=>runtime.execute({...input,...o})
+ const steps = ()=>store.listSteps(input.tenantId,input.executionId)
+ const checkpoint = ()=>store.loadCheckpoint(input.tenantId,input.executionId)
+ const approve = async()=>{const first=await run();assert.equal(first.stopReason,'APPROVAL_REQUIRED');const id=authority.list(input.tenantId)[0].approvalId;authority.approve(input.tenantId,id,{approverId:'operator.aud0600.independent'});return id}
+ return {opts,tool,authority,adapter,pause,events,writes,ordering,settlements,effects,run,steps,checkpoint,approve,
+  setOutcome:v=>outcome=v,setFailLog:v=>failLog=v,setAvailable:v=>available=v,setCheckpoint:f=>onCheckpoint=f,setBegin:f=>onBegin=f,
+  get bodies(){return bodies},get reserved(){return reserved}}
+}
+async function probe(name, fn) {try {const observed=await fn();results.push({name,status:'PASS',observed})}catch(e){results.push({name,status:'FAIL',error:e.message,observed:e.observed})}}
+async function closeAssert(h, result, errorCode, before) {
+ const steps=await h.steps(),cp=await h.checkpoint()
+ const observed={stop:result.stopReason,response:result.response,body:h.bodies,steps,checkpointStop:cp.state.stopReason,closingAttempts:h.events.filter(e=>e.type==='tool/result').length}
+ try {assert.equal(h.bodies,0);assert.equal(steps.length,1);assert.equal(steps[0].stepId,before.stepId);assert.equal(steps[0].stepNumber,before.stepNumber);assert.equal(steps[0].status,'FAILED');assert.equal(steps[0].errorCode,errorCode);assert.equal(cp.state.stopReason,result.stopReason)} catch(e){e.observed=observed;throw e}
+ return observed
+}
+for(const lost of [false,true]) {
+ await probe(`F01_single_after_reserve_loss_${lost}`,async()=>{
+  const h=harness();const key='aud0600-single';const req={tenantId:input.tenantId,agentId:input.agent.id,operationKey:key,toolId:h.tool.id,summary:h.tool.description,correlationId:input.correlationId,executionRef:input.executionId,operatorId:input.agent.id,agentVersion:input.agent.version,action:'tool.execute',resource:{type:'tool',id:h.tool.id},payload:{},policyVersion:'v1'}
+  const pending=await h.adapter.request(req);h.authority.approve(input.tenantId,pending.approvalId,{approverId:'operator.independent'});h.setFailLog(lost)
+  const rt=await KernelRuntime.boot(standardKernelPlugins({...h.opts,orchestrator:{decideNextStep:async()=>({action:'CALL_TOOL',toolInvocation:{toolId:h.tool.id,input:{},operationKey:key}})},plugins:[{name:'independent.guard',kind:'control',apply:ctx=>ctx.guard(()=>h.reserved?marker:undefined)}]}))
+  const r=await rt.execute({...input,runtimeProfile:'single_pass'});await rt.dispose()
+  assert.equal(r.stopReason,lost?'INSUFFICIENT_EVIDENCE':'POLICY_DENIED');assert.ok(r.response.includes(marker));assert.equal(h.bodies,0);assert.equal(h.authority.get(input.tenantId,pending.approvalId).status,'FAILED');assert.equal(h.events.filter(e=>e.type==='tool/result').length,1)
+  return {result:r,approval:'FAILED',body:h.bodies,events:h.events}
+ })
+ for(const policy of ['DENY','HANDOFF','BOGUS']) await probe(`waiting_${policy}_loss_${lost}`,async()=>{
+  const h=harness();const id=await h.approve();const [before]=await h.steps();h.setOutcome(policy);h.setFailLog(lost)
+  const r=await h.run({resume:{kind:'approval',approvalId:id}});assert.equal(r.stopReason,lost||policy==='BOGUS'?'INSUFFICIENT_EVIDENCE':policy==='DENY'?'POLICY_DENIED':'HUMAN_TAKEOVER')
+  return closeAssert(h,r,policy==='DENY'?'policy_denied':policy==='HANDOFF'?'policy_handoff':'policy_outcome_invalid',before)
+ })
+ await probe(`running_expired_loss_${lost}`,async()=>{
+  const h=harness();const id=await h.approve();h.setCheckpoint(()=>h.pause.pause(input.tenantId));const paused=await h.run({resume:{kind:'approval',approvalId:id}});assert.equal(paused.stopReason,'HUMAN_TAKEOVER');const [before]=await h.steps();assert.equal(before.status,'RUNNING')
+  h.setCheckpoint(()=>{});h.pause.resume(input.tenantId);h.authority.expireStale(new Date('2100-01-01'));h.setFailLog(lost)
+  const r=await h.run({resume:{kind:'approval',approvalId:id}});assert.equal(r.stopReason,lost?'INSUFFICIENT_EVIDENCE':'POLICY_DENIED');return closeAssert(h,r,'approval_denied',before)
+ })
+}
+await probe('pause_after_reserve_then_resume_last_tool_slot',async()=>{
+ const h=harness();const id=await h.approve();h.setBegin(()=>h.pause.pause(input.tenantId));const resume={kind:'approval',approvalId:id};const budget={...input.budget,maxToolCalls:1}
+ const r=await h.run({resume,budget});assert.equal(r.stopReason,'HUMAN_TAKEOVER');assert.equal(h.bodies,0);assert.equal(h.authority.get(input.tenantId,id).status,'APPROVED');const cp=await h.checkpoint();assert.equal(cp.state.stopReason,undefined);assert.equal(cp.budgetUsage.toolCalls,1)
+ h.setBegin(()=>{});h.pause.resume(input.tenantId);const r2=await h.run({resume,budget});assert.equal(h.bodies,1);assert.equal(r2.toolCalls,1);assert.equal(h.authority.get(input.tenantId,id).status,'EXECUTED');assert.ok(h.ordering.indexOf('checkpoint')<h.ordering.indexOf('begin'));return {paused:r,completed:r2,order:h.ordering}
+})
+for(const stage of ['WAITING','RUNNING'])for(const scenario of ['cancel_before_loop','missing_tool'])await probe(`${stage}_${scenario}`,async()=>{
+ const h=harness();const id=await h.approve();if(stage==='RUNNING'){h.setCheckpoint(()=>h.pause.pause(input.tenantId));await h.run({resume:{kind:'approval',approvalId:id}});h.setCheckpoint(()=>{});h.pause.resume(input.tenantId)}
+ const [before]=await h.steps();assert.equal(before.status,stage)
+ const ac=new AbortController();if(scenario==='cancel_before_loop')ac.abort();else h.setAvailable(false)
+ const r=await h.run({resume:{kind:'approval',approvalId:id},signal:ac.signal});return closeAssert(h,r,scenario==='cancel_before_loop'?'cancelled':'not_started',before)
+})
+await probe('cancel_at_dispatch_checkpoint',async()=>{
+ const h=harness();const id=await h.approve();const [before]=await h.steps();const ac=new AbortController();h.setCheckpoint(()=>ac.abort());const r=await h.run({resume:{kind:'approval',approvalId:id},signal:ac.signal});return closeAssert(h,r,'cancelled',before)
+})
+
+for(const point of ['after_checkpoint','after_reserve'])for(const scenario of ['cancel','throwing_guard','pause_guard'])for(const lost of [false,true])await probe(`${point}_${scenario}_loss_${lost}`,async()=>{
+ const h=harness();const id=await h.approve();const [before]=await h.steps();const countBefore=h.events.length;const ac=new AbortController();let guardFailed=false;const original=h.pause.isPaused.bind(h.pause)
+ h.pause.isPaused=tenant=>{if(guardFailed)throw Error(marker);return original(tenant)}
+ const trigger=()=>{if(scenario==='cancel')ac.abort();else if(scenario==='throwing_guard')guardFailed=true;else h.pause.pause(input.tenantId)}
+ if(point==='after_checkpoint')h.setCheckpoint(trigger);else h.setBegin(trigger)
+ h.setFailLog(lost);const r=await h.run({resume:{kind:'approval',approvalId:id},signal:ac.signal});const calls=h.events.slice(countBefore).filter(e=>e.type==='tool/call');const closing=h.events.slice(countBefore).filter(e=>e.type==='tool/result')
+ assert.equal(calls.length,1);assert.equal(closing.length,1);assert.equal(closing[0].outcome,'not_started');assert.equal(h.effects.entries.length,0);assert.equal(h.bodies,0)
+ const expectedStop=lost?'INSUFFICIENT_EVIDENCE':scenario==='cancel'?'CANCELLED':scenario==='throwing_guard'?'POLICY_DENIED':'HUMAN_TAKEOVER';assert.equal(r.stopReason,expectedStop)
+ const approval=h.authority.get(input.tenantId,id).status;assert.equal(approval,point==='after_reserve'&&scenario!=='pause_guard'?'FAILED':'APPROVED')
+ assert.deepEqual(h.settlements,point==='after_reserve'?[scenario==='pause_guard'?'release':'fail']:[])
+ let observed
+ if(scenario==='pause_guard'&&!lost){const [step]=await h.steps();const cp=await h.checkpoint();assert.equal(step.stepId,before.stepId);assert.equal(step.stepNumber,before.stepNumber);assert.equal(step.status,'RUNNING');assert.equal(cp.state.stopReason,undefined);observed={step,checkpointStop:cp.state.stopReason}}
+ else observed=await closeAssert(h,r,scenario==='cancel'?'cancelled':'not_started',before)
+ if(scenario==='throwing_guard')assert.ok(r.response.includes(marker))
+ return {...observed,result:r,approval,settlements:h.settlements,effects:h.effects.entries,body:h.bodies,callAttempts:calls.length,closingAttemptsThisCall:closing.length,closing,order:h.ordering}
+})
+
+
+await probe('F01_after_reserve_result_and_turn_end_log_outage',async()=>{
+ const h=harness();const key='aud0600-full-closing-outage';const req={tenantId:input.tenantId,agentId:input.agent.id,operationKey:key,toolId:h.tool.id,summary:h.tool.description,correlationId:input.correlationId,executionRef:input.executionId,operatorId:input.agent.id,agentVersion:input.agent.version,action:'tool.execute',resource:{type:'tool',id:h.tool.id},payload:{},policyVersion:'v1'}
+ const pending=await h.adapter.request(req);h.authority.approve(input.tenantId,pending.approvalId,{approverId:'operator.independent'});h.setFailLog(true)
+ const rt=await KernelRuntime.boot(standardKernelPlugins({...h.opts,orchestrator:{decideNextStep:async()=>({action:'CALL_TOOL',toolInvocation:{toolId:h.tool.id,input:{},operationKey:key}})},log:{append:async e=>{await h.opts.log.append(e);if(e.type==='turn/end')throw Error('independent closing loss')}},plugins:[{name:'independent.guard',kind:'control',apply:ctx=>ctx.guard(()=>h.reserved?marker:undefined)}]}))
+ const r=await rt.execute({...input,runtimeProfile:'single_pass'});await rt.dispose()
+ const observed={result:r,body:h.bodies,approval:h.authority.get(input.tenantId,pending.approvalId).status,settlements:h.settlements,effects:h.effects.entries,closingAttempts:h.events.filter(e=>e.type==='tool/result').length,turnEndAttempts:h.events.filter(e=>e.type==='turn/end').length}
+ assert.equal(r.stopReason,'INSUFFICIENT_EVIDENCE');assert.equal(h.bodies,0);assert.equal(observed.approval,'FAILED');assert.equal(observed.closingAttempts,1);assert.equal(observed.turnEndAttempts,1)
+ try{assert.ok(r.response.includes(marker),'response lost the original guard reason during turn/end log failure')}catch(e){e.observed=observed;throw e};return observed
+})
+for(const lost of [false,true])await probe(`approved_without_execution_port_loss_${lost}`,async()=>{
+ const h=harness();const id=await h.approve();const [before]=await h.steps();h.opts.approvals.execution=undefined;h.setFailLog(lost);const r=await h.run({resume:{kind:'approval',approvalId:id}});assert.equal(r.stopReason,'INSUFFICIENT_EVIDENCE');assert.equal(h.ordering.includes('begin'),false);assert.equal(h.authority.get(input.tenantId,id).status,'APPROVED');return closeAssert(h,r,'not_started',before)
+})
+
+const output={node:process.version,candidate:process.env.AUD0600_CANDIDATE || '5c97b40',results};writeFileSync(new URL(process.env.AUD0600_RESULT || './results.json',import.meta.url),JSON.stringify(output,null,2));console.log(JSON.stringify(output,null,2))

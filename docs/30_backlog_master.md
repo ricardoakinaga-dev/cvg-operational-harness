@@ -1,3 +1,17 @@
+# AUD-0602 — remediações originais confirmadas; novo P1/P2 — 06/10/2026
+
+- Task `AUD0602-REMEDIATION-PUBLISH-20261006`, Codex; auditoria DONE, entrega PARTIAL, núcleo NO_GO. [Parecer](04_audit/0602_reauditoria_aud0601_2026-10-06.md), [evidências](04_audit/evidence/AUD0602-REMEDIATION-20261006/summary.md). Casos originais F01–F07 da AUD0601 passam; contraexemplos novos não são apagados pelas suítes verdes. Publicação Git autorizada pelo pedido atual, sem release.
+
+| Item             | Estado / aceite esperado                                                                                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AUD0601-F01–F07  | CLOSED_EXERCISED_ORIGINAL_SCOPE — pausa/resume PG real, família/logout, cookie logout503, healthy API/worker, progresso serializado, cadeia estrita/âncoras, perfil restore. Limites e modos degradados no parecer. |
+| AUD0602-F01      | P1 / OPEN — PROD-0373/KERNEL-PLUGINS; revalidar cancelamento/prazo após await da última leitura de pausa, antes do corpo; corpo0 em ambas as variantes, liquidação/retry seguros.                                   |
+| AUD0602-F02      | P2 / OPEN — PROD-0373/API; troca de operador/papel/tenant atômica,503 preserva cookie anterior e não emite novo cookie utilizável; timeout/ambos revokes falhos e duas réplicas. Herdado.                           |
+| CI e proteção    | OPEN_REMOTE — branches críticos≥95% passam localmente; CI do histórico publicado, E2E/browser/certificação e checks reais ainda pendentes; proteção não alterada nesta auditoria.                                   |
+| Implantação real | OPEN — ambiente, quatro roles/migrations/segredos, TLS/proxy, backup agendado, sondas e evidência operacional. Mesmo CI verde não elimina o P1/P2 atual.                                                            |
+
+- Verificação principal81f01e8:358 arquivos/2.940 PASS com cobertura, PG37/298 PASS, sem skips; type/lint/formato/mutation10/10/audit0 PASS; smoke18/18, restore e backup0027 PASS. Follow-up8652319:119 testes e typecheck PASS. 25 gates do builder não reemitidos integralmente; E2E/browser/certify/SBOM/licenças locais NOT_RUN. Alerta desligado conforme decisão declarada do usuário.
+
 # PROD-0373 rodada 2 — Verify publicado e AUD-0601 corrigidos — 06/10/2026
 
 - Task `PROD-0373-20261006` rodada 2: `DONE_LOCAL`. Supersede a disposição OPEN de AUD0601-F01–F07 e da falha de cobertura crítica do Verify `37524247242`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-2--verify-publicado-e-aud-0601).
@@ -14,6 +28,25 @@
 | CI-COVERAGE-CHANNEL | FIXED_LOCAL  | `channel` 96,48%; 25 gates locais PASS                                                                                 |
 | 0373-C5             | PENDING_PUSH | Push, CI verde e proteção do `main`                                                                                    |
 
+# AUD-0601 — auditoria concluída; remediação e implantação abertas — 06/10/2026
+
+- Task `AUD0601-PRODUCTION-DELIVERY-20261006`: auditoria DONE; entrega PARTIAL, produção NO_GO. [Parecer](04_audit/0601_auditoria_entrega_producao_2026-10-06.md), [evidências](04_audit/evidence/AUD0601-PRODUCTION-20261006/summary.md). Cenários antigos AUD0600 passam; esta entrada registra os achados atuais sem reescrever cartões anteriores.
+
+| Item                               | Prioridade         | Estado / owner / aceite esperado                                                                                                                                     |
+| ---------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AUD0601-F01 pausa pós-reserva      | P1                 | OPEN — PROD-0373/KERNEL-PLUGINS; guarda na fronteira do efeito, liquidação segura das reservas, regressões das três janelas e PostgreSQL real.                       |
+| AUD0601-F02 família de sessão      | P1                 | OPEN — PROD-0373/API; substituição atômica e logout por linhagem, A→B/logoutA invalidaB em PostgreSQL real.                                                          |
+| AUD0601-F03 cookie em logout503    | P2                 | OPEN — PROD-0373/API; preservar cookie na indisponibilidade e limpar só após revogação confirmada.                                                                   |
+| AUD0601-F04 healthcheck worker     | P2                 | OPEN — PROD-0373/OPS; sonda de worker ou override explícito e prova de healthy com heartbeat.                                                                        |
+| AUD0601-F05 progresso no heartbeat | P2                 | OPEN — PROD-0373/WORKER; serializar/reservar delta com retry seguro, evento1 não pode somar3.                                                                        |
+| AUD0601-F06 integridade payload    | P2                 | OPEN — PROD-0373/AUDIT; integridade do payload persistido/sanitizado ou sinal parcial e política verificável para divergências.                                      |
+| AUD0601-F07 receita restore        | P3                 | OPEN — PROD-0373/OPS; explicitar NODE_ENV=test na sonda sintética ou compor webhook assinado, sem enfraquecer API.                                                   |
+| 0373 condição5                     | Bloqueante         | OPEN — PROD-0373/CI; corrigir cobertura crítica channel sem baixar95%, repetir Verify/Security no mesmo SHA; proteção com contextos reais publicados.                |
+| Implantação do núcleo              | Bloqueante         | OPEN — OPS/usuário; destino/manifesto, quatro roles/migrations/credenciais, TLS/proxy, backup agendado, sondas/restart, mesmo digest API/worker e prova operacional. |
+| 0373 condição9                     | Decisão registrada | Alerta desligado por decisão declarada do usuário; não pedir ativação. Manter disposição/limites explícitos para eventual GO.                                        |
+
+- Suítes canônicas locais 2.925/296 PASS não encerram achados adversariais. Security PASS/zero high não substitui Verify FAIL e evidência de implantação. Nenhum commit/push/deploy ou liberação de produto nesta auditoria.
+
 # PROD-0373 — AUD-0600 corrigida e barra 0373 executada — 06/10/2026
 
 - Task `PROD-0373-20261006`, Claude Code: `DONE_LOCAL`, condição 5 pendente de publicação. Supersede a disposição OPEN de AUD0600-F01/F02 e das condições 1, 3, 4, 6, 7, 8, 9 e 10 da [0373](03_build/0373_barra_producao_harness.md); registros anteriores ficam como histórico. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md).
@@ -26,6 +59,20 @@
 | 0373-C3/C4/C7 | DONE_LOCAL   | Smoke 16/16 na imagem distroless em produção; login 200/401                                                                                         |
 | 0373-C6/C8/C9 | DONE_LOCAL   | Gitleaks na imagem 0; restore com cadeia íntegra; alerta de parada assinado recebido                                                                |
 | 0373-C5       | PENDING_PUSH | Push, CI verde no SHA, CodeQL sem high, proteção do `main`                                                                                          |
+
+# AUD-0600 — disposição da reauditoria AUD0599-REMEDIATION — 06/10/2026
+
+- Task `AUD0600-REMEDIATION-REAUDIT-20261006`: auditoria `DONE`; cenários originais de AUD0599-F01/F02 `CLOSED_ORIGINAL_SCOPE`, aderência integral §12 `PARTIAL_TWO_P2`. [Relatório](04_audit/0600_reauditoria_remediacao_aud0599_2026-10-06.md), [evidência](04_audit/evidence/AUD0600-REMEDIATION-20261006/summary.md). Produção `NO_GO`; nenhum commit/push nesta rodada. Entradas anteriores permanecem históricas.
+
+| Task              | Prioridade/estado        | O quê e onde                                                        | Como e dependência                                                                                                | Critério de pronto                                                                                                        |
+| ----------------- | ------------------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| AUD0600-F01       | P2 / OPEN                | Motivo apagado no turn/end; kernel/kernel-runtime.ts                | Owner KERNEL-PLUGINS; compor falha final com decisão já acumulada, SPEC0181 §11.3/§12.1                           | tool/result e turn/end rejeitados: negação visível, INSUFFICIENT_EVIDENCE, body0 e liquidação única                       |
+| AUD0600-F02       | P2 / OPEN                | Checkpoint terminal com WAITING/RUNNING; iterative-runtime/dispatch | Owner KERNEL-PLUGINS; alcançar terminais anteriores ao pipeline, com certeza de efeito e pausa preservadas, §12.3 | Retomada cancelada/ferramenta ausente; ausência no despacho/prazo: mesma etapa terminal e código coerente, sem duplicação |
+| CI-ZOD-PREINSTALL | P1 / CLOSED_LOCAL_SCOPE  | Bootstrap sem dependências                                          | Init real antes do install e controle negativo da base                                                            | Local PASS; Verify remoto no candidato ainda pendente                                                                     |
+| DEP-SOURCE-MAP-JS | P1 / CLOSED_LOCAL_SCOPE  | Lock 1.2.2 e audit completo                                         | Única entrada alterada, instalação própria congelada                                                              | Audit completo zero, versão instalada confirmada                                                                          |
+| CODEQL-ACTIVE     | P1 / VERIFIED_LOCAL_ONLY | Seis alertas ativos tratados                                        | Regex/alias/helper confirmados por sondas próprias                                                                | Fechamento oficial pendente de scan remoto; #6/#7 e históricos continuam abertos                                          |
+
+- Verificação independente: 352 arquivos/2.844 PASS ordinários + duas falhas esperadas; PG 288 PASS, zero skips; type/lint/formato/links/audit PASS. Sondas novas 26 PASS/7 FAIL em dois P2; 12 cenários anteriores PASS. Parte B, demais condições 0373 e decisões de publicação/proteção/CodeQL continuam pendentes.
 
 # AUD0599-REMEDIATION — correções da AUD-0599 — 06/10/2026
 

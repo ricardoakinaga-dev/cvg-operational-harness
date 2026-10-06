@@ -6,6 +6,25 @@
 - Vale para qualquer agente. Em conflito entre este arquivo e uma instrução
   direta do usuário, vale a instrução do usuário.
 
+## AUD-0602 — reauditoria AUD-0601 e publicação autorizada — 06/10/2026
+
+- Task `AUD0602-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT / PUBLISH_PREPARED / NO_GO_ONE_P1_ONE_P2`; pedido: nova auditoria, commit e push. Congelado `81f01e87a63996f3afe4f55641ebb5e2ea84a39b`, 11 commits posteriores ao main recebido dc4a3cb. Sem release operacional.
+- Escrita exclusiva: `docs/04_audit/0602_reauditoria_aud0601_2026-10-06.md`, `docs/04_audit/evidence/AUD0602-REMEDIATION-20261006/**`, esta seção e entradas novas próprias nos ledgers 99/20/30. Publicar também relatórios/evidências/entradas próprias AUD0600/AUD0601 pendentes, com staging explícito. Fonte e lockfile somente leitura; preservar entradas e commits Claude.
+- Worktree/dependências/outputs próprios `/tmp/cvg-aud0602-20261006/**`; PostgreSQL sintético `cvg-aud0602-pg-20261006` em loopback55724. Revisores somente leitura sessão e pausa/heartbeat; outputs próprios em subpastas, sem descendentes. Smoke/restore somente recursos próprios sintéticos.
+- Follow-up concorrente `8652319`: remoção do campo privado clock não lido em channel-gateway; auditar o delta/rodar foco antes de publicar os 12 commits existentes. Snapshot/gates principais continuam 81f01e8, follow-up registrado separadamente.
+- Critérios: F01–F07 e novo contrato HTTPS/live; suítes completa/PG, cobertura crítica≥95%, skips e backup/rollback; imagem API/worker healthy; cadeia estrita/âncoras e restore real; CI remoto corretamente pendente. Sem certify/E2E/SBOM/licenças locais, segredo real, deploy, proteção de branch ou dismissals. Push normal `origin HEAD:main` autorizado pelo pedido atual; nenhum force/rewrite.
+
+- Fechamento: casos originais passam; novo P1 guarda cancel/deadline e P2 troca de identidade503 confirmados.2.940 testes com cobertura, PG298, mutation10/10, smoke18/18 e demais gates pertinentes PASS; follow-up119/typecheck PASS. Own PG/smokes removidos, revisores encerrados; publicações AUD0600/0601/0602 e histórico recebido autorizadas. Fonte/lockfile/registros anteriores preservados; nenhum release/deploy/proteção alterados.
+
+## AUD-0601 — auditoria da entrega publicada e configuração de produção — 06/10/2026
+
+- Task `AUD0601-PRODUCTION-DELIVERY-20261006`, Codex, `COMPLETED_AUDIT / NO_GO_TWO_P1_AND_CI_FAIL`; pedido atual: auditar a entrega publicada `dc4a3cb` e complemento documental local `210d8e1`. Código congelado `dc4a3cbbfddf91646d794e9165e524032df04c9c`; root somente leitura exceto documentos próprios.
+- Escrita exclusiva: `docs/04_audit/0601_auditoria_entrega_producao_2026-10-06.md`, `docs/04_audit/evidence/AUD0601-PRODUCTION-20261006/**`, esta seção e entradas novas próprias em runtime/log/backlog. Worktree, dependências e outputs em `/tmp/cvg-aud0601-20261006/**`; PostgreSQL sintético próprio `cvg-aud0601-pg-20261006` em loopback 55723. Provas de imagem/restore usam somente recursos descartáveis próprios e o digest recebido, sem deploy.
+- Critérios: remediação AUD0600-F01/F02; bootstrap de sessão e separação de papéis; pausa/heartbeat do worker e certeza de efeito; API/worker na imagem distroless; cadeia após dump/restore; alerta desabilitado conforme declaração do usuário; estado real do Verify/Security/CodeQL/main; configuração necessária e evidência de implantação. Revisores independentes somente leitura para sessão e worker/kernel; fontes e asserções próprias, sem descendentes.
+- Sem alterações de código/lockfile, certify, E2E, SBOM, licenças, segredos reais, recursos de produção, configuração de proteção, dismissals ou publicação Git. Registros AUD-0600 ainda locais e trabalho de outros agentes preservados; esta auditoria não dá commit/push nem concede GO operacional.
+
+- Fechamento: suíte 2.925 PASS, PG296 PASS, smoke16/16 e type/lint/formato PASS; dois P1 reais de pausa/sessão, quatro P2 e um P3; Verify publicado FAIL cobertura crítica channel, Security PASS. Own PG/smokes removidos, revisores encerrados, artefatos arquivados; fonte/lockfile e entradas anteriores preservados. Sem commit/push/deploy ou configuração remota.
+
 ## PROD-0373 — AUD-0600 e barra 0373 até produção — 06/10/2026
 
 - Task `PROD-0373-20261006`, Claude Code, `DONE_LOCAL / CONDITION_5_PENDING_PUSH`. Pedido do usuário:
@@ -41,6 +60,15 @@
   `scripts/runtime-healthcheck.mjs`, `scripts/skip-catalog.json`,
   `scripts/rem21-010-postgres-proof.ts`, testes de channel-gateway.
   Worktrees e PostgreSQL próprios removidos. Push pendente do usuário.
+
+## AUD-0600 — reauditoria dos três commits de remediação — 06/10/2026
+
+- Task `AUD0600-REMEDIATION-REAUDIT-20261006`, Codex, `COMPLETED_AUDIT / PARTIAL_TWO_P2`; pedido atual do usuário: auditar a entrega `b9cf7b6`, `b98df52`, `5c97b40`. SHA congelado `5c97b40a751233a2fdd2babcbabba80387faa7cc`; root de código somente leitura.
+- Escrita exclusiva: `docs/04_audit/0600_reauditoria_remediacao_aud0599_2026-10-06.md`, `docs/04_audit/evidence/AUD0600-REMEDIATION-20261006/**`, esta seção e entradas próprias novas nos ledgers 99/20/30. Worktree e outputs próprios `/tmp/cvg-aud0600-20261006/**`, dependências físicas instaladas em Node 22 com lock congelado, PostgreSQL sintético próprio `cvg-aud0600-pg-20261006` em loopback 55722. Revisão auxiliar fresh-context somente leitura do kernel, sem descendentes.
+- Barra: F01/F02 da AUD-0599 e SPEC0181 §12; invariantes de pausa, cancelamento, approval e fechamento; bootstrap init sem node_modules; parsers equivalentes, alias inválidos e captura literal, URLs lineares, detector de instruções equivalente, lockfile restrito e npm audit; suíte completa/PG/typecheck/lint e docs. Sondas adversariais apenas em cópias/outputs próprios, não na coleta geral do workspace.
+- Sem alterações de implementação ou lockfile compartilhado, certify, E2E, SBOM, licenças, deploy, dado real, provider, dismissals CodeQL ou proteção de branch. Auditoria atual não publica os três commits: o pedido de push anterior foi concluído na entrega anterior; a lista de decisões desta entrega preserva publicação pendente. Sem commit/push nesta rodada; registro documental permanece revisável localmente.
+
+- Fechamento: 352 arquivos/2.844 PASS ordinários + duas falhas esperadas, zero skips; PostgreSQL 35 arquivos/288 PASS; type/lint/formato/links/audit PASS. Cenários originais corrigidos, dois P2 remanescentes confirmados também na base. Evidências próprias arquivadas, revisor encerrado, PostgreSQL próprio removido; código e lockfile compartilhados preservados. Sem commit/push.
 
 ## AUD0599-REMEDIATION — correções da AUD-0599 e dos levantamentos — 06/10/2026
 

@@ -1,0 +1,69 @@
+# AUD0601 — parecer independente final: sessão / production bootstrap
+
+Candidato `dc4a3cbbfddf91646d794e9165e524032df04c9c`. **FAIL_AUTH_CONTRACT / ONE_P1_ONE_P2**. Revisão bounded concluída com receipt PostgreSQL do lead: login e controles básicos de produção compostos; dois contratos de logout derrotados em banco real. Sem GO operacional, sem conclusão sobre os gates globais.
+
+Leitura: AGENTS root, docs/07_agents/AGENTS.md, claim AUD0601 em docs/08_runtime/agent_coordination.md, partes vigentes dos ledgers99/20/30, SPEC0144, barra0373 e operação0802. Os PASS do builder NÃO foram usados como prova. O complemento `.env.example` foi somente lido. Alerta desabilitado é decisão humana e não achado.
+
+## F02 — P1: logout bem-sucedido pelo cookie anterior não revoga a sucessora
+
+**Prova PostgreSQL real:** `pg-probe.ts:58` troca uma sessão válida por sucessora através de GET /v1/session com cookie antigo e novo token assinado da mesma identidade Operator. A linha59 faz POST /v1/session/logout com cookie antigo:200, `loggedOut:true`. A linha60 usa o cookie sucessor em GET /v1/tasks:200. Contrato exigia401. A asserção soft da linha68 falha; `pg-result.json`, `pg-observations.json` (`old-cookie-logout`, `successor-after-old-cookie-logout`) e o log bruto `../session-pg.log` confirmam ambos os status. Não houve indisponibilidade do DB nesse trecho.
+
+**Causa e caminhos:**
+
+- `apps/api/src/server.ts:807` sempre chama `operatorSessionStore.create`, mesmo quando existe sessão; `server.ts:825` chama `revoke(existing.sessionId)` separadamente.
+- `packages/persistence/migrations/operator-session/0000_auth.sql:57` faz create inserir família nova com o próprio digest. A nova sessão recebe essa família na linha61.
+- `0000_auth.sql:146` encontra a família a partir do digest apresentado; na linha155 revoke atualiza somente essa família. Depois da troca, revogar o digest anterior não alcança a família nova.
+- A operação necessária já existe: `apps/api/src/operator-session-postgres.ts:118` / linha129 chama `operator_session_replace`; `0000_auth.sql:112` serializa na família e linha133 insere a sucessora no mesmo `v_family_id`, revogando a antiga na linha135.
+- `docs/02_spec/0144_trusted_operator_session_production.md:57` exige revogação de toda a linhagem por qualquer digest, inclusive substituído, para evitar sessão ativa após logout bem-sucedido/entrega atrasada da troca.
+
+**Severidade P1 justificada:** falha demonstrada de revogação de autenticação, com confirmação de logout bem-sucedido enquanto a credencial sucessora mantém acesso protegido. Uma resposta de troca entregue depois do logout pode deixar acesso ativo; a sequência executada já demonstra a condição lógica, sem depender de uma corrida probabilística. É mais grave que perda de recuperação em erro503: o caminho feliz anuncia sucesso sem impor a fronteira de segurança documentada. O acesso observado foi leitura de tasks como Operator da mesma identidade/tenant; não foram demonstrados escalada de papel, aquisição de cookie por atacante, efeitos sensíveis ou duração ilimitada. A sessão testada tem expiração de aproximadamente cinco minutos a partir do token; não extrapolo a janela.
+
+**Remediação ao owner:** para substituição da mesma sessão lógica, usar replace atômico preservando a linhagem, instalar o novo cookie após sucesso e manter o anterior em indisponibilidade. Conservar testes logout com digest antigo e entrega atrasada; remediação não executada nesta revisão.
+
+## F01 — P2: falha de revoke apaga cookie antes do commit
+
+- `apps/api/src/server.ts:867` instala clear-cookie antes de `revoke` na linha874. O catch da linha877 retorna503 com esse header.
+- Contrato `docs/02_spec/0144_trusted_operator_session_production.md:57`: limpar somente após commit de revoke; erro503 preserva cookie.
+- Prova inicial independente: teste em `session.test.ts:153`, `unit.log`, `unit-result.json`, observação `logout-revoke-failure` em `http-observations.json`: health/get saudáveis, query de revoke rejeitada, resposta503 + `Max-Age=0`, registro não revogado no fixture.
+- **Confirmação real:** `pg-probe.ts:51` revoga seletivamente EXECUTE de operator_session_revoke, preservando get/health. Linha54 observa logout503 apagando cookie; linha55 observa tasks200 com esse mesmo cookie: sessão permanece válida no banco. A asserção soft da linha67 falha. Observações `selective-revoke-failure` e `session-remains-active-after-503` em `pg-observations.json`.
+- Impacto P2: o browser perde o identificador necessário para retentar a revogação enquanto o backend mantém autenticação válida até expiração/revogação posterior. A resposta é erro503, não falso sucesso; nenhum segredo ou elevação de papel demonstrados.
+- Remediação: clear-cookie somente depois de revoke bem-sucedido; em falha503 preservar cookie. Nenhuma correção feita.
+
+## Origem: defeitos herdados, exposição pelo delta de composição
+
+`source-validation.json` registra server.ts, operator-session-postgres.ts, preflight, hook, resolver e as duas migrations de auth **byte-idênticos** à cópia AUD0600. Ambos os achados são herdados desses caminhos, não regressão diferencial introduzida em suas linhas.
+
+O delta introduz production-bootstrap.ts e muda main.ts:51 para chamá-lo; production-bootstrap.ts:180/185 injeta o store no builder e torna essas rotas efetivamente compostas em produção. Portanto o delta expõe na composição de produção contratos incompletos previamente existentes. Não foi executada a sonda PG contra a base; a conclusão de origem é comparação de bytes/fluxo, não comparação dinâmica das duas versões. Identidade do candidato vem do receipt do lead; hashes próprios vinculam as fontes inspecionadas.
+
+## Evidência executável e resultados
+
+- Unidade própria preservada: **48 testes,47 PASS,1 FAIL,0 pending**, exit1, Node22.23.2. `unit-result.json`/`unit.log` não foram alterados para incorporar PG ou converter a falha em PASS. Rotas/resolver/adapter reais, pool e preflight positivo simulados; main usa parser real e composition/listen/exit simulados.
+- PG: sonda de autoria independente `pg-probe.ts`, executada **pelo lead** em PostgreSQL sintético próprio, sequencial e exclusivo após o full. Receipt `../session-pg.result.json`: candidato exato, Node22.23.2, `postgresRequired:true`, exit1,2.986s. Vitest `pg-result.json`: **1 teste integrado FAIL,2 erros de asserção soft,0 pending**. Não conto as duas asserções como dois testes nem trato o teste inteiro como PASS.
+- Fontes de prova: outputs crus do probe próprio e receipt de execução; nenhum resumo/PASS do builder substitui essa evidência. `pg.config.mts` inclui somente pg-probe.ts, sem mocks de persistência/servidor no probe PG.
+
+| Critério | Resultado observado | Limite |
+| --- | --- | --- |
+| Produção compõe sessão PostgreSQL | Builder de produção real, migrations/preflight reais, login200 e tasks200 com cookie em PG | Entry point processual/listen real não executados por essa sonda |
+| 401 sem cookie e sem credencial | tasks401 em PG; unidade confirma headers de identidade forjados401 | Um conjunto enumerado de rotas, não prova de todos os endpoints |
+| Papel/tenant sem elevação nos casos testados | Operator + header Admin403 em PG; unidade confirma tenant divergente403, role/token adulterado401, replay401 sem novo mint | Nenhum teste global de autorização |
+| Dependência auth indisponível | EXECUTE de get revogado => ready503 e tasks503 com/sem cookie; live200, sem credencial nos erros | Falha seletiva de autoridade de função, não chaos/disconnect de servidor |
+| Sessão sobrevive restart | fechar/reabrir builder => mesmo cookie tasks200 em PG | Duas instâncias sequenciais, não cluster concorrente |
+| Preflight role/RLS | BYPASSRLS e RLS disabled rejeitados em bootstrap PG real, estado restaurado | Não executado todo inventário adversarial de ACL/constraints/index/corpos |
+| Perfis fail closed | Unidade: NODE_ENV inválido, simulation, memory, RLSfalse, durablefalse, resolver ausente e HTTPSfalse recusados | Perfis negativos sem conexão; demais configs positivas no builder PG |
+| Readiness/limpeza | Unidade: query/read-only budgets, release(true) em falha, pool.end idempotente/listener removido; PG: zero conexões dos papéis após close | Não foram provocados crashes de OS ou sockets travados |
+| Logout503 preserva cookie | **FAIL F01/P2, confirmado PG** | Sessão ativa demonstrada, não comprometimento de credencial |
+| Logout antigo revoga sucessora | **FAIL F02/P1, confirmado PG** | Mesma identidade/tenant; sequência serial reproduz garantia de linhagem, sem agendamento de corrida |
+
+Referências adicionais: main.ts:39/43/51/57/66; production-bootstrap.ts:50/55/65/74/95/107/149/156/197; operator-session-postgres.ts:151 (pool limitado); operator-session-hook.ts:44/53/54/67; operator-session-route-boundary.ts:12 (templates/métodos exatos); server.ts:5139/5148/5223/5231/5254 (perfil). Inventário/corpos/ACL/search_path do preflight receberam inspeção estática, não suite PG adversarial completa.
+
+A divergência SPEC0144:54 (sem DATABASE_MIGRATION_URL em serving) vs bootstrap.ts:69 (variável exigida) permanece registrada como divergência de contrato/documentação, sem elevação de privilégio inferida. Não reabro gate OIDC: barra0373/0802 atuais explicitamente medem bootstrap HMAC. Não executei purge/retenção de dados de autenticação; essa política não foi certificada nesta lane.
+
+## Teardown, limites globais e handback
+
+`pg-observations.json` registra `auth-and-product-connections-after-close.count=0`. O finally do probe fecha apps/clientes, coleta contagem, executa DROP dos schemas próprios e DROP OWNED/ROLE dos papéis próprios antes de escrever o receipt de observações; log cru não apresenta falha de cleanup. Não houve consulta posterior de inventário de schemas/roles, portanto registro comandos de remoção concluídos e zero conexões, sem inventar readback adicional. O PostgreSQL do lead segue sob responsabilidade do lead; nenhum serviço dessa lane foi provisionado pelo revisor.
+
+Claim externa `claim.json`: COMPLETED_REVIEW, PG receipt incorporado; sem processos ou recursos próprios ativos. Fontes continuam com hashes de entrada; nenhuma escrita em root/código/candidato ou claim/ledgers compartilhados. Apenas artefatos próprios em session-reviewer foram atualizados. Preservados prova de unidade, prova PG e pedidos históricos; não haverá novas lanes.
+
+CI/image/restore/full/critical coverage/release permanecem com o lead. Verify remoto FAIL criticalcoverage foi informado pelo lead, não investigado nem certificado nesta lane. Não inferi estado global da produção a partir de resultados bounded.
+
+Handback final: integrar F02/P1 e F01/P2 herdados ao AUD0601 e encaminhar ao owner a remediação conjunta de troca atômica/revogação/headers, com reauditoria dos mesmos cenários após correção. Esta revisão está encerrada.

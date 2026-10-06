@@ -1,0 +1,96 @@
+# AUD0601 — parecer independente worker/kernel
+
+**Veredito: PARTIAL_BOUNDED / dois achados confirmados: um P1 e um P2.** A remediação da dupla falha de log passou. O fechamento de etapas e o estacionamento de pausa do iterativo passaram nos cenários executados com entrada aceita. A pausa no caminho de execução aprovada do kernel do worker continua incompleta. Este parecer não concede aceite integral, produção ou release.
+
+Candidato informado: `dc4a3cbbfddf91646d794e9165e524032df04c9c`, em `/tmp/cvg-aud0601-20261006/candidate`. Node executado: `v22.23.2`, binário `/home/ricardo/.nvm/versions/node/v22.23.2/bin/node`. As dependências físicas utilizadas pertencem ao candidato. Leitura de AGENTS, constituição, entradas pertinentes dos ledgers, coordenação e claim AUD0601. Claim próprio de revisor persistido exclusivamente em `claim.json` neste diretório externo, sem editar coordenação compartilhada, conforme a instrução direta de somente leitura.
+
+Escopo: delta local de `5c97b40..dc4a3cb` dos três runtimes/dispatch do harness, agent-runtime, kernel-composition/continuous-worker/production-gate, operações persistentes do worker e migração 0027; leitura dos testes pertinentes e do wiring mínimo em postgres-controlled. CI, imagem, restauração, cadeia/tamper de auditoria, sessão e gates globais pertencem ao lead/outro revisor e não foram executados aqui. A decisão de desabilitar alertas não foi classificada como erro.
+
+A comparação foi feita com `difflib` sobre a cópia local da auditoria AUD0600 e o candidato AUD0601; `scoped.diff` conserva o resultado. Não usei Git para confirmar identidade dos commits. `source-manifest.json` registra SHA-256 de 18 fontes examinadas, igualdade com root na captura e igualdade antes/depois da execução. A identidade publicada do SHA é informação fornecida pelo solicitante, não verificação de publicação deste revisor.
+
+## AUD0601-W01 — P1 — pausa ativada depois da reserva não impede o corpo
+
+**Status:** REPRODUCED no runtime público com autoridades/journal reais em memória; ligação ao caminho de produção confirmada por fonte. Corrida em PostgreSQL não executada neste parecer.
+
+**Paths/linhas do candidato:**
+
+- `packages/agent-runtime/src/runtime.ts:1143`: última consulta de pausa na execução aprovada, antes de `approvals.reserve`.
+- `packages/agent-runtime/src/runtime.ts:1152`: reserva da aprovação aguardada.
+- `packages/agent-runtime/src/runtime.ts:1201`: reserva do journal aguardada.
+- `packages/agent-runtime/src/runtime.ts:1216`: aprovação marcada EXECUTING.
+- `packages/agent-runtime/src/runtime.ts:1232`: início do efeito no journal; o controle posterior em `1243` usa `stopDenial`, que não consulta a pausa.
+- `packages/agent-runtime/src/runtime.ts:1313`: corpo invocado sem nova consulta de pausa.
+- `apps/worker/src/kernel-composition.ts:350` e `:375`: composição concreta com `PostgresEffectJournal`, `PostgresApprovalAuthority`, `requireDurable`, executor controlado e o mesmo `GovernedAgentRuntime`; `:386` liga a consulta a `PostgresWorkerOperations.isPaused`.
+
+**Esperado:** SPEC0181 I12, C12 e §13.3: pausa impede o próximo efeito ainda não iniciado, sem consumir a aprovação; entradas ficam retomáveis.
+
+**Procedimento e resultado:** aprovação sintética válida criada/aprovada pela máquina real. Interceptor aguarda a operação original de reserva e ativa a pausa antes de devolver o controle ao runtime. Os probes `A-pause-approval-reserve`, `A-pause-journal-reserve` e `A-pause-journal-started` retornaram `executed`, deixaram a aprovação `EXECUTED` e invocaram o corpo uma vez com `paused:true`. As leituras de pausa foram `[false,false]`: não houve leitura após a ativação. O controle `A-pause-before` retornou `paused`, manteve `APPROVED` e executou zero corpos. A pausa ilegível também impediu o efeito no controle anterior à reserva.
+
+**Viabilidade em produção:** a reserva PostgreSQL é assíncrona (`packages/persistence/src/runtime-approval-store.ts:472`) e usa a mesma transição da máquina de estados. O journal também é assíncrono; a pausa é consultada por outro checkout do pool. Nada nessa composição mantém exclusão mútua entre a leitura inicial da pausa, o commit de `setPaused` e o início do corpo. Uma atualização durável pode completar durante essas operações aguardadas. A reprodução em memória fixa deterministicamente essa ordem; não equivale a uma corrida comprovada com banco real. A composição atual executa somente efeitos sintéticos/controlados: não observei efeito clínico ou externo real.
+
+**Remediação mínima a avaliar pelo owner:** revalidar a pausa depois das operações aguardadas de reserva e antes do início do corpo. Para uma reserva sem efeito iniciado, liberar a aprovação com evidência explícita `no_effect`; se já houver reserva do journal, registrar primeiro a ausência de efeito com a identidade/tentativa correta. As primitivas existentes suportam isso: `runtime-effect-recovery.ts:906` já usa `journal.failEffect` e `releaseApproval` para interrupção após reserva; `:929` envia evidência `no_effect`; `approval-engine/src/engine.ts:717` exige evidência e token e devolve RESERVED/EXECUTING a APPROVED. O adaptador PG delega `release` à mesma máquina (`runtime-approval-store.ts:499`), e `effect-journal-postgres.ts:234` expõe `failEffect`.
+
+Essas primitivas foram inspecionadas, sem implementar um fix. Uma devolução `paused` limpa precisa de confirmação da liberação, não só best effort. Depois de EFFECT_STARTED, uma falha ambígua não pode ser tratada como prova de ausência: conservar fence/UNCERTAIN e reconciliar, preservando no-replay. Não liberar uma tentativa de outro processo apenas porque o interruptor está ligado.
+
+**Critério de fechamento:** repetir os três pontos com aprovação e journal PG da composição efetiva: zero corpo enquanto pausado, pendência preservada, liberação comprovada somente quando `no_effect` for demonstrável, retomada uma vez; falhas de cleanup ou efeito possivelmente iniciado continuam incertas e não executam replay. Nenhuma correção aplicada por este revisor.
+
+## AUD0601-W02 — P2 — callbacks concorrentes duplicam o progresso reportado
+
+**Status:** REPRODUCED na origem dos deltas de heartbeat; efeito do SQL aditivo confirmado por fonte. Contador persistido em PostgreSQL não medido neste parecer.
+
+**Paths/linhas:** `apps/worker/src/continuous-worker.ts:477` captura o total de eventos liquidados e calcula `settled - settledReported`; `:486` só atualiza a marca depois que o I/O termina. `:648` agenda outro `void beat()` sem impedir sobreposição. `packages/persistence/src/worker-operations-postgres.ts:83` soma cada delta ao contador durável.
+
+**Procedimento:** um evento sintético liquidado, cadence legal de 15 ms, hook de persistência suspenso por mais de um intervalo, sem bloquear o event loop. Quatro callbacks ficaram em voo e reportaram `[0,1,1,1]`. `worker.metrics().processed=1`, soma dos deltas `3`. Depois todos os hooks foram liberados e o worker foi encerrado. `W-overlapping-beats-progress-count` captura o resultado.
+
+**Impacto:** latência do banco maior que a cadence — inclusive a padrão de 10 s — pode inflar `processed`. Heartbeat e timestamp de progresso podem atribuir atividade a callbacks atrasados. Não reproduzi duplicação do efeito/outbox, nem concluí que lease é liveness. O bug é a contabilidade de progresso transmitida ao store. O SQL atual soma os três deltas, mas esse resultado durável ainda requer reprodução PG pelo lead.
+
+**Critério de fechamento:** uma escrita de heartbeat em voo por worker, com marca de progresso monotônica após ACK, ou protocolo idempotente equivalente. Sob latência maior que a cadence, um único evento liquidado deve acrescentar exatamente um ao contador; preservar retries de escrita e distinguir heartbeat do processo da renovação de lease. Sem mudanças nesta auditoria.
+
+## Resultados e adjudicação
+
+`probes.mjs` executa as sondas diretamente via Node/tsx, fora da coleta Vitest. Os logs e resultados estão em `probes.log` e `results.json`; o status de julgamento está em `adjudication.json`.
+
+**33 probes: 24 asserções PASS, 9 asserções FAIL brutas.** Quatro FAILs sustentam os dois achados acima: três janelas de pausa e um heartbeat concorrente. Os outros cinco FAILs não foram promovidos a achados. O runner captura o resultado de cada asserção e termina com exit 0; esse exit não é PASS da auditoria nem da coleção.
+
+| Critério | Evidência própria | Avaliação |
+| --- | --- | --- |
+| Negação preservada sob falha simultânea de tool/result e turn/end | Dois probes single-pass, antes/depois de reserva; INSUFFICIENT_EVIDENCE com marcador da negação; zero corpos | Confirmado nos cenários executados |
+| Pausa iterativa antes do dispatch, no checkpoint e após reserva | Três probes; WAITING, zero corpos durante pausa, APPROVED recuperável; retomada COMPLETED, um corpo e uma tool call | Confirmado |
+| Terminal com WAITING e entrada aceita | Cancelamento, ferramenta retirada, maxToolCalls=0; FAILED com cancelled/not_started e checkpoint consistente | Confirmado |
+| Terminal com RUNNING após efeito não registrado na etapa | Falha única da gravação de SUCCEEDED; depois cancelamento; FAILED/unknown_effect, um corpo, sem repetição após checkpoint terminal | Confirmado |
+| Worker kernel pausa após reservas | Três probes aprovados com efeito enquanto paused:true | W01/P1 |
+| Journal do GovernedAgentRuntime | Reinstância do runtime: CONFIRMED retorna idempotent_replay sem novo corpo; UNCERTAIN nega operação; FileEffectJournal reaberto por nova instância repete esses resultados | Confirmado com stores sintéticos; PG não executado |
+| Heartbeat do processo versus lease | Ocioso/pausado/interruptor ilegível: cinco beats e zero lease beats; handler suspenso: cinco beats e seis lease beats, progresso zero | Distinção observada corretamente |
+| Worker parado por pausa conserva pending e retoma | Um item permanece pending; após levantar pausa é processed com um corpo | Confirmado em outbox em memória |
+| Contabilidade de heartbeat sobreposto | Um evento, deltas somados iguais a três | W02/P2 |
+| Production opt-in | kernel + continuous + flag explícita aceitos; ausência de qualquer flag recusada | Confirmado pela função do gate |
+
+**Observação inconclusiva H01, não achado:** `maxSteps=0` ou `maxDurationMs=0` retorna limite sem ler/mutar o checkpoint; WAITING/APPROVAL_REQUIRED ou RUNNING/INTERNAL_FAILURE permanecem como antes. Quatro asserções falharam porque pressupunham encerramento durável. SPEC0181 §13.2 exige fechar etapas em paradas terminais da execução; ela não resolve explicitamente se esses prechecks de entrada devem aceitar uma nova execução/retomada ou rejeitar a chamada preservando o checkpoint. O retorno `MAX_*` sozinho não decide isso. Preservar uma execução existente em rejeição de entrada pode ser correto. Sem concluir F02 remanescente por esses casos; o comportamento também foi observado na cópia base.
+
+**Observação de composição H02, não achado do worker:** uma registry crua, sem `createJournaledToolRegistry`, repetiu o corpo após efeito seguido de falha no registro SUCCEEDED. Foi mantida como controle negativo: `effectsControl` sozinho é ledger de ciclo, não deduplicação. O teste com a wrapper oficial passou no orçamento amplo e executou um corpo; o orçamento de uma única tool call não permitiu liquidar o replay da etapa, com MAX_TOOL_CALLS. Esse último FAIL bruto é observação suplementar do harness sintético, também presente na cópia base, sem estabelecer falha na composição de produção. O worker efetivo usa outro runtime, `GovernedAgentRuntime`, com journal PG, cujo comportamento deve ser avaliado nesse caminho. Não existe opção fictícia de journal adicionada a IterativeGovernedRuntime neste probe: a integração usada foi a wrapper oficial da registry.
+
+**Diferencial bounded do iterativo:** 13 probes contra a cópia fonte da base, usando dependências do candidato, estão em `baseline-probes.log` e `baseline-results.json`. O candidato corrige os cenários de estacionamento WAITING nos dois pontos e fechamento em cancelamento/ferramenta retirada/limite de calls e RUNNING incerto. As observações inconclusivas de orçamento zero e a observação suplementar de replay com limite de uma call também ocorrem na base. A comparação não é gate global nem certificação da base. O rótulo genérico de candidato no JSON inicial da comparação foi corrigido para a fonte realmente importada; observações permaneceram intactas.
+
+## Confirmação comunicada pelo lead
+
+Na mensagem final desta revisão, o lead informou a reexecução do filtro A-pause: **1 PASS / 3 FAIL**, nos pontos approval-reserve, journal-reserve e mark-started, com um corpo chamado enquanto `paused:true` e aprovação EXECUTED. Isso corrobora W01. O lead também informou full com **358 arquivos / 2.925 PASS**; não executei nem inspecionei esse gate e seu resultado não elimina os probes adversariais confirmados. O PG final permanece a cargo do lead, sem resultado final atribuído a este revisor. Esses números são informação recebida do lead, separados das 33 sondas próprias e dos 13 probes de comparação de fonte local.
+
+## Probes, reprodução e limites
+
+Comando da execução principal, a partir de qualquer diretório:
+
+```sh
+TSX_DISABLE_CACHE=1 \
+TSX_TSCONFIG_PATH=/tmp/cvg-aud0601-20261006/candidate/tsconfig.base.json \
+/home/ricardo/.nvm/versions/node/v22.23.2/bin/node \
+  --import /tmp/cvg-aud0601-20261006/candidate/node_modules/tsx/dist/loader.mjs \
+  /tmp/cvg-aud0601-20261006/worker-reviewer/probes.mjs
+```
+
+`PROBE_FILTER=A-pause-approval-reserve`, `PROBE_FILTER=A-pause-journal-reserve`, `PROBE_FILTER=A-pause-journal-started` ou `PROBE_FILTER=W-overlapping` selecionam os achados. A execução escreve results.json neste diretório: preservar o resultado original antes de uma reexecução filtrada. Os filtros e assertions estão no próprio arquivo para reexecução pelo lead.
+
+Na primeira execução os seis cenários de worker não iniciaram por erro da sonda: lease de 200 ms abaixo do mínimo contratual de 1.000 ms. `probes-initial.log` e `results-initial.json` conservam isso. Ajustei apenas a configuração externa para lease de 1.000 ms e repeti. Aqueles erros iniciais não são defeitos do candidato. A verificação de no-replay no iterativo foi adjudicada separando registry crua e wrapper oficial, sem atribuir a registry crua ao worker de produção.
+
+Limites: não executei PostgreSQL, Docker, rede, Git, install, testes globais, subagentes ou testes de sessão. Autoridades e outbox em memória não provam RLS, grants, locking ou restart completo de banco. FileEffectJournal foi reaberto por nova instância no mesmo processo, conservando autoridade em memória; isso prova persistência desse journal e comportamento de replay correspondente, não sobrevivência integral de processo com todos os stores. Heartbeat é liveness do processo, não garantia de processamento ou posse de lease. O pump reutiliza uma leitura de pausa por TTL de 1 s: não declarei reconhecimento instantâneo da pausa no claim. A migração 0027 tem FORCE RLS e políticas por tenant na inspeção, mas isolamento real/grants e aplicação da migração ficam não verificados aqui.
+
+Nenhum arquivo de root/candidato ou implementação/lockfile foi escrito; não criei teste coletado. Não consultei relatório/evidência/justificativa PASS do builder para decidir os achados; as entradas operacionais obrigatórias dos ledgers e claims foram lidas apenas como contexto de tarefa. Evidências e continuidade do revisor ficam neste diretório externo; não atualizei ledgers compartilhados por estarem somente leitura. Próxima ação: lead reproduzir W01/W02 na composição PG e encaminhar ao owner; H01/H02 exigem contrato/integração aplicável antes de virar finding. Nenhuma liberação operacional concedida.
