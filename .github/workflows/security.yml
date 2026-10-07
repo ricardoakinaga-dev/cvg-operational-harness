@@ -83,3 +83,46 @@ jobs:
           name: cyclonedx-sbom
           path: certification/sbom.cyclonedx.json
           if-no-files-found: error
+
+  image-scan:
+    # PLAN0374-A (07/10/2026): operating-system and bundled-dependency
+    # vulnerabilities of the hardened runtime image. HIGH/CRITICAL with a
+    # published fix fail the job; findings without a fix (for example
+    # CVE-2026-84782 in libssl3 of distroless cc-debian12, accepted in
+    # docs/03_build/0374_plano_producao_harness.md) are reported but do not
+    # block until a fixed base is available.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build runtime image
+        run: docker build --target runtime --tag cvg-operational-harness:scan .
+      - name: Trivy (fixed HIGH/CRITICAL fail)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cvg-operational-harness:scan
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+      - name: Trivy (full report, informational)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cvg-operational-harness:scan
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '0'
+          format: json
+          output: trivy-image-report.json
+          skip-setup-trivy: true
+      - name: Upload image scan report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trivy-image-report
+          path: trivy-image-report.json
+          if-no-files-found: error
