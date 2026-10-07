@@ -5,6 +5,7 @@ import {
   PostgresWorkerOperations,
   TenantScopedPostgresControlPlaneRepository,
   TenantScopedPostgresRuntimeRepository,
+  guardPostgresPoolErrors,
   withTenantContext,
   type PostgresPoolLike
 } from '@cvg/persistence'
@@ -114,10 +115,12 @@ export function openPostgresControlledConnection(
   const tenantId = TenantIdSchema.parse(env.CVG_WORKER_TENANT_ID)
   const schemaName = env.POSTGRES_SCHEMA?.trim() || undefined
   assertSafeSchemaName(schemaName)
-  const pool = new Pool({
-    connectionString: databaseUrl,
-    ...(schemaName ? { options: `-c search_path=${schemaName}` } : {})
-  })
+  const pool = guardPostgresPoolErrors(
+    new Pool({
+      connectionString: databaseUrl,
+      ...(schemaName ? { options: `-c search_path=${schemaName}` } : {})
+    })
+  )
   const adapter = new TenantScopedPostgresRuntimeRepository(
     pool as unknown as PostgresPoolLike
   )

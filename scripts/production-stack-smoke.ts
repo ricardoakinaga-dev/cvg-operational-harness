@@ -5,9 +5,15 @@
  * Runs the hardened image (API and worker, NODE_ENV=production, --read-only,
  * --cap-drop ALL) against its own disposable PostgreSQL with separate
  * migration, runtime and operator-session roles, and records:
+ *   - the migration job (`scripts/migrate-job.mjs`) applying product and
+ *     operator-auth migrations before serving, and the API refusing to start
+ *     with the DDL credential (SPEC 0144);
  *   - /live and /ready;
  *   - operator login (token → session cookie), protected route 200, no
  *     session 401;
+ *   - the session backend killed mid identity switch: 503 without cookie,
+ *     the API still running and live, the old session intact, a fresh login
+ *     working;
  *   - a signed webhook accepted, processed by the worker kernel, an approval
  *     executed once, a repeated execution refused, and the original webhook
  *     replay refused after an API restart;
@@ -25,15 +31,9 @@ import { Client, Pool } from 'pg'
 import {
   PostgresApprovalAuthority,
   PostgresWorkerOperations,
-  TENANT_SCHEMA_TABLES,
-  runPostgresMigrations,
   withTenantContext
 } from '@cvg/persistence'
 import { TenantIdSchema } from '@cvg/platform'
-import {
-  grantOperatorSessionFunctions,
-  runOperatorSessionMigrations
-} from '../packages/persistence/src/operator-session-migrations.ts'
 import { createTrustedOperatorIdentityToken } from '../apps/api/src/operator-identity.ts'
 import { createWebhookSignature } from '../apps/api/src/webhook-security.ts'
 
@@ -105,6 +105,8 @@ async function main(): Promise<void> {
   const apiName = `cvg-prod-smoke-api-${id}`
   const workerName = `cvg-prod-smoke-worker-${id}`
   const receiverName = `cvg-prod-smoke-alerts-${id}`
+  const jobName = `cvg-prod-smoke-migrate-${id}`
+  const refusedName = `cvg-prod-smoke-refused-${id}`
   const checks: Check[] = []
   const check = (name: string, pass: boolean, detail?: unknown) => {
     checks.push({ name, pass, ...(detail !== undefined ? { detail } : {}) })
@@ -192,33 +194,54 @@ async function main(): Promise<void> {
         `CREATE ROLE ${role} LOGIN PASSWORD '${PASSWORD}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`
       )
     }
+    // Provisioning (DBA): the data schema belongs to the migration role; the
+    // auth owner may create its schema only while the job runs.
     await admin.query(`CREATE SCHEMA ${data} AUTHORIZATION ${migration}`)
-    await admin.query(`GRANT USAGE ON SCHEMA ${data} TO ${runtime}`)
     await admin.query(`ALTER ROLE ${migration} SET search_path = ${data}`)
     await admin.query(`ALTER ROLE ${runtime} SET search_path = ${data}`)
-    const migrator = new Client({ connectionString: hostUrl(migration) })
-    await migrator.connect()
-    await runPostgresMigrations(migrator, {
-      schemaName: data,
-      createSchema: false
-    })
-    await migrator.end()
     await admin.query(`GRANT CREATE ON DATABASE postgres TO ${owner}`)
-    const authOwner = new Client({ connectionString: hostUrl(owner) })
-    await authOwner.connect()
-    await runOperatorSessionMigrations(authOwner, auth, data)
-    await grantOperatorSessionFunctions(authOwner, auth, session)
-    await authOwner.end()
-    await admin.query(`REVOKE CREATE ON DATABASE postgres FROM ${owner}`)
-    for (const table of TENANT_SCHEMA_TABLES) {
-      await admin.query(
-        `GRANT SELECT,INSERT,UPDATE ON ${data}.${table} TO ${runtime}`
-      )
-    }
-    await admin.query(`GRANT SELECT ON ${data}.schema_migrations TO ${runtime}`)
-    await admin.query(
-      `GRANT SELECT,INSERT,UPDATE,DELETE ON ${data}.webhook_replay_events,${data}.rate_limit_buckets TO ${runtime}`
+    const envArgs = (env: Record<string, string>) =>
+      Object.entries(env).flatMap(([key, value]) => ['-e', `${key}=${value}`])
+    // SPEC 0144: the migration job is the only holder of DDL credentials and
+    // finishes before serving starts.
+    const job = spawnSync(
+      'docker',
+      [
+        'run',
+        '--rm',
+        '--name',
+        jobName,
+        '--network',
+        network,
+        ...hardened,
+        ...envArgs({
+          NODE_ENV: 'production',
+          DATABASE_MIGRATION_URL: netUrl(migration),
+          POSTGRES_SCHEMA: data,
+          CVG_RUNTIME_ROLE: runtime,
+          CVG_OPERATOR_AUTH_MIGRATION_URL: netUrl(owner),
+          CVG_OPERATOR_AUTH_SCHEMA: auth,
+          CVG_OPERATOR_SESSION_ROLE: session
+        }),
+        image,
+        'node',
+        'scripts/migrate-job.mjs'
+      ],
+      { encoding: 'utf8', timeout: 120_000 }
     )
+    await admin.query(`REVOKE CREATE ON DATABASE postgres FROM ${owner}`)
+    const jobEvents = job.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => (JSON.parse(line) as { event: string }).event)
+    check(
+      'migration.job_completed',
+      job.status === 0 &&
+        jobEvents.includes('migration.product_applied') &&
+        jobEvents.includes('migration.operator_auth_applied'),
+      { status: job.status, events: jobEvents, stderr: job.stderr.trim() }
+    )
+    if (job.status !== 0) throw new Error('migration job failed')
     await admin.end()
     check('postgres.roles_separated', true, {
       migration,
@@ -247,7 +270,6 @@ async function main(): Promise<void> {
       PORT: '3000',
       API_PERSISTENCE_MODE: 'postgres',
       DATABASE_URL: netUrl(runtime),
-      DATABASE_MIGRATION_URL: netUrl(migration),
       POSTGRES_SCHEMA: data,
       POSTGRES_RLS_ENFORCEMENT: 'true',
       POSTGRES_AUTO_MIGRATE: 'false',
@@ -279,8 +301,31 @@ async function main(): Promise<void> {
       CVG_STOP_ALERT_QUEUE_STALLED_MS: '3000',
       CVG_STOP_ALERT_INTERVAL_MS: '1000'
     }
-    const envArgs = (env: Record<string, string>) =>
-      Object.entries(env).flatMap(([key, value]) => ['-e', `${key}=${value}`])
+    // The same serving configuration plus the DDL credential must not start.
+    const refused = spawnSync(
+      'docker',
+      [
+        'run',
+        '--rm',
+        '--name',
+        refusedName,
+        '--network',
+        network,
+        ...hardened,
+        ...envArgs({ ...apiEnv, DATABASE_MIGRATION_URL: netUrl(migration) }),
+        image
+      ],
+      { encoding: 'utf8', timeout: 60_000 }
+    )
+    check(
+      'api.refuses_ddl_credential',
+      refused.status !== 0 &&
+        `${refused.stdout}${refused.stderr}`.includes(
+          'must not receive DATABASE_MIGRATION_URL'
+        ) &&
+        !`${refused.stdout}${refused.stderr}`.includes(PASSWORD),
+      { status: refused.status }
+    )
     const startApi = () => {
       docker([
         'run',
@@ -341,6 +386,88 @@ async function main(): Promise<void> {
       login.status
     )
     check('auth.protected_200', protectedStatus === 200, protectedStatus)
+
+    // AUD-0604 F01: kill the session backend while an identity switch holds
+    // its transaction open. The API must answer 503 and keep running.
+    const supervisor = { ...identity, role: 'Supervisor' as const }
+    const switchTo = (cookieHeader?: string) =>
+      api('/v1/session', {
+        headers: {
+          ...(cookieHeader ? { cookie: cookieHeader } : {}),
+          'x-cvg-operator-token': createTrustedOperatorIdentityToken(
+            supervisor,
+            IDENTITY_KEY
+          )
+        }
+      })
+    const locker = new Client({ connectionString: hostUrl('postgres') })
+    const killer = new Client({ connectionString: hostUrl('postgres') })
+    locker.on('error', () => undefined)
+    killer.on('error', () => undefined)
+    await locker.connect()
+    await killer.connect()
+    let lost: { status: number; setCookie: string | null } | undefined
+    let terminated = false
+    try {
+      await locker.query('BEGIN')
+      await locker.query(`LOCK TABLE ${auth}.operator_sessions IN SHARE MODE`)
+      const switching = switchTo(cookie)
+      const pid = await waitFor(
+        async () =>
+          (
+            await killer.query<{ pid: number }>(
+              `SELECT pid FROM pg_stat_activity
+               WHERE usename = $1 AND wait_event_type = 'Lock'
+                 AND datname = current_database()`,
+              [session]
+            )
+          ).rows[0]?.pid,
+        1_500,
+        5
+      )
+      terminated =
+        (
+          await killer.query<{ ok: boolean }>(
+            'SELECT pg_terminate_backend($1) AS ok',
+            [pid]
+          )
+        ).rows[0]?.ok === true
+      const response = await switching
+      lost = {
+        status: response.status,
+        setCookie: response.headers.get('set-cookie')
+      }
+    } finally {
+      await locker.query('ROLLBACK').catch(() => undefined)
+      await locker.end().catch(() => undefined)
+      await killer.end().catch(() => undefined)
+    }
+    const apiRunning =
+      docker(['inspect', apiName, '--format', '{{.State.Running}}']) === 'true'
+    const liveAfterLoss = (await api('/live')).status
+    const previousAfterLoss = (
+      await api('/v1/admin/agents', { headers: { cookie } })
+    ).status
+    const freshLogin = await switchTo()
+    const freshCookie = (freshLogin.headers.get('set-cookie') ?? '').split(
+      ';'
+    )[0]
+    check(
+      'auth.connection_loss_503_api_alive',
+      terminated &&
+        lost?.status === 503 &&
+        lost.setCookie === null &&
+        apiRunning &&
+        liveAfterLoss === 200,
+      { terminated, lost, apiRunning, liveAfterLoss }
+    )
+    check(
+      'auth.connection_loss_recovers',
+      previousAfterLoss === 200 &&
+        freshLogin.status === 200 &&
+        freshCookie.length > 0,
+      { previousAfterLoss, freshLogin: freshLogin.status }
+    )
 
     // Worker: production opt-in, continuous, durable kernel.
     const workerEnv: Record<string, string> = {
@@ -658,7 +785,14 @@ async function main(): Promise<void> {
     }
     throw error
   } finally {
-    for (const name of [apiName, workerName, receiverName, pgName]) {
+    for (const name of [
+      apiName,
+      workerName,
+      receiverName,
+      jobName,
+      refusedName,
+      pgName
+    ]) {
       spawnSync('docker', ['rm', '--force', name], { stdio: 'ignore' })
     }
     spawnSync('docker', ['network', 'rm', network], { stdio: 'ignore' })

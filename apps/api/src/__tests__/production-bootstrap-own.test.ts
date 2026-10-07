@@ -2,6 +2,7 @@
 import { EventEmitter } from 'node:events'
 import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { guardPostgresPoolErrors } from '@cvg/persistence'
 import { PostgresOperatorSessionStore } from '../operator-session-postgres.ts'
 import {
   buildApiWithProductionSessions,
@@ -26,7 +27,6 @@ vi.mock('../server.ts', () => ({ buildServerFromEnv: mocks.build }))
 const env = {
   NODE_ENV: 'production',
   DATABASE_URL: 'postgresql://data:synthetic@127.0.0.1/db',
-  DATABASE_MIGRATION_URL: 'postgresql://migration:synthetic@127.0.0.1/db',
   POSTGRES_SCHEMA: 'data',
   CVG_OPERATOR_SESSION_DATABASE_URL:
     'postgresql://sessions:synthetic@127.0.0.1/db',
@@ -44,7 +44,8 @@ function poolFixture() {
     query: vi.fn().mockResolvedValue({ rows: [{ replication: false }] }),
     end: vi.fn().mockResolvedValue(undefined)
   })
-  mocks.pool.mockReturnValue(pool)
+  // Mirror the real factory, which guards idle and checked-out client errors.
+  mocks.pool.mockReturnValue(guardPostgresPoolErrors(pool as never))
   return { pool, client }
 }
 
@@ -59,8 +60,7 @@ describe('own production session bootstrap', () => {
     'CVG_OPERATOR_SESSION_DATABASE_URL',
     'CVG_OPERATOR_AUTH_SCHEMA',
     'CVG_OPERATOR_SESSION_ROLE',
-    'DATABASE_URL',
-    'DATABASE_MIGRATION_URL'
+    'DATABASE_URL'
   ])('rejects missing %s before allocating any pool/server', async (key) => {
     await expect(
       buildApiWithProductionSessions({ ...env, [key]: '   ' })
@@ -68,6 +68,22 @@ describe('own production session bootstrap', () => {
     expect(mocks.pool).not.toHaveBeenCalled()
     expect(mocks.build).not.toHaveBeenCalled()
   })
+
+  it.each(['postgresql://migration:synthetic@127.0.0.1/db', '', '   '])(
+    'rejects any DDL credential in serving (%j) before allocating any pool/server',
+    async (value) => {
+      await expect(
+        buildApiWithProductionSessions({
+          ...env,
+          DATABASE_MIGRATION_URL: value
+        })
+      ).rejects.toThrow(
+        'Production serving must not receive DATABASE_MIGRATION_URL'
+      )
+      expect(mocks.pool).not.toHaveBeenCalled()
+      expect(mocks.build).not.toHaveBeenCalled()
+    }
+  )
 
   it.each(['data', 'public', 'pg_auth', 'bad"schema', 'Auth', ''])(
     'rejects shared or invalid schema %s before connection',
@@ -84,18 +100,12 @@ describe('own production session bootstrap', () => {
 
   it.each([
     { CVG_OPERATOR_SESSION_ROLE: 'data' },
-    { CVG_OPERATOR_SESSION_ROLE: 'migration' },
     { CVG_OPERATOR_SESSION_ROLE: 'wrong' },
     { CVG_OPERATOR_SESSION_ROLE: 'session;select' },
     {
       CVG_OPERATOR_SESSION_DATABASE_URL:
         'postgresql://data:synthetic@localhost/db',
       CVG_OPERATOR_SESSION_ROLE: 'data'
-    },
-    {
-      CVG_OPERATOR_SESSION_DATABASE_URL:
-        'postgresql://migration:synthetic@localhost/db',
-      CVG_OPERATOR_SESSION_ROLE: 'migration'
     },
     {
       CVG_OPERATOR_SESSION_DATABASE_URL:
@@ -128,7 +138,6 @@ describe('own production session bootstrap', () => {
     expect(client.query).not.toHaveBeenCalled()
     expect(mocks.build).not.toHaveBeenCalled()
     expect(pool.end).toHaveBeenCalledTimes(1)
-    expect(pool.listenerCount('error')).toBe(0)
   })
 
   it.each([

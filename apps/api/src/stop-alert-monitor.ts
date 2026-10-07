@@ -1,6 +1,7 @@
 import { Pool } from 'pg'
 import {
   PostgresWorkerOperations,
+  guardPostgresPoolErrors,
   type PostgresPoolLike
 } from '@cvg/persistence'
 import { TenantIdSchema } from '@cvg/platform'
@@ -74,13 +75,14 @@ export function createStopAlertRuntimeFromEnv(
     )
   }
   const intervalMs = positiveInteger(env, 'CVG_STOP_ALERT_INTERVAL_MS', 30_000)
-  const pool = new Pool({
-    connectionString: databaseUrl,
-    max: 2,
-    connectionTimeoutMillis: 5_000,
-    query_timeout: 5_000
-  })
-  pool.on('error', () => undefined)
+  const pool = guardPostgresPoolErrors(
+    new Pool({
+      connectionString: databaseUrl,
+      max: 2,
+      connectionTimeoutMillis: 5_000,
+      query_timeout: 5_000
+    })
+  )
   const operations = new PostgresWorkerOperations(
     pool as unknown as PostgresPoolLike
   )

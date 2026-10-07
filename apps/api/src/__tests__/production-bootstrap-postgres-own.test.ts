@@ -50,6 +50,7 @@ async function withDatabase(
     auth: string
     data: string
     sessionRole: string
+    migrationUrl: string
     open: () => Promise<
       Awaited<ReturnType<typeof buildApiWithProductionSessions>>
     >
@@ -132,7 +133,6 @@ async function withDatabase(
       NODE_ENV: 'production',
       API_PERSISTENCE_MODE: 'postgres',
       DATABASE_URL: urlFor(runtime),
-      DATABASE_MIGRATION_URL: urlFor(migration),
       POSTGRES_SCHEMA: data,
       POSTGRES_RLS_ENFORCEMENT: 'true',
       POSTGRES_AUTO_MIGRATE: 'false',
@@ -164,7 +164,15 @@ async function withDatabase(
       apps.push(app)
       return app
     }
-    await callback({ env, admin, auth, data, sessionRole, open })
+    await callback({
+      env,
+      admin,
+      auth,
+      data,
+      sessionRole,
+      migrationUrl: urlFor(migration),
+      open
+    })
   } finally {
     for (const app of apps) await app.close()
     for (const client of clients) await client.end()
@@ -182,7 +190,7 @@ describe.skipIf(!databaseUrl)(
   'own production bootstrap with scheduled PostgreSQL',
   () => {
     it('rejects missing config, shared schema, reused roles and unavailable auth DB before serving', async () => {
-      await withDatabase(async ({ env, data }) => {
+      await withDatabase(async ({ env, data, migrationUrl }) => {
         for (const name of [
           'CVG_OPERATOR_SESSION_DATABASE_URL',
           'CVG_OPERATOR_AUTH_SCHEMA',
@@ -198,18 +206,53 @@ describe.skipIf(!databaseUrl)(
             CVG_OPERATOR_AUTH_SCHEMA: data
           })
         ).rejects.toThrow(/private and separate/)
-        for (const roleUrl of [
-          env.DATABASE_URL!,
-          env.DATABASE_MIGRATION_URL!
-        ]) {
-          await expect(
-            createProductionOperatorSessionBootstrap({
-              ...env,
-              CVG_OPERATOR_SESSION_DATABASE_URL: roleUrl,
-              CVG_OPERATOR_SESSION_ROLE: new URL(roleUrl).username
-            })
-          ).rejects.toThrow(/dedicated/)
-        }
+        await expect(
+          createProductionOperatorSessionBootstrap({
+            ...env,
+            CVG_OPERATOR_SESSION_DATABASE_URL: env.DATABASE_URL!,
+            CVG_OPERATOR_SESSION_ROLE: new URL(env.DATABASE_URL!).username
+          })
+        ).rejects.toThrow(/dedicated/)
+        // Serving no longer knows the DDL role by URL; the live preflight
+        // refuses it as the session role (it owns and uses the data schema).
+        await expect(
+          createProductionOperatorSessionBootstrap({
+            ...env,
+            CVG_OPERATOR_SESSION_DATABASE_URL: migrationUrl,
+            CVG_OPERATOR_SESSION_ROLE: new URL(migrationUrl).username
+          })
+        ).rejects.toThrow('Production operator-session bootstrap failed')
+        // SPEC 0144: the DDL credential never reaches the serving process.
+        await expect(
+          buildApiWithProductionSessions({
+            ...env,
+            DATABASE_MIGRATION_URL: migrationUrl
+          })
+        ).rejects.toThrow(
+          'Production serving must not receive DATABASE_MIGRATION_URL'
+        )
+        await expect(
+          buildServerFromEnv(
+            { ...env, DATABASE_MIGRATION_URL: migrationUrl },
+            {
+              operatorIdentityResolver:
+                createConfiguredOperatorIdentityResolver(env)!
+            }
+          )
+        ).rejects.toThrow(
+          'Production serving must not receive DATABASE_MIGRATION_URL'
+        )
+        await expect(
+          buildServerFromEnv(
+            { ...env, POSTGRES_AUTO_MIGRATE: 'true' },
+            {
+              operatorIdentityResolver:
+                createConfiguredOperatorIdentityResolver(env)!
+            }
+          )
+        ).rejects.toThrow(
+          'Production serving must not run PostgreSQL migrations'
+        )
         const unavailable = new URL(env.CVG_OPERATOR_SESSION_DATABASE_URL!)
         unavailable.port = '1'
         const started = Date.now()
@@ -614,6 +657,90 @@ describe.skipIf(!databaseUrl)(
               await app.inject({
                 url: '/v1/session',
                 headers: { ...headers, cookie: c }
+              })
+            ).statusCode
+          ).toBe(200)
+        })
+      }, 60_000)
+
+      it('a connection lost mid-switch answers 503 and the API stays up (AUD-0604 F01)', async () => {
+        await withDatabase(async ({ open, auth, sessionRole }) => {
+          const app = await open()
+          const login = (who: Who, cookie?: string) =>
+            app.inject({
+              url: '/v1/session',
+              headers: {
+                ...headers,
+                ...(cookie ? { cookie } : {}),
+                'x-cvg-operator-token': createTrustedOperatorIdentityToken(
+                  who,
+                  key
+                )
+              }
+            })
+          const a = cookieOf(await login(identity))
+          // Hold the switch inside its transaction, then kill its backend.
+          const locker = new Client({ connectionString: databaseUrl! })
+          const killer = new Client({ connectionString: databaseUrl! })
+          locker.on('error', () => undefined)
+          killer.on('error', () => undefined)
+          await locker.connect()
+          await killer.connect()
+          let switching: ReturnType<typeof login> | undefined
+          try {
+            await locker.query('BEGIN')
+            await locker.query(
+              `LOCK TABLE ${auth}.operator_sessions IN SHARE MODE`
+            )
+            switching = login(supervisor, a)
+            let pid: number | undefined
+            for (let attempt = 0; attempt < 200 && !pid; attempt++) {
+              const blocked = await killer.query<{ pid: number }>(
+                `SELECT pid FROM pg_stat_activity
+                 WHERE usename = $1 AND wait_event_type = 'Lock'
+                   AND datname = current_database()`,
+                [sessionRole]
+              )
+              pid = blocked.rows[0]?.pid
+              if (!pid) await new Promise((done) => setTimeout(done, 5))
+            }
+            expect(pid).toBeDefined()
+            const terminated = await killer.query<{ ok: boolean }>(
+              'SELECT pg_terminate_backend($1) AS ok',
+              [pid]
+            )
+            expect(terminated.rows[0]?.ok).toBe(true)
+            const failed = await switching
+            expect(failed.statusCode).toBe(503)
+            expect(failed.headers['set-cookie']).toBeUndefined()
+          } finally {
+            await locker.query('ROLLBACK').catch(() => undefined)
+            await switching?.catch(() => undefined)
+            await locker.end().catch(() => undefined)
+            await killer.end().catch(() => undefined)
+          }
+          // Same process: liveness, readiness and the old session survive.
+          for (const probe of ['/live', '/ready']) {
+            expect((await app.inject({ url: probe, headers })).statusCode).toBe(
+              200
+            )
+          }
+          expect(
+            (await app.inject({ url, headers: { ...headers, cookie: a } }))
+              .statusCode
+          ).toBe(200)
+          // A new authentication completes the switch and retires the lineage.
+          const retried = await login(supervisor, a)
+          expect(retried.statusCode).toBe(200)
+          expect(
+            (await app.inject({ url, headers: { ...headers, cookie: a } }))
+              .statusCode
+          ).toBe(401)
+          expect(
+            (
+              await app.inject({
+                url: '/v1/session',
+                headers: { ...headers, cookie: cookieOf(retried) }
               })
             ).statusCode
           ).toBe(200)

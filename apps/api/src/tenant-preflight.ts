@@ -1341,6 +1341,87 @@ export async function assertMigrationRoleSecurityBoundary(
   }
 }
 
+/**
+ * Serving holds no DDL credential (SPEC 0144), so the migration role is the
+ * owner of the runtime schema. Verify it from the live catalogs with the same
+ * properties the migration-role checks above assert from its own connection.
+ */
+export async function assertMigrationOwnerFromCatalog(
+  client: PostgresQueryable,
+  runtimeRoleName: string | undefined
+): Promise<string> {
+  const ownerResult = await client.query<{
+    rolname: string
+    rolsuper: boolean
+    rolbypassrls: boolean
+    rolcreatedb: boolean
+    rolcreaterole: boolean
+    rolreplication: boolean
+    database_owner: string
+    can_usage: boolean
+    can_create: boolean
+  }>(
+    `SELECT owner.rolname, owner.rolsuper, owner.rolbypassrls,
+            owner.rolcreatedb, owner.rolcreaterole, owner.rolreplication,
+            (SELECT pg_get_userbyid(datdba)
+             FROM pg_database
+             WHERE datname = current_database()) AS database_owner,
+            has_schema_privilege(owner.oid, schema.oid, 'USAGE') AS can_usage,
+            has_schema_privilege(owner.oid, schema.oid, 'CREATE') AS can_create
+     FROM pg_namespace AS schema
+     INNER JOIN pg_roles AS owner ON owner.oid = schema.nspowner
+     WHERE schema.nspname = current_schema()`
+  )
+  const owner = ownerResult.rows[0]
+  if (
+    ownerResult.rows.length !== 1 ||
+    !owner ||
+    !runtimeRoleName ||
+    owner.rolsuper ||
+    owner.rolbypassrls ||
+    owner.rolcreatedb ||
+    owner.rolcreaterole ||
+    owner.rolreplication ||
+    owner.rolname === runtimeRoleName ||
+    owner.rolname === owner.database_owner ||
+    !owner.can_usage ||
+    !owner.can_create
+  ) {
+    throw new Error(
+      'PostgreSQL migration role must be a separate non-privileged DDL owner'
+    )
+  }
+  const memberships = await client.query(
+    `SELECT 1
+     FROM pg_auth_members AS membership
+     INNER JOIN pg_roles AS member ON member.oid = membership.member
+     WHERE member.rolname = $1
+     LIMIT 1`,
+    [owner.rolname]
+  )
+  const managedTables = await client.query<{
+    relname: string
+    owner: string
+  }>(
+    `SELECT c.relname, pg_get_userbyid(c.relowner) AS owner
+     FROM pg_class AS c
+     INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
+     WHERE n.nspname = current_schema()
+       AND c.relname = ANY($1::text[])`,
+    [tenantIsolationMigrationTables]
+  )
+  if (
+    memberships.rows.length > 0 ||
+    managedTables.rows.length !== tenantIsolationMigrationTables.length ||
+    managedTables.rows.some((table) => table.owner !== owner.rolname)
+  ) {
+    throw new Error(
+      'PostgreSQL migration role must be a separate non-privileged DDL owner'
+    )
+  }
+  return owner.rolname
+}
+
 export async function readCurrentDatabaseRole(
   client: PostgresQueryable
 ): Promise<string> {

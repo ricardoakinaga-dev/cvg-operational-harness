@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { guardPostgresPoolErrors } from '@cvg/persistence'
 import { OperatorIdentitySchema, type OperatorIdentity } from '@cvg/shared'
 import { Pool, type QueryResultRow } from 'pg'
 import {
@@ -153,7 +154,12 @@ export class PostgresOperatorSessionStore implements OperatorSessionStore {
     try {
       await client.query('BEGIN')
       // Both functions run in this transaction: a failed create rolls the
-      // revocation back, so the previous session survives intact.
+      // revocation back, so the previous session survives intact. A lost
+      // connection rejects the pending query (the pool guard keeps the
+      // client's `error` event handled) and the server aborts the
+      // transaction. Only a loss after COMMIT is sent is ambiguous: the
+      // caller still answers 503 without a cookie, so the operator signs in
+      // again whichever way the commit went.
       if (previousDigest) {
         await client.query(
           `SELECT ${this.schema}.operator_session_revoke($1)`,
@@ -191,11 +197,13 @@ export class PostgresOperatorSessionStore implements OperatorSessionStore {
 export function createPostgresOperatorSessionPool(
   connectionString: string
 ): Pool {
-  return new Pool({
-    connectionString,
-    connectionTimeoutMillis: 1_000,
-    query_timeout: QUERY_TIMEOUT_MS,
-    statement_timeout: QUERY_TIMEOUT_MS,
-    max: 10
-  })
+  return guardPostgresPoolErrors(
+    new Pool({
+      connectionString,
+      connectionTimeoutMillis: 1_000,
+      query_timeout: QUERY_TIMEOUT_MS,
+      statement_timeout: QUERY_TIMEOUT_MS,
+      max: 10
+    })
+  )
 }

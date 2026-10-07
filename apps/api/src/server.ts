@@ -112,6 +112,7 @@ import {
   type PostgresPoolLike,
   type SessionRecord,
   runPostgresMigrations,
+  guardPostgresPoolErrors,
   TaskRepository,
   type PostgresQueryable
 } from '@cvg/persistence'
@@ -4552,6 +4553,7 @@ function statusCodeForError(code: string): number {
 
 export {
   assertApprovalDecisionAuditDedupe,
+  assertMigrationOwnerFromCatalog,
   assertMigrationRoleIsLeastPrivilege,
   assertMigrationRoleSecurityBoundary,
   assertRateLimitSchema,
@@ -4644,13 +4646,16 @@ function createPostgresPool(
   schemaName: string | undefined
 ): Pool {
   assertSafeRuntimeSchemaName(schemaName)
-  return new Pool({
-    connectionString,
-    ...(schemaName ? { options: `-c search_path=${schemaName}` } : {})
-  })
+  return guardPostgresPoolErrors(
+    new Pool({
+      connectionString,
+      ...(schemaName ? { options: `-c search_path=${schemaName}` } : {})
+    })
+  )
 }
 import {
   assertApprovalDecisionAuditDedupe,
+  assertMigrationOwnerFromCatalog,
   assertMigrationRoleIsLeastPrivilege,
   assertMigrationRoleSecurityBoundary,
   assertRateLimitSchema,
@@ -5227,6 +5232,19 @@ export async function buildServerFromEnv(
     throw new Error('DATABASE_URL is required for PostgreSQL persistence mode')
   }
 
+  // SPEC 0144: a separate job applies migrations before serving starts; the
+  // serving process holds only runtime credentials and never runs DDL.
+  if (env.NODE_ENV === 'production') {
+    if (env.DATABASE_MIGRATION_URL !== undefined) {
+      throw new Error(
+        'Production serving must not receive DATABASE_MIGRATION_URL'
+      )
+    }
+    if (env.POSTGRES_AUTO_MIGRATE === 'true') {
+      throw new Error('Production serving must not run PostgreSQL migrations')
+    }
+  }
+
   if (
     env.NODE_ENV === 'production' &&
     env.POSTGRES_RLS_ENFORCEMENT !== 'true'
@@ -5285,9 +5303,11 @@ export async function buildServerFromEnv(
     )
   }
   const pool = createPostgresPool(env.DATABASE_URL, schemaName)
+  // Production never reaches here with a DDL URL (rejected above).
   const migrationPool = env.DATABASE_MIGRATION_URL
     ? createPostgresPool(env.DATABASE_MIGRATION_URL, schemaName)
     : pool
+  const servingWithoutDdl = env.NODE_ENV === 'production'
   const closePools = async () => {
     if (migrationPool !== pool) await migrationPool.end()
     await pool.end()
@@ -5318,31 +5338,23 @@ export async function buildServerFromEnv(
       } finally {
         runtimeCheckClient.release()
       }
-      if (env.NODE_ENV === 'production' && !env.DATABASE_MIGRATION_URL) {
-        throw new Error(
-          'Production tenant RLS requires a separate DATABASE_MIGRATION_URL'
-        )
-      }
-      const migrationIdentityClient = await migrationPool.connect()
-      try {
-        migrationRoleName = await readCurrentDatabaseRole(
-          migrationIdentityClient
-        )
-        await assertMigrationRoleSecurityBoundary(
-          migrationIdentityClient,
-          runtimeRoleName
-        )
-      } finally {
-        migrationIdentityClient.release()
+      if (!servingWithoutDdl) {
+        const migrationIdentityClient = await migrationPool.connect()
+        try {
+          migrationRoleName = await readCurrentDatabaseRole(
+            migrationIdentityClient
+          )
+          await assertMigrationRoleSecurityBoundary(
+            migrationIdentityClient,
+            runtimeRoleName
+          )
+        } finally {
+          migrationIdentityClient.release()
+        }
       }
     }
 
     if (env.POSTGRES_AUTO_MIGRATE === 'true') {
-      if (env.NODE_ENV === 'production' && !env.DATABASE_MIGRATION_URL) {
-        throw new Error(
-          'Production auto-migration requires a separate DATABASE_MIGRATION_URL'
-        )
-      }
       const migrationClient = await migrationPool.connect()
       try {
         const migrationOptions = schemaName
@@ -5366,17 +5378,27 @@ export async function buildServerFromEnv(
       rateLimitSchemaClient.release()
     }
     if (env.POSTGRES_RLS_ENFORCEMENT === 'true') {
-      const migrationRoleClient = await migrationPool.connect()
-      try {
-        await assertMigrationRoleIsLeastPrivilege(
-          migrationRoleClient,
-          runtimeRoleName
-        )
-      } finally {
-        migrationRoleClient.release()
+      if (!servingWithoutDdl) {
+        const migrationRoleClient = await migrationPool.connect()
+        try {
+          await assertMigrationRoleIsLeastPrivilege(
+            migrationRoleClient,
+            runtimeRoleName
+          )
+        } finally {
+          migrationRoleClient.release()
+        }
       }
       const runtimeSchemaClient = await pool.connect()
       try {
+        if (servingWithoutDdl) {
+          // Same properties as the migration-role checks, read from the live
+          // catalogs through the runtime connection.
+          migrationRoleName = await assertMigrationOwnerFromCatalog(
+            runtimeSchemaClient,
+            runtimeRoleName
+          )
+        }
         await assertRuntimeRoleIsLeastPrivilege(
           runtimeSchemaClient,
           migrationRoleName

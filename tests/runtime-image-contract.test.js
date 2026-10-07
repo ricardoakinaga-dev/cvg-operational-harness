@@ -54,6 +54,8 @@ describe('REM21-016 runtime image contract', () => {
       'utf8'
     )
     expect(build).toContain("'apps/worker'")
+    // SPEC 0144: the image carries the separate migration job.
+    expect(build).toContain("copyFile('scripts/migrate-job.mjs')")
   })
 
   it('rejects image evidence from another run or candidate', () => {

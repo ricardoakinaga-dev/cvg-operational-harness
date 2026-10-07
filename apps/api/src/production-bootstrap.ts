@@ -48,6 +48,12 @@ export async function createProductionOperatorSessionBootstrap(
   env: NodeJS.ProcessEnv
 ) {
   if (env.NODE_ENV !== 'production') return undefined
+  // SPEC 0144: migrations run in a separate job; serving never holds DDL.
+  if (env.DATABASE_MIGRATION_URL !== undefined) {
+    throw new Error(
+      'Production serving must not receive DATABASE_MIGRATION_URL'
+    )
+  }
   const connectionString = required(env, 'CVG_OPERATOR_SESSION_DATABASE_URL')
   const authSchemaName = required(env, 'CVG_OPERATOR_AUTH_SCHEMA')
   const expectedSessionRole = required(env, 'CVG_OPERATOR_SESSION_ROLE')
@@ -65,9 +71,7 @@ export async function createProductionOperatorSessionBootstrap(
   if (
     !/^[a-z][a-z0-9_]{0,62}$/.test(expectedSessionRole) ||
     databaseRole(connectionString) !== expectedSessionRole ||
-    databaseRole(required(env, 'DATABASE_URL')) === expectedSessionRole ||
-    databaseRole(required(env, 'DATABASE_MIGRATION_URL')) ===
-      expectedSessionRole
+    databaseRole(required(env, 'DATABASE_URL')) === expectedSessionRole
   ) {
     throw new Error('Production operator-session role must be dedicated')
   }
@@ -85,21 +89,16 @@ export async function createProductionOperatorSessionBootstrap(
     throw new Error('Operator-session URL must preserve bounded pool settings')
   }
 
+  // The pool keeps idle and checked-out client errors handled; pg discards
+  // failed clients, so the next real probe/request verifies a fresh connection.
   const pool = createPostgresOperatorSessionPool(connectionString)
-  // pg discards failed idle clients. Keep its error event handled; the next
-  // real probe/request must verify a fresh connection rather than cache health.
-  const idleError = () => undefined
-  pool.on('error', idleError)
   let closed = false
   let closing: Promise<void> | undefined
   const close = (): Promise<void> => {
     closed = true
-    closing ??= pool
-      .end()
-      .catch(() => {
-        throw new Error('Operator session pool shutdown failed')
-      })
-      .finally(() => pool.off('error', idleError))
+    closing ??= pool.end().catch(() => {
+      throw new Error('Operator session pool shutdown failed')
+    })
     return closing
   }
   const probeDigest = randomBytes(32)

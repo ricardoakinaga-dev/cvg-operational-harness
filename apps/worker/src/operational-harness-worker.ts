@@ -24,6 +24,7 @@ import {
   PostgresOperationalExecutionStore,
   PostgresOperationalEffectJournal,
   PostgresExecutionStepStore,
+  guardPostgresPoolErrors,
   type PostgresPoolLike
 } from '@cvg/persistence'
 import type { ApprovalAuthority } from '@cvg/persistence'
@@ -239,10 +240,12 @@ export function createOperationalHarnessWorker(
   const store =
     options.store ??
     (env.DATABASE_URL
-      ? ((pool = new Pool({
-          connectionString: env.DATABASE_URL,
-          ...(schemaName ? { options: `-c search_path=${schemaName}` } : {})
-        })),
+      ? ((pool = guardPostgresPoolErrors(
+          new Pool({
+            connectionString: env.DATABASE_URL,
+            ...(schemaName ? { options: `-c search_path=${schemaName}` } : {})
+          })
+        )),
         new PostgresOperationalExecutionStore(
           pool as unknown as PostgresPoolLike,
           maxAttempts !== undefined ? { maxAttempts } : {}

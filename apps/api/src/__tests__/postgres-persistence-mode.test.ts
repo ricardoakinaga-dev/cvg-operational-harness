@@ -1703,7 +1703,7 @@ describe('api PostgreSQL persistence mode', () => {
   )
 
   itWithPostgres(
-    'validates tenant-scoped startup with separate migration and runtime roles',
+    'validates tenant-scoped startup: migration job first, serving without DDL credentials',
     async () => {
       const admin = new Client({ connectionString: testDatabaseUrl })
       const schemaName = `cvg_startup_${Date.now()}`
@@ -1727,10 +1727,9 @@ describe('api PostgreSQL persistence mode', () => {
         NODE_ENV: 'production' as const,
         API_PERSISTENCE_MODE: 'postgres',
         DATABASE_URL: runtimeUrl.toString(),
-        DATABASE_MIGRATION_URL: migrationUrl.toString(),
         INBOUND_TENANT_ID: postgresTenantA,
         INBOUND_AGENT_ID: postgresInboundAgent,
-        POSTGRES_AUTO_MIGRATE: 'true',
+        POSTGRES_AUTO_MIGRATE: 'false',
         POSTGRES_RLS_ENFORCEMENT: 'true',
         OUTBOX_DURABLE_INBOUND: 'true',
         API_ALLOWED_ORIGINS: 'https://console.example.test',
@@ -1780,6 +1779,29 @@ describe('api PostgreSQL persistence mode', () => {
         )
         await admin.query(
           `ALTER ROLE ${roleName} SET search_path TO ${schemaName}`
+        )
+        // The DDL owner is verified from the live catalogs (SPEC 0144).
+        await admin.query(`ALTER ROLE ${migrationRoleName} CREATEDB`)
+        await expect(
+          buildServerFromEnv(serverEnv, {
+            webhookVerifier: () => true,
+            operatorIdentityResolver: trustedProductionIdentity,
+            operatorSessionStore: createInMemoryOperatorSessionStore()
+          })
+        ).rejects.toThrow('separate non-privileged DDL owner')
+        await admin.query(`ALTER ROLE ${migrationRoleName} NOCREATEDB`)
+        await admin.query(
+          `ALTER TABLE ${schemaName}.tenant_isolation_quarantine OWNER TO ${roleName}`
+        )
+        await expect(
+          buildServerFromEnv(serverEnv, {
+            webhookVerifier: () => true,
+            operatorIdentityResolver: trustedProductionIdentity,
+            operatorSessionStore: createInMemoryOperatorSessionStore()
+          })
+        ).rejects.toThrow('separate non-privileged DDL owner')
+        await admin.query(
+          `ALTER TABLE ${schemaName}.tenant_isolation_quarantine OWNER TO ${migrationRoleName}`
         )
 
         app = await buildServerFromEnv(serverEnv, {
@@ -2419,7 +2441,6 @@ async function withServingReplaySchema(
       NODE_ENV: 'production',
       API_PERSISTENCE_MODE: 'postgres',
       DATABASE_URL: runtimeUrl.toString(),
-      DATABASE_MIGRATION_URL: migrationUrl.toString(),
       INBOUND_TENANT_ID: postgresTenantA,
       INBOUND_AGENT_ID: postgresInboundAgent,
       POSTGRES_AUTO_MIGRATE: 'false',

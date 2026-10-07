@@ -228,6 +228,7 @@ function main() {
   copyDirectory('packages/persistence/migrations')
   copyFile('scripts/runtime-image-smoke.mjs')
   copyFile('scripts/runtime-healthcheck.mjs')
+  copyFile('scripts/migrate-job.mjs')
   fs.writeFileSync(
     path.join(contextDir, 'runtime-context.json'),
     `${JSON.stringify(
