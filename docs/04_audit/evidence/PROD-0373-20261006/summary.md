@@ -93,3 +93,18 @@ aprovação `APPROVED`, retomada executa uma vez); troca de papel com revogaçã
 falhando e retry (PostgreSQL real com os papéis do bootstrap). Gates locais
 no worktree isolado: suíte com cobertura 358 arquivos/2.943 PASS, PostgreSQL
 37/299, cobertura crítica, skips, mutação, docs, startup do worker.
+
+## Rodada 4 — AUD-0603
+
+| Achado | Causa | Correção |
+| --- | --- | --- |
+| AUD0603-F01 P2 (regressão de `7088342`) | Revogar e criar eram duas operações; criação falhando depois da revogação derrubava a sessão anterior | `switchIdentity` no store PostgreSQL: revogação da família e criação na mesma transação; falha em qualquer passo faz `ROLLBACK`, responde 503 sem `Set-Cookie` e a sessão anterior segue válida |
+| AUD0603-F02 P2 (herdado) | Cookie predecessor (já rotacionado) não era a sessão viva, então a troca não aposentava a linhagem e a sucessora seguia válida | A rota usa o cookie apresentado mesmo quando não está vivo: a família inteira dele é aposentada na mesma transação da troca |
+| Observação de precedência | Pausa e cancelamento na mesma leitura | Comentário explícito: `paused` prevalece (devolve o trabalho à fila); nos dois casos o efeito não começa |
+
+Regressões PostgreSQL com os papéis do bootstrap: criação falhando (cookie
+anterior 200 depois da falha; retry troca e aposenta), e predecessor A1 →
+sucessora A2 → troca com A1 (A1 e A2 401, nova sessão 200). Gates no worktree
+isolado: suíte com cobertura 359/2.948 PASS, PostgreSQL 37/301, cobertura
+crítica, skips, mutação, docs, formato/lint/typecheck. Smoke 18/18 e inspeção
+PASS na imagem `sha256:4115fad62784956a286fa244c14453c5d7f8dbc869913559f35db3016c30389b`.

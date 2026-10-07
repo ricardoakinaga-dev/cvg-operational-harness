@@ -1,3 +1,14 @@
+# PROD-0373 rodada 4 — AUD-0603 corrigida — 06/10/2026
+
+- Task `PROD-0373-20261006` rodada 4: `DONE_LOCAL`. Supersede a disposição OPEN de AUD0603-F01/F02.
+
+| Task               | Estado           | Critério atendido                                                                                                  |
+| ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------ |
+| AUD0603-F01        | FIXED_LOCAL      | Criação falhando após revogação: 503 sem Set-Cookie, sessão anterior 200; retry troca e aposenta (PostgreSQL real) |
+| AUD0603-F02        | FIXED_LOCAL      | Predecessor A1 → sucessora A2 → troca com A1: A1 e A2 401, nova sessão 200                                         |
+| SECRET-SCAN-WEEKLY | DECISION_PENDING | Política para os 105 achados heurísticos da varredura semanal                                                      |
+| 0373-C5            | PENDING_PUSH     | Push, CI verde e proteção do `main`                                                                                |
+
 # PROD-0373 rodada 3 — AUD-0602, secret-scan e certificação corrigidos — 06/10/2026
 
 - Task `PROD-0373-20261006` rodada 3: `DONE_LOCAL`. Supersede a disposição OPEN de AUD0602-F01/F02 e das falhas de `secret-scan` e `certify` do CI de `4aa4d8f`.

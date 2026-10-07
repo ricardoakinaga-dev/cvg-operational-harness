@@ -1,3 +1,10 @@
+# PROD-0373 rodada 4 — AUD-0603 corrigida — 06/10/2026
+
+- Task `PROD-0373-20261006`, Claude Code; `status: DONE_LOCAL / CONDITION_5_PENDING_PUSH`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-4--aud-0603).
+- `last_completed_action`: AUD0603-F01 (criação falhando após revogação derrubava a sessão anterior; regressão de `7088342`) e F02 (cookie predecessor deixava a sucessora viva; herdado) corrigidos com troca de identidade atômica no store PostgreSQL e aposentadoria da linhagem do cookie apresentado.
+- `verification_state`: worktree isolado: suíte com cobertura 359/2.948 PASS, PostgreSQL 37/301, cobertura crítica, skips, mutação, docs; smoke 18/18 e inspeção PASS na imagem `sha256:4115fad6…`.
+- `next_action`: push pelo usuário; Verify/Security no SHA; proteção do `main`; reauditoria. Decisão do usuário pendente sobre a varredura semanal de segredos (105 achados heurísticos, 11 fora das evidências). Ambiente real fora do repositório; `NO_GO` até lá.
+
 # PROD-0373 rodada 3 — AUD-0602, secret-scan e certificação corrigidos — 06/10/2026
 
 - Task `PROD-0373-20261006`, Claude Code; `status: DONE_LOCAL / CONDITION_5_PENDING_PUSH`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-3--aud-0602-e-ci-de-4aa4d8f).

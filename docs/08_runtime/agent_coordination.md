@@ -66,6 +66,10 @@
   histórico completo (`.github/workflows/security.yml`); parser do resumo do
   Vitest sem ANSI (`scripts/lib/test-log-summaries.mjs`). Worktrees e
   PostgreSQL próprios removidos. Push pendente do usuário.
+- Rodada 4 (06/10/2026): AUD0603-F01/F02 corrigidos (`switchIdentity` atômico
+  em `apps/api/src/operator-session-postgres.ts`, rota de sessão em
+  `apps/api/src/server.ts`). Worktree e PostgreSQL próprios removidos. Push
+  pendente do usuário.
 
 ## AUD-0600 — reauditoria dos três commits de remediação — 06/10/2026
 
