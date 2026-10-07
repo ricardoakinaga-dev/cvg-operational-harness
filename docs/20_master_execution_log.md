@@ -6,6 +6,8 @@
 - Scripts/receipts brutos97 compactados/hash conferido; erros instrumentação anteriores preservados separadamente da reprodução final FAIL. Revisor PG bloqueado automaticamente por possível risco de cibersegurança; lead confirmou na própria imagem. Revisor contrato declarou exposição inicial a ledgers históricos. Fonte/lock946 preservados; own PG/smokes/roles/listeners removidos, reviewers encerrados. Sem certify/E2E/novo backup/proteção/deploy; CI atual e ambiente real pendentes, NO_GO.
 - Somente relatórios/evidências próprios AUD0603/AUD0604 e novas entradas99/20/30/coordenação serão commitados; trabalho alheio e histórico não reescritos. Recibo de publicação registrado após push.
 
+- Publicação DONE: commit5dad651 e os sete recebidos publicados por push normal; main remoto confirmado. [Recibo](04_audit/evidence/AUD0604-REMEDIATION-20261006/publication.json). Verify/Security inicial em andamento/pendente; follow-up do recibo exclusivamente documental terá CI próprio. F01/F02 novos permanecem OPEN, produção NO_GO.
+
 # PROD-0373 rodada 4 — AUD-0603 corrigida — 06/10/2026
 
 - Task `PROD-0373-20261006`, Claude Code; `status: DONE_LOCAL / CONDITION_5_PENDING_PUSH`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-4--aud-0603).

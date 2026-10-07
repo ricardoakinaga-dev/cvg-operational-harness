@@ -1,10 +1,12 @@
 # AUD-0604 — remediações confirmadas; novo P1/P2, publicação autorizada — 06/10/2026
 
-- Task `AUD0604-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT / PENDING_PUBLICATION / NO_GO_ONE_P1_ONE_P2`; candidata5111ad6, sete commits após main4aa4d8f. [Parecer](04_audit/0604_reauditoria_aud0603_2026-10-06.md), [provas](04_audit/evidence/AUD0604-REMEDIATION-20261006/summary.md).
+- Task `AUD0604-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT_AND_PUBLICATION / NO_GO_ONE_P1_ONE_P2`; candidata5111ad6, sete commits após main4aa4d8f. [Parecer](04_audit/0604_reauditoria_aud0603_2026-10-06.md), [provas](04_audit/evidence/AUD0604-REMEDIATION-20261006/summary.md).
 - `last_completed_action`: AUD0603-F01/F02 fechados no escopo exercitado: transação real preserva antiga503/200 e predecessor aposenta linhagem401/nova200; imagem ampliada confirma. Novo P1: perda de conexão no cliente adquirido de switchIdentity encerra a API (imagem exit1, sem503/live). P2 herdado: serving exige URL DDL que SPEC0144 proíbe.
 - `verification_state`: suíte359/2.948 com cobertura e PG37/301 PASS, zero skips; critical branches mínimo96,73%, mutation10/10, type/lint/formato/docs/audit0 PASS. Imagem própria e3d9d558:18/18 canonical e23/23 ampliado PASS; interrupção de conexão FAIL. Gitleaks0 imagem escopo padrão e0 diff7. Catálogo37 hashes confere; skip completo/E2E/browser/certify/SBOM/licenças/backup novo NOT_RUN.
 - `preservation_state`:946 inputs fonte/lock sem drift em ambas árvores,97 artefatos próprios hash conferido; PG/fixtures/listeners/smokes próprios removidos, reviewers encerrados. Sem implementação ou política/proteção remota; audit603 histórico preservado/publicação autorizada agora.
-- `next_action`: commit e push normal autorizados pelo usuário; confirmar main/CI no SHA. Owner PROD-0373 remediar AUD0604-F01 e reconciliar F02; CI/proteção/ambiente real e política semanal pendentes. Produção NO_GO; Git push não concede release.
+- `next_action`: acompanhar CI no SHA publicado e concluir proteção pela frente responsável. Owner PROD-0373 remediar AUD0604-F01 e reconciliar F02; CI/proteção/ambiente real e política semanal pendentes. Produção NO_GO; Git push não concede release.
+
+- Publicação DONE: commit5dad651 e os sete recebidos publicados por push normal; main remoto confirmado. [Recibo](04_audit/evidence/AUD0604-REMEDIATION-20261006/publication.json). Verify/Security inicial em andamento/pendente; follow-up do recibo exclusivamente documental terá CI próprio. F01/F02 novos permanecem OPEN, produção NO_GO.
 
 # PROD-0373 rodada 4 — AUD-0603 corrigida — 06/10/2026
 

@@ -1,18 +1,20 @@
 # AUD-0604 — correções AUD-0603 verificadas, novo P1 e P2 — 06/10/2026
 
-- Task `AUD0604-REMEDIATION-PUBLISH-20261006`, Codex; auditoria DONE, publicação autorizada PENDING, entrega PARTIAL/NO_GO. [Parecer](04_audit/0604_reauditoria_aud0603_2026-10-06.md).
+- Task `AUD0604-REMEDIATION-PUBLISH-20261006`, Codex; auditoria DONE, publicação DONE (main5dad651 confirmado), entrega PARTIAL/NO_GO. [Parecer](04_audit/0604_reauditoria_aud0603_2026-10-06.md).
 
 | Item            | Estado                 | Próxima ação / critério                                                                                                                            |
 | --------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | AUD0603-F01/F02 | CLOSED_EXERCISED_SCOPE | Rollback503 antiga200/retry e predecessor401/sucessora401/nova200 em PostgreSQL e imagem                                                           |
 | AUD0604-F01 P1  | OPEN                   | PROD-0373/API: tratar erro no cliente adquirido sem crash,503 sem cookie, live/proc vivos e recuperação; repro imagem exit1                        |
 | AUD0604-F02 P2  | OPEN_INHERITED         | PROD-0373/API/arquitetura: reconciliar SPEC0144 sem DDL no serving com bootstrap que exige URL migration; decisão explícita ou remover dependência |
-| Publicação Git  | AUTHORIZED_PENDING     | Commit explícito dos registros próprios603/604 e push normal dos sete commits recebidos; confirmar main                                            |
+| Publicação Git  | DONE_FIRST_PUSH        | Main5dad651 confirmado; recibo/follow-up documental com staging próprio e push normal                                                              |
 | CI / condição5  | PENDING_REMOTE         | Verify/Security/E2E/certificação no SHA final, depois proteção por frente responsável; nenhum PASS inferido                                        |
 | Scan semanal    | POLICY_PENDING         | Resultado histórico105/94/11, sem triagem universal ou mudança de política nesta auditoria                                                         |
 | Ambiente real   | OPEN_NO_GO             | Servidor, PG/papéis/migrações, segredos, HTTPS/proxy e backup agendado; nenhum release                                                             |
 
 - 359/2.948 e PG37/301 PASS, branches críticos≥96,73%, mutation10/10 e gates básicos PASS; imagem18/18 e23/23 PASS, mas interrupção da conexão FAIL. Fonte/lock preservados, recursos próprios removidos; implementação da remediação pertence ao owner, auditoria não altera código.
+
+- Publicação DONE: commit5dad651 e os sete recebidos publicados por push normal; main remoto confirmado. [Recibo](04_audit/evidence/AUD0604-REMEDIATION-20261006/publication.json). Verify/Security inicial em andamento/pendente; follow-up do recibo exclusivamente documental terá CI próprio. F01/F02 novos permanecem OPEN, produção NO_GO.
 
 # PROD-0373 rodada 4 — AUD-0603 corrigida — 06/10/2026
 

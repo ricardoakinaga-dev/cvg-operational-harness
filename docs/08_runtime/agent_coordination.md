@@ -8,13 +8,15 @@
 
 ## AUD-0604 — reauditoria AUD-0603 e publicação autorizada — 06/10/2026
 
-- Task `AUD0604-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT / PENDING_PUBLICATION / NO_GO_ONE_P1_ONE_P2`. Pedido atual autoriza auditoria, commit dos registros próprios e push normal para `ricardoakinaga-dev/cvg-operational-harness`; candidata congelada `5111ad60cbaac49ddbec028a6733be2b51611836`, sete commits após main4aa4d8f. Sem release.
+- Task `AUD0604-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT_AND_PUBLICATION / NO_GO_ONE_P1_ONE_P2`. Pedido atual autoriza auditoria, commit dos registros próprios e push normal para `ricardoakinaga-dev/cvg-operational-harness`; candidata congelada `5111ad60cbaac49ddbec028a6733be2b51611836`, sete commits após main4aa4d8f. Sem release.
 - Escrita exclusiva: `docs/04_audit/0604_reauditoria_aud0603_2026-10-06.md`, `docs/04_audit/evidence/AUD0604-REMEDIATION-20261006/**`, esta seção e entradas novas próprias nos ledgers99/20/30. Publicar também relatório/evidências/entradas próprias AUD0603 ainda pendentes, preservadas como avaliação histórica. Fonte e lockfile somente leitura; staging explícito apenas de arquivos próprios.
 - Worktree/dependências/sondas próprias `/tmp/cvg-aud0604-20261006/**`; PostgreSQL sintético próprio `cvg-aud0604-pg-20261006`, loopback55726, bancos separados para suíte/PG-only/revisão. Imagem reconstruída própria `cvg-operational-harness:aud0604-5111ad6`; smoke e scan somente recursos descartáveis próprios. Revisores independentes sessão/transação e bootstrap/contratos somente leitura, sem descendentes.
 - Barra congelada: rollback real de troca de identidade quando create/revoke falham, 503 sem cookie, antiga válida e retry; predecessor revoga toda linhagem nas três identidades; rotação/logout existentes; cancel/pause sem corpo; regressão completa/PG, type/lint/formato/critical/mutation/docs; smoke imagem18 e segredos, histórico7commits. Certify/E2E/SBOM/licenças locais NOT_RUN, sem dados reais/provider/deploy; CI remoto fica identificado por SHA.
 - Não alterar política semanal de segredos, dismissals ou proteção; decisões pendentes do usuário preservadas. Push autorizado só normal `origin HEAD:main`, sem force/rewrite, sem tocar recurso/trabalho alheio.
 
 - Fechamento AUD0604: originais fechados no escopo exercitado; novo P1 crash da API na perda do cliente pg e P2 herdado de contrato DDL. Suíte2.948/PG301, critical/mutation/básicos PASS, imagem18/23 PASS e fault FAIL; fontes946 preservadas, evidências97 hash conferido, recursos próprios removidos/revisores encerrados. Commit/push normal autorizado em sequência; sem GO, proteção ou política semanal.
+
+- Publicação AUD0604: push normal5dad651 confirmado no main, sete commits recebidos mais registros603/604. Follow-up documental registra recibo; CI pendente por SHA, nenhum GO/proteção/política alterados.
 
 ## AUD-0603 — reauditoria da rodada 3 PROD-0373 — 06/10/2026
 
