@@ -1,3 +1,18 @@
+# AUD-0605 — AUD-0604 reauditada; originais fechados no escopo — 06/10/2026
+
+- Task `AUD0605-REMEDIATION-PUBLISH-20261006`, Codex, auditoria DONE, publicação AUTHORIZED_PENDING. [Parecer](04_audit/0605_reauditoria_aud0604_2026-10-06.md), [evidências](04_audit/evidence/AUD0605-REMEDIATION-20261006/summary.md). Sem novos achados materiais demonstrados; produção NO_GO remoto/ambiente.
+
+| Item           | Estado                 | Critério / próxima ação                                                                                              |
+| -------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| AUD0604-F01 P1 | CLOSED_EXERCISED_SCOPE | Imagem503 sem cookie, processo/live/ready200, antiga200 e recuperação; limite COMMIT ambíguo preservado              |
+| AUD0604-F02 P2 | CLOSED_EXERCISED_SCOPE | Job externo na imagem, serving sem DDL, recusa URL/auto-migrate; catálogo/privilégios/negativos/retry PG confirmados |
+| Publicação Git | AUTHORIZED_PENDING     | Commit próprio da auditoria e push normal de142a170/216e17c; confirmar main                                          |
+| CI / condição5 | PENDING_CURRENT_SHA    | Base5b098a7 Verify/Security verdes; atual precisa de runs próprios, depois proteção pela frente responsável          |
+| Scan semanal   | POLICY_PENDING         | 105 achados históricos sem nova política/triagem universal; decisão do usuário preservada                            |
+| Ambiente real  | OPEN_NO_GO             | Servidor/PG/papéis, job no destino, segredos, HTTPS/proxy e backup agendado; nenhum release                          |
+
+- Suíte360/2.953 com cobertura, zero skips; PG37/302; critical branches mínimo96,73%, mutation10/10 e básicos PASS; imagem22/22 e28/28 PASS, scan padrão0/diff2 zero. Revisões pools38 e job29 funcionais finais incluindo startup (+ambiente) positivas, nenhum novo finding. Fonte/lock949 preservados; próprios PG/smokes removidos, reviewers encerrados.
+
 # PROD-0373 rodada 5 — AUD-0604 corrigida — 06/10/2026
 
 - Task `PROD-0373-20261006` rodada 5: `DONE_LOCAL`. Supersede a disposição OPEN de AUD0604-F01/F02.

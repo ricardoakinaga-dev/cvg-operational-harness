@@ -1,3 +1,11 @@
+# AUD-0605 — reauditoria AUD-0604 e publicação autorizada — 06/10/2026
+
+- Codex, task `AUD0605-REMEDIATION-PUBLISH-20261006`, AUDIT/T1 documental; candidata216e17c, dois commits recebidos após main5b098a7. [Parecer](04_audit/0605_reauditoria_aud0604_2026-10-06.md), [provas](04_audit/evidence/AUD0605-REMEDIATION-20261006/summary.md). Usuário autoriza auditoria/commit próprio/push normal, sem release.
+- Originais F01/F02 fechados no escopo: perda PG antes de COMMIT na imagem503 sem cookie, API/live/ready vivos, antiga200/login novo200; job separado conclui migrations/grants antes do serving sem DDL, recusa URL/auto-migrate. Revisores pools38 testsPASS e job29 funcionaisPASS finais (+ambiente), matriz real catálogo/roles/negativos/idempotência/partial retry; sem novo finding material. Exposição obrigatória a ledgers históricos e erros de harness preservados/declarados.
+- Worktree físico Node22.23.2/PG16.15 próprios: suíte360/2.953 PASS com cobertura, PG37/302, zero skips/todos/falhas. SKIP-PG-021 executou com disposable+required; contagem builder2952+1skip é outra configuração. Critical branches≥96,73%, mutation10/10, type/lint/formato/docs/audit0 PASS; imagem própria17721389, smoke22/22 e ampliado28/28 PASS, Gitleaks padrão0 e diff2 zero. Primeira construção web corrigida para --target runtime; erros do runner arquivados sem virar findings.
+- Artefatos115 gzip com hashes conferidos, fonte/lock949 sem drift nas duas árvores. Own PG/fixtures/listeners/contêineres/redes removidos, reviewers encerrados. E2E/browser/certify/fullskip/SBOM/licenças/backup novo locais NOT_RUN; base CI37554311033/37554311044 PASS, atual ainda sem runs. Nenhuma implementação, política semanal, proteção concorrente ou deploy alterado; ledgers anteriores preservados.
+- Próximo passo: commit explícito de registros próprios e push normal autorizado; confirmar main e CI por SHA, proteção pela frente responsável após CI, provisionamento externo. Produção NO_GO.
+
 # PROD-0373 rodada 5 — AUD-0604 corrigida — 06/10/2026
 
 - Task `PROD-0373-20261006`, Claude Code; `status: DONE_LOCAL / CONDITION_5_PENDING_PUSH`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-5--aud-0604).
