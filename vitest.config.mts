@@ -7,6 +7,21 @@ const isCoverageRun = process.argv.some(
 
 const workspaceRoot = process.cwd()
 
+// HISO-010: the harness CI bar runs every Vitest invocation (its own unit and
+// coverage gates and the ones nested in `certify`) with CVG_TEST_SCOPE=core,
+// so consumer products under products/** never enter the harness test or
+// coverage denominators; each product is tested by its own workflow. Unset
+// keeps the aggregated transition regression of ADR-010 criterion 5, which
+// is also what the product's path-filtered `npm test --workspace` relies on.
+const testScope = process.env.CVG_TEST_SCOPE || 'all'
+if (testScope !== 'all' && testScope !== 'core') {
+  throw new Error(`invalid CVG_TEST_SCOPE: ${testScope} (expected all|core)`)
+}
+const productGlobs = (...extensions: string[]) =>
+  testScope === 'core'
+    ? []
+    : extensions.map((extension) => `products/**/*${extension}`)
+
 export default defineConfig({
   define: {
     __CVG_WEB_IDENTITY_MODE__: JSON.stringify(
@@ -26,8 +41,7 @@ export default defineConfig({
       'legacy/**/*.test.ts',
       'apps/**/*.test.ts',
       'apps/**/*.test.tsx',
-      'products/**/*.test.ts',
-      'products/**/*.test.tsx'
+      ...productGlobs('.test.ts', '.test.tsx')
     ],
     server: {
       deps: {
@@ -48,8 +62,7 @@ export default defineConfig({
         'legacy/**/*.ts',
         'apps/**/*.ts',
         'apps/**/*.tsx',
-        'products/**/*.ts',
-        'products/**/*.tsx'
+        ...productGlobs('.ts', '.tsx')
       ],
       // Process bootstraps, browser rendering, and PostgreSQL adapters have
       // dedicated smoke/E2E/integration gates. Keep them out of the unit

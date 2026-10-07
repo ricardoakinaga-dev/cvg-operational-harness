@@ -1,0 +1,287 @@
+# PLAN0374 Fase C (C1, C3, C5, C7, C9) — harness core on a single host.
+#
+# One image for migrate/api/worker, pinned by digest (C9: the digest that
+# was certified is the digest that runs). PostgreSQL is an external managed
+# service; `--profile local-postgres` adds a disposable instance for
+# rehearsal only. Every value comes from an env file kept OUTSIDE the
+# repository (default /etc/cvg-harness/harness.env, mode 0600):
+#
+#   docker compose -f deploy/harness/compose.production.yaml \
+#     --env-file /etc/cvg-harness/harness.env up -d
+#
+# Variables are interpolated per service on purpose (no shared `env_file:`):
+# serving must never see DATABASE_MIGRATION_URL (the API refuses to start
+# with it, SPEC 0144) and the migration job never sees serving secrets.
+# Values that are invariants of production are literals below, not inputs.
+# Runbook: deploy/harness/README.md and docs/08_runtime/0805_runbook_ambiente_real.md.
+
+name: cvg-harness
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '5'
+
+x-harness-image: &harness-image ${CVG_HARNESS_IMAGE_REPOSITORY:?set CVG_HARNESS_IMAGE_REPOSITORY}@${CVG_HARNESS_IMAGE_DIGEST:?set CVG_HARNESS_IMAGE_DIGEST (sha256:...) from the certified build}
+
+# Same flags as docs/08_runtime/0802_harness_production_operations.md and
+# scripts/production-stack-smoke.ts (barra 0373, condition 7).
+x-hardened: &hardened
+  user: '10001:10001'
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ['no-new-privileges:true']
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=16m
+  logging: *logging
+
+x-db-ca: &db-ca
+  type: bind
+  source: ${CVG_HARNESS_DB_CA_FILE:?set CVG_HARNESS_DB_CA_FILE (CA bundle of the managed PostgreSQL)}
+  target: /run/cvg/db-ca.pem
+  read_only: true
+
+x-optional-local-postgres: &optional-local-postgres
+  postgres:
+    condition: service_healthy
+    required: false
+
+services:
+  # C3: the only holder of DDL credentials; runs to completion first.
+  migrate:
+    <<: *hardened
+    image: *harness-image
+    command: ['node', 'scripts/migrate-job.mjs']
+    restart: 'no'
+    healthcheck:
+      disable: true
+    environment:
+      NODE_ENV: production
+      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:?set DATABASE_MIGRATION_URL (migration role)}
+      POSTGRES_SCHEMA: ${POSTGRES_SCHEMA:?set POSTGRES_SCHEMA}
+      CVG_RUNTIME_ROLE: ${CVG_RUNTIME_ROLE:?set CVG_RUNTIME_ROLE}
+      CVG_OPERATOR_AUTH_MIGRATION_URL: ${CVG_OPERATOR_AUTH_MIGRATION_URL:?set CVG_OPERATOR_AUTH_MIGRATION_URL (auth owner role)}
+      CVG_OPERATOR_AUTH_SCHEMA: ${CVG_OPERATOR_AUTH_SCHEMA:?set CVG_OPERATOR_AUTH_SCHEMA}
+      CVG_OPERATOR_SESSION_ROLE: ${CVG_OPERATOR_SESSION_ROLE:?set CVG_OPERATOR_SESSION_ROLE}
+    volumes:
+      - *db-ca
+    networks: [harness]
+    depends_on: *optional-local-postgres
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
+          pids: 128
+
+  api:
+    <<: *hardened
+    image: *harness-image
+    command: ['node', 'apps/api/dist/main.js']
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      API_PERSISTENCE_MODE: postgres
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL (runtime role)}
+      POSTGRES_SCHEMA: ${POSTGRES_SCHEMA:?set POSTGRES_SCHEMA}
+      POSTGRES_RLS_ENFORCEMENT: 'true'
+      POSTGRES_AUTO_MIGRATE: 'false'
+      OUTBOX_DURABLE_INBOUND: 'true'
+      CVG_IDENTITY_MODE: trusted
+      CVG_OPERATOR_IDENTITY_KEYRING: ${CVG_OPERATOR_IDENTITY_KEYRING:?set CVG_OPERATOR_IDENTITY_KEYRING}
+      CVG_OPERATOR_SESSION_DATABASE_URL: ${CVG_OPERATOR_SESSION_DATABASE_URL:?set CVG_OPERATOR_SESSION_DATABASE_URL (session role)}
+      CVG_OPERATOR_AUTH_SCHEMA: ${CVG_OPERATOR_AUTH_SCHEMA:?set CVG_OPERATOR_AUTH_SCHEMA}
+      CVG_OPERATOR_SESSION_ROLE: ${CVG_OPERATOR_SESSION_ROLE:?set CVG_OPERATOR_SESSION_ROLE}
+      CVG_RATE_LIMIT_KEYRING: ${CVG_RATE_LIMIT_KEYRING:?set CVG_RATE_LIMIT_KEYRING}
+      INBOUND_TENANT_ID: ${INBOUND_TENANT_ID:?set INBOUND_TENANT_ID}
+      INBOUND_AGENT_ID: ${INBOUND_AGENT_ID:?set INBOUND_AGENT_ID}
+      WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET:?set WEBHOOK_SIGNING_SECRET}
+      API_ALLOWED_ORIGINS: ${API_ALLOWED_ORIGINS:?set API_ALLOWED_ORIGINS}
+      # C5: TLS ends at the proxy; only the proxy's fixed address may assert
+      # X-Forwarded-Proto. /live over loopback stays exempt for the probe.
+      API_REQUIRE_HTTPS: 'true'
+      API_TRUSTED_PROXY_ADDRESSES: ${CVG_HARNESS_PROXY_IPV4:?set CVG_HARNESS_PROXY_IPV4}
+      # C7: stop alert (worker_down / queue_stalled), signed HMAC-SHA256.
+      CVG_STOP_ALERT_WEBHOOK_URL: ${CVG_STOP_ALERT_WEBHOOK_URL:?set CVG_STOP_ALERT_WEBHOOK_URL (alert receiver decided in A3)}
+      CVG_STOP_ALERT_WEBHOOK_SECRET: ${CVG_STOP_ALERT_WEBHOOK_SECRET:?set CVG_STOP_ALERT_WEBHOOK_SECRET}
+      CVG_STOP_ALERT_TENANT_ID: ${CVG_STOP_ALERT_TENANT_ID:?set CVG_STOP_ALERT_TENANT_ID}
+      CVG_STOP_ALERT_WORKER_STALE_MS: ${CVG_STOP_ALERT_WORKER_STALE_MS:-120000}
+      CVG_STOP_ALERT_QUEUE_STALLED_MS: ${CVG_STOP_ALERT_QUEUE_STALLED_MS:-300000}
+      CVG_STOP_ALERT_INTERVAL_MS: ${CVG_STOP_ALERT_INTERVAL_MS:-30000}
+      ENABLE_REAL_CHANNELS: 'false'
+      ENABLE_REAL_RAG: 'false'
+      ENABLE_REAL_PAYMENTS: 'false'
+      ENABLE_REAL_MEDICAL_RECORDS: 'false'
+    volumes:
+      - *db-ca
+    networks: [harness]
+    expose: ['3000']
+    healthcheck:
+      test: ['CMD', 'node', 'scripts/runtime-healthcheck.mjs']
+      interval: 30s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      <<: *optional-local-postgres
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 512M
+          pids: 256
+
+  worker:
+    <<: *hardened
+    image: *harness-image
+    command: ['node', 'apps/worker/dist/main.js']
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL (runtime role)}
+      POSTGRES_SCHEMA: ${POSTGRES_SCHEMA:?set POSTGRES_SCHEMA}
+      POSTGRES_RLS_ENFORCEMENT: 'true'
+      # Production runs only the durable continuous kernel (production-gate.ts).
+      CVG_WORKER_CONTROLLED_MODE: 'true'
+      CVG_WORKER_PRODUCTION_ENABLED: 'true'
+      CVG_WORKER_QUEUE_ADAPTER: postgres-controlled
+      CVG_WORKER_RUN_MODE: continuous
+      CVG_WORKER_RUNTIME: kernel
+      CVG_WORKER_TENANT_ID: ${CVG_WORKER_TENANT_ID:?set CVG_WORKER_TENANT_ID}
+      CVG_WORKER_AGENT_ID: ${CVG_WORKER_AGENT_ID:?set CVG_WORKER_AGENT_ID}
+      CVG_WORKER_ID: ${CVG_WORKER_ID:-worker-harness-1}
+    volumes:
+      - *db-ca
+    networks: [harness]
+    healthcheck:
+      # Same script; with CVG_WORKER_RUN_MODE set it checks the heartbeat
+      # liveness file (/tmp/cvg-worker.alive, at most 60 s old).
+      test: ['CMD', 'node', 'scripts/runtime-healthcheck.mjs']
+      interval: 30s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      <<: *optional-local-postgres
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 512M
+          pids: 256
+
+  # C5: TLS termination. The repo's `web` target (nginx-unprivileged, non-root,
+  # console static files) with deploy/harness/proxy/nginx.conf mounted over
+  # its default server. Plain HTTP is forwarded, not redirected, so the API
+  # itself answers 426.
+  proxy:
+    image: ${CVG_HARNESS_WEB_IMAGE_REPOSITORY:?set CVG_HARNESS_WEB_IMAGE_REPOSITORY}@${CVG_HARNESS_WEB_IMAGE_DIGEST:?set CVG_HARNESS_WEB_IMAGE_DIGEST (sha256:...) of the web target}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    logging: *logging
+    restart: unless-stopped
+    environment:
+      NGINX_ENTRYPOINT_QUIET_LOGS: '1'
+    volumes:
+      - type: bind
+        source: ./proxy/nginx.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+      - type: bind
+        source: ${CVG_HARNESS_TLS_CERT_FILE:?set CVG_HARNESS_TLS_CERT_FILE}
+        target: /etc/nginx/tls/fullchain.pem
+        read_only: true
+      - type: bind
+        source: ${CVG_HARNESS_TLS_KEY_FILE:?set CVG_HARNESS_TLS_KEY_FILE}
+        target: /etc/nginx/tls/privkey.pem
+        read_only: true
+      - type: bind
+        source: ${CVG_HARNESS_ACME_WEBROOT:-/var/lib/cvg-harness/acme}
+        target: /var/www/acme
+        read_only: true
+    ports:
+      - ${CVG_HARNESS_PUBLIC_BIND:-0.0.0.0}:${CVG_HARNESS_HTTP_PORT:-80}:8080
+      - ${CVG_HARNESS_PUBLIC_BIND:-0.0.0.0}:${CVG_HARNESS_HTTPS_PORT:-443}:8443
+    networks:
+      harness:
+        ipv4_address: ${CVG_HARNESS_PROXY_IPV4:?set CVG_HARNESS_PROXY_IPV4}
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '-q',
+          '-O',
+          '/dev/null',
+          'http://127.0.0.1:8081/proxy-health'
+        ]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    depends_on:
+      # nginx resolves `api` once at start; restart it when api is recreated.
+      api:
+        condition: service_healthy
+        restart: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 128M
+          pids: 128
+
+  # Rehearsal only (`--profile local-postgres`). Production uses the managed
+  # instance; this service never receives production data.
+  postgres:
+    profiles: [local-postgres]
+    image: ${CVG_HARNESS_LOCAL_PG_IMAGE:-postgres:16-alpine}
+    security_opt: ['no-new-privileges:true']
+    logging: *logging
+    restart: unless-stopped
+    environment:
+      # Empty on purpose outside rehearsal: the image refuses to initialise
+      # without a superuser password.
+      POSTGRES_PASSWORD: ${CVG_HARNESS_LOCAL_PG_PASSWORD:-}
+      POSTGRES_DB: ${CVG_HARNESS_LOCAL_PG_DATABASE:-cvg}
+    volumes:
+      - cvg-harness-local-pg:/var/lib/postgresql/data
+      - type: bind
+        source: ./postgres
+        target: /cvg-postgres
+        read_only: true
+    networks: [harness]
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U postgres && psql -U postgres -tAc "select 1" >/dev/null'
+        ]
+      interval: 5s
+      timeout: 3s
+      start_period: 20s
+      retries: 12
+
+networks:
+  harness:
+    # Fixed name: backup/restore scripts attach to it (deploy/harness/backup).
+    name: cvg-harness-net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${CVG_HARNESS_NET_SUBNET:?set CVG_HARNESS_NET_SUBNET (must contain CVG_HARNESS_PROXY_IPV4)}
+
+volumes:
+  cvg-harness-local-pg:
+    name: cvg-harness-local-pg

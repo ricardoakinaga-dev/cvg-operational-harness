@@ -1,0 +1,165 @@
+name: Product - Assistente de Plantão
+
+# HISO-010 / ADR-010 criteria 4, 5 and 7: the consumer product is built,
+# tested and imaged here, with its own owner and denominator. The harness bar
+# (verify.yml) never runs these tests, and this workflow runs no harness gate.
+# The paths cover the product and every workspace in its dependency closure,
+# plus the root configuration its build and tests resolve through; the list
+# is kept complete by tests/ci-workflow-contract.test.js.
+on:
+  pull_request:
+    paths:
+      - 'products/shift-assistant/**'
+      - 'packages/model-gateway/**'
+      - 'packages/shared/**'
+      - 'scripts/build-public-workspace.mjs'
+      - 'vitest.config.mts'
+      - 'tsconfig.base.json'
+      - 'eslint.config.js'
+      - '.prettierrc.json'
+      - '.prettierignore'
+      - '.nvmrc'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/product-shift-assistant.yml'
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'products/shift-assistant/**'
+      - 'packages/model-gateway/**'
+      - 'packages/shared/**'
+      - 'scripts/build-public-workspace.mjs'
+      - 'vitest.config.mts'
+      - 'tsconfig.base.json'
+      - 'eslint.config.js'
+      - '.prettierrc.json'
+      - '.prettierignore'
+      - '.nvmrc'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/product-shift-assistant.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-shift-assistant-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bar:
+    name: Shift assistant bar (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Runtime version evidence
+        run: |
+          node --version
+          npm --version
+
+      - name: Install
+        run: npm ci --ignore-scripts
+
+      - name: Format
+        run: npx prettier --check products/shift-assistant
+
+      - name: Lint
+        run: npx eslint products/shift-assistant
+
+      # Compiles the product and its workspace closure against package
+      # exports (no source aliases), then bundles the runtime entrypoint.
+      - name: Build
+        run: npm run build:shift-assistant
+
+      - name: Test
+        run: |
+          mkdir -p "$RUNNER_TEMP/shift-assistant"
+          npm run test:shift-assistant -- -- --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/shift-assistant/test-report.json"
+
+      - name: Product denominator
+        run: |
+          node --input-type=module <<'JS'
+          import { createHash } from 'node:crypto'
+          import fs from 'node:fs'
+          import path from 'node:path'
+          const directory = path.join(process.env.RUNNER_TEMP, 'shift-assistant')
+          const raw = fs.readFileSync(path.join(directory, 'test-report.json'))
+          const report = JSON.parse(raw)
+          const files = report.testResults.map((file) =>
+            path.relative(process.cwd(), file.name).split(path.sep).join('/')
+          )
+          const failures = []
+          if (files.length === 0 || report.numTotalTests <= 0) failures.push('empty_product_suite')
+          if (report.success !== true || report.numFailedTests !== 0) failures.push('product_tests_failed')
+          if (report.numPendingTests !== 0 || report.numTodoTests !== 0) failures.push('product_tests_skipped')
+          const foreign = files.filter((file) => !file.startsWith('products/shift-assistant/'))
+          if (foreign.length > 0) failures.push(`foreign_tests:${foreign.length}`)
+          const summary = {
+            schemaVersion: 1,
+            kind: 'cvg-product-test-denominator',
+            owner: 'shift-assistant',
+            scope: 'products/shift-assistant',
+            repository: process.env.GITHUB_REPOSITORY,
+            sha: process.env.GITHUB_SHA,
+            runId: process.env.GITHUB_RUN_ID,
+            attempt: process.env.GITHUB_RUN_ATTEMPT,
+            testFiles: files.length,
+            tests: report.numTotalTests,
+            passed: report.numPassedTests,
+            failed: report.numFailedTests,
+            skipped: report.numPendingTests + report.numTodoTests,
+            reportSha256: createHash('sha256').update(raw).digest('hex'),
+            failures,
+            verdict: failures.length === 0 ? 'PASS' : 'FAIL'
+          }
+          fs.writeFileSync(path.join(directory, 'denominator.json'), `${JSON.stringify(summary, null, 2)}\n`)
+          process.stdout.write(`${JSON.stringify(summary)}\n`)
+          process.exitCode = failures.length === 0 ? 0 : 1
+          JS
+
+      - name: Upload product test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: shift-assistant-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/shift-assistant
+          if-no-files-found: error
+          retention-days: 90
+
+  image:
+    name: Shift assistant image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # The product's own image (SPEC 0177 deploy), never the harness image.
+      - name: Build product image
+        run: |
+          docker build --pull \
+            --file products/shift-assistant/deploy/Dockerfile \
+            --target runtime \
+            --tag "cvg-shift-assistant:ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            .
+
+      - name: Check product image identity
+        run: |
+          image="cvg-shift-assistant:ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test "$(docker image inspect --format '{{.Config.User}}' "$image")" = cvg
+          test "$(docker image inspect --format '{{json .Config.Cmd}}' "$image")" = '["node","shift-assistant.mjs"]'

@@ -91,6 +91,10 @@ jobs:
         id: gate_build
         run: node scripts/ci-bar.mjs gate build
 
+      # HISO-010: this bar certifies the harness core only. ci-bar runs every
+      # gate with CVG_TEST_SCOPE=core, so unit, coverage and the suites nested
+      # in certify exclude products/**; the consumer product has its own
+      # workflow (product-shift-assistant.yml) and denominator.
       - name: Gate unit
         id: gate_unit
         run: node scripts/ci-bar.mjs gate unit
@@ -291,7 +295,9 @@ jobs:
           state = json.loads((artifact_root / 'ci-bar-state.json').read_text())
           require(state['runId'] == manifest['runId'], 'state_run_mismatch')
           require(state['candidateId'] == manifest['candidateId'], 'state_candidate_mismatch')
-          approved_contract = 'rem21-014-v2-sealed'
+          approved_contract = 'hiso-010-v1-core-sealed'
+          approved_scope = json.loads('{"owner":"harness","testScope":"core","excludedTestRoots":["products/"]}')
+          require(manifest.get('scope') == approved_scope and state.get('scope') == approved_scope, 'scope_mismatch')
           approved_gates = set('runtime install readiness format typecheck lint build unit coverage coverage-critical mutation skip worker-startup postgres postgres-proof observability-proof phase2 phase3 phase4a phase4a-identity chaos evals load restore docs e2e browser-proof image sbom licenses security certify certification-verify diff'.split())
           require(manifest['contract'] == approved_contract and state['contract'] == approved_contract, 'contract_mismatch')
           entries = {item['id']: item for item in state['gates']}
