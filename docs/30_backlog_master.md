@@ -1,3 +1,14 @@
+# PROD-0373 rodada 5 — AUD-0604 corrigida — 06/10/2026
+
+- Task `PROD-0373-20261006` rodada 5: `DONE_LOCAL`. Supersede a disposição OPEN de AUD0604-F01/F02.
+
+| Task               | Estado           | Critério atendido                                                                                                         |
+| ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| AUD0604-F01        | FIXED_LOCAL      | Conexão terminada no meio da troca: 503 sem Set-Cookie, processo e `/live` vivos, cookie anterior 200, nova sessão 200    |
+| AUD0604-F02        | FIXED_LOCAL      | Serving recusa credencial DDL e auto-migração; dono do schema verificado por catálogo; job de migração separado na imagem |
+| SECRET-SCAN-WEEKLY | DECISION_PENDING | Política para os 105 achados heurísticos da varredura semanal                                                             |
+| 0373-C5            | PENDING_PUSH     | Push, CI verde e proteção do `main`                                                                                       |
+
 # AUD-0604 — correções AUD-0603 verificadas, novo P1 e P2 — 06/10/2026
 
 - Task `AUD0604-REMEDIATION-PUBLISH-20261006`, Codex; auditoria DONE, publicação DONE (main5dad651 confirmado), entrega PARTIAL/NO_GO. [Parecer](04_audit/0604_reauditoria_aud0603_2026-10-06.md).

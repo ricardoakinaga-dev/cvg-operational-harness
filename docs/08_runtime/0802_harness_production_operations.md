@@ -33,6 +33,24 @@ A migração `0027_worker_operations` cria `worker_heartbeats` e
 `kernel_pause_switches`; o runtime precisa de `SELECT/INSERT/UPDATE` nas duas
 (o preflight do worker recusa subir sem isso).
 
+Migração é um job separado, o único com credencial DDL (SPEC 0144). Ele
+termina antes de a API e o worker subirem:
+
+```sh
+docker run --rm ...mesmas flags... \
+  -e DATABASE_MIGRATION_URL=<url do papel de migração> -e POSTGRES_SCHEMA=<schema> \
+  -e CVG_RUNTIME_ROLE=<papel runtime> \
+  -e CVG_OPERATOR_AUTH_MIGRATION_URL=<url do dono do schema de auth> \
+  -e CVG_OPERATOR_AUTH_SCHEMA=<schema de auth> -e CVG_OPERATOR_SESSION_ROLE=<papel de sessão> \
+  cvg-operational-harness:<sha> node scripts/migrate-job.mjs
+```
+
+O schema de dados é provisionado antes, com `AUTHORIZATION` do papel de
+migração; o dono do schema de auth precisa de `CREATE` no banco só durante o
+job. A API de produção recusa subir com `DATABASE_MIGRATION_URL` ou
+`POSTGRES_AUTO_MIGRATE=true` e verifica o dono do schema pelos catálogos, com a
+conexão de runtime.
+
 ## Login de operador (condição 4)
 
 A API em produção compõe o store de sessão PostgreSQL
@@ -41,6 +59,11 @@ A API em produção compõe o store de sessão PostgreSQL
 chaveiro `CVG_OPERATOR_IDENTITY_KEYRING`) troca-se por cookie em
 `GET /v1/session`; sem sessão, rota protegida responde 401. Se o banco de
 autenticação cair, rotas de operador falham fechadas (503) e `/ready` reflete.
+Uma conexão perdida no meio de uma troca de operador responde 503 sem cookie e
+o processo segue de pé; a sessão anterior continua válida. Se a perda vier
+depois do `COMMIT` enviado, o resultado é ambíguo e o operador autentica de
+novo. Todos os pools da API e do worker tratam a perda de conexão, ociosa ou
+em uso, sem derrubar o processo.
 
 ## Botão de desligar (condição 10)
 
@@ -91,6 +114,8 @@ em processo no perfil sintético de teste:
 ## Smoke da pilha (condição 3)
 
 `npx tsx scripts/production-stack-smoke.ts --image <ref> --output <arquivo.json>`
-sobe PostgreSQL próprio, API e worker em produção endurecidos e um receptor de
-alerta, e registra probes, login, webhook assinado, aprovação com um efeito,
-reuso sem duplicata, replay recusado após reinício, pausa/retomada e alerta.
+sobe PostgreSQL próprio, roda o job de migração, sobe API e worker em produção
+endurecidos e um receptor de alerta, e registra a recusa da credencial DDL no
+serving, probes, login, queda da conexão de sessão no meio da troca, webhook
+assinado, aprovação com um efeito, reuso sem duplicata, replay recusado após
+reinício, pausa/retomada e alerta.

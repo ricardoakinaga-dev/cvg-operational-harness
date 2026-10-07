@@ -108,3 +108,29 @@ sucessora A2 → troca com A1 (A1 e A2 401, nova sessão 200). Gates no worktree
 isolado: suíte com cobertura 359/2.948 PASS, PostgreSQL 37/301, cobertura
 crítica, skips, mutação, docs, formato/lint/typecheck. Smoke 18/18 e inspeção
 PASS na imagem `sha256:4115fad62784956a286fa244c14453c5d7f8dbc869913559f35db3016c30389b`.
+
+## Rodada 5 — AUD-0604
+
+| Achado | Causa | Correção |
+| --- | --- | --- |
+| AUD0604-F01 P1 | O `pg` emite `error` no cliente cuja conexão morre; o pg-pool só escuta clientes ociosos, então a perda durante `switchIdentity` virava exceção não tratada e o processo saía | `guardPostgresPoolErrors` (`packages/persistence/src/pool-errors.ts`) liga um ouvinte em cada cliente ao conectar e no pool; aplicado a todos os pools da API (dados, sessão, alerta) e do worker. A query pendente rejeita, a transação aborta, a rota responde 503 sem `Set-Cookie` e o cliente morto é descartado |
+| AUD0604-F02 P2 | O bootstrap exigia `DATABASE_MIGRATION_URL` e o serving abria pool DDL para o preflight, contra a SPEC 0144 | Serving de produção recusa `DATABASE_MIGRATION_URL` e `POSTGRES_AUTO_MIGRATE=true`; o dono do schema é verificado pelos catálogos com a conexão de runtime (`assertMigrationOwnerFromCatalog`, mesmas propriedades das checagens antigas). Job separado `scripts/migrate-job.mjs` na imagem aplica migrations de dados e auth e concede os privilégios |
+
+Limite declarado: perda de conexão depois do `COMMIT` enviado é ambígua; a
+rota responde 503 sem cookie e o operador autentica de novo.
+
+Provas:
+
+- PostgreSQL real com os papéis do bootstrap: troca bloqueada por lock e
+  backend da sessão terminado com `pg_terminate_backend` → 503 sem cookie,
+  `/live` e `/ready` 200 no mesmo processo, cookie anterior 200, nova
+  autenticação troca e aposenta a linhagem. Controle: sem o guard, o mesmo
+  teste gera `Connection terminated unexpectedly` não tratado.
+- Unitário do guard sobre o pg-pool real (cliente em uso, liberado sem erro e
+  ocioso); serving recusa DDL e auto-migração; DDL owner com `CREATEDB` ou
+  tabela gerida com dono errado reprovam o boot.
+- Smoke 22/22 na imagem
+  `sha256:70d995bd961856495b7a9ab44bffb9acda7a9712fc38a4c9894c46e803851224`:
+  job de migração, API recusando a credencial DDL (saída 1, sem eco de
+  senha), API e worker sem credencial DDL, queda da conexão no meio da troca
+  com o contêiner de pé e recuperação. Inspeção da imagem PASS (gitleaks 0).

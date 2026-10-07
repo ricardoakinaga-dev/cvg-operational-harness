@@ -1,3 +1,10 @@
+# PROD-0373 rodada 5 — AUD-0604 corrigida — 06/10/2026
+
+- Task `PROD-0373-20261006`, Claude Code; `status: DONE_LOCAL / CONDITION_5_PENDING_PUSH`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-5--aud-0604).
+- F01: o `pg` emite `error` no cliente em uso quando a conexão morre e o pg-pool só escuta clientes ociosos; guard novo em `packages/persistence/src/pool-errors.ts` aplicado aos pools de dados, sessão e alerta da API e aos dois pools do worker. Regressão PostgreSQL com os papéis do bootstrap (lock + `pg_terminate_backend` no meio da troca) e controle sem o guard reproduzindo o erro não tratado.
+- F02: serving de produção sem credencial DDL (SPEC 0144): recusa `DATABASE_MIGRATION_URL`/`POSTGRES_AUTO_MIGRATE=true`, `assertMigrationOwnerFromCatalog` no lugar das conexões de migração, bootstrap de sessão sem a variável, job `scripts/migrate-job.mjs` copiado para a imagem; smoke passa a migrar pelo job e prova a recusa.
+- Verificação: Checkout compartilhado sem mudanças de outros agentes, commit `142a170`: suíte com cobertura 360 arquivos/2.952 PASS (1 skip catalogado SKIP-PG-021, do gate phase4a), PostgreSQL 37/302, cobertura crítica e global, skips, mutação, docs, formato/lint/typecheck PASS; smoke 22/22 e inspeção PASS (gitleaks 0) na imagem `sha256:70d995bd…`.
+
 # AUD-0604 — reauditoria AUD-0603 e publicação autorizada — 06/10/2026
 
 - Codex, task `AUD0604-REMEDIATION-PUBLISH-20261006`, AUDIT/T1 documental; candidato5111ad6 com sete commits recebidos sobre main4aa4d8f. [Parecer](04_audit/0604_reauditoria_aud0603_2026-10-06.md), [evidências](04_audit/evidence/AUD0604-REMEDIATION-20261006/summary.md). Usuário autoriza commit/push normal dos registros próprios e histórico recebido.

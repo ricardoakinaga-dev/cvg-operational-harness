@@ -1,3 +1,10 @@
+# PROD-0373 rodada 5 — AUD-0604 corrigida — 06/10/2026
+
+- Task `PROD-0373-20261006`, Claude Code; `status: DONE_LOCAL / CONDITION_5_PENDING_PUSH`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-5--aud-0604).
+- `last_completed_action`: AUD0604-F01 (perda da conexão durante a troca de sessão derrubava a API) corrigido com `guardPostgresPoolErrors` em todos os pools da API e do worker: 503 sem cookie, processo e `/live` de pé, sessão anterior válida, nova autenticação recupera. AUD0604-F02 resolvido pela SPEC 0144 vigente, sem mudar contrato: serving de produção recusa `DATABASE_MIGRATION_URL` e auto-migração, verifica o dono do schema pelos catálogos com a conexão de runtime; job separado `scripts/migrate-job.mjs` na imagem.
+- `verification_state`: checkout compartilhado sem mudanças de outros agentes, commit `142a170`: suíte com cobertura 360 arquivos/2.952 PASS (1 skip catalogado SKIP-PG-021, do gate phase4a), PostgreSQL 37/302, cobertura crítica e global, skips, mutação, docs, formato/lint/typecheck PASS; smoke 22/22 e inspeção PASS (gitleaks 0) na imagem `sha256:70d995bd…`.
+- `next_action`: push pelo usuário; Verify/Security no SHA; proteção do `main`; reauditoria. Decisão do usuário pendente sobre a varredura semanal de segredos. Ambiente real (servidor, papéis, job de migração, segredos, HTTPS, backup agendado) fora do repositório; `NO_GO` até lá.
+
 # AUD-0604 — remediações confirmadas; novo P1/P2, publicação autorizada — 06/10/2026
 
 - Task `AUD0604-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT_AND_PUBLICATION / NO_GO_ONE_P1_ONE_P2`; candidata5111ad6, sete commits após main4aa4d8f. [Parecer](04_audit/0604_reauditoria_aud0603_2026-10-06.md), [provas](04_audit/evidence/AUD0604-REMEDIATION-20261006/summary.md).

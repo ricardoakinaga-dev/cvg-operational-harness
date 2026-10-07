@@ -91,6 +91,21 @@
   em `apps/api/src/operator-session-postgres.ts`, rota de sessão em
   `apps/api/src/server.ts`). Worktree e PostgreSQL próprios removidos. Push
   pendente do usuário.
+- Rodada 5 (06/10/2026, `DONE_LOCAL`): AUD0604-F01 (perda do cliente pg
+  derruba a API) e F02 (serving exige credencial DDL contra a SPEC 0144).
+  Escrita adicional: `apps/api/src/operator-session-postgres.ts`,
+  `apps/api/src/production-bootstrap.ts`, `apps/api/src/server.ts` (pools e
+  preflight de produção), `apps/api/src/tenant-preflight.ts`,
+  `apps/api/src/stop-alert-monitor.ts`, pools do worker
+  (`apps/worker/src/postgres-controlled.ts`,
+  `apps/worker/src/operational-harness-worker.ts`), helper novo em
+  `packages/persistence/src/`, testes próprios, `.env.example`,
+  `scripts/production-stack-smoke.ts`, job de migração novo em `scripts/`,
+  0802 e evidência PROD-0373. PostgreSQL descartável próprio
+  `claude-prod0373-pg` (loopback 55731). Gates rodados no checkout
+  compartilhado (sem mudanças de outros agentes presentes), não em worktree.
+  Código em `142a170`; PostgreSQL e contêineres próprios removidos. Push
+  pendente do usuário.
 
 ## AUD-0600 — reauditoria dos três commits de remediação — 06/10/2026
 
