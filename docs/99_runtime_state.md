@@ -1,9 +1,25 @@
+# AUD-0604 — remediações confirmadas; novo P1/P2, publicação autorizada — 06/10/2026
+
+- Task `AUD0604-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT / PENDING_PUBLICATION / NO_GO_ONE_P1_ONE_P2`; candidata5111ad6, sete commits após main4aa4d8f. [Parecer](04_audit/0604_reauditoria_aud0603_2026-10-06.md), [provas](04_audit/evidence/AUD0604-REMEDIATION-20261006/summary.md).
+- `last_completed_action`: AUD0603-F01/F02 fechados no escopo exercitado: transação real preserva antiga503/200 e predecessor aposenta linhagem401/nova200; imagem ampliada confirma. Novo P1: perda de conexão no cliente adquirido de switchIdentity encerra a API (imagem exit1, sem503/live). P2 herdado: serving exige URL DDL que SPEC0144 proíbe.
+- `verification_state`: suíte359/2.948 com cobertura e PG37/301 PASS, zero skips; critical branches mínimo96,73%, mutation10/10, type/lint/formato/docs/audit0 PASS. Imagem própria e3d9d558:18/18 canonical e23/23 ampliado PASS; interrupção de conexão FAIL. Gitleaks0 imagem escopo padrão e0 diff7. Catálogo37 hashes confere; skip completo/E2E/browser/certify/SBOM/licenças/backup novo NOT_RUN.
+- `preservation_state`:946 inputs fonte/lock sem drift em ambas árvores,97 artefatos próprios hash conferido; PG/fixtures/listeners/smokes próprios removidos, reviewers encerrados. Sem implementação ou política/proteção remota; audit603 histórico preservado/publicação autorizada agora.
+- `next_action`: commit e push normal autorizados pelo usuário; confirmar main/CI no SHA. Owner PROD-0373 remediar AUD0604-F01 e reconciliar F02; CI/proteção/ambiente real e política semanal pendentes. Produção NO_GO; Git push não concede release.
+
 # PROD-0373 rodada 4 — AUD-0603 corrigida — 06/10/2026
 
 - Task `PROD-0373-20261006`, Claude Code; `status: DONE_LOCAL / CONDITION_5_PENDING_PUSH`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-4--aud-0603).
 - `last_completed_action`: AUD0603-F01 (criação falhando após revogação derrubava a sessão anterior; regressão de `7088342`) e F02 (cookie predecessor deixava a sucessora viva; herdado) corrigidos com troca de identidade atômica no store PostgreSQL e aposentadoria da linhagem do cookie apresentado.
 - `verification_state`: worktree isolado: suíte com cobertura 359/2.948 PASS, PostgreSQL 37/301, cobertura crítica, skips, mutação, docs; smoke 18/18 e inspeção PASS na imagem `sha256:4115fad6…`.
 - `next_action`: push pelo usuário; Verify/Security no SHA; proteção do `main`; reauditoria. Decisão do usuário pendente sobre a varredura semanal de segredos (105 achados heurísticos, 11 fora das evidências). Ambiente real fora do repositório; `NO_GO` até lá.
+
+# AUD-0603 — reauditoria concluída; dois P2, publicação pendente — 06/10/2026
+
+- Task `AUD0603-REMEDIATION-REAUDIT-20261006`, Codex, `COMPLETED_AUDIT / PARTIAL_TWO_P2`; T1 documental, atividade AUDIT. Candidata `9b85d5b4c6c1f4fb7eee4b1bb4c6e67db3f44e04`; [parecer](04_audit/0603_reauditoria_aud0602_2026-10-06.md).
+- `last_completed_action`: confirmadas correções originais de cancelamento/prazo e revogação503; parser ANSI testado em logs reais e schema; scan push cinco commits zero. Dois P2 restantes: perda de sessão/cookie após revoke confirmado e create falhando (regressão), e troca com cookie predecessor mantém família anterior ativa (herdado).
+- `verification_state`: suíte359/2.946 PASS com cobertura, PostgreSQL37/299, zero skips; critical branches mínimos96,73%, mutation10/10 e type/lint/formato/docs/audit PASS. Fonte/lock946 inputs preservados, reviewers encerrados, PG próprio removido. Observações conservadoras/precedência não são novos P2 canônicos.
+- `remote_state`: main4aa4d8f sem proteção; Verify FAIL certificação e Security FAIL secret-scan, base histórica. Novo SHA sem CI. E2E/browser da base PASS; atuais NOT_RUN nesta auditoria. Schedule simulado105 genéricos,94 evidências/11outros; decisão de política pendente, sem triagem universal.
+- `next_action`: owner PROD-0373 remediar AUD0603-F01/F02 com transição atômica e predecessor, reauditar novo SHA, validar CI/proteção e provisionar ambiente real. Produção NO_GO. Pedido desta rodada somente auditoria: não houve commit/push; cinco commits e documentação continuam locais.
 
 # PROD-0373 rodada 3 — AUD-0602, secret-scan e certificação corrigidos — 06/10/2026
 

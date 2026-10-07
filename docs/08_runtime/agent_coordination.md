@@ -6,6 +6,25 @@
 - Vale para qualquer agente. Em conflito entre este arquivo e uma instrução
   direta do usuário, vale a instrução do usuário.
 
+## AUD-0604 — reauditoria AUD-0603 e publicação autorizada — 06/10/2026
+
+- Task `AUD0604-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT / PENDING_PUBLICATION / NO_GO_ONE_P1_ONE_P2`. Pedido atual autoriza auditoria, commit dos registros próprios e push normal para `ricardoakinaga-dev/cvg-operational-harness`; candidata congelada `5111ad60cbaac49ddbec028a6733be2b51611836`, sete commits após main4aa4d8f. Sem release.
+- Escrita exclusiva: `docs/04_audit/0604_reauditoria_aud0603_2026-10-06.md`, `docs/04_audit/evidence/AUD0604-REMEDIATION-20261006/**`, esta seção e entradas novas próprias nos ledgers99/20/30. Publicar também relatório/evidências/entradas próprias AUD0603 ainda pendentes, preservadas como avaliação histórica. Fonte e lockfile somente leitura; staging explícito apenas de arquivos próprios.
+- Worktree/dependências/sondas próprias `/tmp/cvg-aud0604-20261006/**`; PostgreSQL sintético próprio `cvg-aud0604-pg-20261006`, loopback55726, bancos separados para suíte/PG-only/revisão. Imagem reconstruída própria `cvg-operational-harness:aud0604-5111ad6`; smoke e scan somente recursos descartáveis próprios. Revisores independentes sessão/transação e bootstrap/contratos somente leitura, sem descendentes.
+- Barra congelada: rollback real de troca de identidade quando create/revoke falham, 503 sem cookie, antiga válida e retry; predecessor revoga toda linhagem nas três identidades; rotação/logout existentes; cancel/pause sem corpo; regressão completa/PG, type/lint/formato/critical/mutation/docs; smoke imagem18 e segredos, histórico7commits. Certify/E2E/SBOM/licenças locais NOT_RUN, sem dados reais/provider/deploy; CI remoto fica identificado por SHA.
+- Não alterar política semanal de segredos, dismissals ou proteção; decisões pendentes do usuário preservadas. Push autorizado só normal `origin HEAD:main`, sem force/rewrite, sem tocar recurso/trabalho alheio.
+
+- Fechamento AUD0604: originais fechados no escopo exercitado; novo P1 crash da API na perda do cliente pg e P2 herdado de contrato DDL. Suíte2.948/PG301, critical/mutation/básicos PASS, imagem18/23 PASS e fault FAIL; fontes946 preservadas, evidências97 hash conferido, recursos próprios removidos/revisores encerrados. Commit/push normal autorizado em sequência; sem GO, proteção ou política semanal.
+
+## AUD-0603 — reauditoria da rodada 3 PROD-0373 — 06/10/2026
+
+- Task `AUD0603-REMEDIATION-REAUDIT-20261006`, Codex, `COMPLETED_AUDIT / PARTIAL_TWO_P2`. Pedido atual: auditar cinco commits locais; candidata congelada `9b85d5b4c6c1f4fb7eee4b1bb4c6e67db3f44e04`, base publicada `4aa4d8f700b922cd38344edbeb0e2c43745bd9bb`.
+- Escrita própria: `docs/04_audit/0603_reauditoria_aud0602_2026-10-06.md`, `docs/04_audit/evidence/AUD0603-REMEDIATION-20261006/**`, esta seção e entradas novas próprias nos ledgers 99/20/30. Fontes e lockfile recebidos somente leitura; worktree/dependências/sondas em `/tmp/cvg-aud0603-20261006/**`. PostgreSQL sintético próprio `cvg-aud0603-pg-20261006`, loopback 55725, bancos separados para suíte, PG-only e revisão.
+- Barra: cancelamento/prazo após última leitura de pausa e retomada sem efeito duplicado; transição/falhas de família de sessão; logs reais Verify/Security, parser ANSI, alcance da varredura; regressão com PostgreSQL obrigatório e cobertura. Revisores independentes kernel e sessão somente leitura, sem descendentes.
+- Sem implementação, alteração de lockfile, certify completo, E2E, SBOM/licenças, deploy, dado real, provider, configuração remota, dismissals ou proteção. Esta rodada é auditoria: não dá commit/push, e não reutiliza a autorização de publicação já concluída na rodada anterior. Evidência histórica será identificada como tal; produção permanece NO_GO.
+
+- Fechamento: suíte359/2.946 e PG37/299 PASS, zero skips; critical mínimo branches96,73%, mutation10/10, type/lint/formato/docs/audit PASS. Originais corrigidos, dois P2 de sessão confirmados (regressão create após revoke e predecessor sem aposentar família). Parser/scans próprios arquivados; CI atual/E2E/certify NOT_RUN. Recursos PG/listeners próprios removidos e reviewers encerrados. Fonte/lock e entradas anteriores preservados; sem commit/push/configuração remota. Produção NO_GO.
+
 ## AUD-0602 — reauditoria AUD-0601 e publicação autorizada — 06/10/2026
 
 - Task `AUD0602-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT_AND_PUBLICATION / NO_GO_ONE_P1_ONE_P2`; pedido: nova auditoria, commit e push. Congelado `81f01e87a63996f3afe4f55641ebb5e2ea84a39b`, 11 commits posteriores ao main recebido dc4a3cb. Sem release operacional.

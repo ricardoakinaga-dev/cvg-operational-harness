@@ -1,3 +1,19 @@
+# AUD-0604 — correções AUD-0603 verificadas, novo P1 e P2 — 06/10/2026
+
+- Task `AUD0604-REMEDIATION-PUBLISH-20261006`, Codex; auditoria DONE, publicação autorizada PENDING, entrega PARTIAL/NO_GO. [Parecer](04_audit/0604_reauditoria_aud0603_2026-10-06.md).
+
+| Item            | Estado                 | Próxima ação / critério                                                                                                                            |
+| --------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AUD0603-F01/F02 | CLOSED_EXERCISED_SCOPE | Rollback503 antiga200/retry e predecessor401/sucessora401/nova200 em PostgreSQL e imagem                                                           |
+| AUD0604-F01 P1  | OPEN                   | PROD-0373/API: tratar erro no cliente adquirido sem crash,503 sem cookie, live/proc vivos e recuperação; repro imagem exit1                        |
+| AUD0604-F02 P2  | OPEN_INHERITED         | PROD-0373/API/arquitetura: reconciliar SPEC0144 sem DDL no serving com bootstrap que exige URL migration; decisão explícita ou remover dependência |
+| Publicação Git  | AUTHORIZED_PENDING     | Commit explícito dos registros próprios603/604 e push normal dos sete commits recebidos; confirmar main                                            |
+| CI / condição5  | PENDING_REMOTE         | Verify/Security/E2E/certificação no SHA final, depois proteção por frente responsável; nenhum PASS inferido                                        |
+| Scan semanal    | POLICY_PENDING         | Resultado histórico105/94/11, sem triagem universal ou mudança de política nesta auditoria                                                         |
+| Ambiente real   | OPEN_NO_GO             | Servidor, PG/papéis/migrações, segredos, HTTPS/proxy e backup agendado; nenhum release                                                             |
+
+- 359/2.948 e PG37/301 PASS, branches críticos≥96,73%, mutation10/10 e gates básicos PASS; imagem18/18 e23/23 PASS, mas interrupção da conexão FAIL. Fonte/lock preservados, recursos próprios removidos; implementação da remediação pertence ao owner, auditoria não altera código.
+
 # PROD-0373 rodada 4 — AUD-0603 corrigida — 06/10/2026
 
 - Task `PROD-0373-20261006` rodada 4: `DONE_LOCAL`. Supersede a disposição OPEN de AUD0603-F01/F02.
@@ -8,6 +24,21 @@
 | AUD0603-F02        | FIXED_LOCAL      | Predecessor A1 → sucessora A2 → troca com A1: A1 e A2 401, nova sessão 200                                         |
 | SECRET-SCAN-WEEKLY | DECISION_PENDING | Política para os 105 achados heurísticos da varredura semanal                                                      |
 | 0373-C5            | PENDING_PUSH     | Push, CI verde e proteção do `main`                                                                                |
+
+# AUD-0603 — reauditoria rodada 3; dois P2 de sessão — 06/10/2026
+
+- Task `AUD0603-REMEDIATION-REAUDIT-20261006`, Codex, `COMPLETED_AUDIT / PARTIAL_TWO_P2`. [Parecer](04_audit/0603_reauditoria_aud0602_2026-10-06.md).
+
+| Item                      | Estado          | Próxima ação                                                                                  |
+| ------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
+| AUD0602-F01, janela final | VERIFIED_SCOPED | Corpo0, APPROVED, retomada1 e replay sem duplicação; original corrigido                       |
+| AUD0602-F02, revoke falha | VERIFIED_SCOPED | Original503 sem cookie e retry confirmados; transição integral ainda parcial                  |
+| AUD0603-F01 P2            | OPEN            | Substituição atômica: falha create após revoke deve preservar sessão/cookie; regressão7088342 |
+| AUD0603-F02 P2            | OPEN            | Troca com predecessor deve aposentar família sucessora anterior; herdado4aa4d8f               |
+| CI atual / condição5      | PENDING         | Novo SHA ainda não publicado; Verify/Security/E2E/certificação e proteção sem confirmação     |
+| Scan semanal              | POLICY_PENDING  | Simulação105 genéricos,94 em evidências e11 fora; exclusão só da pasta não resolve tudo       |
+
+- Suíte atual359/2.946, PostgreSQL37/299, zero skips; critical mínimo branches96,73%, mutation10/10 e type/lint/formato/docs/audit PASS. Kernel conservador/cancel+pause são observações, sem novos P2 aprovados. Sem código/lock, commit/push ou configuração remota. Produção NO_GO por findings, gates e ambiente real pendentes.
 
 # PROD-0373 rodada 3 — AUD-0602, secret-scan e certificação corrigidos — 06/10/2026
 

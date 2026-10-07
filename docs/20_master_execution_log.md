@@ -1,9 +1,25 @@
+# AUD-0604 — reauditoria AUD-0603 e publicação autorizada — 06/10/2026
+
+- Codex, task `AUD0604-REMEDIATION-PUBLISH-20261006`, AUDIT/T1 documental; candidato5111ad6 com sete commits recebidos sobre main4aa4d8f. [Parecer](04_audit/0604_reauditoria_aud0603_2026-10-06.md), [evidências](04_audit/evidence/AUD0604-REMEDIATION-20261006/summary.md). Usuário autoriza commit/push normal dos registros próprios e histórico recebido.
+- Originais AUD0603-F01/F02 confirmados por rollback/predecessor em composição real quatro roles e imagem. Revisão de contrato79 PASS e matriz PG17 checks PASS; nova prova adversarial da imagem FAIL: conexão de sessão interrompida antes de create/COMMIT encerra API por evento pg não tratado. AUD0604-F01 P1 regressão; AUD0604-F02 P2 herdado, URL DDL exigida contradiz SPEC0144. Não houve efeito externo ou comprometimento demonstrado.
+- Suíte359/2.948 e PG37/301 PASS, zero skips; global cobertura91,94/93,05/94,21/87,52; critical branches≥96,73%, mutation10/10, type/lint/formato/docs/audit0 PASS. Canonical smoke18/18 e ampliado23/23 PASS na imagem e3d9d558; cinco checks adicionados provam sessão, ausentes dos18 originais. Scan padrão imagem/diff7 zero; semanal105 histórico não reexecutado nem alterado.
+- Scripts/receipts brutos97 compactados/hash conferido; erros instrumentação anteriores preservados separadamente da reprodução final FAIL. Revisor PG bloqueado automaticamente por possível risco de cibersegurança; lead confirmou na própria imagem. Revisor contrato declarou exposição inicial a ledgers históricos. Fonte/lock946 preservados; own PG/smokes/roles/listeners removidos, reviewers encerrados. Sem certify/E2E/novo backup/proteção/deploy; CI atual e ambiente real pendentes, NO_GO.
+- Somente relatórios/evidências próprios AUD0603/AUD0604 e novas entradas99/20/30/coordenação serão commitados; trabalho alheio e histórico não reescritos. Recibo de publicação registrado após push.
+
 # PROD-0373 rodada 4 — AUD-0603 corrigida — 06/10/2026
 
 - Task `PROD-0373-20261006`, Claude Code; `status: DONE_LOCAL / CONDITION_5_PENDING_PUSH`. [Resumo](04_audit/evidence/PROD-0373-20261006/summary.md#rodada-4--aud-0603).
 - `last_completed_action`: AUD0603-F01 (criação falhando após revogação derrubava a sessão anterior; regressão de `7088342`) e F02 (cookie predecessor deixava a sucessora viva; herdado) corrigidos com troca de identidade atômica no store PostgreSQL e aposentadoria da linhagem do cookie apresentado.
 - `verification_state`: worktree isolado: suíte com cobertura 359/2.948 PASS, PostgreSQL 37/301, cobertura crítica, skips, mutação, docs; smoke 18/18 e inspeção PASS na imagem `sha256:4115fad6…`.
 - `next_action`: push pelo usuário; Verify/Security no SHA; proteção do `main`; reauditoria. Decisão do usuário pendente sobre a varredura semanal de segredos (105 achados heurísticos, 11 fora das evidências). Ambiente real fora do repositório; `NO_GO` até lá.
+
+# AUD-0603 — reauditoria dos cinco commits da rodada 3 — 06/10/2026
+
+- Task `AUD0603-REMEDIATION-REAUDIT-20261006`, Codex; candidata `9b85d5b4c6c1f4fb7eee4b1bb4c6e67db3f44e04`, base4aa4d8f; [parecer](04_audit/0603_reauditoria_aud0602_2026-10-06.md) e [evidências](04_audit/evidence/AUD0603-REMEDIATION-20261006/summary.md).
+- P1 original confirmado corrigido: última leitura async + cancel/deadline dá corpo0, APPROVED/EFFECT_FAILED, retomada1 e replay1. Revogação503 original também corrigida. Dois P2 de sessão: regressão ao perder cookie/sessão se create falha após revoke; família antiga permanece ativa em troca com predecessor. Reviewer e lead PG real/quatro papéis reproduzem.
+- Node22.23.2/PG16.15:359 arquivos/2.946 PASS com cobertura; PG37/299; zero falhas/skips. Type/lint/formato/docs/critical/mutation/audit PASS; branches críticos mínimos96,73%, mutation10/10, audit0. Fonte946 inputs sem drift; contador358/2.943 recebido não descreve a medição final atual.
+- CI4aa4d8f FAIL confirmado: ANSI→metrics.unit=null e checkout raso/-1→104 achados. Parser em três logs reais e schema passam no novo código; push5commits zero. Schedule completo105 genéricos (94 evidências,11outros), sem triagem universal ou allowlist nova. E2E12/browser15 históricos não certificam candidata; full E2E/certify atuais NOT_RUN.
+- Parecer PARTIAL_TWO_P2, produção NO_GO. Propostas ampliadas de certeza/precedência não viraram P2 sem contrato. Revisores encerrados e recursos PG/listeners próprios removidos; arquivos recebidos e entradas anteriores preservados. Sem alteração de código/lock, commit/push, dismissals, proteção ou deploy.
 
 # PROD-0373 rodada 3 — AUD-0602, secret-scan e certificação corrigidos — 06/10/2026
 
