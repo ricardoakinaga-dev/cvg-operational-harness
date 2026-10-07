@@ -1,11 +1,13 @@
 # AUD-0605 — correções AUD-0604 confirmadas; publicação autorizada — 06/10/2026
 
-- Task `AUD0605-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT / PENDING_PUBLICATION / NO_GO_REMOTE_ENVIRONMENT`. Candidata216e17c, dois commits recebidos sobre main5b098a7; [parecer](04_audit/0605_reauditoria_aud0604_2026-10-06.md), [evidências](04_audit/evidence/AUD0605-REMEDIATION-20261006/summary.md).
+- Task `AUD0605-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT_AND_PUBLICATION / NO_GO_REMOTE_ENVIRONMENT`. Candidata216e17c, dois commits recebidos sobre main5b098a7; [parecer](04_audit/0605_reauditoria_aud0604_2026-10-06.md), [evidências](04_audit/evidence/AUD0605-REMEDIATION-20261006/summary.md).
 - `last_completed_action`: F01/P1 e F02/P2 fechados no escopo exercitado: imagem perda503/no-cookie/api/live/ready/antiga/login recuperam; serving sem DDL e job externo, privilégios/catálogo/retry negativos reais. Sem novo finding material demonstrado; COMMIT pós-envio ambíguo não recebe garantia falsa de rollback.
 - `verification_state`: suíte360/2.953 e PG37/302 com cobertura PASS, zero skips; critical branches mínimo96,73%, mutation10/10 e básicos PASS; SKIP-PG-021 executado. Imagem17721389 reconstruída:22/22 e28/28 PASS, scan padrão/diff2 zero. Fullskip/E2E/browser/certify/SBOM/licenças/backup novo locais NOT_RUN.
 - `preservation_state`:949 inputs fonte/lock preservados,115 brutos hash conferido; own PG/smokes/roles/listeners removidos, reviewers encerrados. Revisão separada com exposição declarada a históricos; harness errors preservados. Sem mudança de código/proteção/política semanal/deploy, registros anteriores preservados.
-- `remote_state`: base5b098a7 Verify/Security PASS; main sem proteção. Os dois commits atuais ainda locais; CI atual não inferido da base.105 achados semanais históricos sem triagem universal/política nova.
-- `next_action`: commit da auditoria e push normal autorizados, confirmar main e runs no SHA; frente responsável acompanha CI/proteção; ambiente real ainda precisa servidor/PG/papéis/job/segredos/HTTPS/backup. NO_GO até evidência completa externa, nenhum release.
+- `remote_state`: base5b098a7 Verify/Security PASS; main sem proteção. Os dois commits atuais publicados em e79d754; CI atual em andamento, sem PASS inferido da base.105 achados semanais históricos sem triagem universal/política nova.
+- `next_action`: acompanhar runs no SHA publicado; frente responsável acompanha CI/proteção; ambiente real ainda precisa servidor/PG/papéis/job/segredos/HTTPS/backup. NO_GO até evidência completa externa, nenhum release.
+
+- Publicação DONE: push normal confirmou main e79d754, incluindo142a170/216e17c e a auditoria. [Recibo](04_audit/evidence/AUD0605-REMEDIATION-20261006/publication.json); Verify/Security inicial em andamento. Follow-up de recibo é documental, sem novos inputs de código, CI próprio pendente. Proteção pela frente responsável após CI; ambiente real/política semanal continuam pendentes, NO_GO.
 
 # PROD-0373 rodada 5 — AUD-0604 corrigida — 06/10/2026
 

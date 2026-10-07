@@ -8,13 +8,15 @@
 
 ## AUD-0605 — reauditoria AUD-0604 e publicação autorizada — 06/10/2026
 
-- Task `AUD0605-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT / PENDING_PUBLICATION / NO_GO_REMOTE_ENVIRONMENT`; candidata congelada `216e17c512efe1ec6d244698b2c82f62ba567667`; dois commits recebidos após main5b098a7. Pedido atual autoriza auditoria, commit documental próprio e push normal, sem release.
+- Task `AUD0605-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT_AND_PUBLICATION / NO_GO_REMOTE_ENVIRONMENT`; candidata congelada `216e17c512efe1ec6d244698b2c82f62ba567667`; dois commits recebidos após main5b098a7. Pedido atual autoriza auditoria, commit documental próprio e push normal, sem release.
 - Escrita exclusiva: `docs/04_audit/0605_reauditoria_aud0604_2026-10-06.md`, `docs/04_audit/evidence/AUD0605-REMEDIATION-20261006/**`, esta seção e entradas novas próprias nos ledgers99/20/30. Fonte e lockfile somente leitura; staging explícito. Worktree/dependências/probes próprios `/tmp/cvg-aud0605-20261006/**`.
 - Recursos próprios: PostgreSQL sintético `cvg-aud0605-pg-20261006`, loopback55727, bancos separados suite/PG/revisão; imagem `cvg-operational-harness:aud0605-216e17c`; smokes somente contêineres/redes descartáveis próprios. Revisores readonly separados pools/error e job/preflight, outputs em subpastas próprias, sem descendentes.
 - Barra: F01 processo vivo/503 sem cookie/antiga200/recuperação em PostgreSQL/imagem; F02 serving sem DDL, recusa URL/auto-migrate, job separado/catalog owner/roles mínimos; regressão cobertura/PG/phase4a skip/type/lint/formato/critical/mutation/docs, smoke22 e scanner imagem/diff. Certify/E2E/SBOM/licenças locais NOT_RUN. CI remoto aferido por SHA.
 - Push normal `origin HEAD:main` autorizado; sem force/rewrite, dados reais, provider/deploy, mudança de política semanal ou proteção concorrente (responsável Claude após CI conforme pedido). Achados serão registrados sem alterar código alheio.
 
 - Fechamento AUD0605: F01/F02 fechados no escopo, sem novo finding. Suíte2.953/PG302 zero skips, critical/mutation/básicos PASS; imagem22/28 e scanner padrão0/diff2 zero. Fonte949/evidências115 conferidas; próprios recursos removidos, reviewers encerrados. Publicação normal autorizada em sequência; CI atual/proteção/ambiente pendentes, NO_GO.
+
+- Publicação AUD0605: main confirmado e79d754 por push normal; commits142a170/216e17c e auditoria própria publicados. Recibo documental em follow-up; CI atual em andamento/pendente, proteção coordenada com frente responsável. Sem GO ou política semanal alterada.
 
 ## AUD-0604 — reauditoria AUD-0603 e publicação autorizada — 06/10/2026
 
