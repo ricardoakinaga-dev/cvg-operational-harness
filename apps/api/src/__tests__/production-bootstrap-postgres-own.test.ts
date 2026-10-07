@@ -517,6 +517,110 @@ describe.skipIf(!databaseUrl)(
       })
     }, 60_000)
 
+    describe('identity switch is atomic and retires the presented lineage (AUD-0603)', () => {
+      type Who = {
+        operatorId: string
+        role: 'Admin' | 'Supervisor'
+        tenantId: string
+      }
+      const supervisor: Who = { ...identity, role: 'Supervisor' }
+      const url = '/v1/admin/agents'
+      const cookieOf = (response: { headers: Record<string, unknown> }) =>
+        String(response.headers['set-cookie']).split(';')[0]!
+
+      it('a failed create rolls the revocation back: previous cookie untouched (F01)', async () => {
+        await withDatabase(async ({ open, admin, auth, sessionRole }) => {
+          const app = await open()
+          const login = (who: Who, cookie?: string) =>
+            app.inject({
+              url: '/v1/session',
+              headers: {
+                ...headers,
+                ...(cookie ? { cookie } : {}),
+                'x-cvg-operator-token': createTrustedOperatorIdentityToken(
+                  who,
+                  key
+                )
+              }
+            })
+          const a = cookieOf(await login(identity))
+          await admin.query(
+            `REVOKE EXECUTE ON FUNCTION ${auth}.operator_session_create(bytea,text,text,text,timestamptz) FROM ${sessionRole}`
+          )
+          try {
+            const failed = await login(supervisor, a)
+            expect(failed.statusCode).toBe(503)
+            expect(failed.headers['set-cookie']).toBeUndefined()
+          } finally {
+            await admin.query(
+              `GRANT EXECUTE ON FUNCTION ${auth}.operator_session_create(bytea,text,text,text,timestamptz) TO ${sessionRole}`
+            )
+          }
+          // The revocation was rolled back with the failed create.
+          expect(
+            (await app.inject({ url, headers: { ...headers, cookie: a } }))
+              .statusCode
+          ).toBe(200)
+          const retried = await login(supervisor, a)
+          expect(retried.statusCode).toBe(200)
+          expect(
+            (await app.inject({ url, headers: { ...headers, cookie: a } }))
+              .statusCode
+          ).toBe(401)
+          // Any role: a live session answers GET /v1/session by cookie.
+          expect(
+            (
+              await app.inject({
+                url: '/v1/session',
+                headers: { ...headers, cookie: cookieOf(retried) }
+              })
+            ).statusCode
+          ).toBe(200)
+        })
+      }, 60_000)
+
+      it('switching with a rotated predecessor cookie revokes its successor (F02)', async () => {
+        await withDatabase(async ({ open }) => {
+          const app = await open()
+          const login = (who: Who, cookie?: string) =>
+            app.inject({
+              url: '/v1/session',
+              headers: {
+                ...headers,
+                ...(cookie ? { cookie } : {}),
+                'x-cvg-operator-token': createTrustedOperatorIdentityToken(
+                  who,
+                  key
+                )
+              }
+            })
+          const a1 = cookieOf(await login(identity))
+          const a2 = cookieOf(await login(identity, a1))
+          expect(
+            (await app.inject({ url, headers: { ...headers, cookie: a2 } }))
+              .statusCode
+          ).toBe(200)
+          const switched = await login(supervisor, a1)
+          expect(switched.statusCode).toBe(200)
+          const c = cookieOf(switched)
+          for (const old of [a1, a2]) {
+            expect(
+              (await app.inject({ url, headers: { ...headers, cookie: old } }))
+                .statusCode
+            ).toBe(401)
+          }
+          expect(
+            (
+              await app.inject({
+                url: '/v1/session',
+                headers: { ...headers, cookie: c }
+              })
+            ).statusCode
+          ).toBe(200)
+        })
+      }, 60_000)
+    })
+
     it('fails readiness, cookie and token-only requests on auth outage, then recovers', async () => {
       await withDatabase(async ({ open, admin, auth, sessionRole }) => {
         const app = await open()

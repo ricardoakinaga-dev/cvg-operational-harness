@@ -1306,6 +1306,9 @@ export class GovernedAgentRuntime {
     // approval executes once after resume (the journal re-arms EFFECT_FAILED).
     // The read is awaited, so cancellation and the deadline are checked again
     // after it, in beginStage, with no await before the body (AUD-0602 F01).
+    // Precedence: a pause seen by this read wins over a cancellation that
+    // also arrived, because `paused` hands the work back to the queue while a
+    // cancellation denies the turn; in both cases the effect never starts.
     const pausedBeforeBody = await readPause()
     if (pausedBeforeBody !== undefined) {
       if (effectJournal !== undefined && journalAttemptId !== undefined) {

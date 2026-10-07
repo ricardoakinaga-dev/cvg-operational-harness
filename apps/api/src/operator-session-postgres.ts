@@ -139,6 +139,46 @@ export class PostgresOperatorSessionStore implements OperatorSessionStore {
     return { sessionId, identity, expiresAt }
   }
 
+  async switchIdentity(
+    previousSessionId: string,
+    input: { identity: OperatorIdentity; expiresAt: number }
+  ): Promise<OperatorSessionRecord> {
+    const { identity, expiresAt } = validatedInput(input)
+    const sessionId = createOpaqueOperatorSessionId()
+    const digest = digestSessionId(sessionId)
+    if (!digest) throw new Error('Generated operator session is invalid')
+    const previousDigest = digestSessionId(previousSessionId)
+    const client = await this.pool.connect()
+    let failed = true
+    try {
+      await client.query('BEGIN')
+      // Both functions run in this transaction: a failed create rolls the
+      // revocation back, so the previous session survives intact.
+      if (previousDigest) {
+        await client.query(
+          `SELECT ${this.schema}.operator_session_revoke($1)`,
+          [previousDigest]
+        )
+      }
+      await client.query(
+        `SELECT ${this.schema}.operator_session_create($1,$2,$3,$4,$5)`,
+        [
+          digest,
+          identity.tenantId,
+          identity.operatorId,
+          identity.role,
+          new Date(expiresAt)
+        ]
+      )
+      await client.query('COMMIT')
+      failed = false
+      return { sessionId, identity, expiresAt }
+    } finally {
+      if (failed) await client.query('ROLLBACK').catch(() => undefined)
+      client.release(failed)
+    }
+  }
+
   async revoke(sessionId: string): Promise<void> {
     const digest = digestSessionId(sessionId)
     if (!digest) return

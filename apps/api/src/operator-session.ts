@@ -25,6 +25,15 @@ export interface OperatorSessionStore {
     previousSessionId: string,
     input: { identity: OperatorIdentity; expiresAt: number }
   ): Promise<OperatorSessionRecord>
+  /**
+   * Atomically retires the whole family of `previousSessionId` (any digest
+   * of its lineage, live or already rotated) and creates a session in a new
+   * family. If either step fails nothing changes (SPEC 0144, AUD-0603).
+   */
+  switchIdentity?(
+    previousSessionId: string,
+    input: { identity: OperatorIdentity; expiresAt: number }
+  ): Promise<OperatorSessionRecord>
 }
 
 export interface InMemoryOperatorSessionStoreOptions {

@@ -803,8 +803,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         )
       }
       // Rotation keeps the session family (SPEC 0144, AUD-0601 F02): logout
-      // with any digest of the lineage then revokes every successor. A token
-      // for another operator starts a new family and retires the old one.
+      // with any digest of the lineage then revokes every successor.
       const sameOperator =
         existing !== undefined &&
         existing.identity.tenantId === identity.tenantId &&
@@ -812,43 +811,32 @@ export function buildServer(options: BuildServerOptions = {}) {
         existing.identity.role === identity.role
       const rotate =
         sameOperator && options.operatorSessionStore.replace !== undefined
+      // Any other presented cookie — another identity, or a rotated/stale
+      // digest whose lineage lives on in a successor — retires its whole
+      // family in the same transaction that creates the new session, so a
+      // failure in either step changes nothing (AUD-0603 F01/F02).
+      const presentedSessionId = parseOperatorSessionCookie(
+        request.headers.cookie
+      )
+      const retireLineage = !rotate && presentedSessionId !== null
       const next = { identity, expiresAt: Number(claims.exp) * 1000 }
-      // Another identity (or a store without atomic replace) retires the
-      // previous family durably first (SPEC 0144, AUD-0602 F02). If that
-      // fails the answer is 503 without Set-Cookie: the previous cookie is
-      // kept, no second family exists and no new session is exposed.
-      const retirePrevious = existing !== undefined && !rotate
-      if (existing && retirePrevious) {
-        try {
-          await options.operatorSessionStore.revoke(existing.sessionId)
-        } catch {
-          reply.code(503)
-          return fail(
-            'configuration_error',
-            'Operator session store is unavailable',
-            correlationId
-          )
-        }
-      }
+      const store = options.operatorSessionStore
       let record: OperatorSessionRecord
       try {
-        record =
-          rotate && existing
-            ? await options.operatorSessionStore.replace!(
-                existing.sessionId,
-                next
-              )
-            : await options.operatorSessionStore.create(next)
-      } catch {
-        reply.code(503)
-        // A retired family's cookie is no longer usable; a failed rotation
-        // keeps the previous cookie, which is still valid.
-        if (retirePrevious) {
-          reply.header(
-            'set-cookie',
-            clearOperatorSessionCookie(httpSecurity.enforceHttps)
-          )
+        if (rotate && existing) {
+          record = await store.replace!(existing.sessionId, next)
+        } else if (retireLineage && store.switchIdentity) {
+          record = await store.switchIdentity(presentedSessionId, next)
+        } else if (retireLineage) {
+          // Stores without an atomic switch (the in-memory test store).
+          await store.revoke(presentedSessionId)
+          record = await store.create(next)
+        } else {
+          record = await store.create(next)
         }
+      } catch {
+        // Nothing committed: the previous cookie stays as it was.
+        reply.code(503)
         return fail(
           'configuration_error',
           'Operator session store is unavailable',
