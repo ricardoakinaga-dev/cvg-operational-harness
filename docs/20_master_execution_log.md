@@ -1,3 +1,7 @@
+# PLAN0374-B-FABLE-20261007 — Fase B (B1–B3, B5) e Fase C preparada — 07/10/2026
+
+- Fable (Claude Code) como lead; lanes Opus: B1 fronteira (`check-product-boundary.mjs` 22 min → 26 s, 50 negativos novos, contraexemplos T2 cobertos, tabela de 169 exceções a revisar), B2/B3 (`PUBLIC_API.md` superfície suportada + decisão sobre o consumidor atual + `examples/consumers/reception-agent`), B5 (`CVG_TEST_SCOPE`, ci-bar selado por escopo, `product-shift-assistant.yml`), Fase C (`deploy/harness/**`, smoke remoto, runbook 0805, achados G1–G8). Verificação do lead: 2.707 testes PASS/0 FAIL, produto 37/37, typecheck/contrato CI/docs PASS. [Evidência](04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md). Sem push; `NO_GO` preservado; aceites HISO dependem de reauditoria Codex e revisão T3.
+
 # AUD-0605 — reauditoria AUD-0604 e publicação autorizada — 06/10/2026
 
 - Codex, task `AUD0605-REMEDIATION-PUBLISH-20261006`, AUDIT/T1 documental; candidata216e17c, dois commits recebidos após main5b098a7. [Parecer](04_audit/0605_reauditoria_aud0604_2026-10-06.md), [provas](04_audit/evidence/AUD0605-REMEDIATION-20261006/summary.md). Usuário autoriza auditoria/commit próprio/push normal, sem release.

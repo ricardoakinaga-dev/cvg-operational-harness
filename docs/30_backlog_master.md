@@ -1,3 +1,17 @@
+# PLAN0374-B-FABLE-20261007 — itens B1–B3, B5 e Fase C preparada — 07/10/2026
+
+- Task `PLAN0374-B-FABLE-20261007` (Fable + Opus): `DONE_LOCAL`. [Evidência](04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md). Cartões [0370](03_build/0370_harness_product_isolation_backlog.md) HISO-005/006/009/010 anotados.
+
+| Item                               | Estado        | Critério / próxima ação                                                                                      |
+| ---------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------ |
+| B1 — HISO-005 fronteira executável | BUILT         | Gate 26 s PASS + negativos; reauditoria Codex da tabela de exceções e da premissa do lockfile (B6)           |
+| B2 — HISO-009 exports suportados   | BUILT         | `PUBLIC_API.md` + teste de regressão; aceite na reauditoria Codex                                            |
+| B3 — consumidor neutro             | BUILT         | `examples/consumers/reception-agent` 7 testes; incluir `examples/` no gate de fronteira é melhoria futura    |
+| B5 — HISO-010 CI por artefato      | BUILT_T3_PEND | Revisão humana T3 do contrato `hiso-010-v1-core-sealed`; primeira execução real dos dois workflows           |
+| Fase C — preparação (C1–C9)        | PREPARED      | Decisões do usuário (destino, cofre, IdP, alerta, `BYPASSRLS`); ensaio local `--profile local-postgres`; C10 |
+| Fase A, B4                         | OUTRA SESSÃO  | `PLAN0374-A` (proteção do `main`, allowlist, Trivy, runbook de gates)                                        |
+| Produção                           | NO_GO         | GO só após Fase C com reauditoria no mesmo SHA/digest                                                        |
+
 # AUD-0605 — AUD-0604 reauditada; originais fechados no escopo — 06/10/2026
 
 - Task `AUD0605-REMEDIATION-PUBLISH-20261006`, Codex, auditoria DONE, publicação DONE_FIRST_PUSH_CONFIRMED. [Parecer](04_audit/0605_reauditoria_aud0604_2026-10-06.md), [evidências](04_audit/evidence/AUD0605-REMEDIATION-20261006/summary.md). Sem novos achados materiais demonstrados; produção NO_GO remoto/ambiente.

@@ -1,3 +1,10 @@
+# PLAN0374-B-FABLE-20261007 — Fase B de código, B5 e preparação da Fase C — 07/10/2026
+
+- Task `PLAN0374-B-FABLE-20261007`, Fable (Claude Code) com quatro agentes Opus, `status: DONE_LOCAL / PRODUCTION_NO_GO`. Pedido do usuário: "implemente todo o plano de melhoria junto com o opus". Divisão com a sessão `PLAN0374-A` (Fase A, B4) e Codex (A5/B6/C10) em [coordenação](08_runtime/agent_coordination.md). [Evidência](04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md).
+- `last_completed_action`: B1 gate `boundary:products` 26 s `PASS` (0 violações, 169 exceções vinculadas, 128 testes); B2/B3 exports suportados em `PUBLIC_API.md` + consumidor neutro `examples/consumers/reception-agent` (14 testes); B5 `CVG_TEST_SCOPE=core`, contrato `hiso-010-v1-core-sealed`, workflow do produto novo, denominadores core 360/2.940 + produto 2/37; Fase C preparada em `deploy/harness/**`, `scripts/production-target-smoke.ts` (5 testes) e runbook 0805 com achados G1–G8. Lead: `vitest run tests` 2.707 PASS/203 skip (sem PG)/0 FAIL, produto 37/37, typecheck/ci:bar:contract/docs/prettier PASS.
+- `verification_state`: HISO-005/009/010 continuam `IN_PROGRESS`; aceite depende da reauditoria Codex (B6) sobre a tabela de exceções, a premissa de confiança no lockfile e os exports; B5 exige revisão humana T3. Nenhuma execução real no GitHub Actions; `certify`/E2E/SBOM não rodados no checkout compartilhado. Nenhum item da Fase C executado em destino real.
+- `next_action`: usuário decide C1 (destino), cofre, emissor de token, receptor do alerta (A3), exceção `BYPASSRLS` do backup e revisão T3 do B5; `PLAN0374-A` fecha Fase A e B4; Codex faz B6 e depois C10. Commit local dos caminhos próprios; push só com autorização. Produção `NO_GO`.
+
 # AUD-0605 — correções AUD-0604 confirmadas; publicação autorizada — 06/10/2026
 
 - Task `AUD0605-REMEDIATION-PUBLISH-20261006`, Codex, `COMPLETED_AUDIT_AND_PUBLICATION / NO_GO_REMOTE_ENVIRONMENT`. Candidata216e17c, dois commits recebidos sobre main5b098a7; [parecer](04_audit/0605_reauditoria_aud0604_2026-10-06.md), [evidências](04_audit/evidence/AUD0605-REMEDIATION-20261006/summary.md).

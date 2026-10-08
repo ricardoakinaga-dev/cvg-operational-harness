@@ -1,0 +1,24 @@
+# PLAN0374 Fase C (C6) — daily logical backup with ledger anchors.
+# Install: deploy/harness/README.md (C6). Paths assume the deployed checkout
+# at /opt/cvg-harness (the same SHA as the running image).
+[Unit]
+Description=CVG harness PostgreSQL backup with audit chain anchors
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Dedicated account in the docker group, owner of the backup directories.
+User=cvg-backup
+Group=cvg-backup
+EnvironmentFile=/etc/cvg-harness/backup.env
+ExecStart=/opt/cvg-harness/deploy/harness/backup/backup.sh
+TimeoutStartSec=4h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# Wire OnFailure= to the alert channel chosen by operation (A3), e.g.
+# OnFailure=cvg-harness-notify@%n.service
+
+[Install]
+WantedBy=multi-user.target

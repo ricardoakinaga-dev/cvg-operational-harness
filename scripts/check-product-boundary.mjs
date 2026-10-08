@@ -1,18 +1,31 @@
 import {
   createBoundaryManifestReader,
+  createInstalledPackageVerifier,
+  installedContext,
+  locateInstalled,
   manifestDependencyFields
 } from './boundary-manifests.mjs'
 import {
   invalidTsconfigPathPatterns,
   expandSingleWildcard
 } from './tsconfig-path-grammar.mjs'
-// R2-G1: gate REJECTED; PASS is not evidence of HISO-005 isolation until
-// the R2-C1 cycle and its independent posterior review are accepted.
+// HISO-005 status (PLAN0374 B1, 2026-10-07): the gate completes on the real
+// repository in minutes and its known negative cases (direct, intermediary,
+// alias, workspace/installed dependency, dynamic loaders and the reproduced
+// T2 counterexamples) are covered by tests/product-boundary.test.js. HISO-005
+// is NOT accepted: acceptance still depends on an independent re-audit.
+//
+// Scope: first-party sources (packages, apps, legacy, products and any local
+// file a reference reaches) are parsed completely and fail closed. Installed
+// third-party packages are terminal nodes verified by canonical path, lock
+// metadata, declared successors and a product-identifier tripwire; their
+// implementation is not parsed (see createInstalledPackageVerifier).
 import fs from 'node:fs'
 import path from 'node:path'
 import { isBuiltin, createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { auditDynamicCodeExecution } from './boundary-code-execution.mjs'
 import {
   createBoundaryLexical,
@@ -68,7 +81,10 @@ function files(directory, result = [], manifests) {
   return result
 }
 
-export function auditProductBoundary(directory = process.cwd()) {
+export function auditProductBoundary(
+  directory = process.cwd(),
+  { graph: includeGraph = false, exceptions: applyExceptions = true } = {}
+) {
   const root = fs.realpathSync(directory)
   const metadata = createBoundaryManifestReader(root)
   const boundaryManifest = (filename, rootManifest = false) =>
@@ -219,6 +235,130 @@ export function auditProductBoundary(directory = process.cwd()) {
   const owner = (file) =>
     [...workspaces.values()].find((item) => inside(item.workspace, file))
   const workspaceNode = (item) => path.join(item.workspace, 'package.json')
+  // Product identifiers for the installed-package tripwire: every product
+  // workspace name and every products/<dir> path spelling.
+  const productReferences = new Set(
+    [...workspaces.values()]
+      .filter((item) => inside(productRoot, item.workspace))
+      .map((item) => item.pkg.name)
+  )
+  if (fs.existsSync(productRoot))
+    for (const entry of fs.readdirSync(productRoot))
+      productReferences.add(`products/${entry}`)
+  const installedPackages = createInstalledPackageVerifier(root, {
+    productReferences: [...productReferences]
+  })
+  // Installed third-party packages are terminal nodes keyed by their canonical
+  // directory. They are verified and expanded by settleInstalled() without
+  // ever entering the parsed source inventory.
+  const installedNodes = new Map()
+  const installedQueue = []
+  const installedDrift = new Map()
+  const installedVerdicts = new Map()
+  const installedNode = (from, located) => {
+    let node = installedNodes.get(located.context)
+    if (!node) {
+      const manifest = path.join(located.context, 'package.json')
+      node = fs.existsSync(manifest) ? manifest : located.context
+      installedNodes.set(located.context, node)
+      installedQueue.push({ node, ...located })
+    }
+    edge(from, node)
+  }
+  // Canonical classification of a successor reached from an installed node:
+  // product -> violation witness; workspace -> first-party closure continues;
+  // installed -> verified terminal; anything else stays fail-closed.
+  const installedSuccessor = (node, target, specifier) => {
+    if (!inside(root, target)) {
+      reportDiagnostic(node, {
+        file: path.relative(root, node),
+        specifier,
+        reason: 'MODULE_OUTSIDE_REPOSITORY'
+      })
+      return
+    }
+    const vendor = installedContext(root, target)
+    if (vendor) {
+      installedNode(node, vendor)
+      return
+    }
+    const manifest = path.join(target, 'package.json')
+    edge(node, fs.existsSync(manifest) ? manifest : target)
+    if (inside(productRoot, target)) return
+    const workspace = owner(target)
+    if (workspace) {
+      edge(node, workspaceNode(workspace))
+      return
+    }
+    reportDiagnostic(node, {
+      file: path.relative(root, node),
+      specifier,
+      reason: 'UNVERIFIED_INSTALLED_DEPENDENCY'
+    })
+    const context = fs.statSync(target).isDirectory()
+      ? target
+      : path.dirname(target)
+    governActor(context)
+  }
+  const settleInstalled = () => {
+    while (installedQueue.length) {
+      const { node, context, key, valid } = installedQueue.shift()
+      // A product-owned installation is itself the violation witness.
+      if (inside(productRoot, context)) continue
+      if (!valid) {
+        reportDiagnostic(node, {
+          file: path.relative(root, context),
+          reason: 'UNVERIFIED_INSTALLED_PACKAGE',
+          detail: 'INVALID_INSTALLED_PATH'
+        })
+        continue
+      }
+      const verdict = installedPackages.verify(context, key)
+      installedVerdicts.set(node, verdict)
+      if (!verdict.verified)
+        reportDiagnostic(node, {
+          file: path.relative(root, node),
+          reason: 'UNVERIFIED_INSTALLED_PACKAGE',
+          detail: verdict.reason
+        })
+      else if (verdict.drift) installedDrift.set(node, verdict.drift)
+      for (const { name } of verdict.dependencies ?? []) {
+        const located = locateInstalled(
+          root,
+          path.join(context, 'package.json'),
+          name
+        )
+        // Absent optional/peer/unmet dependencies have no physical edge.
+        if (!located) continue
+        if (located.dangling)
+          reportDiagnostic(node, {
+            file: path.relative(root, located.candidate),
+            specifier: name,
+            reason: 'UNVERIFIED_INSTALLED_PACKAGE',
+            detail: 'DANGLING_INSTALLED_LINK'
+          })
+        else installedSuccessor(node, located.context, name)
+      }
+      const { references, links } = installedPackages.scan(context)
+      for (const { file, reference } of references)
+        reportDiagnostic(node, {
+          file: path.relative(root, file),
+          reference,
+          reason: 'INSTALLED_PACKAGE_REFERENCES_PRODUCT'
+        })
+      for (const link of links) {
+        let target
+        try {
+          target = fs.realpathSync(link)
+        } catch (error) {
+          // A dangling link cannot be loaded; nothing physical is reachable.
+          if (error.code === 'ENOENT') continue
+          throw error
+        }
+        installedSuccessor(node, target, path.relative(root, link))
+      }
+    }
+  }
   const governedActors = new Set()
   const linkedManifests = new Set()
   // Shape validation and graph reachability are separate obligations. Every
@@ -270,32 +410,39 @@ export function auditProductBoundary(directory = process.cwd()) {
         // A declared workspace edge supplements, never replaces, the physical
         // successor. Node resolves the declared installation key in the
         // declaring manifest's lookup order, including npm/workspace aliases.
-        const installed = metadata.installedPackage(pkgFile, name, {
-          field,
-          version
-        })
+        const installed = metadata.installedPackage(pkgFile, name)
         if (!installed) continue
-        edge(pkgFile, installed.manifest ?? installed.context)
-        const workspace = [...workspaces.values()].find(
-          (item) => item.workspace === installed.context
-        )
-        if (workspace) edge(pkgFile, workspaceNode(workspace))
-        else
-          reportDiagnostic(pkgFile, {
-            file: path.relative(root, pkgFile),
-            specifier: name,
-            reason: 'UNVERIFIED_INSTALLED_DEPENDENCY'
-          })
-        // A physical directory owns recursive metadata even if the root
-        // package.json is absent; unknown implementation still blocks.
-        governActor(installed.context)
+        const vendor = installedContext(root, installed.context)
+        if (vendor) {
+          // Canonically installed third-party package: verified terminal node.
+          installedNode(pkgFile, vendor)
+        } else {
+          // Canonical first-party destination (workspace link, product link or
+          // local directory): its metadata stays governed and fail-closed.
+          edge(pkgFile, installed.manifest ?? installed.context)
+          const workspace = [...workspaces.values()].find(
+            (item) => item.workspace === installed.context
+          )
+          if (workspace) edge(pkgFile, workspaceNode(workspace))
+          else
+            reportDiagnostic(pkgFile, {
+              file: path.relative(root, pkgFile),
+              specifier: name,
+              reason: 'UNVERIFIED_INSTALLED_DEPENDENCY'
+            })
+          // A physical directory owns recursive metadata even if the root
+          // package.json is absent; unknown implementation still blocks.
+          governActor(installed.context)
+        }
+        // The runtime entry is resolved as well: an entry that escapes the
+        // installed directory is classified by its own canonical path.
         for (const mode of ['require', 'import'])
           runtimeReferences.push({
             file: pkgFile,
             location: path.relative(root, pkgFile),
             specifier: name,
             mode,
-            manifestEdge: { field, version, nearest: installed.context }
+            manifestEdge: { field, version }
           })
       }
   }
@@ -400,8 +547,15 @@ export function auditProductBoundary(directory = process.cwd()) {
       })
       return
     }
-    // Discovery skips vendor trees, but every resolved physical destination is
-    // part of the closure. A declaration is never evidence about different JS.
+    // Every resolved physical destination is part of the closure. Inside an
+    // installed package it is a verified terminal node (never parsed); a
+    // canonical path inside products/ is a violation witness either way.
+    const vendor = installedContext(root, target)
+    if (vendor) {
+      installedNode(file, vendor)
+      return
+    }
+    // A declaration is never evidence about different JS.
     edge(file, target)
     if (extensions.has(path.extname(target))) {
       if (!discoveredSources.has(target)) {
@@ -417,14 +571,8 @@ export function auditProductBoundary(directory = process.cwd()) {
     }
     const targetOwner = owner(target)
     if (targetOwner) edge(file, workspaceNode(targetOwner))
-    // A source reference makes its physical Node package context an actor.
+    // A source reference makes its nearest physical package context an actor.
     // Documentary trees remain opaque unless an implementation edge enters.
-    const installedContext = metadata.physicalPackage(target)
-    if (installedContext) {
-      const manifest = path.join(installedContext, 'package.json')
-      edge(file, fs.existsSync(manifest) ? manifest : installedContext)
-      governActor(installedContext)
-    }
     let context = path.dirname(target)
     while (inside(root, context)) {
       const pkgFile = path.join(context, 'package.json')
@@ -435,7 +583,7 @@ export function auditProductBoundary(directory = process.cwd()) {
         governActor(context)
         break
       }
-      if (context === (installedContext ?? root)) break
+      if (context === root) break
       context = path.dirname(context)
     }
   }
@@ -500,47 +648,12 @@ export function auditProductBoundary(directory = process.cwd()) {
             mode: ref.mode,
             reason: 'UNVERIFIED_INSTALLED_RUNTIME_RESOLUTION'
           })
-        else if (typeof target === 'string') {
-          const physical = fs.realpathSync(target)
-          if (!inside(root, physical))
-            reportDiagnostic(ref.file, {
-              file: ref.location,
-              specifier: ref.specifier,
-              mode: ref.mode,
-              reason: 'MODULE_OUTSIDE_REPOSITORY'
-            })
-          else {
-            edge(ref.file, physical)
-            let context = metadata.runtimePackage(
-              ref.file,
-              ref.specifier,
-              ref.manifestEdge,
-              physical
-            )
-            if (!context) {
-              context = path.dirname(physical)
-              while (
-                context !== root &&
-                !fs.existsSync(path.join(context, 'package.json'))
-              )
-                context = path.dirname(context)
-            }
-            const manifest = path.join(context, 'package.json')
-            edge(ref.file, fs.existsSync(manifest) ? manifest : context)
-            const workspace = [...workspaces.values()].find(
-              (item) => item.workspace === context
-            )
-            if (context !== ref.manifestEdge.nearest && !workspace)
-              reportDiagnostic(ref.file, {
-                file: ref.location,
-                specifier: ref.specifier,
-                mode: ref.mode,
-                reason: 'UNVERIFIED_INSTALLED_DEPENDENCY'
-              })
-            governActor(context)
-            localTarget(ref.file, ref.location, ref.specifier, physical)
-          }
-        }
+        // The entry's canonical path decides: installed package (verified
+        // terminal), product (violation), outside (diagnostic) or first-party
+        // (parsed, nearest package governed). A null entry (types-only or
+        // condition-less package) adds no physical runtime edge.
+        else if (typeof target === 'string')
+          localTarget(ref.file, ref.location, ref.specifier, target)
         continue
       }
       if (typeof target === 'string')
@@ -591,6 +704,17 @@ export function auditProductBoundary(directory = process.cwd()) {
       ([name]) => specifier === name || specifier.startsWith(`${name}/`)
     )?.[1]
     if (dependency) edge(file, workspaceNode(dependency))
+    // A bare package specifier also names a physical package directory. If
+    // Node's lookup from this file finds it canonically inside products/, the
+    // reference is a product edge even when no entry file resolves.
+    const bare = /^(?:@[^/]+\/)?[^./@][^/]*/.exec(specifier)?.[0]
+    if (bare && !specifier.startsWith('#')) {
+      const located = locateInstalled(root, file, bare)
+      if (located?.context && inside(productRoot, located.context)) {
+        const manifest = path.join(located.context, 'package.json')
+        edge(file, fs.existsSync(manifest) ? manifest : located.context)
+      }
+    }
     const resolved = typeDirective
       ? ts.resolveTypeReferenceDirective(
           specifier,
@@ -657,9 +781,14 @@ export function auditProductBoundary(directory = process.cwd()) {
     return node && (ts.isStringLiteralLike(node) ? node.text : undefined)
   }
   let sourceIndex = 0
-  while (sourceIndex < sourceFiles.length || runtimeReferences.length) {
+  while (
+    sourceIndex < sourceFiles.length ||
+    runtimeReferences.length ||
+    installedQueue.length
+  ) {
     if (sourceIndex === sourceFiles.length) {
-      resolveRuntime()
+      if (installedQueue.length) settleInstalled()
+      else resolveRuntime()
       continue
     }
     const file = sourceFiles[sourceIndex++]
@@ -1050,10 +1179,14 @@ export function auditProductBoundary(directory = process.cwd()) {
           isMeta(target.expression)
       )
     )
+    // `expression` digests the complete flagged expression, so a reviewed
+    // exception binds the whole construct (a multi-line call includes its
+    // arguments), not merely the line where it starts.
     const loaderDiagnostic = (node, reason) =>
       reportDiagnostic(file, {
         file: `${path.relative(root, file)}:${ts.getLineAndCharacterOfPosition(source, node.getStart()).line + 1}`,
-        reason
+        reason,
+        expression: expressionDigest(node.getText(source))
       })
     const { scalarMetadata } = auditDynamicCodeExecution({
       ts,
@@ -1580,23 +1713,740 @@ export function auditProductBoundary(directory = process.cwd()) {
   }
   for (const [file, references] of consumerEnvReferences)
     if (seen.has(file)) diagnostics.push(...references)
+  // Restricted exceptions apply to core-closure diagnostics only, after the
+  // provenance filter, and never to any reason outside exceptableReasons.
+  const exceptions = []
+  const exceptionUse = new Map()
+  const sourceLines = new Map()
+  const pinState = new Map()
+  // A group's pins name files its justification depends on (for example the
+  // callee that receives an escaped capability); any byte change lapses it.
+  const pinsHold = (pins) =>
+    Object.entries(pins).every(([file, digest]) => {
+      if (!pinState.has(file)) {
+        const target = path.join(root, file)
+        pinState.set(
+          file,
+          fs.existsSync(target)
+            ? createHash('sha256').update(fs.readFileSync(target)).digest('hex')
+            : null
+        )
+      }
+      return pinState.get(file) === digest
+    })
+  const exceptionKey = (diagnostic) => {
+    if (!exceptableReasons.has(diagnostic.reason)) return undefined
+    const match = /^(.+):(\d+)$/.exec(diagnostic.file ?? '')
+    if (!match || typeof diagnostic.expression !== 'string') return undefined
+    const [, file, line] = match
+    if (!sourceLines.has(file))
+      sourceLines.set(
+        file,
+        fs.readFileSync(path.join(root, file), 'utf8').split('\n')
+      )
+    const text = normalizeLine(sourceLines.get(file)[Number(line) - 1] ?? '')
+    return JSON.stringify([
+      diagnostic.reason,
+      file,
+      text,
+      diagnostic.expression
+    ])
+  }
+  for (let index = 0; index < diagnostics.length; ) {
+    const key = applyExceptions && exceptionKey(diagnostics[index])
+    const site = key && exceptionSites.get(key)
+    const used = (key && exceptionUse.get(key)) || 0
+    if (site && used < site.max && pinsHold(site.pins)) {
+      exceptionUse.set(key, used + 1)
+      exceptions.push({
+        ...diagnostics.splice(index, 1)[0],
+        exception: site.id
+      })
+    } else index += 1
+  }
+  // Informational: listed capacity not consumed by a file present in this
+  // tree (a fixed or edited site, or a lapsed pin). Absent files, such as
+  // compiled mirrors in a clean checkout, are not listed.
+  const unusedExceptions = applyExceptions
+    ? [...exceptionSites]
+        .filter(
+          ([key, { max }]) =>
+            (exceptionUse.get(key) ?? 0) < max &&
+            fs.existsSync(path.join(root, JSON.parse(key)[1]))
+        )
+        .map(([key, { id, max, pins }]) => {
+          const [reason, file, line, expression] = JSON.parse(key)
+          return {
+            exception: id,
+            reason,
+            file,
+            line,
+            expression,
+            unused: max - (exceptionUse.get(key) ?? 0),
+            pinsHold: pinsHold(pins)
+          }
+        })
+    : []
+  // Known product identity in reached code is a failure, not an unknown.
+  const failing = new Set([
+    'CONSUMER_ENV_IN_CORE',
+    'INSTALLED_PACKAGE_REFERENCES_PRODUCT'
+  ])
   const status =
     violations.length > 0 ||
-    diagnostics.some(({ reason }) => reason === 'CONSUMER_ENV_IN_CORE')
+    diagnostics.some(({ reason }) => failing.has(reason))
       ? 'FAIL'
       : diagnostics.length > 0
         ? 'INCOMPLETE'
         : 'PASS'
-  return {
+  const coreInstalled = [...installedNodes.values()].filter((node) =>
+    seen.has(node)
+  )
+  const result = {
     sourceFiles: sourceFiles.length,
     coreFiles: coreFiles.length,
     workspaceCount: workspaces.size,
+    installedPackageCount: coreInstalled.length,
     edgeCount: [...graph.values()].reduce((sum, set) => sum + set.size, 0),
     violations,
     diagnostics,
+    exceptionsApplied: applyExceptions,
+    exceptions,
+    unusedExceptions,
+    // Informational: lock-verified installed packages whose on-disk version
+    // differs from the committed lockfile (a stale install). Not a boundary
+    // path; `npm ci` realigns the tree.
+    installedLockDrift: coreInstalled
+      .filter((node) => installedDrift.has(node))
+      .map((node) => installedDrift.get(node)),
     status,
     passed: status === 'PASS'
   }
+  if (includeGraph) {
+    // Resolved core closure: every node reachable from the core starts, its
+    // outgoing edges (including those that end in a product witness) and the
+    // verification verdict of each installed terminal node.
+    const relative = (file) => path.relative(root, file)
+    result.graph = {
+      starts: starts.map(relative),
+      nodes: [...seen].map(relative).sort(),
+      edges: [...seen]
+        .flatMap((from) =>
+          [...(graph.get(from) ?? [])].map((to) => [
+            relative(from),
+            relative(to)
+          ])
+        )
+        .sort(),
+      installed: coreInstalled
+        .map((node) => {
+          const verdict = installedVerdicts.get(node)
+          return {
+            node: relative(node),
+            verified: verdict?.verified ?? false,
+            source: verdict?.source ?? null,
+            reason: verdict?.reason ?? null
+          }
+        })
+        .sort((a, b) => a.node.localeCompare(b.node))
+    }
+  }
+  return result
+}
+
+// Reviewed first-party capability exceptions. HISO-005 allows exceptions only
+// with a restricted target and a justification. A site accepts at most `max`
+// diagnostics that match all of: the reason, the file, the whitespace-
+// normalized text of the line where the flagged expression starts, and the
+// digest of the complete flagged expression; and only while every file pinned
+// by its group is byte-identical. Any other file, reason, line, expression,
+// one occurrence more or a changed pin stays a blocking diagnostic. Only the
+// per-file capability analyses can be excepted: product edges, SHIFT_* reads,
+// unresolved modules and installed-package findings never can.
+//
+// Residual risk accepted per site: the binding covers the flagged expression,
+// not every identity it uses (for example a rebinding of `vi` elsewhere in the
+// same file). The accepted set is printed with each result and `--strict`
+// disables the table. The list was authored by the B1 change (PLAN0374) after
+// inspecting every site; it is subject to the independent re-audit and is not
+// an acceptance of HISO-005.
+const capabilityExceptions = [
+  {
+    id: 'vitest-fetch-spy',
+    reason: 'UNVERIFIED_MODULE_LOADER_ESCAPE',
+    justification:
+      "Vitest replaces the fetch global inside a test: globalThis goes to vi.spyOn with the literal method 'fetch'. No module or code string is acquired.",
+    sites: {
+      'apps/web/src/__tests__/app.test.tsx': {
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {": {
+          '211d07ad9adf840f': 6
+        },
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {": {
+          '211d07ad9adf840f': 6
+        },
+        "vi.spyOn(globalThis, 'fetch').mockRejectedValue(": {
+          '211d07ad9adf840f': 1
+        }
+      },
+      'apps/web/src/__tests__/attendance-approval-conflict.test.tsx': {
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {": {
+          '211d07ad9adf840f': 2
+        }
+      },
+      'apps/web/src/__tests__/audit-checkpoint-app.test.tsx': {
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {": {
+          '211d07ad9adf840f': 1
+        }
+      },
+      'apps/web/src/__tests__/journeys-identity-race.test.tsx': {
+        ".spyOn(globalThis, 'fetch')": {
+          '211d07ad9adf840f': 1
+        },
+        "vi.spyOn(globalThis, 'fetch').mockImplementation(() =>": {
+          '211d07ad9adf840f': 1
+        },
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {": {
+          '211d07ad9adf840f': 3
+        }
+      },
+      'apps/web/src/__tests__/platform-panel.test.tsx': {
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {": {
+          '211d07ad9adf840f': 1
+        },
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {": {
+          '211d07ad9adf840f': 5
+        }
+      },
+      'apps/web/src/__tests__/trusted-session-app.test.tsx': {
+        "return vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {":
+          {
+            '211d07ad9adf840f': 1
+          }
+      },
+      'apps/web/src/api/audit-evidence-checkpoint-client.test.ts': {
+        ".spyOn(globalThis, 'fetch')": {
+          '211d07ad9adf840f': 1
+        },
+        "const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(": {
+          '211d07ad9adf840f': 1
+        }
+      },
+      'apps/web/src/api/client.test.ts': {
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {": {
+          '211d07ad9adf840f': 1
+        }
+      },
+      'apps/web/src/api/release-candidate-client.test.ts': {
+        ".spyOn(globalThis, 'fetch')": {
+          '211d07ad9adf840f': 1
+        },
+        "vi.spyOn(globalThis, 'fetch').mockImplementation(() =>": {
+          '211d07ad9adf840f': 1
+        },
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {": {
+          '211d07ad9adf840f': 1
+        }
+      },
+      'apps/web/src/api/resilient-client.test.ts': {
+        "vi.spyOn(globalThis, 'fetch').mockImplementation(() => {": {
+          '211d07ad9adf840f': 3
+        },
+        "vi.spyOn(globalThis, 'fetch').mockImplementation(() =>": {
+          '211d07ad9adf840f': 2
+        },
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) => {":
+          {
+            '211d07ad9adf840f': 2
+          },
+        "vi.spyOn(globalThis, 'fetch').mockImplementation(": {
+          '211d07ad9adf840f': 2
+        }
+      },
+      'apps/web/src/features/journeys/journeys.test.tsx': {
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {": {
+          '211d07ad9adf840f': 1
+        }
+      },
+      'apps/web/src/features/platform/handoff-policy-control-center.test.tsx': {
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {": {
+          '211d07ad9adf840f': 1
+        },
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {": {
+          '211d07ad9adf840f': 1
+        }
+      },
+      'apps/web/src/features/platform/knowledge-source-catalog.test.tsx': {
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {": {
+          '211d07ad9adf840f': 1
+        }
+      },
+      'apps/web/src/features/platform/multi-agent-creation.test.tsx': {
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {": {
+          '211d07ad9adf840f': 6
+        }
+      },
+      'apps/web/src/features/platform/platform.test.tsx': {
+        ".spyOn(globalThis, 'fetch')": {
+          '211d07ad9adf840f': 1
+        },
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {": {
+          '211d07ad9adf840f': 2
+        }
+      },
+      'apps/web/src/features/platform/prompt-profile-control-center.test.tsx': {
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {": {
+          '211d07ad9adf840f': 1
+        }
+      },
+      'apps/web/src/features/platform/release-candidate-ledger.test.tsx': {
+        "vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {": {
+          '211d07ad9adf840f': 1
+        }
+      }
+    }
+  },
+  {
+    id: 'entrypoint-subprocess',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'The test runs the core entrypoint itself (tsx apps/worker/src/main.ts or tsx apps/api/src/main.ts) as a child process and reads its streams; the bound expressions include the literal arguments, and that entrypoint is already inside the analysed core closure.',
+    sites: {
+      'apps/api/src/__tests__/identity-composition-wiring.test.ts': {
+        "child.once('close', (code) => resolve({ code, output }))": {
+          '7e3a11f8d590dd59': 1
+        },
+        "child.once('error', reject)": {
+          cf3ce6f5fc7dd1b9: 1
+        },
+        "child.stderr.on('data', (chunk) => {": {
+          '76f89432d910db42': 1
+        },
+        "child.stdout.on('data', (chunk) => {": {
+          f09a5636ee06b7a1: 1
+        },
+        'const child = spawn(': {
+          '43f55bc626fd9ce0': 1
+        }
+      },
+      'apps/worker/src/__tests__/continuous-worker-entrypoint.integration.test.ts':
+        {
+          "child.stderr?.on('data', (chunk) => {": {
+            '656f518bc4d28237': 1
+          },
+          "child.stdout?.on('data', (chunk) => {": {
+            a9708ba7d5a90314: 1
+          },
+          'const child = spawn(': {
+            acf1da9554e36371: 1
+          },
+          'return { child, output: () => output }': {
+            ddc9e669194254ce: 1
+          }
+        },
+      'apps/worker/src/__tests__/continuous-worker.test.ts': {
+        "child.once('close', (code) => {": {
+          '89edd9e32294233c': 1
+        },
+        "child.once('error', () => {": {
+          f8b03579a30d46a1: 1
+        },
+        "child.stderr.on('data', (chunk) => {": {
+          '76f89432d910db42': 1
+        },
+        "child.stdout.on('data', (chunk) => {": {
+          f09a5636ee06b7a1: 1
+        },
+        'const child = spawn(': {
+          acf1da9554e36371: 1
+        },
+        "const timeout = setTimeout(() => child.kill('SIGKILL'), 30_000)": {
+          '5c689333c261579d': 1
+        }
+      },
+      'apps/worker/src/__tests__/homolog-worker-lifecycle.test.ts': {
+        "child.once('close', (code) => resolve({ code }))": {
+          ed0a2e756723aeeb: 2
+        },
+        "child.once('error', reject)": {
+          cf3ce6f5fc7dd1b9: 2
+        },
+        "child.stderr?.on('data', (chunk) => {": {
+          '656f518bc4d28237': 2
+        },
+        "child.stdout?.on('data', (chunk) => {": {
+          a9708ba7d5a90314: 2
+        },
+        'const child = spawn(': {
+          '1d58aa57004384b9': 1,
+          a5a2c25e853e6901: 1
+        }
+      },
+      'apps/worker/src/__tests__/operational-harness-homolog.integration.test.ts':
+        {
+          "child.once('close', (code, signal) => resolve({ code, signal }))": {
+            '1dfa5e15bfdbfca9': 1
+          },
+          "child.once('error', reject)": {
+            cf3ce6f5fc7dd1b9: 1
+          },
+          "child.stderr?.on('data', (chunk) => {": {
+            '656f518bc4d28237': 1
+          },
+          "child.stdout?.on('data', (chunk) => {": {
+            a9708ba7d5a90314: 1
+          },
+          'const child = spawn(': {
+            acf1da9554e36371: 1
+          },
+          'return { child, output: () => output, exit }': {
+            ddc9e669194254ce: 1
+          }
+        },
+      'apps/worker/src/__tests__/operational-harness-process-restart.integration.test.ts':
+        {
+          "child.once('close', (code, signal) => resolve({ code, signal }))": {
+            '1dfa5e15bfdbfca9': 1
+          },
+          "child.once('error', reject)": {
+            cf3ce6f5fc7dd1b9: 1
+          },
+          "child.stderr?.on('data', (chunk) => {": {
+            '656f518bc4d28237': 1
+          },
+          "child.stdout?.on('data', (chunk) => {": {
+            a9708ba7d5a90314: 1
+          },
+          'const child = spawn(': {
+            acf1da9554e36371: 1
+          },
+          'return { child, output: () => output, exit }': {
+            ddc9e669194254ce: 1
+          }
+        },
+      'apps/worker/src/__tests__/startup-error-redaction.test.ts': {
+        "child.once('close', (code) => resolve({ code }))": {
+          ed0a2e756723aeeb: 1
+        },
+        "child.once('error', reject)": {
+          cf3ce6f5fc7dd1b9: 1
+        },
+        "child.stderr?.on('data', (chunk) => {": {
+          '656f518bc4d28237': 1
+        },
+        "child.stdout?.on('data', (chunk) => {": {
+          a9708ba7d5a90314: 1
+        },
+        'const child = spawn(': {
+          c5e23c80b5d58815: 1
+        }
+      }
+    }
+  },
+  {
+    id: 'shutdown-signal-source',
+    reason: 'UNVERIFIED_MODULE_LOADER_ESCAPE',
+    justification:
+      'process is handed to createShutdownController().install, which only calls source.once(signal, handler); the pin binds that implementation. homolog-worker.js is the gitignored compiled mirror of homolog-worker.ts.',
+    pins: {
+      'packages/shared/src/lifecycle.ts':
+        'b78db7a8d1335b4e22fd26c01d831c6addfa138d216c2e86bf8433ccf284c7b4'
+    },
+    sites: {
+      'apps/api/src/main.ts': {
+        'shutdown.install(process)': {
+          '19ed40bf62c399b8': 1
+        }
+      },
+      'apps/worker/src/homolog-worker.js': {
+        'shutdown.install(process);': {
+          '19ed40bf62c399b8': 1
+        }
+      },
+      'apps/worker/src/homolog-worker.ts': {
+        'shutdown.install(process)': {
+          '19ed40bf62c399b8': 1
+        }
+      },
+      'apps/worker/src/main.ts': {
+        'shutdown.install(process)': {
+          '19ed40bf62c399b8': 4
+        }
+      }
+    }
+  },
+  {
+    id: 'entrypoint-process-double',
+    reason: 'UNVERIFIED_MODULE_LOADER_ESCAPE',
+    justification:
+      'Test doubles for process.once/process.exit around the API entrypoint: process is only spied, bound or returned to the code under test.',
+    sites: {
+      'apps/api/src/__tests__/production-bootstrap-main-own.test.ts': {
+        'const once = process.once.bind(process)': {
+          '19ed40bf62c399b8': 1
+        },
+        "exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never)":
+          {
+            '19ed40bf62c399b8': 1
+          },
+        'return process': {
+          '19ed40bf62c399b8': 1
+        },
+        "vi.spyOn(process, 'once').mockImplementation((event, listener) => {": {
+          '19ed40bf62c399b8': 1
+        }
+      }
+    }
+  },
+  {
+    id: 'plain-object-reflection',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'Canonical serialization and plain-object checks: Object.getPrototypeOf / Object.getOwnPropertyDescriptor read the prototype or data descriptor of the value being checked; results are compared or serialized, never evaluated. src/*.js and dist/*.js entries are gitignored compiled mirrors of the listed TypeScript.',
+    sites: {
+      'apps/api/src/webhook-security.ts': {
+        'const prototype = Object.getPrototypeOf(value)': {
+          '5b2efa8c4f1c77a4': 1
+        },
+        'if (prototype !== Object.prototype && prototype !== null) {': {
+          b34563e2ebeb7717: 2
+        }
+      },
+      'packages/harness/dist/capability-boundary.js': {
+        'const property = Object.getOwnPropertyDescriptor(value, key);': {
+          e803fbe0ab1500bc: 1
+        },
+        'const prototype = Object.getPrototypeOf(value);': {
+          '5b2efa8c4f1c77a4': 1
+        },
+        "if (!property || !('value' in property)) {": {
+          fc9184134ae56728: 2
+        },
+        'parts.push(`${JSON.stringify(key)}:${stableSerialize(property.value, state, depth + 1)}`);':
+          {
+            '1608b61b9ac5ebe6': 1
+          },
+        'return prototype === Object.prototype || prototype === null;': {
+          b34563e2ebeb7717: 2
+        }
+      },
+      'packages/harness/src/capability-boundary.ts': {
+        '`${JSON.stringify(key)}:${stableSerialize(property.value, state, depth + 1)}`':
+          {
+            '1608b61b9ac5ebe6': 1
+          },
+        'const property = Object.getOwnPropertyDescriptor(value, key)': {
+          e803fbe0ab1500bc: 1
+        },
+        'const prototype = Object.getPrototypeOf(value)': {
+          '5b2efa8c4f1c77a4': 1
+        },
+        "if (!property || !('value' in property)) {": {
+          fc9184134ae56728: 2
+        },
+        'return prototype === Object.prototype || prototype === null': {
+          b34563e2ebeb7717: 2
+        }
+      },
+      'packages/platform/dist/tool-invocation-boundary.js': {
+        'const prototype = Object.getPrototypeOf(value);': {
+          '5b2efa8c4f1c77a4': 1
+        },
+        'return prototype === Object.prototype || prototype === null;': {
+          b34563e2ebeb7717: 2
+        }
+      },
+      'packages/platform/src/tool-invocation-boundary.js': {
+        'const prototype = Object.getPrototypeOf(value);': {
+          '5b2efa8c4f1c77a4': 1
+        },
+        'return prototype === Object.prototype || prototype === null;': {
+          b34563e2ebeb7717: 2
+        }
+      },
+      'packages/platform/src/tool-invocation-boundary.ts': {
+        'const prototype = Object.getPrototypeOf(value)': {
+          '5b2efa8c4f1c77a4': 1
+        },
+        'return prototype === Object.prototype || prototype === null': {
+          b34563e2ebeb7717: 2
+        }
+      },
+      'packages/shared/dist/canonical.js': {
+        'const prototype = Object.getPrototypeOf(value);': {
+          '5b2efa8c4f1c77a4': 1
+        },
+        'return prototype === Object.prototype || prototype === null;': {
+          b34563e2ebeb7717: 2
+        }
+      },
+      'packages/shared/src/canonical.js': {
+        'const prototype = Object.getPrototypeOf(value);': {
+          '5b2efa8c4f1c77a4': 1
+        },
+        'return prototype === Object.prototype || prototype === null;': {
+          b34563e2ebeb7717: 2
+        }
+      },
+      'packages/shared/src/canonical.ts': {
+        'const prototype = Object.getPrototypeOf(value)': {
+          '5b2efa8c4f1c77a4': 1
+        },
+        'return prototype === Object.prototype || prototype === null': {
+          b34563e2ebeb7717: 2
+        }
+      }
+    }
+  },
+  {
+    id: 'test-proxy-get-trap',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'Proxy get traps in tests forward property reads to the wrapped store with Reflect.get (functions are re-bound to the target). No code string is evaluated.',
+    sites: {
+      'apps/api/src/__tests__/approval-decision-atomicity-postgres.test.ts': {
+        'return Reflect.get(target, property, receiver)': {
+          b168168728e8d590: 1
+        }
+      },
+      'apps/api/src/__tests__/approval-decision-atomicity.test.ts': {
+        'Reflect.get(target, property, receiver) as never,': {
+          b168168728e8d590: 1
+        },
+        'return Reflect.get(target, property, receiver)': {
+          b168168728e8d590: 2
+        }
+      },
+      'packages/platform/src/__tests__/controlled-preset-hardening.test.ts': {
+        'const value = Reflect.get(target, property, receiver)': {
+          b168168728e8d590: 1
+        },
+        "return typeof value === 'function' ? value.bind(target) : value": {
+          cd42404d52ad55cc: 2,
+          fa2622dfddcead0d: 1
+        }
+      }
+    }
+  },
+  {
+    id: 'function-type-matcher',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'The Function constructor is passed to expect.any as a type matcher (instanceof check); it is never called.',
+    sites: {
+      'apps/web/src/__tests__/app.test.tsx': {
+        'expect(resolveDecision).toEqual(expect.any(Function))': {
+          c803710302d5769d: 1
+        },
+        'expect(resolveTenantB).toEqual(expect.any(Function))': {
+          c803710302d5769d: 1
+        }
+      },
+      'packages/persistence/src/__tests__/outbox-edge.test.ts': {
+        'expect(event.payload).toEqual({ callback: expect.any(Function) })': {
+          c803710302d5769d: 1
+        }
+      }
+    }
+  },
+  {
+    id: 'web-bootstrap-token',
+    reason: 'UNVERIFIED_MODULE_LOADER_ESCAPE',
+    justification:
+      'Reads, calls and clears the operator bootstrap token that the hosting page injects on window, under literal property names. No module or code string is acquired.',
+    sites: {
+      'apps/web/src/auth/session.ts': {
+        'const runtime = globalThis as typeof globalThis & RuntimeBootstrapWindow':
+          {
+            '211d07ad9adf840f': 1
+          }
+      }
+    }
+  },
+  {
+    id: 'web-bootstrap-token',
+    reason: 'UNVERIFIED_MODULE_LOADER_PROPERTY',
+    justification:
+      'Reads, calls and clears the operator bootstrap token that the hosting page injects on window, under literal property names. No module or code string is acquired.',
+    sites: {
+      'apps/web/src/auth/session.ts': {
+        'const token = runtime.__CVG_OPERATOR_BOOTSTRAP_TOKEN__ ?? null': {
+          '5ac65af8360cc35c': 1
+        },
+        'if (runtime.__CVG_OPERATOR_BOOTSTRAP_TOKEN_PROVIDER__) {': {
+          '759692d8b2b2f1fa': 1
+        },
+        'if (token) delete runtime.__CVG_OPERATOR_BOOTSTRAP_TOKEN__': {
+          '5ac65af8360cc35c': 1
+        },
+        'return runtime.__CVG_OPERATOR_BOOTSTRAP_TOKEN_PROVIDER__()': {
+          '759692d8b2b2f1fa': 1
+        }
+      }
+    }
+  },
+  {
+    id: 'typescript-reexport-helper',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      "TypeScript's CommonJS re-export helper (__createBinding) in packages/persistence/src/index.js, a gitignored compiled mirror; it copies property descriptors of already required modules.",
+    sites: {
+      'packages/persistence/src/index.js': {
+        'Object.defineProperty(o, k2, desc);': {
+          '97864e878fe129a3': 1
+        },
+        'desc = { enumerable: true, get: function() { return m[k]; } };': {
+          '97864e878fe129a3': 1
+        },
+        'if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {':
+          {
+            '6a021c39917993fc': 1,
+            '97864e878fe129a3': 2,
+            ed60354aae43e365: 1
+          },
+        'var desc = Object.getOwnPropertyDescriptor(m, k);': {
+          b26857a240b32b4a: 1
+        }
+      }
+    }
+  }
+]
+const exceptableReasons = new Set([
+  'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+  'UNVERIFIED_MODULE_LOADER_ESCAPE',
+  'UNVERIFIED_MODULE_LOADER_PROPERTY'
+])
+const normalizeLine = (text) => text.trim().replace(/\s+/g, ' ')
+const expressionDigest = (text) =>
+  createHash('sha256').update(normalizeLine(text)).digest('hex').slice(0, 16)
+const firstPartyFile = (file) =>
+  /^(?:packages|apps|legacy)\//.test(file) &&
+  !file
+    .split('/')
+    .some((part) => ['node_modules', '..', '.', ''].includes(part))
+const exceptionSites = new Map()
+for (const { id, reason, pins = {}, sites } of capabilityExceptions) {
+  if (!exceptableReasons.has(reason))
+    throw new Error(`invalid_boundary_exception:${id}:${reason}`)
+  for (const [file, digest] of Object.entries(pins))
+    if (!firstPartyFile(file) || !/^[0-9a-f]{64}$/.test(digest))
+      throw new Error(`invalid_boundary_exception:${id}:${file}`)
+  for (const [file, lines] of Object.entries(sites))
+    for (const [line, expressions] of Object.entries(lines))
+      for (const [expression, max] of Object.entries(expressions)) {
+        if (
+          !firstPartyFile(file) ||
+          normalizeLine(line) !== line ||
+          !/^[0-9a-f]{16}$/.test(expression) ||
+          !Number.isInteger(max) ||
+          max < 1
+        )
+          throw new Error(`invalid_boundary_exception:${id}:${file}`)
+        exceptionSites.set(JSON.stringify([reason, file, line, expression]), {
+          id,
+          max,
+          pins
+        })
+      }
 }
 
 if (
@@ -1604,7 +2454,29 @@ if (
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 ) {
   try {
-    const result = auditProductBoundary(process.argv[2] ?? process.cwd())
+    // Usage: check-product-boundary.mjs [root] [--graph=<file>] [--strict]
+    // --graph writes the resolved core closure (evidence) to <file>.
+    // --strict disables the restricted exception table (raw analysis).
+    const args = process.argv.slice(2)
+    const flags = args.filter((arg) => arg.startsWith('--'))
+    const graphFile = flags
+      .find((arg) => arg.startsWith('--graph='))
+      ?.slice('--graph='.length)
+    const strict = flags.includes('--strict')
+    const unknown = flags.filter(
+      (arg) => !arg.startsWith('--graph=') && arg !== '--strict'
+    )
+    const positional = args.filter((arg) => !arg.startsWith('--'))
+    if (unknown.length || positional.length > 1 || graphFile === '')
+      throw new Error(`invalid_boundary_arguments:${args.join(' ')}`)
+    const result = auditProductBoundary(positional[0] ?? process.cwd(), {
+      graph: graphFile !== undefined,
+      exceptions: !strict
+    })
+    if (graphFile !== undefined) {
+      fs.writeFileSync(graphFile, `${JSON.stringify(result.graph, null, 2)}\n`)
+      delete result.graph
+    }
     console.log(JSON.stringify(result, null, 2))
     process.exitCode = result.passed ? 0 : 1
   } catch (error) {
