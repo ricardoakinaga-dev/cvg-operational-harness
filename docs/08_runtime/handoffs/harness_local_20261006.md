@@ -13,3 +13,7 @@ Pedido direto do usuário: subir a última imagem do programa localmente. Task o
 - `next_action`: usuário testar interface; manter contêineres disponíveis. Produção continua `NO_GO`; nenhum certify/E2E completo/SBOM/licenças, commit/push, deploy produtivo ou recurso alheio alterado.
 
 Referência: [coordenação](../agent_coordination.md), [ADR-010](../../architecture/adrs/ADR-010-harness-product-isolation.md).
+
+## Preservação em 11/10/2026
+
+O Dockerfile adicional da construção local foi preservado byte a byte em `Dockerfile.local-test`, a partir do snapshot `31dc1c3`. A cópia não representa um novo build no candidato atual. Os containers foram parados por solicitação do usuário; os registros acima descrevem a execução histórica.
