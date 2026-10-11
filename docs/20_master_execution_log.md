@@ -1,6 +1,25 @@
+# SSD-SYNC-20261011 — preservação autorizada
+
+- Codex: pedido atual do usuário autoriza publicar todas as alterações locais revisadas antes da transferência ao SSD. Escopo documental: preservar os registros e evidências existentes, sem certificar novamente seus resultados históricos.
+- `status`: IN_PROGRESS; `last_completed_action`: comparação com GitHub e revisão dos arquivos locais; `next_action`: validar documentos, publicar uma branch de arquivo e transferir com verificação de conteúdo. Containers de aplicação permanecem parados; nenhum release.
+
 # PLAN0374-B-FABLE-20261007 — Fase B (B1–B3, B5) e Fase C preparada — 07/10/2026
 
 - Fable (Claude Code) como lead; lanes Opus: B1 fronteira (`check-product-boundary.mjs` 22 min → 26 s, 50 negativos novos, contraexemplos T2 cobertos, tabela de 169 exceções a revisar), B2/B3 (`PUBLIC_API.md` superfície suportada + decisão sobre o consumidor atual + `examples/consumers/reception-agent`), B5 (`CVG_TEST_SCOPE`, ci-bar selado por escopo, `product-shift-assistant.yml`), Fase C (`deploy/harness/**`, smoke remoto, runbook 0805, achados G1–G8). Verificação do lead: 2.707 testes PASS/0 FAIL, produto 37/37, typecheck/contrato CI/docs PASS. [Evidência](04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md). Sem push; `NO_GO` preservado; aceites HISO dependem de reauditoria Codex e revisão T3.
+
+# PLAN0374-A — Fase A executada, `main` protegido — 07/10/2026
+
+- Claude Code, após "pode iniciar a implementação do programa": proteção do `main` ativada (A1), Trivy no Security (A4), prova de restore corrigida e `test:e2e:prepare` (B4 parcial), runbook 0803, triagem do scan semanal (A2 aguarda o usuário: allowlist bloqueada pela permissão da sessão). Commit `d98d9ce`; push pendente de autorização; fluxo novo exige branch candidate. Divisão de trabalho com o Fable registrada na coordenação. `NO_GO` preservado.
+
+# FULLTEST-20261007 — bateria completa e plano 0374 — 07/10/2026
+
+- Claude Code, pedido do usuário: testar tudo que fosse possível na instalação local e trazer um plano até produção. Instância 3410 do Codex usada só por HTTP/browser; worktree, PostgreSQL (55741) e imagem próprios. `certify` 16/16 PASS; 25 gates/provas individuais PASS; smoke de produção 22/22; restore PASS com espera robusta (script oficial falha por `pg_isready`); gitleaks imagem 0; Trivy 1 HIGH sem correção. Sete achados de processo/ferramental, zero de código. [Evidência](04_audit/evidence/FULLTEST-20261007/summary.md), [plano](03_build/0374_plano_producao_harness.md). Sem commit/push; `NO_GO` preservado.
+
+# LOCAL-IMAGE-20261006 — imagem mais recente para teste — 06/10/2026
+
+- Codex, operação autorizada pelo pedido direto do usuário. Snapshot31dc1c3 reconstruído fora do checkout; runtime/web próprios e projeto `cvg-harness-local-20261006`, loopback3410. [Handoff](08_runtime/handoffs/harness_local_20261006.md).
+- Build0; live/ready200 e ambos healthy. Smoke Chromium criou agente fictício e executou dry-run sem chamada externa, sem erros JS/API. Configuração explícita test/memory/simulation e web controlled-test; chave de webhook sintética e rede frontend própria resolvem pré-requisitos operacionais, sem mudar código.
+- Helpers, build log, IDs das imagens, screenshot e recibo em `/home/ricardo/.local/state/cvg-harness-local-20261006/`. Recursos mantidos para teste, dados em memória perdem-se no restart. Fonte/lockfile e outros serviços preservados; sem fullE2E/certify/commit/push ou release.
 
 # AUD-0605 — reauditoria AUD-0604 e publicação autorizada — 06/10/2026
 

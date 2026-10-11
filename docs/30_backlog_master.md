@@ -12,6 +12,35 @@
 | Fase A, B4                         | OUTRA SESSÃO  | `PLAN0374-A` (proteção do `main`, allowlist, Trivy, runbook de gates)                                        |
 | Produção                           | NO_GO         | GO só após Fase C com reauditoria no mesmo SHA/digest                                                        |
 
+# PLAN0374-A — Fase A — 07/10/2026
+
+| Item                        | Estado             | Critério / próxima ação                                                                         |
+| --------------------------- | ------------------ | ----------------------------------------------------------------------------------------------- |
+| A1 proteção do `main`       | DONE               | Quatro contextos obrigatórios verificados via API; fluxo em 0803                                |
+| A2 política do scan semanal | DECISÃO DO USUÁRIO | Triagem pronta (105 sintéticos); aplicar allowlist em `.gitleaks.toml` ou manter triagem manual |
+| A3 alerta real              | TODO               | Decisão de operação                                                                             |
+| A4 Trivy no CI              | DONE_LOCAL         | Job `image-scan`; validar no primeiro run após push                                             |
+| B4 runbook e ferramental    | PARCIAL            | F-03/F-04 corrigidos, F-05/F-06 documentados; `boundary:products` viável depende de HISO-005    |
+| B1–B3 (sugeridos ao Fable)  | TODO               | Claim próprio do Fable; ver coordenação                                                         |
+
+# FULLTEST-20261007 — plano 0374 para produção — 07/10/2026
+
+- Task `FULLTEST-20261007` (Claude Code): `DONE_LOCAL`. Bateria completa PASS em `31dc1c3`; nenhum código aberto. [Plano 0374](03_build/0374_plano_producao_harness.md) organiza o caminho em quatro fases.
+
+| Item                               | Estado      | Critério / próxima ação                                                                                    |
+| ---------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------- |
+| Fase A — proteção do `main` (F-01) | TODO P1     | Checks obrigatórios REM21 CI bar, codeql, secret-scan, supply-chain; decisão do usuário                    |
+| Fase A — política scan semanal     | TODO        | 6.548 achados em evidências sintéticas + 9 fixtures; allowlist por caminho ou triagem manual               |
+| Fase A — Trivy no CI + CVE libssl3 | TODO P2     | Security falha em HIGH/CRITICAL com correção; aceite com prazo para `CVE-2026-84782`                       |
+| Fase B — HISO-005/009/006/010/014  | IN_PROGRESS | Fronteira executável, exports suportados, runbook de gates (F-03..F-06), CI por artefato, aceite           |
+| Fase C — ambiente real             | TODO        | Destino, PG com quatro papéis, job de migração, segredos, HTTPS/proxy, backup agendado, alerta real, smoke |
+| Produção                           | NO_GO       | GO só após Fase C com reauditoria no mesmo SHA/digest                                                      |
+
+# LOCAL-IMAGE-20261006 — teste local disponível — 06/10/2026
+
+- Task operacional `LOCAL-IMAGE-20261006`: `DONE / SANDBOX_RUNNING`; imagem atual31dc1c3 reconstruída e disponível em http://127.0.0.1:3410. [Handoff](08_runtime/handoffs/harness_local_20261006.md).
+- Build/health/Chromium com criação e dry-run sintéticos PASS. Próxima ação: teste interativo do usuário; helpers start/stop no diretório local state. Persistência memory e ausência de worker limitam o escopo a interface/dry-run; backlog produtivo e NO_GO preservados.
+
 # AUD-0605 — AUD-0604 reauditada; originais fechados no escopo — 06/10/2026
 
 - Task `AUD0605-REMEDIATION-PUBLISH-20261006`, Codex, auditoria DONE, publicação DONE_FIRST_PUSH_CONFIRMED. [Parecer](04_audit/0605_reauditoria_aud0604_2026-10-06.md), [evidências](04_audit/evidence/AUD0605-REMEDIATION-20261006/summary.md). Sem novos achados materiais demonstrados; produção NO_GO remoto/ambiente.

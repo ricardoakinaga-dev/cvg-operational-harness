@@ -1,3 +1,8 @@
+# SSD-SYNC-20261011 — preservação autorizada
+
+- Codex: pedido atual do usuário autoriza publicar todas as alterações locais revisadas antes da transferência ao SSD. Escopo documental: preservar os registros e evidências existentes, sem certificar novamente seus resultados históricos.
+- `status`: IN_PROGRESS; `last_completed_action`: comparação com GitHub e revisão dos arquivos locais; `next_action`: validar documentos, publicar uma branch de arquivo e transferir com verificação de conteúdo. Containers de aplicação permanecem parados; nenhum release.
+
 # Coordenação entre agentes — Codex e Claude Code
 
 - Criado em 27/09/2026 a pedido do usuário: Codex e Claude Code trabalham ao
@@ -5,6 +10,32 @@
   mesma identidade git. Este arquivo é a fonte única de quem está com o quê.
 - Vale para qualquer agente. Em conflito entre este arquivo e uma instrução
   direta do usuário, vale a instrução do usuário.
+
+## PLAN0374-RESOLVE-20261007 — publicação, A5/B6 e decisões — 07/10/2026
+
+- OpenCode, `IN_PROGRESS`, pedido do usuário: "resolva isso" (push em branch/PR, revisão B5, decisões C e pedido de reauditorias ao Codex). Candidato congelado `d917262`, base remota `31dc1c3`; não trocar o branch do checkout compartilhado. Publicação normal em `candidate/plan0374-ab-20261007`, PR para `main`; sem merge ou release.
+- Escrita própria: `docs/04_audit/0606_plan0374_a5_b6_2026-10-07.md`, `docs/04_audit/evidence/PLAN0374-RESOLVE-20261007/**`, esta seção e novas entradas próprias no topo de 99/20/30. Fonte, lockfile, registros antigos, handoff local não rastreado e diffs preexistentes somente leitura. Staging próprio por hunk nos ledgers; nunca incluir os diffs alheios.
+- Codex CLI solicitado pelo usuário: revisão A5/B6 read-only do candidato, tabela de exceções, confiança no lockfile, exports, B3 e B5; saída em `/tmp/opencode/plan0374-*/`. Sem descendentes, mudanças na implementação, cofre/credenciais reais, deploy ou recursos alheios. Verificações locais focadas em Node 22; CI real via PR. C10 só depois de ambiente e evidências reais.
+- Decisões explícitas desta rodada: usuário aprovou B5 `hiso-010-v1-core-sealed` **para validação**, com limites expostos e sem retroatividade; autorizou exceção `BYPASSRLS` restrita ao papel dedicado de backup, leitura, fora do serving, cofre e auditoria. Indicou ambiente e serviços existentes, mas ainda não informou provedor/região/host/PG/DNS/cofre/emissor/receptor/responsáveis. Não presumir esses valores; C permanece bloqueada por inventário/acesso.
+- Extensão T1 de empacotamento: adotar somente `docs/04_audit/evidence/FULLTEST-20261007/raw/coverage-summary.txt` para armazenamento `.txt.gz` byte-exato, com recibo/hash próprios. O whitespace bruto derrota `git diff --check` no intervalo do PR; não editar o conteúdo observado nem flexibilizar o gate. `coverage-summary.txt` não tem referências Markdown encontradas. Inventário confirmado indisponível pelo usuário; PR aberto #2.
+- Autorizações adicionais explícitas: commit seletivo dos artefatos próprios/parecer/empacotamento e push à mesma branch; configuração remota do `main` para exigir uma revisão aprovada e adicionar `image-scan` aos quatro checks atuais. Esta rodada assume apenas esses dois ajustes remotos; preservar demais controles. Merge exige outra conta GitHub autorizada; não executar merge.
+
+## Divisão de trabalho proposta para o Fable — plano 0374 — 07/10/2026
+
+- Usuário, 07/10/2026: "o fable vai trabalhar com vc nesse repositorio". A partir daqui trabalham simultaneamente Codex, Claude Code (sessão `PLAN0374-A-20261007`) e Fable. Mesmas regras deste arquivo: claim antes de escrever, `git add <caminho>` só dos próprios arquivos, nada de `restore/stash/reset/clean` em arquivo alheio, push só com autorização do usuário.
+- Fonte do trabalho: [plano 0374](../03_build/0374_plano_producao_harness.md). Para não colidir, a proposta é:
+  - **Claude Code (`PLAN0374-A`)**: Fase A inteira (proteção do `main`, allowlist do scan semanal em `.gitleaks.toml`, Trivy em `security.yml`) e B4 (runbook `docs/08_runtime/0803_runbook_gates_locais.md`, correções F-03/F-05 em `scripts/restore-audit-chain-proof.ts` e verificadores de fase). Caminhos listados na seção `PLAN0374-A-20261007` abaixo.
+  - **Fable (sugestão, registrar claim próprio antes de começar)**: Fase B código — B1 HISO-005 (`scripts/check-product-boundary.mjs`, `scripts/boundary-*.mjs`, `tests/product-boundary.test.js`: fechar os caminhos de dependência proibida reproduzidos pela crítica T2, caso negativo conhecido e tempo de execução viável; hoje termina `INCOMPLETE` em ~22 min por `UNVERIFIED_INSTALLED_DEPENDENCY` ao percorrer `node_modules`); B2 HISO-009 (lista de exports suportados de `@cvg/contracts`, `@cvg/harness`, `@cvg/model-gateway` e adapters, com teste de regressão que importa só o suportado); B3 exemplo mínimo de consumidor em `examples/consumers/**` compondo `createOperationalHarness` só por exports públicos. Atualizar os cartões em `docs/03_build/0370_harness_product_isolation_backlog.md`. Usar PostgreSQL/portas/worktree próprios (55741/55742 e `claude-*` já estão em uso por esta sessão; 55598/55599/55449 são do Codex).
+  - **Codex**: reauditorias por fase (A5, B6) e qualquer alteração em `products/**`.
+- Ledgers 99/20/30: cada agente só adiciona entradas novas no topo, sem reescrever as alheias. Evidência de cada task em `docs/04_audit/evidence/<TASK>/`.
+
+## PLAN0374-A-20261007 — implementação do plano 0374 (Fases A e B inicial)
+
+- Task `PLAN0374-A-20261007`, Claude Code, `IN_PROGRESS`. Pedido direto do usuário após o plano 0374: "pode iniciar a implementação do programa". Escopo desta rodada: Fase A (proteção do `main`, allowlist do scan de segredos, Trivy no Security) e início da Fase B (runbook de gates e correções de ferramental F-03..F-05; investigação HISO-005/009).
+- Escrita exclusiva: `.github/workflows/security.yml`, `.gitleaks.toml`, `scripts/restore-audit-chain-proof.ts`, `scripts/phase2-verify.mjs`/`phase3-verify.mjs` só se necessário para mensagem de erro, `docs/08_runtime/0803_runbook_gates_locais.md`, `docs/03_build/0374_plano_producao_harness.md`, `docs/04_audit/evidence/PLAN0374-A-20261007/**`, `package.json` apenas scripts (sem lockfile), esta seção e entradas próprias nos ledgers 99/20/30. Configuração remota do GitHub (branch protection) conforme decisão do usuário registrada em PROD-0373.
+- Não toca: `products/**`, kernel, lockfile, recursos do Codex (instância 3410, `cvg-deps-audit-*`). Worktree de verificação próprio em `/tmp/claude-1000/**/scratchpad/plan0374/**`, PostgreSQL próprio `claude-plan0374-pg` (loopback 55742). Commits só dos caminhos próprios; push só com autorização.
+
+- Fechamento parcial PLAN0374-A (07/10/2026): commit próprio `d98d9ce` (security.yml, package.json scripts, restore proof, runbook 0803, plano 0374, evidências FULLTEST/PLAN0374-A). `main` remoto protegido: push direto só com os quatro checks verdes no SHA; usar `candidate/<task>`. A2 (`.gitleaks.toml`) não alterado — decisão/aplicação do usuário. Lockfile, `products/**` e kernel intactos. Ledgers 99/20/30: entradas próprias no topo, não commitadas por mim junto com as do Codex. Push pendente de autorização.
 
 ## PLAN0374-B-FABLE-20261007 — Fase B de código, B5 e preparação da Fase C (Fable com agentes Opus)
 
@@ -16,6 +47,22 @@
 - Lead (Fable): `docs/03_build/0370_harness_product_isolation_backlog.md` (somente estados HISO-005/006/009/010), `docs/04_audit/evidence/PLAN0374-B-FABLE-20261007/**`, esta seção e entradas próprias no topo dos ledgers 99/20/30. Commits só de caminhos próprios, por hunk nos ledgers; push só com autorização do usuário.
 - Recursos próprios: PostgreSQL descartável `fable-plan0374-pg` (loopback 55743), worktree de verificação em `/tmp/claude-1000/**/scratchpad/fable-plan0374/**`. Não toca: `products/**`, kernel (`packages/*/src/**` fora de testes), lockfile, `package.json`, caminhos de `PLAN0374-A`, instância 3410. Sem `certify`/`test:e2e`/`sbom`/`licenses:check` no checkout compartilhado. Sem dado real, provider, deploy, canal ou release; produção `NO_GO`.
 - Fechamento PLAN0374-B-FABLE (07/10/2026, `DONE_LOCAL`): caminhos efetivamente tocados além dos listados: `vitest.config.mts` (B5, `CVG_TEST_SCOPE`), `tests/ci-bar-contract.test.js`, `tests/ci-bar-e2e-finalizer.test.js`, `tests/ci-bar-provenance.test.js`, `tests/consumers-public-surface.test.ts`, `tests/consumers-reception-agent.test.ts`, `tests/production-target-smoke.test.ts`, `deploy/harness/.env.example` (nome final; `.env.production.example` cai no `.gitignore`). Não foram tocados: `tsconfig.typecheck.json`, `package.json`, lockfile, `products/**`, `0802`, caminhos de `PLAN0374-A`. PostgreSQL próprio não foi necessário (nenhum gate PG rodado). Lead rodou `vitest run tests` (2.707 PASS/0 FAIL), produto 37/37, typecheck, `ci:bar:contract`, docs/links e Prettier. [Evidência](../04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md). Commit dos caminhos próprios em seguida; ledgers por hunk (entradas LOCAL-IMAGE do Codex e handoff dele ficam fora). Aceites HISO e produção seguem `NO_GO`.
+
+## FULLTEST-20261007 — bateria completa de testes do harness local e plano até produção
+
+- Task `FULLTEST-20261007`, Claude Code, `IN_PROGRESS`. Pedido direto do usuário: "ele está instalado localmente, faça todos os testes possíveis nele e me traga um plano para alcançar produção". Somente leitura da instância `cvg-harness-local-20261006` (3410) do Codex: sondas HTTP, inspeção de contêiner e navegação; sem parar, reiniciar ou reconstruir seus recursos.
+- Caminhos próprios: worktree descartável do snapshot `31dc1c3` em `/tmp/claude-1000/**/scratchpad/fulltest-20261007/**`, PostgreSQL sintético próprio `claude-fulltest-pg-20261007` (loopback 55741), imagem própria `cvg-operational-harness:fulltest-31dc1c3`, contêineres/redes de smoke próprios com prefixo `claude-fulltest-`. Escrita no repositório: `docs/04_audit/evidence/FULLTEST-20261007/**`, `docs/03_build/0374_plano_producao_harness.md`, esta seção e entradas novas próprias no topo dos ledgers 99/20/30.
+- Gates que serão executados no worktree próprio (claim exclusivo): format/typecheck/lint/build, suíte completa com cobertura, `test:postgres`, cobertura crítica, mutação, skips, docs/links, fronteira de produtos, audit, SBOM, licenças, E2E/browser, chaos, evals, worker startup, readiness, `certify`, smoke da pilha de produção, restore da cadeia e inspeção da imagem. Fonte e lockfile somente leitura; sem commit/push, deploy, provider, dado real ou release.
+
+- Fechamento FULLTEST: `certify` 16/16 PASS e demais gates/provas PASS no worktree de `31dc1c3`; smoke 22/22 e restore PASS na imagem própria; instância 3410 sondada por HTTP/browser (agentes sintéticos `fulltest-*` e fixtures E2E ficaram na memória da API, somem no próximo reinício dela). Worktree, PostgreSQL 55741, imagem `fulltest-31dc1c3` e contêineres próprios removidos. Entregues: evidência `FULLTEST-20261007`, plano `0374`, entradas próprias nos ledgers. Sem commit/push; fonte/lockfile intactos; `NO_GO`.
+
+## LOCAL-IMAGE-20261006 — imagem atual para teste local
+
+- Task `LOCAL-IMAGE-20261006`, Codex, `CONCLUÍDO_OPERACIONAL / SANDBOX_RODANDO`. Pedido direto do usuário autoriza construir e subir a última entrega localmente. Operação sintética da implementação existente; sem alteração de código ou release.
+- Caminhos próprios: `/tmp/cvg-harness-local-20261006/**`, `/home/ricardo/.local/state/cvg-harness-local-20261006/**`, `docs/08_runtime/handoffs/harness_local_20261006.md`, esta seção e novas entradas no topo dos ledgers99/20/30 (somente se limpos). Snapshot congelado31dc1c3; fonte/lockfile somente leitura.
+- Recursos: projeto Compose `cvg-harness-local-20261006`, rede interna própria, imagens runtime/web próprias, interface loopback `127.0.0.1:3410`. API test/memory com identidade simulation explícita; web controlled-test explícito, sem provider/canal/dado real. Nenhum recurso alheio será parado; sem certify/E2E/SBOM/licenças/commit/push.
+
+- Fechamento LOCAL-IMAGE: build0, dois contêineres healthy, live/ready200; smoke Chromium criação/dry-run PASS, sem chamada externa/erro JS/API. Interface3410 e recursos próprios mantidos; [handoff](handoffs/harness_local_20261006.md), evidências/helpers no state próprio. Sem fonte/lockfile/commit/push ou release.
 
 ## AUD-0605 — reauditoria AUD-0604 e publicação autorizada — 06/10/2026
 

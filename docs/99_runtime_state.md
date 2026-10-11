@@ -1,9 +1,36 @@
+# SSD-SYNC-20261011 — preservação autorizada
+
+- Codex: pedido atual do usuário autoriza publicar todas as alterações locais revisadas antes da transferência ao SSD. Escopo documental: preservar os registros e evidências existentes, sem certificar novamente seus resultados históricos.
+- `status`: IN_PROGRESS; `last_completed_action`: comparação com GitHub e revisão dos arquivos locais; `next_action`: validar documentos, publicar uma branch de arquivo e transferir com verificação de conteúdo. Containers de aplicação permanecem parados; nenhum release.
+
 # PLAN0374-B-FABLE-20261007 — Fase B de código, B5 e preparação da Fase C — 07/10/2026
 
 - Task `PLAN0374-B-FABLE-20261007`, Fable (Claude Code) com quatro agentes Opus, `status: DONE_LOCAL / PRODUCTION_NO_GO`. Pedido do usuário: "implemente todo o plano de melhoria junto com o opus". Divisão com a sessão `PLAN0374-A` (Fase A, B4) e Codex (A5/B6/C10) em [coordenação](08_runtime/agent_coordination.md). [Evidência](04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md).
 - `last_completed_action`: B1 gate `boundary:products` 26 s `PASS` (0 violações, 169 exceções vinculadas, 128 testes); B2/B3 exports suportados em `PUBLIC_API.md` + consumidor neutro `examples/consumers/reception-agent` (14 testes); B5 `CVG_TEST_SCOPE=core`, contrato `hiso-010-v1-core-sealed`, workflow do produto novo, denominadores core 360/2.940 + produto 2/37; Fase C preparada em `deploy/harness/**`, `scripts/production-target-smoke.ts` (5 testes) e runbook 0805 com achados G1–G8. Lead: `vitest run tests` 2.707 PASS/203 skip (sem PG)/0 FAIL, produto 37/37, typecheck/ci:bar:contract/docs/prettier PASS.
 - `verification_state`: HISO-005/009/010 continuam `IN_PROGRESS`; aceite depende da reauditoria Codex (B6) sobre a tabela de exceções, a premissa de confiança no lockfile e os exports; B5 exige revisão humana T3. Nenhuma execução real no GitHub Actions; `certify`/E2E/SBOM não rodados no checkout compartilhado. Nenhum item da Fase C executado em destino real.
 - `next_action`: usuário decide C1 (destino), cofre, emissor de token, receptor do alerta (A3), exceção `BYPASSRLS` do backup e revisão T3 do B5; `PLAN0374-A` fecha Fase A e B4; Codex faz B6 e depois C10. Commit local dos caminhos próprios; push só com autorização. Produção `NO_GO`.
+
+# PLAN0374-A — Fase A do plano 0374 iniciada; `main` protegido — 07/10/2026
+
+- Task `PLAN0374-A-20261007`, Claude Code, `status: DONE_LOCAL / A2_AWAITING_USER / PRODUCTION_NO_GO`. Pedido do usuário: "pode iniciar a implementação do programa"; depois: "o fable vai trabalhar com vc nesse repositorio" (divisão de trabalho registrada na [coordenação](08_runtime/agent_coordination.md)). Commit próprio `d98d9ce`. [Plano 0374 §6](03_build/0374_plano_producao_harness.md), [evidência](04_audit/evidence/PLAN0374-A-20261007/raw/).
+- `last_completed_action`: A1 proteção do `main` ativa (quatro checks obrigatórios, admins incluídos, sem force-push/exclusão, linear). A4 job `image-scan` (Trivy pinado) no Security. B4 parcial: prova de restore espera consulta real (3/3 PASS), `test:e2e:prepare` resolve E2E em clone limpo, runbook 0803 dos gates e do novo fluxo de publicação (branch candidate → checks → fast-forward). Triagem dos 105 achados do scan semanal: todos sintéticos.
+- `verification_state`: gitleaks git-mode do commit 0 achados; testes de contrato de workflow 10/10 PASS; `ci:bar:contract` PASS; prettier/links PASS. Worktree limpo de `d98d9ce`: ver fechamento. CI do SHA ainda não executado (push pendente de autorização).
+- `blocking_state`: A2 — a ampliação dos allowlists de `.gitleaks.toml` foi recusada pela política de permissão da sessão; decisão e aplicação ficam com o usuário. `.env` local não rastreado contém chave com formato real de provider: está no `.gitignore`, mas deve ser tratada como segredo pessoal fora do repositório.
+- `next_action`: usuário autoriza push de `d98d9ce` via `candidate/plan0374-a` e fast-forward do `main`; primeiro run do `image-scan`; A5 reauditoria Codex; Fable assume B1–B3 com claim próprio. Produção `NO_GO`.
+
+# FULLTEST-20261007 — bateria completa do harness local e plano até produção — 07/10/2026
+
+- Task `FULLTEST-20261007`, Claude Code, `status: DONE_LOCAL / PRODUCTION_NO_GO`. Pedido do usuário: "ele está instalado localmente, faça todos os testes possíveis nele e me traga um plano para alcançar produção". [Evidência](04_audit/evidence/FULLTEST-20261007/summary.md), [plano 0374](03_build/0374_plano_producao_harness.md).
+- `last_completed_action`: instância 3410 (Codex) sondada por HTTP e browser sem reiniciar: cabeçalhos, CORS, 413, 401/403 por papel e tenant, jornada de agente/versão/dry-run, 9/9 specs Playwright. Worktree limpo de `31dc1c3`: `certify` 16/16 PASS (`CONDITIONAL_GO`), suíte 359/2.952 + PG 37/302, cobertura crítica, mutação 10/10, skips, docs, audit 0, licenças, SBOM, chaos, evals, load, restore, provas rem21-010/011/014, fases 2/3/4A. Imagem própria: smoke de produção 22/22, restore com cadeia íntegra, gitleaks 0, Trivy 1 HIGH (`libssl3`, sem correção).
+- `verification_state`: nenhum achado de código. F-01 `main` sem proteção (P1 de processo); F-02 CVE base distroless (P2); F-03..F-06 armadilhas de ferramental (restore proof com `pg_isready`, E2E sem `dist`, env das fases, `boundary:products` INCOMPLETE em 22 min); F-07 sem Trivy no CI. Verify/Security verdes em `31dc1c3` confirmados via GitHub.
+- `next_action`: executar o plano 0374 — Fase A (proteção do `main`, política de segredos, alerta real, Trivy no CI) → Fase B (HISO-005/009 aceitos; é o que libera "camadas acima") → Fase C (ambiente real) → reauditoria Codex por fase. Recursos próprios removidos; sem commit/push nesta rodada; produção `NO_GO`.
+
+# LOCAL-IMAGE-20261006 — imagem atual rodando localmente — 06/10/2026
+
+- Task `LOCAL-IMAGE-20261006`, Codex, `status: COMPLETED_LOCAL_SETUP / SANDBOX_RUNNING`; operação solicitada pelo usuário, fonte/lockfile preservados. [Handoff](08_runtime/handoffs/harness_local_20261006.md).
+- `last_completed_action`: snapshot31dc1c3 reconstruído em runtime/web; projeto próprio `cvg-harness-local-20261006` disponível em http://127.0.0.1:3410. API test/memory/simulation e web controlled-test; dados sintéticos em memória, sem worker/provider externo.
+- `verification_state`: build0, ambos healthy, live/ready200; Chromium administrador/criação de agente/dry-run PASS, externalCallfalse, zero erros JS/API no fluxo. Evidências e start/stop em `/home/ricardo/.local/state/cvg-harness-local-20261006/`.
+- `next_action`: usuário testar com admin.local/Admin/tenant_00000000-0000-4000-8000-000000000001; dados desaparecem ao reiniciar a API. Recursos mantidos; sem commit/push ou liberação produtiva, NO_GO preservado.
 
 # AUD-0605 — correções AUD-0604 confirmadas; publicação autorizada — 06/10/2026
 
