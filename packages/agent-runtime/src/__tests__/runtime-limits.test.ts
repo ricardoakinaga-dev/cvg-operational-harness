@@ -505,7 +505,13 @@ describe('AAA-11 signal propagation', () => {
     )
 
     expect(result.outcome).toBe('executed')
-    expect(received).toBe(controller.signal)
+    // The kernel pipeline composes the turn cancel signal with the tool
+    // dispatch signal (AbortSignal.any), so the tool receives a derived
+    // signal that mirrors the turn's abort state, not the original object.
+    expect(received).toBeDefined()
+    expect(received?.aborted).toBe(controller.signal.aborted)
+    controller.abort()
+    expect(received?.aborted).toBe(true)
     expectNoPendingSpans(harness)
   })
 })

@@ -7,6 +7,7 @@ import type {
   PolicyEngine,
   RuntimeInput,
   RuntimeResult,
+  SandboxGate,
   TelemetrySink,
   ToolRegistry
 } from '@cvg/harness-contracts'
@@ -29,6 +30,8 @@ export interface HarnessRuntimeOptions {
   readonly pause?: PauseSwitch
   readonly log?: KernelLog
   readonly effects?: EffectLedger
+  /** Optional containment gate; absent means fail-closed for contained tools. */
+  readonly sandbox?: SandboxGate
 }
 
 /**

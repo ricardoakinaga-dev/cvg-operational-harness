@@ -1,3 +1,17 @@
+/**
+ * Published-agent execution entrypoint (worker/API path).
+ *
+ * This resolves the published/pinned agent version from the ControlPlaneStore
+ * and DELEGATES execution to the platform's CONTROLLED_RUNTIME
+ * (`executeConfiguredAgent` in `@cvg/platform`). It is a profile/delegation
+ * layer, not a governed kernel turn: the CONTROLLED_RUNTIME is the dry-run
+ * published path and does not run through `@cvg/harness`'s
+ * `kernel/pipeline.ts`. Unifying the published path onto the governed kernel
+ * (or justifying the CONTROLLED_RUNTIME as a distinct profile) is scoped as
+ * PDSH-003b (SPEC 0195) and is intentionally out of scope here
+ * (SPEC 0194). The public contract (`PublishedAgentExecutionResult`) is
+ * unchanged.
+ */
 import {
   createControlledCapabilityGateway,
   executeConfiguredAgent,

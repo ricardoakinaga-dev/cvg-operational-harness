@@ -17,6 +17,7 @@ import {
   type CostBudgetLimits,
   type CostBudgetStore
 } from './budget.ts'
+import { TokenMeter, isValidProviderUsage } from './token-meter.ts'
 import {
   CircuitBreaker,
   type CircuitBreakerOptions
@@ -55,6 +56,8 @@ export interface ModelGatewayOptions {
   onEvent?: (event: ModelGatewayEvent) => void
   defaultTimeoutMs?: number
   maxOutputChars?: number
+  /** PDSH-024: per-turn meter fed with each successful call's usage. */
+  meter?: TokenMeter
 }
 
 export interface GenerateRequest<
@@ -103,6 +106,7 @@ export class ModelGateway {
   readonly #onEvent?: (event: ModelGatewayEvent) => void
   readonly #defaultTimeoutMs: number
   readonly #maxOutputChars: number
+  readonly #meter?: TokenMeter
 
   constructor(options: ModelGatewayOptions) {
     for (const provider of options.providers) {
@@ -119,6 +123,7 @@ export class ModelGateway {
     if (options.onEvent) this.#onEvent = options.onEvent
     this.#defaultTimeoutMs = options.defaultTimeoutMs ?? 30_000
     this.#maxOutputChars = options.maxOutputChars ?? 32_000
+    if (options.meter) this.#meter = options.meter
     this.#budgetLimits = options.budget?.limits ?? {}
     if (options.budget) {
       this.#budget = new BudgetGuard({
@@ -329,7 +334,16 @@ export class ModelGateway {
 
         const output = this.#parseOutput(providerResult, structuredOutput)
         const usage = providerResult.usage
+        // Fail closed before settle/meter: malformed usage must not become a
+        // silent NaN cost (PDSH-024).
+        if (!isValidProviderUsage(usage)) {
+          throw new ModelGatewayError(
+            'provider_malformed_response',
+            `Provider ${provider.id} returned invalid token usage`
+          )
+        }
         const costUsd = this.#computeCost(profile, usage)
+        this.#meter?.record(usage)
         this.#circuit.onSuccess(circuitKey)
         if (this.#budget) {
           this.#budget.settle({
@@ -348,7 +362,9 @@ export class ModelGateway {
           model: profile.model,
           profile: profile.name,
           attempt,
-          costUsd
+          costUsd,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens
         })
         return {
           requestId: request.requestId,

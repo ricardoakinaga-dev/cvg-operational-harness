@@ -1,4 +1,6 @@
 export * from './createOperationalHarness.ts'
+export * from './compaction.ts'
+export * from './session/index.ts'
 export {
   CapabilityRegistry,
   CapabilityRegistryError,
@@ -13,6 +15,9 @@ export * from './effect-journal.ts'
 export * from './execution-spine.ts'
 export * from './runtime.ts'
 export {
+  CANCELLED,
+  CANCELLED_RESPONSE,
+  DEADLINE,
   InMemoryEffectLedger,
   InMemoryKernelLog,
   InMemoryPauseSwitch,
@@ -20,40 +25,66 @@ export {
   KernelHost,
   KernelRuntime,
   PAUSED_RESPONSE,
+  PROCEED,
   REQUIRED_SERVICES,
+  appendLog,
   approvalsControl,
   auditControl,
   budgetControl,
   createKernelRuntime,
+  createTurnState,
   effectsControl,
   logControl,
   modelCapability,
   pauseControl,
   plannerCapability,
   policyControl,
+  race,
+  runGate,
+  runGuards,
+  runModelCall,
+  runToolCall,
   standardKernelPlugins,
+  stop,
   telemetryCapability,
-  toolsCapability
+  toolsCapability,
+  unrecordedBlock
 } from './kernel/index.ts'
 export type {
+  BudgetService,
   EffectLedger,
+  EffectRef,
   GuardVerdict,
   HookMap,
   HookPoint,
   KernelContext,
+  KernelGate,
   KernelLog,
   KernelLogEvent,
   KernelPlugin,
+  KernelProceed,
+  KernelStop,
+  ModelCallState,
+  ModelPipelineResult,
   PauseSwitch,
   PluginKind,
   ServiceKey,
+  Services,
   StandardKernelOptions,
-  ToolGuard
+  StopCause,
+  ToolCallState,
+  ToolGuard,
+  ToolOutcome,
+  ToolPipelineHooks,
+  ToolPipelineResult,
+  TurnBudget,
+  TurnState
 } from './kernel/index.ts'
 export * from './context-engine.ts'
 export * from './completion.ts'
 export * from './step-store.ts'
 export * from './iterative-runtime.ts'
 export * from './trajectory.ts'
+export * from './skills/index.ts'
 
 export type { ExecutionStepStore } from '@cvg/harness-contracts'

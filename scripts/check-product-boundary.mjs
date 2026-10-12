@@ -1872,6 +1872,144 @@ export function auditProductBoundary(
 // an acceptance of HISO-005.
 const capabilityExceptions = [
   {
+    id: 'pdsh-neutral-canonical-compiled-reflection',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'Compiled mirror of the reviewed neutral canonical serializer, emitted by the shared preparation build. Source and compiled bytes are independently pinned together; reflection only checks ordinary/null prototypes.',
+    pins: {
+      'packages/contracts/src/canonical-json.ts':
+        '133301a83cbf3996122cec66dc02b88642f851c89c88419a9a197acd11853b77',
+      'packages/contracts/dist/canonical-json.js':
+        '899483f6572feefe1953fd7cfdc20ba80845d0748dd78998a2fdbebdf25b297e'
+    },
+    sites: {
+      'packages/contracts/dist/canonical-json.js': {
+        'const prototype = Object.getPrototypeOf(value);': {
+          '5b2efa8c4f1c77a4': 1
+        },
+        'return prototype === Object.prototype || prototype === null;': {
+          b34563e2ebeb7717: 2
+        }
+      }
+    }
+  },
+  {
+    id: 'pdsh-neutral-canonical-reflection',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'Pure canonical JSON serializer moved without semantic changes from shared to neutral contracts. Reflection only distinguishes ordinary/null object prototypes; no code or module is acquired. The new owner source is fully byte-pinned. Reviewed coverage-only v8 hint added by PDSH-031; source bytes re-pinned.',
+    pins: {
+      'packages/contracts/src/canonical-json.ts':
+        '133301a83cbf3996122cec66dc02b88642f851c89c88419a9a197acd11853b77'
+    },
+    sites: {
+      'packages/contracts/src/canonical-json.ts': {
+        'const prototype = Object.getPrototypeOf(value)': {
+          '5b2efa8c4f1c77a4': 1
+        },
+        'return prototype === Object.prototype || prototype === null': {
+          b34563e2ebeb7717: 2
+        }
+      }
+    }
+  },
+  {
+    id: 'pdsh-session-json-reflection',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'Reviewed session JSON validator reads own property descriptors without evaluating accessors, rejects functions/host objects/cycles and checks only ordinary/null prototypes. Descriptor values are recursively validated as data, never called as code. Full validator file is byte-pinned; product edges remain forbidden. Reviewed v8 coverage hints and one dead-clause simplification added by PDSH-031; file bytes re-pinned.',
+    pins: {
+      'packages/harness/src/session/events.ts':
+        '771fa0692d9712ca0f168f71e15d43b8ba351b0aea003a98014159b3c1710bd2'
+    },
+    sites: {
+      'packages/harness/src/session/events.ts': {
+        'const descriptors = Object.getOwnPropertyDescriptors(v)': {
+          '511cf3cd840c8327': 1
+        },
+        'Object.keys(descriptors).some(': { '12b2fdc0a0ffd6ce': 1 },
+        'const descriptor = descriptors[String(i)]': { '12b2fdc0a0ffd6ce': 1 },
+        "if (!descriptor || !('value' in descriptor) || !descriptor.enumerable)":
+          { '194b520dc30384b3': 2, '7e8c064eaa08ddfa': 1 },
+        'visit(descriptor.value, depth + 1)': { '7d29e4d19453aa96': 1 },
+        'Object.getPrototypeOf(v) !== Object.prototype &&': {
+          '99cac9d0d093a87e': 1
+        },
+        'Object.getPrototypeOf(v) !== null': { '99cac9d0d093a87e': 1 },
+        'Object.getOwnPropertyDescriptors(v)': { '511cf3cd840c8327': 1 }
+      }
+    }
+  },
+  {
+    id: 'pdsh-sandbox-host-probe',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'Reviewed PDSH-011 host probe executes literal bwrap argv and /bin/true with network unshared, only to detect containment; no module/code-string acquisition. Entire probe source is pinned.',
+    pins: {
+      'packages/sandbox/src/capabilities.ts':
+        '6d65214b7c2c641603aec5aa336b3a050efd5c2ba9917d142407f3c019c3d6f5'
+    },
+    sites: {
+      'packages/sandbox/src/capabilities.ts': {
+        'execFileSync(': { '6ee64919b5e7503c': 1 }
+      }
+    }
+  },
+  {
+    id: 'pdsh-contained-process',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'PDSH-011 deliberately exposes a process capability, gated by allowSubprocess and confined cwd. Reviewed code constructs bubblewrap namespace argv (no shell wrapper); other sites manage child streams, stdin, timeout and exit. bwrapPath is a trusted composition seam. This exception does not attest arbitrary child code or host filesystem isolation; product edges remain forbidden. Entire runner is pinned.',
+    pins: {
+      'packages/sandbox/src/run.ts':
+        'a5fa08026af97e2c809445f5949799f3e70b1f833da542142cb28d14f078e933'
+    },
+    sites: {
+      'packages/sandbox/src/run.ts': {
+        "const child = spawn(request.bwrapPath ?? 'bwrap', bwrapArgs, {": {
+          fdc5cd232a6b322b: 1
+        },
+        "child.kill('SIGKILL')": { '5c689333c261579d': 1 },
+        "child.stdout.on('data', (chunk: Buffer) => drain('stdout', chunk))": {
+          c48d06f5a4f383e0: 1
+        },
+        "child.stderr.on('data', (chunk: Buffer) => drain('stderr', chunk))": {
+          a24febbe3ca5b688: 1
+        },
+        "child.on('error', () => {": { '49c05c6142480228': 1 },
+        "child.on('close', (code: number | null) => {": {
+          '520278083d1a776a': 1
+        },
+        'child.stdin.end(request.stdin)': { e1751db744e7920e: 1 },
+        'child.stdin.end()': { dc7602b66365a6bb: 1 }
+      }
+    }
+  },
+  {
+    id: 'pdsh-tool-catalog-generator-test',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'PDSH-014 test invokes only Node with the reviewed first-party catalog generator, or a byte-exact temporary copy, for deterministic generation and a negative drift check. Test and generator are both pinned; changed code in either invalidates all sites.',
+    pins: {
+      'packages/harness/src/__tests__/pdsh-014-tool-catalog.test.ts':
+        'ede4c0e0ad78c4d48a4628d878220d357bdf9df3bf386ecd257d2048a528fd98',
+      'scripts/gen-tool-catalog.mjs':
+        '0550a2c7484c494a3551992853ffa7eb8ec38fa88c065b9ce2e8a9db7f8ab612'
+    },
+    sites: {
+      'packages/harness/src/__tests__/pdsh-014-tool-catalog.test.ts': {
+        "const stdout = execFileSync('node', [SCRIPT, '--check'], {": {
+          aaa4e5ed89d5f88d: 1
+        },
+        "return { status: 0, stdout, stderr: '' }": { '63d42d26156fcc76': 1 },
+        "execFileSync('node', [SCRIPT], { cwd: ROOT, encoding: 'utf8' })": {
+          '8a9c2cb694959bc5': 1
+        },
+        'execFileSync(': { '7fd20b681069d001': 1 }
+      }
+    }
+  },
+  {
     id: 'vitest-fetch-spy',
     reason: 'UNVERIFIED_MODULE_LOADER_ESCAPE',
     justification:
@@ -2271,27 +2409,11 @@ const capabilityExceptions = [
           b34563e2ebeb7717: 2
         }
       },
-      'packages/shared/dist/canonical.js': {
-        'const prototype = Object.getPrototypeOf(value);': {
-          '5b2efa8c4f1c77a4': 1
-        },
-        'return prototype === Object.prototype || prototype === null;': {
-          b34563e2ebeb7717: 2
-        }
-      },
       'packages/shared/src/canonical.js': {
         'const prototype = Object.getPrototypeOf(value);': {
           '5b2efa8c4f1c77a4': 1
         },
         'return prototype === Object.prototype || prototype === null;': {
-          b34563e2ebeb7717: 2
-        }
-      },
-      'packages/shared/src/canonical.ts': {
-        'const prototype = Object.getPrototypeOf(value)': {
-          '5b2efa8c4f1c77a4': 1
-        },
-        'return prototype === Object.prototype || prototype === null': {
           b34563e2ebeb7717: 2
         }
       }
@@ -2423,12 +2545,20 @@ const firstPartyFile = (file) =>
   !file
     .split('/')
     .some((part) => ['node_modules', '..', '.', ''].includes(part))
+// Scripts may be additional byte pins, never exception sites. Keeping these
+// predicates separate prevents an expanded exemption surface for runtime code.
+const pinnableFirstPartyFile = (file) =>
+  firstPartyFile(file) ||
+  (/^scripts\//.test(file) &&
+    !file
+      .split('/')
+      .some((part) => ['node_modules', '..', '.', ''].includes(part)))
 const exceptionSites = new Map()
 for (const { id, reason, pins = {}, sites } of capabilityExceptions) {
   if (!exceptableReasons.has(reason))
     throw new Error(`invalid_boundary_exception:${id}:${reason}`)
   for (const [file, digest] of Object.entries(pins))
-    if (!firstPartyFile(file) || !/^[0-9a-f]{64}$/.test(digest))
+    if (!pinnableFirstPartyFile(file) || !/^[0-9a-f]{64}$/.test(digest))
       throw new Error(`invalid_boundary_exception:${id}:${file}`)
   for (const [file, lines] of Object.entries(sites))
     for (const [line, expressions] of Object.entries(lines))

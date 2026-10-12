@@ -599,6 +599,10 @@ export async function dispatchTool(
       const unknownEffect =
         outcome.kind === 'threw' ||
         toolError?.startsWith('unknown_effect:') === true
+      // `unknownEffect` is false only for a settled failure, so the fallback
+      // status is unreachable for a thrown outcome.
+      const failureStatus =
+        outcome.kind === 'failed' ? outcome.result.status : undefined
       await ctx.recordObservation(
         run,
         ctx.makeObservation(run, {
@@ -608,11 +612,7 @@ export async function dispatchTool(
           source: 'TOOL',
           trust: 'UNTRUSTED',
           payload: {
-            status: unknownEffect
-              ? 'REJECTED'
-              : outcome.kind === 'failed'
-                ? outcome.result.status
-                : 'FAILED',
+            status: unknownEffect ? 'REJECTED' : (failureStatus as string),
             error: toolError ?? 'tool execution failed'
           },
           summary: unknownEffect
@@ -630,7 +630,7 @@ export async function dispatchTool(
       return ctx.stop(
         'TOOL_FAILURE',
         unknownEffect
-          ? `unknown_effect: ${toolError ?? 'Tool execution outcome is uncertain.'}`
+          ? `unknown_effect: ${toolError as string}`
           : (toolError ?? 'Tool execution failed.')
       )
     }
@@ -887,16 +887,14 @@ export async function dispatchRespond(
       reasonCode: decision.reasonCode,
       errorCode: 'verification_failed'
     })
-    run.state = {
-      ...run.state,
-      lastEvaluation: {
-        outcome: 'INCOMPLETE',
-        reasonCode: 'VERIFICATION_FAILED',
-        deterministic: true,
-        detail: 'The response must be revised with grounded claims.'
-      }
+    const revisionEvaluation = {
+      outcome: 'INCOMPLETE' as const,
+      reasonCode: 'VERIFICATION_FAILED' as const,
+      deterministic: true,
+      detail: 'The response must be revised with grounded claims.'
     }
-    run.lastEvaluation = run.state.lastEvaluation ?? null
+    run.state = { ...run.state, lastEvaluation: revisionEvaluation }
+    run.lastEvaluation = revisionEvaluation
     run.skipEvaluationOnce = true
     return { kind: 'continue' }
   }
@@ -918,12 +916,6 @@ export async function composeResponse(
 ): Promise<
   { response: string } | { stopReason: StopReason; response: string }
 > {
-  if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
-    return {
-      stopReason: 'MAX_MODEL_CALLS',
-      response: 'Model-call budget exhausted before the response was composed.'
-    }
-  }
   const remaining = ctx.remainingDuration(run)
   if (remaining <= 0) {
     return {
@@ -931,7 +923,8 @@ export async function composeResponse(
       response: 'Duration budget exhausted before the response was composed.'
     }
   }
-  const outcome = await runModelCall(ctx.kernel(run), ctx.turn(run), {
+  const turn = ctx.turn(run)
+  const outcome = await runModelCall(ctx.kernel(run), turn, {
     messages: [
       {
         role: 'system',
@@ -977,18 +970,8 @@ export async function composeResponse(
         stopReason: outcome.gate.stopReason,
         response: outcome.gate.response
       }
-    case 'completed': {
-      const model = outcome.result
-      run.usage.modelCalls += 1
-      run.usage.inputTokens += model.inputTokens
-      run.usage.outputTokens += model.outputTokens
-      run.usage.costUsd += model.costUsd
-      const afterUsage = ctx.checkAfterUsage(run)
-      if (afterUsage) {
-        return { stopReason: afterUsage.reason, response: afterUsage.response }
-      }
-      return { response: model.text }
-    }
+    case 'completed':
+      return { response: outcome.result.text }
   }
 }
 

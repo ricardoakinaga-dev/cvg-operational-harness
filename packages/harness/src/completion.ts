@@ -37,12 +37,6 @@ function lastToolObservation(
   return lastOfType(observations, 'TOOL_RESULT')
 }
 
-function toolObservationSucceeded(observation: Observation): boolean {
-  const payload = observation.payload as { status?: unknown } | null
-  if (!payload || typeof payload !== 'object') return false
-  return payload.status === 'SUCCEEDED'
-}
-
 function toolObservationIsEffect(observation: Observation): boolean {
   const payload = observation.payload as {
     status?: unknown
@@ -55,27 +49,24 @@ function toolObservationIsEffect(observation: Observation): boolean {
 
 /**
  * A confirmed action must be grounded in the claimed effect: either the exact
- * tool named by the decision succeeded, or (when no tool is named) at least
- * one side-effecting tool succeeded. A previous successful read never
- * satisfies an action-confirmation claim.
+ * tool named by the decision succeeded with a side effect, or (when no tool is
+ * named) at least one side-effecting tool succeeded. A previous successful
+ * read never satisfies an action-confirmation claim.
  */
 function hasConfirmedEffect(
   decision: { readonly toolId?: string },
   observations: readonly Observation[]
 ): boolean {
-  const successful = observations.filter(
+  const effects = observations.filter(
     (observation) =>
-      observation.type === 'TOOL_RESULT' &&
-      toolObservationSucceeded(observation)
+      observation.type === 'TOOL_RESULT' && toolObservationIsEffect(observation)
   )
   if (decision.toolId) {
-    return successful.some(
-      (observation) =>
-        observation.provenance.sourceId === decision.toolId &&
-        toolObservationIsEffect(observation)
+    return effects.some(
+      (observation) => observation.provenance.sourceId === decision.toolId
     )
   }
-  return successful.some((observation) => toolObservationIsEffect(observation))
+  return effects.length > 0
 }
 
 function toolObservationFailed(observation: Observation): boolean {
@@ -131,6 +122,8 @@ export class DeterministicCompletionEvaluator implements CompletionEvaluator {
     } catch {
       return {
         ...deterministic,
+        // Unreachable: every deterministic COMPLETE carries a detail.
+        /* v8 ignore next 2 */
         detail:
           `${deterministic.detail ?? ''} semantic_judge_unavailable`.trim(),
         reasonCode: 'EVALUATOR_UNAVAILABLE'

@@ -418,15 +418,7 @@ function sorted(
   return [...registrations].sort((left, right) => {
     const idOrder = compareCodeUnits(left.descriptor.id, right.descriptor.id)
     if (idOrder !== 0) return idOrder
-    const versionOrder = compareCodeUnits(
-      left.descriptor.version,
-      right.descriptor.version
-    )
-    if (versionOrder !== 0) return versionOrder
-    return compareCodeUnits(
-      left.descriptor.providerId,
-      right.descriptor.providerId
-    )
+    return compareCodeUnits(left.descriptor.version, right.descriptor.version)
   })
 }
 

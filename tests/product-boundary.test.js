@@ -37,7 +37,9 @@ function fixture() {
         baseUrl: '.',
         paths: {
           '@private/product': ['products/shift/src/index.ts'],
-          '@neutral/core': ['packages/core/src/index.ts']
+          '@neutral/core': ['packages/core/src/index.ts'],
+          '@cvg/harness-contracts': ['packages/contracts/src/index.ts'],
+          vitest: ['packages/vitest/src/index.ts']
         }
       }
     })
@@ -60,6 +62,102 @@ afterEach(() => {
 })
 
 describe('harness product boundary', () => {
+  it('pins session JSON reflection and invalidates sites on any validator mutation', () => {
+    const { root, write } = fixture()
+    const file = 'packages/harness/src/session/events.ts'
+    const source = fs.readFileSync(file, 'utf8')
+    write(file, source)
+    const dynamic = () =>
+      auditProductBoundary(root).diagnostics.filter(
+        (d) =>
+          d.file.startsWith(file + ':') &&
+          d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
+      )
+    // This focused fixture does not resolve runtime imports; only the exact
+    // reflection sites are under test. The real-tree gate verifies closure.
+    expect(dynamic()).toEqual([])
+    write(file, `${source}\n// unreviewed mutation\n`)
+    expect(dynamic()).toHaveLength(10)
+  })
+  it('pins the reviewed PDSH host probe and still rejects product edges', () => {
+    const { root, write } = fixture()
+    write(
+      'packages/contracts/package.json',
+      JSON.stringify({ name: '@cvg/harness-contracts', main: 'src/index.ts' })
+    )
+    write(
+      'packages/contracts/src/index.ts',
+      'export type SandboxMode = string\n'
+    )
+    write(
+      'packages/sandbox/package.json',
+      JSON.stringify({ name: '@cvg/sandbox' })
+    )
+    const probe = fs.readFileSync(
+      'packages/sandbox/src/capabilities.ts',
+      'utf8'
+    )
+    write('packages/sandbox/src/capabilities.ts', probe)
+    expect(
+      auditProductBoundary(root).diagnostics.filter((d) =>
+        d.file.startsWith('packages/sandbox/')
+      )
+    ).toEqual([])
+    write(
+      'packages/sandbox/src/capabilities.ts',
+      `${probe}\n// unreviewed mutation\n`
+    )
+    expect(
+      auditProductBoundary(root).diagnostics.some((d) =>
+        d.file.startsWith('packages/sandbox/')
+      )
+    ).toBe(true)
+    write(
+      'packages/sandbox/src/capabilities.ts',
+      `${probe}\nimport '../../../products/shift/src/index.ts'\n`
+    )
+    expect(
+      auditProductBoundary(root).violations.some(
+        (v) => v.reason === 'CORE_DEPENDS_ON_PRODUCT'
+      )
+    ).toBe(true)
+  })
+
+  it('binds PDSH catalog process sites to both test and generator bytes', () => {
+    const { root, write } = fixture()
+    write(
+      'packages/vitest/package.json',
+      JSON.stringify({ name: 'vitest', main: 'src/index.ts' })
+    )
+    write(
+      'packages/vitest/src/index.ts',
+      'export const afterAll = () => {}; export const describe = () => {}; export const expect = () => {}; export const it = () => {}\n'
+    )
+    write(
+      'packages/harness/package.json',
+      JSON.stringify({ name: '@cvg/harness' })
+    )
+    write(
+      'packages/harness/src/__tests__/pdsh-014-tool-catalog.test.ts',
+      fs.readFileSync(
+        'packages/harness/src/__tests__/pdsh-014-tool-catalog.test.ts',
+        'utf8'
+      )
+    )
+    const generator = fs.readFileSync('scripts/gen-tool-catalog.mjs', 'utf8')
+    write('scripts/gen-tool-catalog.mjs', generator)
+    const diagnostics = () =>
+      auditProductBoundary(root).diagnostics.filter((d) =>
+        d.file.includes('pdsh-014-tool-catalog')
+      )
+    expect(diagnostics()).toEqual([])
+    write(
+      'scripts/gen-tool-catalog.mjs',
+      `${generator}\n// generator mutation\n`
+    )
+    expect(diagnostics()).toHaveLength(4)
+  })
+
   it.each([
     "const delegate=require; const api=delegate('node:module'); const fetch=api.createRequire(__filename); fetch('../../../products/shift/src/index.ts')",
     "const {createRequire: make}=module.require('module'); const fetch=make(__filename); fetch('../../../products/shift/src/index.ts')",

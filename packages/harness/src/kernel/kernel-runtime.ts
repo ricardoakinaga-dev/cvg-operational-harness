@@ -377,6 +377,10 @@ class Turn {
       )
     }
     const input = this.#state.input
+    // Single pre-model gate: runModelCall (kernel/pipeline.ts) consumes the
+    // model-call slot via turn.budget.beginModelRequest() and records tokens/
+    // cost via recordModelResult() (PDSH-004 / I11). Gating here too would
+    // double-consume the slot for one turn.
     const outcome = await runModelCall(this.#host, this.#state, {
       messages: [
         {
@@ -433,7 +437,7 @@ class Turn {
         metadata.inputTokens = model.inputTokens
         metadata.outputTokens = model.outputTokens
         metadata.costUsd = model.costUsd
-        const exhausted = this.#state.budget.afterModel(model)
+        const exhausted = this.#state.budget.recordModelResult(model)
         if (exhausted) return this.#finish(fromStop(exhausted))
         return this.#finish(
           result({

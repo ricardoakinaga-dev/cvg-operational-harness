@@ -9,6 +9,7 @@ import type {
   RuntimeInput,
   RuntimeProfile,
   RuntimeResult,
+  SandboxGate,
   SufficiencyEvaluator,
   CapabilityRegistry,
   ToolRegistry
@@ -53,6 +54,8 @@ export interface OperationalHarnessOptions extends Omit<
   readonly claimExtractor?: (response: string) => readonly Claim[]
   readonly defaultRuntimeProfile?: RuntimeProfile
   readonly clock?: () => Date
+  /** Optional containment gate; absent means fail-closed for contained tools. */
+  readonly sandbox?: SandboxGate
 }
 
 export interface OperationalHarness {
@@ -85,7 +88,9 @@ export function createOperationalHarness(
     tools,
     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
     audit: options.audit,
-    telemetry: options.telemetry
+    telemetry: options.telemetry,
+    ...(options.log ? { log: options.log } : {}),
+    ...(options.sandbox ? { sandbox: options.sandbox } : {})
   })
 
   const iterative =
@@ -99,6 +104,7 @@ export function createOperationalHarness(
           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
           audit: options.audit,
           telemetry: options.telemetry,
+          ...(options.log ? { log: options.log } : {}),
           stepStore: options.stepStore,
           ...(options.contextEngine
             ? { contextEngine: options.contextEngine }

@@ -3,10 +3,10 @@ import type {
   ApprovalExecutionRequest,
   AuditSink,
   ModelGateway,
-  ModelResult,
   Orchestrator,
   PolicyEngine,
   RuntimeInput,
+  SandboxGate,
   TelemetryEvent,
   TelemetrySink,
   ToolRegistry
@@ -52,6 +52,11 @@ function bindCapabilityFingerprint(
 // ---------------------------------------------------------------- budget
 
 class DurationBudget implements TurnBudget {
+  #modelCalls = 0
+  #totalInputTokens = 0
+  #totalOutputTokens = 0
+  #totalCostUsd = 0
+
   public constructor(
     private readonly input: RuntimeInput,
     private readonly startedAt: number
@@ -66,45 +71,93 @@ class DurationBudget implements TurnBudget {
     ms: number = this.remainingMs()
   ): Promise<T | typeof DEADLINE> {
     if (ms <= 0) return DEADLINE
-    let timer: ReturnType<typeof setTimeout> | undefined
+    let timer!: ReturnType<typeof setTimeout>
     const deadline = new Promise<typeof DEADLINE>((resolve) => {
       timer = setTimeout(() => resolve(DEADLINE), ms)
     })
     try {
       return await Promise.race([operation(), deadline])
     } finally {
-      if (timer) clearTimeout(timer)
+      clearTimeout(timer)
     }
   }
 
-  public afterModel(result: ModelResult): KernelStop | undefined {
-    const usage = {
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-      costUsd: result.costUsd
+  /**
+   * Single pre-model gate (I11 / PDSH-004): consumes one model-call slot
+   * before the call. Tokens and cost are recorded post-result.
+   */
+  public beginModelRequest(): KernelStop | undefined {
+    if (this.#modelCalls + 1 > this.input.budget.maxModelCalls) {
+      return stop(
+        'MAX_MODEL_CALLS',
+        'Model-call budget exhausted before the call was started.',
+        {
+          modelCalls: this.#modelCalls,
+          usage: {
+            inputTokens: this.#totalInputTokens,
+            outputTokens: this.#totalOutputTokens,
+            costUsd: this.#totalCostUsd
+          }
+        }
+      )
     }
-    if (
-      result.inputTokens + result.outputTokens >
-      this.input.budget.maxTokens
-    ) {
+    this.#modelCalls += 1
+    if (this.remainingMs() <= 0) {
+      return stop(
+        'MAX_DURATION',
+        'Duration budget exhausted before the call was started.',
+        {
+          modelCalls: this.#modelCalls,
+          usage: {
+            inputTokens: this.#totalInputTokens,
+            outputTokens: this.#totalOutputTokens,
+            costUsd: this.#totalCostUsd
+          }
+        }
+      )
+    }
+    return undefined
+  }
+
+  /**
+   * Single post-result accounting site (PDSH-004): records tokens and cost
+   * and checks the resulting totals. Callers never re-check budgets here.
+   */
+  public recordModelResult(result: {
+    readonly inputTokens: number
+    readonly outputTokens: number
+    readonly costUsd: number
+  }): KernelStop | undefined {
+    this.#totalInputTokens += result.inputTokens
+    this.#totalOutputTokens += result.outputTokens
+    this.#totalCostUsd += result.costUsd
+    const tokens = this.#totalInputTokens + this.#totalOutputTokens
+    if (tokens > this.input.budget.maxTokens) {
       return stop(
         'MAX_TOKENS',
         'Token budget exhausted before a response could be completed.',
-        { modelCalls: 1, usage }
+        {
+          modelCalls: this.#modelCalls,
+          usage: {
+            inputTokens: this.#totalInputTokens,
+            outputTokens: this.#totalOutputTokens,
+            costUsd: this.#totalCostUsd
+          }
+        }
       )
     }
-    if (result.costUsd > this.input.budget.maxCostUsd) {
+    if (this.#totalCostUsd > this.input.budget.maxCostUsd) {
       return stop(
         'MAX_COST',
         'Cost budget exhausted before a response could be completed.',
-        { modelCalls: 1, usage }
-      )
-    }
-    if (Date.now() - this.startedAt > this.input.budget.maxDurationMs) {
-      return stop(
-        'MAX_DURATION',
-        'Duration budget exhausted before a response could be completed.',
-        { modelCalls: 1, usage }
+        {
+          modelCalls: this.#modelCalls,
+          usage: {
+            inputTokens: this.#totalInputTokens,
+            outputTokens: this.#totalOutputTokens,
+            costUsd: this.#totalCostUsd
+          }
+        }
       )
     }
     return undefined
@@ -123,12 +176,8 @@ export function budgetControl(): KernelPlugin {
       }
       ctx.provide('budget', service)
       ctx.on('model/before-call', async (call, next) => {
-        if (call.turn.input.budget.maxModelCalls < 1) {
-          return stop(
-            'MAX_MODEL_CALLS',
-            'Model-call budget exhausted before a response was generated.'
-          )
-        }
+        // The single budget gate (I11 / PDSH-004) is beginModelRequest in
+        // kernel/pipeline.ts; this hook only re-checks the duration window.
         if (call.turn.budget.remainingMs() <= 0) {
           return stop(
             'MAX_DURATION',
@@ -278,6 +327,22 @@ export function effectsControl(
 }
 
 // ---------------------------------------------------------------- policy
+
+/**
+ * Containment port (SPEC 0195). The pipeline resolves this and enforces it
+ * between every control and the capability body; a missing gate on the host
+ * is handled in `enforceSandbox` as fail-closed.
+ */
+export function sandboxControl(sandbox: SandboxGate): KernelPlugin {
+  return {
+    name: 'control.sandbox',
+    kind: 'control',
+    provides: ['sandbox'],
+    apply(ctx) {
+      ctx.provide('sandbox', sandbox)
+    }
+  }
+}
 
 export function policyControl(policy: PolicyEngine): KernelPlugin {
   return {

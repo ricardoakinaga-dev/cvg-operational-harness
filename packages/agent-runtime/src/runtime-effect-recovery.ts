@@ -333,6 +333,7 @@ export class RuntimeEffectRecovery {
           policyVersion: decision.policyVersion,
           approvalId,
           proposalId: record.proposalId ?? null,
+          /* v8 ignore next -- every caller guards record.proposalHash before replay */
           proposalHash: record.proposalHash ?? null
         }
       })

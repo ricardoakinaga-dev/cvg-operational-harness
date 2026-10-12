@@ -1,7 +1,10 @@
 import type {
   ModelRequest,
   ModelResult,
-  RuntimeInput
+  RuntimeInput,
+  SandboxGateOutcome,
+  SandboxMode,
+  ToolDescriptor
 } from '@cvg/harness-contracts'
 import type { KernelHost } from './host.ts'
 import {
@@ -138,7 +141,7 @@ export async function race<T>(
 ): Promise<T | typeof DEADLINE | typeof CANCELLED> {
   const signal = turn.signal
   if (signal.aborted) return CANCELLED
-  let onAbort: (() => void) | undefined
+  let onAbort!: () => void
   const cancelled = new Promise<typeof CANCELLED>((resolve) => {
     onAbort = () => resolve(CANCELLED)
     signal.addEventListener('abort', onAbort, { once: true })
@@ -146,7 +149,7 @@ export async function race<T>(
   try {
     return await Promise.race([turn.budget.withDeadline(operation), cancelled])
   } finally {
-    if (onAbort) signal.removeEventListener('abort', onAbort)
+    signal.removeEventListener('abort', onAbort)
   }
 }
 
@@ -160,8 +163,11 @@ async function raceInvoked<T>(
   operation: () => Promise<T>
 ): Promise<T | typeof DEADLINE | typeof CANCELLED> {
   const running = operation()
+  // The operation may start and then find an exhausted deadline at race time;
+  // its later rejection must never surface as an unhandled rejection.
+  void running.catch(() => undefined)
   const signal = turn.signal
-  let onAbort: (() => void) | undefined
+  let onAbort!: () => void
   const cancelled = new Promise<typeof CANCELLED>((resolve) => {
     if (signal.aborted) resolve(CANCELLED)
     onAbort = () => resolve(CANCELLED)
@@ -173,7 +179,7 @@ async function raceInvoked<T>(
       cancelled
     ])
   } finally {
-    if (onAbort) signal.removeEventListener('abort', onAbort)
+    signal.removeEventListener('abort', onAbort)
   }
 }
 
@@ -295,6 +301,9 @@ export async function runToolCall(
   const denial = await revalidate(host, call)
   if (denial) return closeNotStarted(denial)
 
+  const sandbox = await enforceSandbox(host, call)
+  if (sandbox) return closeNotStarted(sandbox)
+
   let hooked: KernelStop | undefined
   try {
     hooked = await hooks.beforeDispatch?.(call)
@@ -325,6 +334,88 @@ export async function runToolCall(
   return logFailure
     ? { kind: 'settled', outcome: settled, logFailure }
     : { kind: 'settled', outcome: settled }
+}
+
+/**
+ * Derives the containment a tool needs from its descriptor (SPEC 0195 §2/§5).
+ * EXTERNAL effects require an EGRESS gate; WRITE effects require WORKSPACE;
+ * READ effects require at least IN_PROCESS. A mode-`NONE` capability is pure
+ * in-memory and never reaches the sandbox gate.
+ */
+/**
+ * The mode is declared on the descriptor (SPEC 0195 §5). Absent or `'NONE'`
+ * means no gate; the harness never infers containment from `sideEffect`, so
+ * legacy side-effecting tools keep running until they opt in.
+ */
+export function requiredSandboxMode(descriptor: ToolDescriptor): SandboxMode {
+  return descriptor.sandbox ?? 'NONE'
+}
+
+/**
+ * Enforcement point between every control decision and the capability body
+ * (SPEC 0195 §3/§4). Fails closed: a missing gate, an `unavailable` outcome
+ * or a thrown gate stops the call as `UNSAFE_REQUEST` and never downgrades
+ * to in-process execution. Pure (`NONE`) tools skip the gate entirely.
+ */
+async function enforceSandbox(
+  host: KernelHost,
+  call: ToolCallState
+): Promise<KernelStop | undefined> {
+  const requiredMode = requiredSandboxMode(call.tool)
+  if (requiredMode === 'NONE') return undefined
+  if (!host.has('sandbox')) {
+    return stop(
+      'UNSAFE_REQUEST',
+      `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+    )
+  }
+  const gate = host.get('sandbox')
+  if (!gate) {
+    // host.has was checked; a missing entry here is a host-integrity fault,
+    // so fail closed the same way as an unconfigured gate.
+    return stop(
+      'UNSAFE_REQUEST',
+      `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+    )
+  }
+  let outcome: SandboxGateOutcome
+  try {
+    outcome = await gate.evaluate({
+      descriptor: call.tool,
+      context: {
+        tenantId: call.turn.input.tenantId,
+        agentId: call.turn.input.agent.id,
+        correlationId: call.turn.input.correlationId,
+        traceId: call.turn.input.traceId,
+        operationKey: call.invocation.operationKey
+      },
+      policy: {
+        requiredMode,
+        workspaceScoped: requiredMode === 'WORKSPACE',
+        networkAllowed: requiredMode === 'EGRESS',
+        subprocessAllowed: requiredMode === 'PROCESS'
+      }
+    })
+  } catch (error) {
+    return stop(
+      'UNSAFE_REQUEST',
+      `Sandbox gate failed for tool "${call.tool.id}": ${errorMessage(error)}.`
+    )
+  }
+  if (outcome.kind === 'denied') {
+    return stop(
+      'UNSAFE_REQUEST',
+      `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
+    )
+  }
+  if (outcome.kind === 'unavailable') {
+    return stop(
+      'UNSAFE_REQUEST',
+      `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
+    )
+  }
+  call.sandboxHandle = outcome.handle
+  return undefined
 }
 
 async function dispatch(
@@ -472,6 +563,8 @@ export async function runModelCall(
     ...request,
     signal: AbortSignal.any([controller.signal, turn.signal])
   }
+  const preGate = turn.budget.beginModelRequest()
+  if (preGate) return { kind: 'stopped', gate: preGate }
   const gate = await runGate(host, 'model/before-call', { turn, request: full })
   if (gate.kind === 'stop') return { kind: 'stopped', gate }
   if (turn.signal.aborted) return { kind: 'cancelled' }
@@ -500,6 +593,12 @@ export async function runModelCall(
     if (unrecorded) {
       return { kind: 'unrecorded', result: outcome, gate: unrecorded }
     }
+    const accounted = turn.budget.recordModelResult({
+      inputTokens: outcome.inputTokens,
+      outputTokens: outcome.outputTokens,
+      costUsd: outcome.costUsd
+    })
+    if (accounted) return { kind: 'stopped', gate: accounted }
     return { kind: 'completed', result: outcome }
   } catch (error) {
     return { kind: 'failed', error: errorMessage(error) }

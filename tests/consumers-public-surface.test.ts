@@ -8,6 +8,9 @@ import * as contracts from '@cvg/harness-contracts'
 import * as orchestrator from '@cvg/harness-orchestrator'
 import * as modelGateway from '@cvg/model-gateway'
 import * as persistence from '@cvg/persistence'
+import * as sandbox from '@cvg/sandbox'
+import * as channelGateway from '@cvg/channel-gateway'
+import * as sdk from '@cvg/sdk'
 import {
   createReceptionAgentFixture,
   createReceptionAgentInput
@@ -28,7 +31,13 @@ const PACKAGES = {
     module: orchestrator
   },
   '@cvg/model-gateway': { dir: 'packages/model-gateway', module: modelGateway },
-  '@cvg/persistence': { dir: 'packages/persistence', module: persistence }
+  '@cvg/persistence': { dir: 'packages/persistence', module: persistence },
+  '@cvg/sandbox': { dir: 'packages/sandbox', module: sandbox },
+  '@cvg/channel-gateway': {
+    dir: 'packages/channel-gateway',
+    module: channelGateway
+  },
+  '@cvg/sdk': { dir: 'packages/sdk', module: sdk }
 } as const satisfies Record<
   string,
   { readonly dir: string; readonly module: object }
@@ -57,14 +66,25 @@ const PINNED: Record<PackageName, readonly string[]> = {
     'ApprovalEngine',
     'ApprovalExecutionPort',
     'AuditSink',
-    'TelemetrySink'
+    'TelemetrySink',
+    'SessionEventStore',
+    'SessionEvent',
+    'SESSION_EVENT_CATALOG_V1'
   ],
   '@cvg/harness': [
     'createOperationalHarness',
     'OperationalHarnessOptions',
     'createCapabilityRegistry',
     'EffectJournal',
-    'InMemoryEffectJournal'
+    'InMemoryEffectJournal',
+    'loadSkillsFromDirectory',
+    'createSkillRegistry',
+    'assertSkillsAvailable',
+    'InMemorySessionEventStore',
+    'createSessionKernelLog',
+    'sessionEventFingerprint',
+    'createSessionFormatRegistry',
+    'SessionFormatMigrationError'
   ],
   '@cvg/harness-orchestrator': ['SinglePassOrchestrator'],
   '@cvg/model-gateway': [
@@ -73,7 +93,29 @@ const PINNED: Record<PackageName, readonly string[]> = {
     'OpenAICompatibleProvider',
     'DeterministicModelProvider'
   ],
-  '@cvg/persistence': ['PostgresOperationalEffectJournal']
+  '@cvg/persistence': [
+    'PostgresOperationalEffectJournal',
+    'PostgresSessionEventStore',
+    'runSessionEventMigrations'
+  ],
+  '@cvg/sandbox': [
+    'detectSandboxCapabilities',
+    'createLocalSandboxGate',
+    'createFsTools',
+    'createShellTool',
+    'confinePath'
+  ],
+  '@cvg/channel-gateway': [
+    'createExamUploadTool',
+    'createExamDownloadTool',
+    'ExamEgressOptions'
+  ],
+  '@cvg/sdk': [
+    'createSdk',
+    'createSdkMinimal',
+    'createSdkServer',
+    'SDK_PROTOCOL_VERSION'
+  ]
 }
 
 interface SupportedExport {
