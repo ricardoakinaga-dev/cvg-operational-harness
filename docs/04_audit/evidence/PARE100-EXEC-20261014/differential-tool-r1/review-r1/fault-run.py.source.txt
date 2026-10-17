@@ -1,0 +1,16 @@
+import os,json,subprocess,time,hashlib
+from pathlib import Path
+O=Path(__file__).resolve().parent;node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node';results=[]
+for mode in ['explicit','default']:
+ tmp=O/('fault-'+mode+'-tmp');tmp.mkdir()
+ env={'PATH':str(Path(node).parent)+':/usr/bin:/bin','HOME':str(O/'home'),'TMPDIR':str(tmp),'TMP':str(tmp),'TEMP':str(tmp),'XDG_CACHE_HOME':str(O/'xdg-cache'),'XDG_CONFIG_HOME':str(O/'xdg-config'),'XDG_DATA_HOME':str(O/'xdg-data'),'XDG_STATE_HOME':str(O/'xdg-state'),'CI':'true','CVG_TEST_SCOPE':'core','LANG':'C.UTF-8'}
+ if mode=='explicit':env['CVG_DIFFERENTIAL_EVIDENCE_DIR']=str(O/'fault-explicit-evidence')
+ argv=[node,str(O/'candidate/node_modules/vitest/vitest.mjs'),'run','tests/differential/tool-turn-differential.test.ts','--config',str(O/'fault.config.mts'),'--maxWorkers=1']
+ start=time.time();r=subprocess.run(argv,cwd=O/'candidate',env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=25);log=O/'raw'/f'fault-{mode}.log';log.write_bytes(r.stdout)
+ evidence=O/'fault-explicit-evidence/tool-turn' if mode=='explicit' else next(tmp.glob('cvg-tool-evidence-*'),None)
+ commands=[]
+ if evidence:
+  for f in evidence.glob('*.command.json'):
+   d=json.loads(f.read_text());commands.append({'file':str(f),'exit':d['exit'],'childExitObserved':d['childExitObserved'],'stdoutExists':f.with_name(f.name.replace('.command.json','.reference.stdout.log')).exists(),'stderrExists':f.with_name(f.name.replace('.command.json','.reference.stderr.log')).exists(),'homeRemoved':not Path(d['cwd']).exists()})
+ results.append({'mode':mode,'argv':argv,'environment':env,'start':start,'end':time.time(),'deadlineSeconds':25,'exit':r.returncode,'logSHA256':hashlib.sha256(r.stdout).hexdigest(),'retainedEvidence':str(evidence),'commands':commands,'remaining':sorted(f.name for f in tmp.iterdir())})
+(O/'raw/fault-run.commands.json').write_text(json.dumps(results,indent=2)+'\n');print(json.dumps(results,indent=2))

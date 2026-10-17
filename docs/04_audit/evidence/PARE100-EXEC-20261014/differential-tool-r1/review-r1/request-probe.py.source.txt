@@ -1,0 +1,14 @@
+import os,json,subprocess,hashlib,time,shutil
+from pathlib import Path
+O=Path(__file__).resolve().parent;node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+fixture=json.loads((O/'candidate/tests/differential/tool-native-witnesses.json').read_text())['cases'][0]['fixture']
+results=[]
+for mode in ['baseline','missing-tools','wrong-schema','wrong-routing']:
+ home=O/'tmp'/('request-'+mode);home.mkdir();f=home/'fixture.json';f.write_text(json.dumps(fixture))
+ env={'PATH':str(Path(node).parent)+':/usr/bin:/bin','HOME':str(home),'TMPDIR':str(home),'TMP':str(home),'TEMP':str(home),'XDG_CONFIG_HOME':str(home/'config'),'XDG_CACHE_HOME':str(home/'cache'),'XDG_DATA_HOME':str(home/'data'),'XDG_STATE_HOME':str(home/'state'),'DSH_HOME':str(home/'dsh'),'NODE_ENV':'test','LANG':'C.UTF-8','REQUEST_PROBE_MODE':mode}
+ argv=[node,'--import',str(O/'request-probe-preload.mjs'),str(O/'candidate/tests/differential/reference-tool-driver.mjs'),str(f)]
+ start=time.time();r=subprocess.run(argv,cwd=home,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=8)
+ for stream in ['stdout','stderr']:(O/'raw'/f'request-{mode}.{stream}.log').write_bytes(getattr(r,stream))
+ results.append({'mode':mode,'argv':argv,'environment':env,'exit':r.returncode,'elapsed':time.time()-start,'stdoutSHA256':hashlib.sha256(r.stdout).hexdigest(),'stderrSHA256':hashlib.sha256(r.stderr).hexdigest(),'childExitObserved':True})
+ shutil.rmtree(home)
+(O/'raw/request-probes.commands.json').write_text(json.dumps(results,indent=2)+'\n');print(json.dumps([{k:v for k,v in x.items() if k in ['mode','exit','elapsed']} for x in results]))

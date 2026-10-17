@@ -1,0 +1,50 @@
+{
+  "executed": false,
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "MEDIUM",
+      "confidence": "HIGH",
+      "procedure": "SD11",
+      "location": "payload/procedures.json:569-576",
+      "contract_locations": [
+        "packages/session/session-persistence/src/handle.ts:45-51",
+        "packages/session/session-persistence/src/handle.ts:111-116"
+      ],
+      "title": "Disposal-only live-handle behavior is not discriminated",
+      "rejecting_example": {
+        "kind": "STATIC_REASONING_ONLY_NOT_EXECUTED",
+        "candidate": "Correct ordinary close; asyncDispose resolves without teardown.",
+        "specified_trace": [
+          "Close writer ordinarily; accepted prefix becomes durable and ownership releases.",
+          "Repeat close and invoke asyncDispose on already closed writer.",
+          "Verify typed-closed operations and no leaks."
+        ],
+        "why_it_can_pass": "Ordinary close has already established every observed teardown condition; no-op disposal on the closed handle preserves them.",
+        "missing_trace": "Fresh active writer -> append -> asyncDispose only -> await -> independent durability and ownership checks; fresh reader disposal too."
+      }
+    },
+    {
+      "id": "F2",
+      "severity": "MEDIUM",
+      "confidence": "HIGH",
+      "procedure": "SD13",
+      "location": "payload/procedures.json:650-659",
+      "contract_locations": [
+        "packages/session/session-persistence/src/index.ts:184-189",
+        "packages/session/session-persistence/src/revision.ts:5-9"
+      ],
+      "title": "No changed-log transition discriminates an unsound constant revision",
+      "rejecting_example": {
+        "kind": "STATIC_REASONING_ONLY_NOT_EXECUTED",
+        "candidate": "Correct current read/stat/list data; one constant revision per service instance/session.",
+        "specified_trace": [
+          "Observe metadata and compare same-instance/session revisions.",
+          "Exercise ownership-only churn; revision remains constant."
+        ],
+        "why_it_can_pass": "No specified SD13 step changes the body between revision observations; SD09 freshness does not compare unchanged tokens against changed bodies.",
+        "missing_trace": "Capture body and stat/list revisions -> append nonempty continuation -> resolution barrier -> observe changed body and corresponding revisions -> reject false unchanged-cache eligibility."
+      }
+    }
+  ]
+}

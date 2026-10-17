@@ -1,0 +1,504 @@
+import {
+  assignedResource,
+  startCompleteChild,
+  completeReadiness,
+  cleanupCompleteChildren,
+  completeArgv,
+  privateBytes,
+  ownedPath
+} from './fixtures/complete-process-support.ts'
+/** Store-process evidence only: no public runtime, model, or tool body is run. */
+import { createHash, randomUUID } from 'node:crypto'
+import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { Pool } from 'pg'
+import { describe, expect, it } from 'vitest'
+import {
+  EMPTY_BUDGET_USAGE,
+  canonicalizeCompleteJson,
+  type ExecutionCheckpoint,
+  type DecisionAdmissionRecord,
+  type CheckpointCompareAndSwapInput
+} from '@cvg/harness-contracts'
+import {
+  sealCheckpoint,
+  InMemoryExecutionStepStore
+} from '../../../harness/src/step-store.ts'
+import { TenantIdSchema } from '@cvg/platform'
+import { PostgresExecutionStepStore } from '../operational-step-postgres.ts'
+import { withTenantContext } from '../tenant-scoped-postgres.ts'
+
+const resourcePath = process.env.SPEC0224_PG_RESOURCE
+if (process.env.SPEC0224_PG_REQUIRED === '1' && !resourcePath)
+  throw new Error('SPEC0224 assigned synthetic PG resource required')
+const role = process.env.SPEC0224_PG_CHILD_ROLE
+const tenantId = TenantIdSchema.parse(
+  'tenant_00000000-0000-4000-8000-000000000224'
+)
+const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+const token = (c: ExecutionCheckpoint) => ({
+  checkpointId: c.checkpointId,
+  digest: c.digest
+})
+
+async function connect() {
+  const assigned = await assignedResource('store-restart', resourcePath!)
+  if (process.env.SPEC0224_PG_CHILD_CONFIG !== assigned.claim.config)
+    throw new Error('Wrong assigned config')
+  if (role) {
+    completeArgv(
+      'store-restart',
+      role,
+      assigned.claim.config!,
+      assigned.claim.cwd
+    )
+    await privateBytes(assigned.root, process.env.SPEC0224_PG_CHILD_INPUT!)
+    const dir = process.env.SPEC0224_PG_CHILD_DIR!
+    await ownedPath(assigned.root, dir, 'directory')
+    if (!dir.startsWith(assigned.claim.evidence + '/'))
+      throw new Error('Wrong child evidence')
+  }
+  const r = assigned.resource as {
+    test_database_url: string
+    schemaName: string
+    synthetic: boolean
+    exclusiveClaim: string
+  }
+  const url = new URL(r.test_database_url)
+  if (
+    r.synthetic !== true ||
+    !r.exclusiveClaim ||
+    !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) ||
+    !/^[a-z][a-z0-9_]*$/.test(r.schemaName)
+  )
+    throw new Error('Unassigned PG resource')
+  const pool = new Pool({
+    connectionString: url.toString(),
+    options: `-c search_path=${r.schemaName},public`,
+    max: 2
+  })
+  return { pool, store: new PostgresExecutionStepStore(pool) }
+}
+
+function fixture(
+  executionId: string,
+  status: 'SETTLED' | 'RESERVED' | 'NONE' = 'SETTLED'
+) {
+  const output = { '\u0000😀': '\u0000'.repeat(4096), tail: 'fim😀\\"\n' }
+  const raw = canonicalizeCompleteJson(output)
+  const receipt: DecisionAdmissionRecord = {
+    admissionId: 'adm_process',
+    tenantId,
+    executionId,
+    stepNumber: 2,
+    attempt: 1,
+    purpose: 'ORCHESTRATION',
+    requestSha256: sha('synthetic counted request'),
+    measurement: {
+      counterId: 'synthetic',
+      counterVersion: '1',
+      provider: 'synthetic',
+      model: 'synthetic',
+      formattingVersion: '1',
+      inputUpperBoundTokens: 100,
+      contextWindowTokens: 1024,
+      costUpperBoundUsd: 1
+    },
+    reserved: {
+      modelCalls: 1,
+      inputTokens: 100,
+      outputTokens: 512,
+      costUsd: 1
+    },
+    status: status === 'RESERVED' ? 'RESERVED' : 'SETTLED',
+    ...(status === 'SETTLED'
+      ? {
+          actual: {
+            modelCalls: 1,
+            inputTokens: 80,
+            outputTokens: 20,
+            costUsd: 0.5
+          },
+          resultSha256: sha('synthetic settled native result')
+        }
+      : {})
+  }
+  return sealCheckpoint({
+    tenantId,
+    executionId,
+    checkpointVersion: 2,
+    runtimeProfile: 'iterative',
+    runtimeVersion: '2.0.0',
+    orchestratorVersion: '1.0.0',
+    stepNumber: 1,
+    state: {
+      goal: 'synthetic store process recovery',
+      stepNumber: 1,
+      observations: [
+        {
+          observationId: 'obs_process',
+          stepId: 'step_process',
+          executionId,
+          stepNumber: 1,
+          type: 'TOOL_RESULT',
+          source: 'TOOL',
+          trust: 'UNTRUSTED',
+          payload: {
+            schemaVersion: 1,
+            status: 'SUCCEEDED',
+            sideEffect: 'NONE',
+            completion: 'COMPLETE',
+            resultAvailability: 'AVAILABLE',
+            output,
+            outputBytes: Buffer.byteLength(raw),
+            outputSha256: sha(raw)
+          },
+          summary: 'synthetic preview',
+          provenance: { sourceId: 'synthetic', operationKey: 'op_process' },
+          timestamp: '2026-10-16T00:00:00.000Z'
+        }
+      ],
+      openQuestions: [],
+      resolvedInputs: {},
+      loopSignatures: [],
+      toolResultContext: {
+        version: 1,
+        deliveredThroughStep: 0,
+        pendingDecisionAdmission:
+          status === 'RESERVED' ? receipt.admissionId : null,
+        decisionAdmissions: status === 'NONE' ? [] : [receipt]
+      }
+    },
+    budgetUsage: {
+      ...EMPTY_BUDGET_USAGE,
+      steps: 1,
+      ...(status === 'NONE'
+        ? {}
+        : status === 'RESERVED'
+          ? receipt.reserved
+          : receipt.actual!)
+    }
+  })
+}
+
+async function seed(pool: Pool, executionId: string) {
+  await withTenantContext(pool, tenantId, (client) =>
+    client.query(
+      `INSERT INTO operational_executions (tenant_id,id,idempotency_key,request_hash,request,state)
+     VALUES ($1,$2,$2,$3,'{}'::jsonb,'RECEIVED')`,
+      [tenantId, executionId, sha(executionId)]
+    )
+  )
+}
+async function cleanup(pool: Pool, executionId: string) {
+  await withTenantContext(pool, tenantId, async (client) => {
+    await client.query(
+      'DELETE FROM operational_execution_checkpoints WHERE tenant_id=$1 AND execution_id=$2',
+      [tenantId, executionId]
+    )
+    await client.query(
+      'DELETE FROM operational_executions WHERE tenant_id=$1 AND id=$2',
+      [tenantId, executionId]
+    )
+  })
+}
+
+async function child(childRole: string, dir: string, input: string) {
+  const config = process.env.SPEC0224_PG_CHILD_CONFIG
+  if (!config) throw new Error('Private child config required')
+  const owned = await startCompleteChild({
+    profile: 'store-restart',
+    role: childRole,
+    resource: resourcePath!,
+    config,
+    input: input,
+    dir
+  })
+  const { proc, argv } = owned
+  const readiness = completeReadiness(owned, 'store-restart')
+  const ready = readiness.then((status) => {
+    if (status !== 'ready') throw new Error('Child exited before readiness')
+  })
+  void ready.catch(() => {})
+  const done = owned.done.then(async (exit) => {
+    const omitted: string[] = []
+    for (const name of ['stdout', 'stderr'] as const) {
+      const bytes = owned.output.bytes(name)
+      if (bytes.length)
+        await writeFile(join(dir, `${childRole}.${name}.log`), bytes)
+      else omitted.push(name)
+    }
+    await writeFile(
+      join(dir, `${childRole}.command.json`),
+      JSON.stringify(
+        {
+          executable: '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',
+          argv,
+          cwd: process.cwd(),
+          pid: proc.pid,
+          ...exit,
+          emptyStreamsOmitted: omitted
+        },
+        null,
+        2
+      )
+    )
+    return exit
+  })
+  void done.catch(() => {})
+  return {
+    proc,
+    ready,
+    done,
+    stop: async () => {
+      await owned.stop()
+      await done
+    }
+  }
+}
+
+if (role) {
+  it(`synthetic PG child ${role}`, async () => {
+    const dir = process.env.SPEC0224_PG_CHILD_DIR!
+    const input = JSON.parse(
+      (
+        await privateBytes(
+          dirname(resourcePath!),
+          process.env.SPEC0224_PG_CHILD_INPUT!
+        )
+      ).toString()
+    )
+    const { pool, store } = await connect()
+    try {
+      if (role === 'writer') {
+        const checkpoint = fixture(input.executionId)
+        expect(
+          (
+            await store.compareAndSwapCheckpoint({
+              tenantId,
+              executionId: input.executionId,
+              expected: null,
+              next: checkpoint
+            })
+          ).status
+        ).toBe('APPLIED')
+        await writeFile(
+          join(dir, 'before.json'),
+          JSON.stringify({ pid: process.pid, checkpoint })
+        )
+        process.stdout.write('PG224_READY COMMITTED\n')
+        // Parent kills the actual Node process; pool and adapter are deliberately not closed.
+        await new Promise(() => {
+          setInterval(() => {}, 1000)
+        })
+      } else if (role === 'reader') {
+        const checkpoint = await store.loadCheckpoint(
+          tenantId,
+          input.executionId
+        )
+        await writeFile(
+          join(dir, 'after.json'),
+          JSON.stringify({ pid: process.pid, checkpoint })
+        )
+        expect(checkpoint).not.toBeNull()
+        process.stdout.write('PG224_READY RECREATED\n')
+      } else {
+        process.stdout.write('PG224_READY RACING\n')
+        for (let n = 0; ; n++) {
+          try {
+            await readFile(input.gate)
+            break
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || n > 1000)
+              throw error
+            await new Promise((yes) => setTimeout(yes, 10))
+          }
+        }
+        const result = await store.compareAndSwapCheckpoint(
+          input.cas as CheckpointCompareAndSwapInput
+        )
+        await writeFile(
+          join(dir, `${role}.result.json`),
+          JSON.stringify({ pid: process.pid, result, next: input.cas.next })
+        )
+      }
+    } finally {
+      await pool.end()
+    }
+  }, 30000)
+} else {
+  describe.skipIf(!resourcePath)(
+    'SPEC0224 actual store process loss and two-process CAS',
+    () => {
+      it('preserves exact NUL output, bytes, usage and SETTLED receipt after writer SIGKILL and reader recreation', async () => {
+        const assigned = await assignedResource('store-restart', resourcePath!)
+        const dir = join(assigned.claim.evidence, `restart-${randomUUID()}`)
+        await mkdir(dir, { mode: 0o700 })
+        const executionId = `spec0224_process_${randomUUID()}`
+        const input = join(dir, 'input.json')
+        await writeFile(input, JSON.stringify({ executionId }), { mode: 0o600 })
+        const { pool } = await connect()
+        let writer: Awaited<ReturnType<typeof child>> | undefined
+        const ownedChildren: Awaited<ReturnType<typeof child>>[] = []
+        let primary: { error: unknown } | undefined
+        try {
+          await seed(pool, executionId)
+          writer = await child('writer', dir, input)
+          ownedChildren.push(writer)
+          await writer.ready
+          expect(writer.proc.kill('SIGKILL')).toBe(true)
+          expect(await writer.done).toEqual({ code: null, signal: 'SIGKILL' })
+          const reader = await child('reader', dir, input)
+          ownedChildren.push(reader)
+          await reader.ready
+          expect(await reader.done).toEqual({ code: 0, signal: null })
+          const before = JSON.parse(
+            await readFile(join(dir, 'before.json'), 'utf8')
+          )
+          const after = JSON.parse(
+            await readFile(join(dir, 'after.json'), 'utf8')
+          )
+          expect(before.pid).toBe(writer.proc.pid)
+          expect(after.pid).toBe(reader.proc.pid)
+          expect(after.pid).not.toBe(before.pid)
+          expect(after.checkpoint).toEqual(before.checkpoint)
+          const payload = after.checkpoint.state.observations[0].payload
+          expect(payload.output['\u0000😀']).toBe('\u0000'.repeat(4096))
+          const raw = canonicalizeCompleteJson(payload.output)
+          expect(payload.outputBytes).toBe(Buffer.byteLength(raw))
+          expect(payload.outputSha256).toBe(sha(raw))
+          expect(after.checkpoint.budgetUsage).toMatchObject({
+            modelCalls: 1,
+            inputTokens: 80,
+            outputTokens: 20,
+            costUsd: 0.5
+          })
+          expect(
+            after.checkpoint.state.toolResultContext.decisionAdmissions[0]
+          ).toMatchObject({
+            status: 'SETTLED',
+            resultSha256: sha('synthetic settled native result')
+          })
+          const memory = new InMemoryExecutionStepStore()
+          await memory.compareAndSwapCheckpoint({
+            tenantId,
+            executionId,
+            expected: null,
+            next: before.checkpoint
+          })
+          expect(await memory.loadCheckpoint(tenantId, executionId)).toEqual(
+            after.checkpoint
+          )
+          await writeFile(
+            join(dir, 'comparison.json'),
+            JSON.stringify(
+              {
+                exactLogicalCheckpoint: true,
+                outputBytes: payload.outputBytes,
+                outputSha256: payload.outputSha256,
+                writerPid: before.pid,
+                readerPid: after.pid,
+                writerSignal: 'SIGKILL',
+                boundary: 'store process only; no runtime/tool/model dispatch'
+              },
+              null,
+              2
+            )
+          )
+        } catch (error) {
+          primary = { error }
+          throw error
+        } finally {
+          await cleanupCompleteChildren(
+            ownedChildren,
+            [() => cleanup(pool, executionId), () => pool.end()],
+            primary
+          )
+        }
+      }, 45000)
+
+      it('allows exactly one initial CAS and one reservation CAS across two real processes; refuses stale token and simple V2 save', async () => {
+        const assigned = await assignedResource('store-restart', resourcePath!)
+        const dir = join(assigned.claim.evidence, `race-${randomUUID()}`)
+        await mkdir(dir, { mode: 0o700 })
+        const executionId = `spec0224_race_${randomUUID()}`
+        const { pool, store } = await connect()
+        const processes: Awaited<ReturnType<typeof child>>[] = []
+        let primary: { error: unknown } | undefined
+        try {
+          await seed(pool, executionId)
+          for (const phase of ['initial', 'reservation']) {
+            const current = await store.loadCheckpoint(tenantId, executionId)
+            const gate = join(dir, `${phase}.gate`)
+            const pair = []
+            for (const side of ['a', 'b']) {
+              const name = `${phase}-${side}`
+              const input = join(dir, `${name}.input.json`)
+              await writeFile(
+                input,
+                JSON.stringify({
+                  gate,
+                  cas: {
+                    tenantId,
+                    executionId,
+                    expected: current ? token(current) : null,
+                    next: fixture(
+                      executionId,
+                      phase === 'initial' ? 'NONE' : 'RESERVED'
+                    )
+                  }
+                }),
+                { mode: 0o600 }
+              )
+              const proc = await child(name, dir, input)
+              processes.push(proc)
+              pair.push(proc)
+            }
+            await Promise.all(pair.map((p) => p.ready))
+            await writeFile(gate, 'go')
+            expect(await Promise.all(pair.map((p) => p.done))).toEqual([
+              { code: 0, signal: null },
+              { code: 0, signal: null }
+            ])
+            const results = await Promise.all(
+              ['a', 'b'].map(async (s) =>
+                JSON.parse(
+                  await readFile(join(dir, `${phase}-${s}.result.json`), 'utf8')
+                )
+              )
+            )
+            expect(new Set(results.map((r) => r.pid)).size).toBe(2)
+            expect(
+              results.filter((r) => r.result.status === 'APPLIED')
+            ).toHaveLength(1)
+            expect(
+              results.filter((r) => r.result.status === 'CONFLICT')
+            ).toHaveLength(1)
+            const winner = results.find(
+              (r) => r.result.status === 'APPLIED'
+            )!.next
+            expect(await store.loadCheckpoint(tenantId, executionId)).toEqual(
+              winner
+            )
+            const stale = JSON.parse(
+              await readFile(join(dir, `${phase}-a.input.json`), 'utf8')
+            ).cas
+            expect((await store.compareAndSwapCheckpoint(stale)).status).toBe(
+              'CONFLICT'
+            )
+            expect(() => store.saveCheckpoint(winner)).toThrow()
+          }
+        } catch (error) {
+          primary = { error }
+          throw error
+        } finally {
+          await cleanupCompleteChildren(
+            processes,
+            [() => cleanup(pool, executionId), () => pool.end()],
+            primary
+          )
+        }
+      }, 45000)
+    }
+  )
+}

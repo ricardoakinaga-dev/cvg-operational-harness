@@ -1,0 +1,120 @@
+# INTERIM store boundary review — REVISE
+
+This is a fresh, independent targeted critique of the frozen `review-store-r1` packet, **not final SPEC0217 acceptance**. The source remains BUILD/unqualified. Findings concern the store boundary and its extracted helpers; they do not establish a public HTTP exploit or prove that the latest mutable Lead source still has these defects.
+
+## Authority, identity and non-mutation
+
+- Authoritative SPEC: `W/docs/02_spec/0217_pare100_durable_kernel_composition.md`, SHA-256 `1e5df50255e1634c06e09b46e2fc40da3a51a6e15be10ae4856e092bf910a905`.
+- Canonical acceptance plan: `W/docs/04_audit/evidence/PARE100-EXEC-20261014/spec0217/acceptance-plan.md`, SHA-256 `eeea91052e435f81060aa40acf94ce9c8055180a628729ee33c88e176e9b38f5`.
+- W = `/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree`. Mandatory AGENTS/07/99/20/30/coordination read for applicable instructions/current state. Their Lead test summaries were not used as acceptance evidence.
+- Engineering-framework and gauntlet-loop applied in audit-only mode. No descendants, implementation, live PostgreSQL, services, network, installation, certification, shared-cache build, application test changes or ledger writes. Output ownership is only `report.md`, `result.json`, `probes/**` in this packet, as explicitly directed by the user; this overrides routine ledger/claim-file updates.
+- Fresh review context with inherited/same model; no Builder judgment adopted. No tool UUID was surfaced to this reviewer and no agent OS PID was available. Neither is fabricated. No bundled-v3 validator was run and no v3 PASS is claimed.
+- All eight frozen source hashes matched `manifest.json` before and after the pure probes and at final verification. The mutable W was only consulted for instructions, normative documents and the pre-existing TypeScript transpiler. The concurrent W is not the artifact judged; no whole-W mutation sentinel claim is made.
+
+## Findings
+
+Paths and line numbers below are relative to **`sources/` in this packet**. Hash aliases resolve to the exact full SHA-256 table at the end. `STATIC + TESTED(pure)` means frozen method control flow was exercised with dependency/SQL doubles; it does **not** mean PostgreSQL or acceptance testing.
+
+### F1 — P1 — Attempt abort is dropped before the bound0002 transaction
+
+**Location:** `packages/persistence/src/controlled-published-kernel-store.ts:250–265,446–475,507–512` [S]; `controlled-published-fencing.ts:132,187–195` [F]. **K08/K09**, also cancellation requirement K06. Confidence high. **STATIC + TESTED(pure).**
+
+`createHost` receives the attempt signal but captures only the database fence for continuation/approval operations. `run` calls `guardControlledPublishedFence(client,fence,{settlement})` without that signal. The guard already supports checking `options.signal` after waits; the bound consume therefore never uses those checks.
+
+**Reproduction:** call the host's consume port with a live issued0002 and valid leases, block its grant SELECT, abort the attempt while blocked, then release before lease/deadline expiry. The actual frozen store/guard/approval-helper bodies still execute issued→consumed, audit and receipt. Probe `F1-abort-during-grant-lock` observes `aborted:true`, `approvalStatus:consumed`, receipt present. A separate clock-expiry control is denied with the grant still issued, so this is specifically missing abort propagation rather than a blanket missing time guard.
+
+**Invariant/impact:** SPEC4.2(2–4) and acceptance K06/N1-C require an observed abort before the mutating operation is sent to veto that operation. The platform's later `assertDispatch()` can prevent body entry, but cannot undo an unnecessarily consumed one-use grant. This finding does not claim that consumption already linearized before abort must be undone.
+
+**Bounded remediation:** propagate the same attempt signal into active persistence guards/rechecks, including after the0002 lock wait and immediately before mutation. Preserve a distinct settlement channel for required cleanup. Add the real-PG abort-during-wait negative with live clocks.
+
+### F2 — P1 — Bound approval input is not tied to the persisted plan/phase
+
+**Location:** `controlled-published-kernel-store.ts:446–473` [S], especially 449–453 and 466–470; `platform-approval-repository.ts:335–355` [A]. **K08/K10**, K04 orphan-consumption consequences. Confidence high. **STATIC + TESTED(pure).**
+
+The store checks tenant/agent/version/tool, request/fingerprint, operationKey and stepNumber, but never compares the verification's canonical input/actor/stepId/executionRef with the persisted command, or recomputes the `approval.begin` inputDigest from the verification. After consumption it locates a state attempt by **tool name only**. The helper proves that a grant matches the supplied verification; it does not prove that this verification matches the command planned for this execution.
+
+**Reproduction:** S1 contains canonical input A. Start a real approval.begin phase for that plan. Supply a valid same-tenant/agent/version/tool grant for input B, changing only input and its matching grant hash while keeping the advertised requestDigest/fingerprint/operationKey. Probe `F2-other-plan-input-consumed` consumes B and returns a receipt whose inputHash differs from the persisted command's inputHash. The current phase inputDigest remains unchanged. The later platform receipt check rejects this, after the private0002 mutation has committed.
+
+**Invariant/impact:** SPEC4.2(2,5), 5 and K08/K10 require operation/step/actor/input to be execution-bound before mutation. This can orphan an unrelated valid grant; it is not a request to treat a receipt as permission to resume OPEN or to repeat a body.
+
+**Bounded remediation:** verify canonical command/inputHash/actor/step/executionRef and phase inputDigest against the binding's validated current plan before calling the helper. Test swapped input/actor/step independently and assert issued/audit0/receipt0/body0.
+
+### F3 — P1 — A seal does not certify the expected phase or checkpoint identity
+
+**Location:** `controlled-published-kernel-store.ts:340–360` [S]; `operational-step-postgres.ts:389–411` [C]. **K04/K10**, K05 state integrity. Confidence high for missing validations; PG outcome untested. **STATIC + TESTED(pure predicate).**
+
+`saveResumePoint` checks OPEN/ACK, cursor/revision, several snapshot bindings, step number and usage. It does not require S1's `plan.seal` phase, compare `checkpoint.tenantId/executionId` with the fence, certify the actual settled step or required S2 receipts, or validate the snapshot/plan digests before creating IDLE_SEALED. The extracted checkpoint helper validates its executionId against **itself** and writes under that ID.
+
+**Reproduction:** after an ACKed `pause.read`, pass a snapshot claiming S1 and a same-tenant, individually valid checkpoint for a different **unbound** execution E2, with matching step number/usage and current E1 cursor/revision. No predicate rejects E2: the store sends it to the helper and creates an E1 seal hashing those bytes. The pure probe `F3-foreign-checkpoint-nonplan-seal` observes that call and seal creation; its checkpoint helper is a spy, not an integrity-validator test. For a PG reproduction provide a genuinely valid E2 checkpoint and existing E2 parent. The SQL writer trigger bypasses bound context for unbound E2 (migration lines173–176), so it does not repair the missing cross-binding check.
+
+**Invariant/impact:** SPEC5.1/5.2 require a real checkpoint1 plus ACKed plan.seal/predecessors; SPEC4.1 requires snapshot/checkpoint/seal identity and atomicity. One transaction for two unrelated executions is not that invariant. Downstream rehydration rejects mismatched checkpoints, which limits replay risk but leaves a falsely certified/unusable continuation and possible unrelated checkpoint overwrite. No claim is made that the normal facade currently supplies a foreign checkpoint.
+
+**Bounded remediation:** validate checkpoint identity against the fence before any write; validate the required phase/predecessors and full snapshot/S1/S2 relationship before sealing. Prove that rejection leaves both checkpoints, state and seal unchanged.
+
+### F4 — P1 — Successful close validates fragments rather than the required final proof
+
+**Location:** `controlled-published-kernel-store.ts:376–420` [S], callback producer 479–493. **K04/K09/K10**. Confidence high. **STATIC + TESTED(pure predicate).**
+
+For COMPLETED, `close` checks absence of fault, latest phase ACK, trace status, presence of two audit event types and selected tool flags/journal state. It never validates the supplied snapshot's binding/schema/digests, `finalIssued`, valid S2 (or valid empty/suppressed S1), or that required receipts actually certify that snapshot. For tool callbacks it only checks that `mirrorAuditId` identifies **some** audit row in the tenant; it does not compare callback status/trace/correlation/tool/result with the projected success. `appendToolAudit` itself omits correlationId validation.
+
+**Discriminating reproductions:**
+
+- `F4b-close-without-final-issued`: with the two actual mandatory audit types and latest ACK, a no-tool snapshot with `finalIssued:false` and `planSealed:false` reaches the SUCCEEDED transition request.
+- `F4-contradictory-callback-and-unfinalized-close`: a CONFIRMED journal plus truthy snapshot flags passes even when the callback receipt says `failed` and references another trace/correlation. It also accepts S1 with an attempted tool.
+- `F4a-callback-correlation`: the actual callback writer mirrors and ACKs an event whose correlationId differs from the binding, despite matching the other parent IDs.
+
+These are store-level acceptance of inconsistent inputs under SQL/transition doubles, not public-path success proofs. In real PG the relevant SQL trigger checks the write fence and monotonicity, not these semantic relationships.
+
+**Invariant/impact:** SPEC4.1 callback binding, 5.2 finalIssued/validated final state and matching receipts must precede SUCCEEDED. Isolated CONFIRMED and callback-row existence are insufficient. **No `turn/end` requirement is invented**: the default iterative path emits mandatory `runtime.completed`; the probes supply `evaluation.completed` and `runtime.completed`, exactly the audit types the frozen close queries.
+
+**Bounded remediation:** validate the profile's final state and join exact mandatory receipt contents/hashes to that state and the mirrored audit payload before success; compare callback correlation too. Include negatives for foreign mirror, failed callback, absent finalIssued and attempted-tool S1.
+
+### F5 — P1 — An authenticated pre-claim CANCELLED execution cannot be safely closed
+
+**Location:** `controlled-published-kernel-store.ts:172–189,250–251,376–421` [S]; `controlled-published-fencing.ts:148–153` [F]; `operational-execution-postgres.ts:558–648` [O]. **K04/K05**, acceptance K06. Confidence high. **STATIC + TESTED(pure).**
+
+The generic cancel method correctly permits a bound QUEUED execution and commits parent CANCELLED. The published store's next claim handles CLOSED, then only permits QUEUED/FAILED_RETRYABLE/CLAIMED/RUNNING. It rejects CANCELLED; its common guard also demands a leased CLAIMED/RUNNING parent. There is no cancellation-specific projection/close path in this frozen store.
+
+**Reproduction:** admit S0; authenticated cancel wins before published claim, leaving binding IDLE_SEALED, parent CANCELLED and no worker lease. On the next live outer claim, `claim` throws `lease_lost` instead of supplying the required cancellation-only closure. Probe `F5-cancelled-claim-no-projection` observes that rejection with a cancellation-reachable S0 shape. No capability/body is invoked, but this store cannot create S3/closed CANCELLED trace for completion.
+
+**Invariant/impact:** SPEC4.1 explicitly requires safe CANCELLED closure without reactivating the lease or changing parent state/attempt, bound to the cancellation event. Repeated transport retries do not implement that terminal closure. This finding is scoped to the store; no assertion is made about the still-changing worker's final transport behavior.
+
+**Bounded remediation:** return/handle a cancellation disposition and add the narrowly authorized close path validating the committed cancellation event. Prove zero factory/model/body and unchanged cancelled state/attempt.
+
+### F6 — P2 — Normal evidence can consume all bytes needed for fault/closure
+
+**Location:** `controlled-published-kernel-store.ts:516–537,366–373,407–408` [S]; quota consumer `packages/platform/src/controlled-kernel-continuation.ts:978–982` [P]. **K09/K10**. Confidence high for arithmetic; saturation not tested in PG. **STATIC + TESTED(pure arithmetic).**
+
+The normal/terminal distinction reserves eight **sequence slots** (248/256), but both use the identical full4MiB byte ceiling. A normal append can reach exactly4194304 bytes. Every nonempty subsequent fault/closed event then fails. `poison` updates the latch and appends its event in the same transaction, so that append failure also rolls back the latch update. OPEN recovery still prevents unsafe resume; this is loss of guaranteed finalization room, not evidence of restored success.
+
+**Reproduction:** in `F6-byte-reserve`, use a synthetic valid-range cursor with bytes4194302, append normal `{}` (2bytes), then append terminal fault. Normal append is admitted; terminal append rejects. The probe intentionally does not construct a real4MiB chain or exercise RLS. A real-PG test should reach this state with canonical bounded payloads and assert the required poison/closure can still fit.
+
+**Invariant/impact:** SPEC5.2 requires reserved fault/closure capacity and quota failure before operation without truncating receipts. A sequence-only reserve cannot provide that guarantee across both stated quotas.
+
+**Bounded remediation:** reserve sufficient byte budget as well as event slots for mandatory terminal evidence, and preflight the normal phase's required evidence before invoking its operation. Verify saturation at both limits with actual sanitized canonical payloads.
+
+## Checks, observations and limits
+
+- Ran `node probes/store-boundary.cjs` in this output directory, using pre-existing TypeScript6.0.3 in memory, Node24.20.0. Final exit0; eleven observations, zero probe errors. This is **not** the Node22 application qualification suite.
+- Raw results: `probes/store-boundary-results.json`; repeatable probe: `probes/store-boundary.cjs`. First probe attempt had two VM cross-realm prototype harness errors, preserved in `probes/store-boundary-initial-harness-errors.json`. Correcting only the private loader to the same realm resolved them; frozen source hashes did not change. No application defect is inferred from those harness errors.
+- Positive controls observed matching grant consumption/receipt, stable ACK-marker replay, and deadline/lease denial before grant mutation. These validate discrimination of the bounded probes, not acceptance K01–K12/N1.
+- Source inspection found the intended transaction-free helper structure: submit/transition/checkpoint/approval helpers do not open their own root transaction; bound0002 receipt/audit/state/ACK use the root's client. Actual commit/rollback atomicity, cancellation during query and SQL-trigger behavior remain NOT_TESTED_PG.
+- Source inspection found generic claim/recover anti-joins, generic transition/heartbeat bound refusal, step/journal optional-fence checks, SQL context triggers and immutable/append-only/monotonic constraints. No additional concrete generic-write bypass is asserted here. Serving-role privileges/mixed-version rollout/RLS need real PG verification.
+- The guard locks inner parent→binding→queue→outer→attempt→session→pause and rereads DB clock for lease/deadline checks. Session/pause waits are inspected, not exercised with PostgreSQL concurrency.
+- OPEN/ACKED without seal remains unresumable on reclaim; claim conservatively faults it. Consumption intentionally mutates private receipt/state while still OPEN. This is **not** treated as resumable S1/S2, and CONFIRMED/private0002 facts are not acceptance of turn success.
+- No current Lead PG resource was read or written. No process/SIGKILL/live renewal, callback through public runtime, serving-role migration, actual SQL race, final acceptance or bundled-v3 validation ran. Packet omits external transaction/sanitizer/worker sources needed for full acceptance; dependencies in pure probes are explicitly doubled. Partial Lead PG progress provides no acceptance here.
+
+**Verdict: REVISE (interim store boundary only).** Address F1–F5 before relying on this store boundary; address F6 before quota qualification. Then freeze a new packet and run the relevant real-PG negatives plus positive continuation/finalization. The Lead retains K01–K12/N1 and integrated final acceptance. No APPROVE_FULL, release, production permission or P100-010 closure is granted.
+
+## Frozen SHA-256 pins
+
+| Alias | Path relative to sources/ | SHA-256 |
+| --- | --- | --- |
+| S | packages/persistence/src/controlled-published-kernel-store.ts | c36cbbba16dabc60c4acef9eb62789a3d8bfdb1ed345c4848e63b57500395882 |
+| F | packages/persistence/src/controlled-published-fencing.ts | a32cf7961b1d0d71b2e787de549039a6b2b2ac015b41bacc069745b8fb4ce90b |
+| O | packages/persistence/src/operational-execution-postgres.ts | 19cb47d0061d44b7779a0e2632ce8d950e8540311a925ca800a93396a3a41827 |
+| C | packages/persistence/src/operational-step-postgres.ts | 840e8538aab6c22933bc17d9a2a9d5f95ca1f080de85c08ac5e731d184cb62cd |
+| A | packages/persistence/src/platform-approval-repository.ts | 620032a49b92e1f2272f2530035396efa4baf275bd3abd8458abcad1decd7c9b |
+| SQL | packages/persistence/migrations/0029_controlled_published_kernel.sql | 88fced357227985c0d4537b35e2f09820fe2dd6d6b5c33841fca3707f9c4ac59 |
+| P | packages/platform/src/controlled-kernel-continuation.ts | 9d5e14130c3f5710a60e8c9743ed47696f80b424f3de5e0f76b4a9ea65303917 |
+| WRP | packages/platform/src/controlled-kernel-adapters.ts | 74f9a8cb87ac8423b74e1ab166f9d90009398774c58a7e4e6f8f6843494df26e |

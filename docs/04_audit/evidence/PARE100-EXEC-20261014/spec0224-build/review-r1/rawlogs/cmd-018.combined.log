@@ -1,0 +1,810 @@
+
+FILE packages/harness/src/iterative-runtime.ts
+1348:     }
+1349:   }
+1350: 
+1351:   /**
+1352:    * A non-idempotent tool must never be invoked twice for the same decision;
+1353:    * the safe threshold is one repeat (stop before the second effect).
+1354:    */
+1355:   private effectiveRepeatThreshold(
+1356:     run: LoopRun,
+1357:     decision: LoopDecision
+1358:   ): number {
+1359:     if (
+1360:       decision.decisionType === 'CALL_TOOL' ||
+1361:       decision.decisionType === 'REQUEST_APPROVAL'
+1362:     ) {
+1363:       const tool = this.options.tools.resolve(
+1364:         decision.toolId as string,
+1365:         decision.toolVersion
+1366:       )
+1367:       if (tool && tool.idempotent === false && tool.sideEffect !== 'NONE') {
+1368:         return 1
+1369:       }
+1370:     }
+1371:     return this.repeatThreshold
+1372:   }
+1373: 
+1374:   private validateDecision(
+1375:     run: LoopRun,
+1376:     decision: LoopDecision
+1377:   ): DecisionValidationResult {
+1378:     return validateDecision(this.dispatchContext, run, decision)
+1379:   }
+1380: 
+1381:   private allowedDecisionTypes(run: LoopRun): LoopDecision['decisionType'][] {
+1382:     const allowed: LoopDecision['decisionType'][] = ['RESPOND', 'ASK_USER']
+1383:     if (this.availableTools(run).length > 0) {
+1384:       allowed.push('CALL_TOOL', 'REQUEST_APPROVAL')
+1385:     }
+1386:     if (this.options.knowledge && this.remaining(run, 'knowledge') > 0) {
+1387:       allowed.push('SEARCH_KNOWLEDGE')
+1388:     }
+1389:     if (this.remaining(run, 'verification') > 0) {
+1390:       allowed.push('VERIFY')
+1391:     }
+1392:     if (this.remaining(run, 'replan') > 0) {
+1393:       allowed.push('REPLAN')
+1394:     }
+1395:     allowed.push('HANDOFF', 'STOP')
+1396:     return allowed
+1397:   }
+1398: 
+1399:   private remaining(
+1400:     run: LoopRun,
+1401:     kind: 'knowledge' | 'verification' | 'replan'
+1402:   ): number {
+1403:     const budget = run.input.budget
+1404:     if (kind === 'knowledge') {
+1405:       return Math.max(
+1406:         0,
+1407:         (budget.maxKnowledgeCalls ?? budget.maxSteps) - run.usage.knowledgeCalls
+1408:       )
+1409:     }
+1410:     if (kind === 'verification') {
+1411:       return Math.max(
+1412:         0,
+1413:         (budget.maxVerificationCalls ?? budget.maxSteps) -
+1414:           run.usage.verificationCalls
+1415:       )
+1416:     }
+1417:     return Math.max(
+1418:       0,
+1419:       (budget.maxReplans ?? budget.maxSteps) - run.usage.replans
+1420:     )
+1421:   }
+1422: 
+1423:   private availableTools(run: LoopRun): readonly ToolDescriptor[] {
+1424:     return this.options.tools
+1425:       .list()
+1426:       .filter((tool) => agentExposesTool(run.input.agent.tools, tool.id))
+1427:       .map(describeTool)
+1428:   }
+1429: 
+1430:   private async dispatch(
+1431:     run: LoopRun,
+1432:     decision: LoopDecision,
+1433:     stepNumber: number
+1434:   ): Promise<DispatchOutcome> {
+1435:     switch (decision.decisionType) {
+1436:       case 'CALL_TOOL':
+1437:         return this.dispatchTool(run, decision, stepNumber, false)
+1438:       case 'REQUEST_APPROVAL':
+1439:         return this.dispatchTool(run, decision, stepNumber, true)
+1440:       case 'SEARCH_KNOWLEDGE':
+1441:         return this.dispatchKnowledge(run, decision, stepNumber)
+1442:       case 'VERIFY':
+1443:         return this.dispatchVerify(run, decision, stepNumber)
+1444:       case 'REPLAN':
+1445:         return this.dispatchReplan(run, decision, stepNumber)
+1446:       case 'RESPOND':
+1447:         return this.dispatchRespond(run, decision, stepNumber)
+1448:       case 'ASK_USER':
+1449:         return {
+1450:           kind: 'pause',
+1451:           pausedKind: 'NEEDS_USER_INPUT',
+1452:           decision
+1453:         }
+1454:       case 'HANDOFF':
+1455:         await this.recordStep(run, {
+1456:           stepNumber,
+1457:           stepType: 'HANDOFF',
+1458:           status: 'SUCCEEDED',
+1459:           sideEffecting: false,
+1460:           reasonCode: decision.reasonCode
+1461:         })
+1462:         return this.stop(
+1463:           'HUMAN_TAKEOVER',
+1464:           'Execution handed off to a human operator.'
+1465:         )
+1466:       case 'STOP':
+1467:         await this.recordStep(run, {
+1468:           stepNumber,
+1469:           stepType: 'STOP',
+1470:           status: 'SUCCEEDED',
+1471:           sideEffecting: false,
+1472:           reasonCode: decision.reasonCode
+1473:         })
+1474:         return { kind: 'continue' }
+1475:     }
+1476:   }
+1477: 
+1478:   private async dispatchTool(
+1479:     run: LoopRun,
+1480:     decision: LoopDecision,
+1481:     stepNumber: number,
+1482:     forceApproval: boolean
+1483:   ): Promise<DispatchOutcome> {
+1484:     return dispatchTool(
+1485:       this.dispatchContext,
+1486:       run,
+1487:       decision,
+1488:       stepNumber,
+1489:       forceApproval
+1490:     )
+1491:   }
+1492: 
+1493:   private async dispatchKnowledge(
+1494:     run: LoopRun,
+1495:     decision: LoopDecision,
+1496:     stepNumber: number
+1497:   ): Promise<DispatchOutcome> {
+1498:     return dispatchKnowledge(this.dispatchContext, run, decision, stepNumber)
+1499:   }
+1500: 
+1501:   private async dispatchVerify(
+1502:     run: LoopRun,
+1503:     decision: LoopDecision,
+1504:     stepNumber: number
+1505:   ): Promise<DispatchOutcome> {
+1506:     const verificationLimit =
+1507:       run.input.budget.maxVerificationCalls ?? run.input.budget.maxSteps
+1508:     /* v8 ignore next -- defensive: the allowed-decision gate already stops at the bound */
+1509:     if (run.usage.verificationCalls + 1 > verificationLimit) {
+1510:       return this.stop(
+1511:         'MAX_VERIFICATION_CALLS',
+1512:         'Verification budget exhausted.'
+1513:       )
+1514:     }
+1515:     run.usage.verificationCalls += 1
+1516:     await this.persistCheckpoint(run)
+1517:     const target = decision.verificationTarget as string
+1518:     const verification = this.verify(run, target)
+1519:     await this.recordObservation(
+1520:       run,
+1521:       this.makeObservation(run, {
+1522:         stepId: `step_${run.executionId}_${stepNumber}_verify`,
+1523:         stepNumber,
+1524:         type: 'VERIFICATION',
+1525:         source: 'SYSTEM',
+1526:         trust: 'TRUSTED',
+1527:         payload: { target, ...verification },
+1528:         summary: `Verification ${verification.valid ? 'passed' : 'failed'} for target ${target}.`,
+1529:         provenance: { sourceId: 'runtime-verifier' }
+1530:       })
+1980:     try {
+1981:       await this.options.audit.append({
+1982:         actor: run.input.agent.id,
+1983:         agent: run.input.agent.id,
+1984:         tenant: run.input.tenantId,
+1985:         action,
+1986:         policy: null,
+1987:         approval:
+1988:           (run.state.pendingApprovalId as ApprovalId | undefined) ?? null,
+1989:         tool: extras.tool ?? null,
+1990:         result: extras.result,
+1991:         timestamp: this.clock().toISOString(),
+1992:         traceId: run.input.traceId,
+1993:         correlationId: run.input.correlationId
+1994:       })
+1995:     } catch {
+1996:       if (this.options.toolResultContext) {
+1997:         throw new ToolResultContextError(
+1998:           'ADMISSION_UNAVAILABLE',
+1999:           'Native audit could not record the governed step.'
+2000:         )
+2001:       }
+2002:       // Legacy semantics; terminal outcome auditing still owns its veto.
+2003:     }
+2004:   }
+2005: 
+2006:   /**
+2007:    * A terminal stop never leaves its pending tool step open (AUD-0600 F02).
+2008:    * A WAITING step never reached its effect (approval wait, or parked by an
+2009:    * operator pause), so it closes with the stop's own code. A step still
+2010:    * RUNNING here may have started its effect before a crash or a failure
+2011:    * after dispatch, so it is closed as `unknown_effect` for reconciliation
+2012:    * instead of being declared not executed.
+2013:    */
+2014:   private async closePendingStep(
+2015:     run: LoopRun,
+2016:     stopReason: StopReason
+2017:   ): Promise<void> {
+2018:     const stepNumber = run.state.pendingStepNumber
+2019:     if (!stepNumber) return
+2020:     const steps = await this.options.stepStore.listSteps(
+2021:       run.input.tenantId,
+2022:       run.executionId
+2023:     )
+2024:     const step = steps.find(
+2025:       (candidate) =>
+2026:         candidate.stepNumber === stepNumber && candidate.stepType === 'TOOL'
+2027:     )
+2028:     if (!step || (step.status !== 'WAITING' && step.status !== 'RUNNING')) {
+2029:       return
+2030:     }
+2031:     await this.recordStep(run, {
+2032:       stepNumber,
+2033:       stepType: 'TOOL',
+2034:       status: 'FAILED',
+2035:       sideEffecting: step.sideEffecting,
+2036:       ...(step.reasonCode ? { reasonCode: step.reasonCode } : {}),
+2037:       errorCode:
+2038:         step.status === 'RUNNING'
+2039:           ? 'unknown_effect'
+2040:           : stopReason === 'CANCELLED'
+2041:             ? 'cancelled'
+2042:             : stopReason === 'MAX_DURATION'
+2043:               ? 'deadline'
+2044:               : 'not_started'
+2045:     })
+2046:   }
+2047: 
+2048:   private async finalize(
+2049:     run: LoopRun,
+2050:     outcome: Extract<DispatchOutcome, { kind: 'stop' }>,
+2051:     startedAtMs: number
+2052:   ): Promise<RuntimeResult> {
+2053:     let stopReason: StopReason = outcome.stopReason
+2054:     run.usage.activeDurationMs += Date.now() - startedAtMs
+2055:     if (!outcome.preserveCheckpoint && TERMINAL_STOPS.has(stopReason)) {
+2056:       try {
+2057:         await this.closePendingStep(run, stopReason)
+2058:       } catch {
+2059:         // The open step could not be closed: the terminal checkpoint must not
+2060:         // claim a clean stop while the step store disagrees.
+2061:         stopReason = 'INSUFFICIENT_EVIDENCE'
+2062:       }
+2063:     }
+2064:     run.state = { ...run.state, stopReason }
+2065:     let checkpointProven = true
+2066:     if (outcome.preserveCheckpoint) {
+2067:       // Intentional no-write: the durable pause must stay resumable after a
+2068:       // rejected resume binding.
+2069:     } else {
+2070:       try {
+2071:         await this.persistCheckpoint(run)
+2072:       } catch {
+2073:         checkpointProven = false
+2074:       }
+2075:     }
+2076:     const claimedReason: StopReason = checkpointProven
+2077:       ? stopReason
+2078:       : 'INSUFFICIENT_EVIDENCE'
+2079:     if (!checkpointProven) {
+2080:       run.state = { ...run.state, stopReason: claimedReason }
+2081:     }
+2082:     const result: RuntimeResult = {
+2083:       response: outcome.response,
+2084:       stopReason: claimedReason,
+2085:       ...(outcome.kind === 'stop' && outcome.approvalId
+2086:         ? { approvalId: outcome.approvalId }
+2087:         : {}),
+2088:       steps: run.usage.steps,
+2089:       modelCalls: run.usage.modelCalls,
+2090:       toolCalls: run.usage.toolCalls,
+2091:       usage: {
+2092:         inputTokens: run.usage.inputTokens,
+2093:         outputTokens: run.usage.outputTokens,
+2094:         costUsd: run.usage.costUsd
+2095:       },
+2096:       ...(run.lastToolObservation
+2097:         ? {
+2098:             toolResult: {
+2099:               /* v8 ignore next -- only a successful tool observation is stored */
+2100:               status:
+2101:                 (run.lastToolObservation.payload as { status?: string } | null)
+2102:                   ?.status === 'SUCCEEDED'
+2103:                   ? ('SUCCEEDED' as const)
+2104:                   : ('REJECTED' as const),
+2105:               output: (
+2106:                 run.lastToolObservation.payload as {
+2107:                   output?: unknown
+2108:                 } | null
+
+FILE packages/harness/src/iterative-dispatch.ts
+ 317:   }
+ 318: }
+ 319: 
+ 320: export async function dispatchTool(
+ 321:   ctx: IterativeDispatchContext,
+ 322:   run: LoopRun,
+ 323:   decision: LoopDecision,
+ 324:   stepNumber: number,
+ 325:   forceApproval: boolean
+ 326: ): Promise<DispatchOutcome> {
+ 327:   // A previous successful dispatch is trajectory evidence, not the result
+ 328:   // of this attempt. Only this dispatch's success may populate toolResult.
+ 329:   run.lastToolObservation = null
+ 330:   // A resumed in-flight step was already counted when it reached dispatch.
+ 331:   const alreadyCounted =
+ 332:     run.inFlightCounted && run.state.pendingStepNumber === stepNumber
+ 333:   if (
+ 334:     !alreadyCounted &&
+ 335:     run.usage.toolCalls + 1 > run.input.budget.maxToolCalls
+ 336:   ) {
+ 337:     return ctx.stop(
+ 338:       'MAX_TOOL_CALLS',
+ 339:       'Tool-call budget exhausted before the tool could run.'
+ 340:     )
+ 341:   }
+ 342:   const tool = ctx.options.tools.resolve(
+ 343:     decision.toolId as string,
+ 344:     decision.toolVersion
+ 345:   )
+ 346:   if (!tool) {
+ 347:     return ctx.stop(
+ 348:       'STATE_CONFLICT',
+ 349:       `Tool "${decision.toolId}" is unavailable.`
+ 350:     )
+ 351:   }
+ 352:   const operationKey = ctx.operationKey(run, stepNumber, tool.id)
+ 353:   ctx.preflightCompleteTool(run, decision, stepNumber)
+ 354:   const invocation = {
+ 355:     toolId: tool.id,
+ 356:     ...(tool.version ? { toolVersion: tool.version } : {}),
+ 357:     input: decision.toolInput ?? {},
+ 358:     operationKey
+ 359:   }
+ 360:   if (ctx.remainingDuration(run) <= 0) {
+ 361:     return ctx.stop(
+ 362:       'MAX_DURATION',
+ 363:       'Duration budget exhausted before tool execution.'
+ 364:     )
+ 365:   }
+ 366: 
+ 367:   const stepId = `step_${run.executionId}_${stepNumber}_tool`
+ 368:   // A resumed step already holds this step number as a tool step (waiting for
+ 369:   // approval or in flight), and the dispatch checkpoint opens it as RUNNING;
+ 370:   // a control that then blocks the call closes that same step instead of
+ 371:   // recording a second one under the same number, or leaving it open while
+ 372:   // the checkpoint ends (AUD-0599 F02).
+ 373:   let stepOpen = run.state.pendingStepNumber === stepNumber
+ 374:   // Opened as RUNNING by this invocation's dispatch checkpoint.
+ 375:   let openedHere = false
+ 376:   // An operator pause proves that nothing ran and nothing stays reserved: the
+ 377:   // step waits for the resume instead of looking in flight, so a later
+ 378:   // terminal stop can close it as not executed (AUD-0600 F02).
+ 379:   const parkForResume = async (): Promise<void> => {
+ 380:     if (!openedHere) return
+ 381:     await ctx.recordStep(run, {
+ 382:       stepNumber,
+ 383:       stepType: 'TOOL',
+ 384:       status: 'WAITING',
+ 385:       sideEffecting: true,
+ 386:       reasonCode: decision.reasonCode
+ 387:     })
+ 388:   }
+ 389:   const recordDenial = (record: StepRecord): Promise<void> =>
+ 390:     ctx.recordStep(
+ 391:       run,
+ 392:       stepOpen
+ 393:         ? {
+ 394:             stepNumber,
+ 395:             stepType: 'TOOL',
+ 396:             status: 'FAILED',
+ 397:             sideEffecting: true,
+ 398:             reasonCode: decision.reasonCode,
+ 399:             errorCode: record.errorCode
+ 400:           }
+ 401:         : record
+ 402:     )
+ 403:   const call: ToolCallState = {
+ 404:     turn: ctx.turn(run),
+ 405:     tool,
+ 406:     invocation,
+ 407:     needsApproval: forceApproval,
+ 408:     executionRef: run.executionId
+ 409:   }
+ 410:   let policyRecorded = false
+ 411:   const recordPolicy = async (): Promise<void> => {
+ 412:     if (policyRecorded || !call.policyDecision) return
+ 413:     policyRecorded = true
+ 414:     await ctx.recordObservation(
+ 415:       run,
+ 416:       ctx.makeObservation(run, {
+ 417:         stepId,
+ 418:         stepNumber,
+ 419:         type: 'POLICY_DECISION',
+ 420:         source: 'POLICY',
+ 421:         trust: 'TRUSTED',
+ 422:         payload: {
+ 423:           outcome: call.policyDecision.outcome,
+ 424:           policyVersion: call.policyDecision.policyVersion
+ 425:         },
+ 426:         summary: `Policy outcome ${call.policyDecision.outcome}.`,
+ 427:         provenance: { sourceId: 'policy-engine' }
+ 428:       })
+ 429:     )
+ 430:   }
+ 431: 
+ 432:   // Policy, approval, guards (pause) and cancellation run in the kernel
+ 433:   // pipeline (SPEC 0181); this loop only adds its checkpoint and its steps.
+ 434:   const pipeline = await runToolCall(ctx.kernel(run), call, {
+ 435:     beforeDispatch: async () => {
+ 436:       await recordPolicy()
+ 437:       const approvalId = call.grant?.approvalId
+ 438:       if (
+ 439:         approvalId &&
+ 440:         run.state.pendingApprovalId &&
+ 441:         run.state.pendingApprovalId !== approvalId
+ 442:       ) {
+ 443:         return {
+ 444:           kind: 'stop',
+ 445:           stopReason: 'STATE_CONFLICT',
+ 446:           response: 'Approval identity changed while resuming the execution.'
+ 447:         }
+ 448:       }
+ 449:       // Budget accounting is committed with the in-flight decision so a crash
+ 450:       // cannot replay the same step against an unconsumed counter; the
+ 451:       // approval is only reserved after this checkpoint.
+ 452:       if (!alreadyCounted) run.usage.toolCalls += 1
+ 453:       run.inFlightCounted = false
+ 454:       // The step is in flight from here: a stop reason left by an earlier
+ 455:       // approval wait would hide that this call is already counted when the
+ 456:       // execution resumes (AUD-0598 R02).
+ 457:       run.state = {
+ 458:         ...run.state,
+ 459:         pendingDecision: decision,
+ 460:         pendingStepNumber: stepNumber,
+ 461:         ...(approvalId ? { pendingApprovalId: approvalId } : {}),
+ 462:         stopReason: undefined
+ 463:       }
+ 464:       await ctx.persistCheckpoint(run)
+ 465:       await ctx.recordStep(run, {
+ 466:         stepNumber,
+ 467:         stepType: 'TOOL',
+ 468:         status: 'RUNNING',
+ 469:         sideEffecting: true,
+ 470:         reasonCode: decision.reasonCode
+ 471:       })
+
+FILE packages/harness/src/__tests__/complete-checkpoint.test.ts
+   1: import { createHash } from 'node:crypto'
+   2: import { describe, expect, it } from 'vitest'
+   3: import {
+   4:   EMPTY_BUDGET_USAGE,
+   5:   canonicalizeCompleteJson,
+   6:   type AgentLoopState,
+   7:   type Observation,
+   8:   type DecisionAdmissionRecord,
+   9:   type ExecutionCheckpoint
+  10: } from '@cvg/harness-contracts'
+  11: import {
+  12:   completeCheckpointDigest,
+  13:   encodeCompleteCheckpointState,
+  14:   decodeCompleteCheckpointState
+  15: } from '../complete-checkpoint.ts'
+  16: import {
+  17:   sealCheckpoint,
+  18:   checkpointDigest,
+  19:   validateCheckpointIntegrity,
+  20:   InMemoryExecutionStepStore
+  21: } from '../step-store.ts'
+  22: 
+  23: export function completeFixture(stepNumber = 0) {
+  24:   return sealCheckpoint({
+  25:     tenantId: 'tenant_test',
+  26:     executionId: 'exec_test',
+  27:     checkpointVersion: 2,
+  28:     runtimeProfile: 'iterative',
+  29:     runtimeVersion: '2.0.0',
+  30:     orchestratorVersion: '1.0.0',
+  31:     stepNumber,
+  32:     state: {
+  33:       goal: 'synthetic',
+  34:       stepNumber,
+  35:       observations: [],
+  36:       openQuestions: [],
+  37:       resolvedInputs: {},
+  38:       loopSignatures: [],
+  39:       toolResultContext: {
+  40:         version: 1,
+  41:         deliveredThroughStep: 0,
+  42:         pendingDecisionAdmission: null,
+  43:         decisionAdmissions: []
+  44:       }
+  45:     },
+  46:     budgetUsage: { ...EMPTY_BUDGET_USAGE, steps: stepNumber }
+  47:   })
+  48: }
+  49: 
+  50: function reseal(
+  51:   checkpoint: ExecutionCheckpoint,
+  52:   state: AgentLoopState,
+  53:   budgetUsage = checkpoint.budgetUsage
+  54: ) {
+  55:   const {
+  56:     checkpointId: _id,
+  57:     createdAt: _at,
+  58:     digest: _digest,
+  59:     ...unsigned
+  60:   } = checkpoint
+  61:   void _id
+  62:   void _at
+  63:   void _digest
+  64:   return sealCheckpoint({
+  65:     ...unsigned,
+  66:     stepNumber: state.stepNumber,
+  67:     state,
+  68:     budgetUsage
+  69:   })
+  70: }
+  71: function resultObservation(output: unknown, stepNumber = 1): Observation {
+  72:   const raw = canonicalizeCompleteJson(output)
+  73:   return {
+  74:     observationId: `obs_${stepNumber}`,
+  75:     stepId: `step_${stepNumber}`,
+  76:     stepNumber,
+  77:     executionId: 'exec_test',
+  78:     type: 'TOOL_RESULT',
+  79:     source: 'TOOL',
+  80:     trust: 'UNTRUSTED',
+  81:     timestamp: '2026-10-16T00:00:00.000Z',
+  82:     summary: 'preview',
+  83:     provenance: { sourceId: 'tool', operationKey: `op_${stepNumber}` },
+  84:     payload: {
+  85:       schemaVersion: 1,
+  86:       status: 'SUCCEEDED',
+  87:       sideEffect: 'NONE',
+  88:       completion: 'COMPLETE',
+  89:       resultAvailability: 'AVAILABLE',
+  90:       output,
+  91:       outputBytes: Buffer.byteLength(raw),
+  92:       outputSha256: createHash('sha256').update(raw).digest('hex')
+  93:     }
+  94:   }
+  95: }
+  96: function reservation(
+  97:   status: 'RESERVED' | 'SETTLED' | 'UNKNOWN' = 'RESERVED'
+  98: ): DecisionAdmissionRecord {
+  99:   return {
+ 100:     admissionId: 'adm_1',
+ 101:     tenantId: 'tenant_test',
+ 102:     executionId: 'exec_test',
+ 103:     stepNumber: 2,
+ 104:     attempt: 1,
+ 105:     purpose: 'ORCHESTRATION',
+ 106:     requestSha256: 'a'.repeat(64),
+ 107:     measurement: {
+ 108:       counterId: 'synthetic',
+ 109:       counterVersion: '1',
+ 110:       provider: 'synthetic',
+ 111:       model: 'model',
+ 112:       formattingVersion: '1',
+ 113:       inputUpperBoundTokens: 100,
+ 114:       contextWindowTokens: 1024,
+ 115:       costUpperBoundUsd: 1
+ 116:     },
+ 117:     reserved: {
+ 118:       modelCalls: 1,
+ 119:       inputTokens: 100,
+ 120:       outputTokens: 512,
+ 121:       costUsd: 1
+ 122:     },
+ 123:     status,
+ 124:     ...(status === 'SETTLED'
+ 125:       ? {
+ 126:           actual: {
+ 127:             modelCalls: 1,
+ 128:             inputTokens: 80,
+ 129:             outputTokens: 20,
+ 130:             costUsd: 0.5
+ 131:           },
+ 132:           resultSha256: 'b'.repeat(64)
+ 133:         }
+ 134:       : {}),
+ 135:     ...(status === 'UNKNOWN' ? { unknownReason: 'timeout' } : {})
+ 136:   }
+ 137: }
+ 138: 
+ 139: describe('complete checkpoint codec and memory CAS', () => {
+ 140:   it('uses domain-separated logical digest, schema optional normalization and legacy digest', () => {
+ 141:     const checkpoint = completeFixture()
+ 142:     const { checkpointId, createdAt, digest, ...unsigned } = checkpoint
+ 143:     expect(digest).toBe(completeCheckpointDigest(unsigned))
+ 144:     expect(digest).toBe(
+ 145:       createHash('sha256')
+ 146:         .update(
+ 147:           'cvg.checkpoint.v2\n' +
+ 148:             canonicalizeCompleteJson(unsigned, {
+ 149:               maxBytes: 8388608,
+ 150:               maxDepth: 64,
+ 151:               maxNodes: 1000000
+ 152:             })
+ 153:         )
+ 154:         .digest('hex')
+ 155:     )
+ 156:     expect(
+ 157:       completeCheckpointDigest({
+ 158:         ...unsigned,
+ 159:         state: { ...unsigned.state, pendingDecision: undefined }
+ 160:       })
+ 161:     ).toBe(digest)
+ 162:     expect(() =>
+ 163:       completeCheckpointDigest({
+ 164:         ...unsigned,
+ 165:         state: { ...unsigned.state, resolvedInputs: { invalid: undefined } }
+ 166:       })
+ 167:     ).toThrow()
+ 168:     validateCheckpointIntegrity(checkpoint, {
+ 169:       tenantId: checkpoint.tenantId,
+ 170:       executionId: checkpoint.executionId
+ 171:     })
+ 172:     const legacy = sealCheckpoint({
+ 173:       ...unsigned,
+ 174:       checkpointVersion: 1,
+ 175:       state: { ...unsigned.state, toolResultContext: undefined }
+ 176:     })
+ 177:     expect(legacy.digest).not.toBe(digest)
+ 178:     expect(checkpointId).toBeTruthy()
+ 179:     expect(createdAt).toBeTruthy()
+ 180:   })
+ 181: 
+ 182:   it('round trips NUL keys and 4096 NULs with ASCII physical wrapper', () => {
+ 183:     const state = {
+ 184:       ...completeFixture().state,
+ 185:       resolvedInputs: { '\u0000😀': '\u0000'.repeat(4096) }
+ 186:     }
+ 187:     const encoded = encodeCompleteCheckpointState(state)
+ 188:     expect(JSON.stringify(encoded)).not.toContain('\u0000')
+ 189:     expect(decodeCompleteCheckpointState(encoded)).toEqual(state)
+ 190:     expect(encoded.data).toBe(
+ 191:       Buffer.from(
+ 192:         canonicalizeCompleteJson(state, {
+ 193:           maxBytes: 8388608,
+ 194:           maxDepth: 64,
+ 195:           maxNodes: 1000000
+ 196:         })
+ 197:       ).toString('base64')
+ 198:     )
+ 199:   })
+ 200: 
+ 201:   it('rejects malformed physical wrappers, UTF8, JSON, noncanonical JSON and tamper', () => {
+ 202:     const encoded = encodeCompleteCheckpointState(completeFixture().state)
+ 203:     const wrap = (data: Buffer) => ({
+ 204:       ...encoded,
+ 205:       data: data.toString('base64'),
+ 206:       decodedBytes: data.length,
+ 207:       decodedSha256: createHash('sha256').update(data).digest('hex')
+ 208:     })
+ 209:     for (const raw of [
+ 210:       null,
+ 211:       {},
+ 212:       { ...encoded, extra: 1 },
+ 213:       { ...encoded, data: encoded.data + '=' },
+ 214:       { ...encoded, decodedBytes: encoded.decodedBytes + 1 },
+ 215:       { ...encoded, decodedSha256: '0'.repeat(64) },
+ 216:       wrap(Buffer.from([0xff])),
+ 217:       wrap(Buffer.from('{"a":1,"a":2}')),
+ 218:       wrap(Buffer.from('null ')),
+ 219:       wrap(Buffer.from('{"goal":"x"}')),
+ 220:       { ...encoded, data: 'A'.repeat(11184816) }
+ 221:     ]) {
+ 222:       expect(() => decodeCompleteCheckpointState(raw)).toThrow()
+ 223:     }
+ 224:     const tampered = { ...completeFixture(), tenantId: 'other' }
+ 225:     expect(() =>
+ 226:       validateCheckpointIntegrity(tampered, {
+ 227:         tenantId: 'tenant_test',
+ 228:         executionId: 'exec_test'
+ 229:       })
+ 230:     ).toThrow()
+ 231:     expect(() =>
+ 232:       encodeCompleteCheckpointState({
+ 233:         ...completeFixture().state,
+ 234:         toolResultContext: undefined
+ 235:       } as AgentLoopState)
+ 236:     ).toThrow()
+ 237:   })
+ 238: 
+ 239:   it('rejects invalid result hashes, cursor, receipts, external NUL and unsigned size', () => {
+ 240:     const base = completeFixture()
+
+FILE packages/contracts/src/__tests__/complete-json.test.ts
+   1: import { describe, expect, it } from 'vitest'
+   2: import {
+   3:   canonicalizeCompleteJson,
+   4:   CompleteJsonError
+   5: } from '../complete-json.ts'
+   6: 
+   7: describe('complete JSON strict value snapshot', () => {
+   8:   it('preserves aliases, Unicode, NUL keys, numeric keys and exact JSON values', () => {
+   9:     const alias = { 'é\u0000': '😀\u0000é' }
+  10:     const value = {
+  11:       z: [null, true, false, 1.25, '', alias, alias],
+  12:       '2': 2,
+  13:       '10': 10
+  14:     }
+  15:     const raw = canonicalizeCompleteJson(value)
+  16:     expect(raw.startsWith('{"10":10,"2":2,"z":')).toBe(true)
+  17:     expect(JSON.parse(raw)).toEqual(value)
+  18:     expect(canonicalizeCompleteJson(JSON.parse(raw))).toBe(raw)
+  19:   })
+  20: 
+  21:   it.each([
+  22:     undefined,
+  23:     BigInt(1),
+  24:     NaN,
+  25:     Infinity,
+  26:     -Infinity,
+  27:     -0,
+  28:     Symbol('s'),
+  29:     () => 1,
+  30:     '\ud800',
+  31:     '\udfff',
+  32:     { '\ud800': 1 },
+  33:     new Date(),
+  34:     new Map(),
+  35:     [1, , 2],
+  36:     { a: undefined },
+  37:     Object.assign([1], { extra: 2 }),
+  38:     { [Symbol('s')]: 1 }
+  39:   ])('rejects non-JSON input without coercion (%#)', (value) => {
+  40:     expect(() => canonicalizeCompleteJson(value)).toThrow(CompleteJsonError)
+  41:     try {
+  42:       canonicalizeCompleteJson(value)
+  43:     } catch (error) {
+  44:       expect((error as CompleteJsonError).code).toBe('INVALID_JSON')
+  45:     }
+  46:   })
+  47: 
+  48:   it('never invokes accessors or toJSON and rejects cycles', () => {
+  49:     let calls = 0
+  50:     const getter = Object.defineProperty({}, 'x', {
+  51:       enumerable: true,
+  52:       get() {
+  53:         calls++
+  54:         return 1
+  55:       }
+  56:     })
+  57:     const hook = {
+  58:       toJSON() {
+  59:         calls++
+  60:         return {}
+  61:       }
+  62:     }
+  63:     const cycle: unknown[] = []
+  64:     cycle.push(cycle)
+  65:     for (const value of [getter, hook, cycle])
+  66:       expect(() => canonicalizeCompleteJson(value)).toThrow()
+  67:     expect(calls).toBe(0)
+  68:   })
+  69: 
+  70:   it('enforces exact UTF-8 bytes, root-at-zero depth and value node limits', () => {
+  71:     expect(Buffer.byteLength(canonicalizeCompleteJson('a'.repeat(32766)))).toBe(
+  72:       32768
+  73:     )
+  74:     expect(() => canonicalizeCompleteJson('a'.repeat(32767))).toThrow(
+  75:       expect.objectContaining({ code: 'RESULT_TOO_LARGE' })
+  76:     )
+  77:     expect(canonicalizeCompleteJson('😀', { maxBytes: 6 })).toBe('"😀"')
+  78:     expect(() => canonicalizeCompleteJson('😀', { maxBytes: 5 })).toThrow()
+  79:     let nested: unknown = null
+  80:     for (let i = 0; i < 32; i++) nested = [nested]
+  81:     expect(() => canonicalizeCompleteJson(nested)).not.toThrow()
+  82:     expect(() => canonicalizeCompleteJson([nested])).toThrow(
+  83:       expect.objectContaining({ code: 'RESULT_COMPLEXITY' })
+  84:     )
+  85:     expect(() => canonicalizeCompleteJson(Array(9999).fill(0))).not.toThrow()
+  86:     expect(() => canonicalizeCompleteJson(Array(10000).fill(0))).toThrow(
+  87:       expect.objectContaining({ code: 'RESULT_COMPLEXITY' })
+  88:     )
+  89:     expect(() => canonicalizeCompleteJson('x'.repeat(10_000_000))).toThrow(
+  90:       expect.objectContaining({ code: 'RESULT_TOO_LARGE' })
+  91:     )
+  92:     expect(() => canonicalizeCompleteJson(new Array(2 ** 30))).toThrow()
+  93:   })
+  94: })
+

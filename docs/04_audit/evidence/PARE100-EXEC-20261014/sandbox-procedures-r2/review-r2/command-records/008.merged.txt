@@ -1,0 +1,533 @@
+FILE reference/packages/sandbox/sandbox-local/src/index.ts
+402:   }
+403: 
+404:   /**
+405:    * The windows-acl runner argv for one policy. With a calling session (the
+406:    * policy's `sessionId`) under workspace-write, the grants are materialized
+407:    * once per provider lifetime — the standing workspace-root grant per
+408:    * workspace and a revocable, RANDOM private-temp capability per live
+409:    * session/workspace pair. The runner receives `--write-sid` plus
+410:    * `--temp-write-sid` and grants nothing itself. Agentless workspace-write
+411:    * calls pass the ambient temp ROOT and no SID flags: the runner creates and
+412:    * removes a random private child directory for that one invocation.
+413:    * @param policy - the resolved per-call policy.
+414:    * @returns the runner invocation.
+415:    */
+416:   private windowsAclRunnerArgv(policy: SandboxPolicy): string[] {
+417:     const sessionId = policy.sessionId
+418:     if (sessionId === undefined || policy.mode === 'read-only') {
+419:       return [
+420:         ...this.windowsAclRunnerInvocation(),
+421:         '--workspace', policy.workspaceRoot,
+422:         '--temp', tmpdir(),
+423:         '--mode', policy.mode,
+424:       ]
+425:     }
+426:     const temp = this.materializeAclGrant(sessionId, policy.workspaceRoot)
+427:     return [
+428:       ...this.windowsAclRunnerInvocation(),
+429:       '--workspace', policy.workspaceRoot,
+430:       '--temp', temp.dir,
+431:       '--mode', policy.mode,
+432:       '--write-sid', workspaceWriteSid(policy.workspaceRoot),
+433:       '--temp-write-sid', temp.writeSid,
+434:     ]
+435:   }
+436: 
+437:   /**
+438:    * Materialize one workspace-write policy's ACEs once per provider
+439:    * lifetime. The workspace SID and standing root grant are shared by the
+440:    * workspace. The temp directory is random and carries a distinct SID, so
+441:    * another session on the same workspace cannot use the shared workspace
+442:    * SID to enter it. A fresh provider always chooses a new path; crash
+443:    * residue therefore cannot collide with or authorize a resumed session.
+444:    * Fail-closed: a half-materialized temp grant is revoked and its directory
+445:    * removed before the error propagates.
+446:    * @param sessionId - the policy's calling-session identity.
+447:    * @param workspaceRoot - the resolved policy root.
+448:    * @returns the pair's private temp directory and write capability.
+449:    */
+450:   private materializeAclGrant(sessionId: SessionId, workspaceRoot: string): AclTempCapability {
+451:     assertTempRootOutsideWorkspace(workspaceRoot, tmpdir())
+452:     const writeSid = workspaceWriteSid(workspaceRoot)
+453:     if (!this.workspaceGrants.has(workspaceRoot)) {
+454:       const grant = AclWriteGrant.create(writeSid)
+455:       try {
+456:         grant.add(workspaceRoot, true)
+457:       } catch (error) {
+458:         // Free the SID; a standing ACE (if the apply succeeded before a
+459:         // post-apply throw) is the intended end state, not an error
+460:         // artifact — nothing to revoke.
+461:         try {
+462:           grant.dispose()
+463:         } catch (cleanupError) {
+464:           throw new AggregateError([error, cleanupError], 'sandbox-local windows-acl workspace grant failed and its cleanup also failed')
+465:         }
+466:         throw error
+467:       }
+468:       this.workspaceGrants.set(workspaceRoot, grant)
+469:     }
+470:     const key = JSON.stringify([String(sessionId), workspaceRoot])
+471:     const existing = this.tempCapabilities.get(key)
+472:     if (existing !== undefined) return existing
+473:     const tempDir = mkdtempSync(join(tmpdir(), 'dsh-'))
+474:     const tempSid = tempWriteSid(tempDir)
+475:     let grant: AclWriteGrant | undefined
+476:     try {
+477:       grant = AclWriteGrant.create(tempSid)
+478:       grant.add(tempDir)
+479:     } catch (error) {
+480:       const cleanupFailures: unknown[] = []
+481:       if (grant !== undefined) {
+482:         try {
+483:           grant.dispose()
+484:         } catch (cleanupError) {
+485:           cleanupFailures.push(cleanupError)
+486:         }
+487:       }
+488:       try {
+489:         this.removeTempDir(tempDir)
+490:       } catch (cleanupError) {
+491:         cleanupFailures.push(cleanupError)
+492:       }
+493:       if (cleanupFailures.length > 0) {
+494:         throw new AggregateError([error, ...cleanupFailures], 'sandbox-local windows-acl temp grant materialization failed and its cleanup also failed')
+495:       }
+496:       throw error
+497:     }
+498:     const capability = { dir: tempDir, writeSid: tempSid, grant }
+499:     this.tempCapabilities.set(key, capability)
+500:     return capability
+501:   }
+502: 
+503:   /**
+504:    * Dispose every write grant (provider dispose): the revocable temp ACEs
+505:    * are revoked, the private temp directories this provider created are
+506:    * removed, and every SID allocation is freed; the standing workspace ACEs
+507:    * stay (the reuse cache). Cleanup failures are reported, not thrown:
+508:    * cordis teardown must not be aborted by grant cleanup. A crash skips all
+509:    * of it, but a new provider never reuses the residue's random path or SID;
+510:    * OS temp hygiene (or manual removal) eventually reclaims it.
+511:    */
+512:   private revokeAclGrants(): void {
+513:     if (this.workspaceGrants.size === 0 && this.tempCapabilities.size === 0) return
+514:     const failures: unknown[] = []
+515:     for (const grant of [...this.workspaceGrants.values(), ...[...this.tempCapabilities.values()].map(capability => capability.grant)]) {
+516:       try {
+517:         grant.dispose()
+518:       } catch (error) {
+519:         failures.push(error)
+520:       }
+521:     }
+522:     for (const { dir } of this.tempCapabilities.values()) {
+523:       try {
+524:         this.removeTempDir(dir)
+525:       } catch (error) {
+526:         failures.push(error)
+527:       }
+528:     }
+529:     this.workspaceGrants.clear()
+530:     this.tempCapabilities.clear()
+531:     if (failures.length > 0) {
+532:       this.ctx.logger.warn(`sandbox-local: windows-acl grant cleanup completed with ${failures.length} failure(s)`)
+533:       for (const error of failures) this.ctx.logger.warn(error)
+534:     }
+535:   }
+536: 
+537:   /** Remove one provider-owned private temp directory (injectable for cleanup tests). */
+538:   private removeTempDir(dir: string): void {
+539:     const remove = this.internals.rmTempDir ?? ((path: string) => { rmSync(path, { recursive: true, force: true }) })
+540:     remove(dir)
+541:   }
+542: 
+543:   /**
+544:    * Resolve which runner confines commands, once, for the provider's
+545:    * lifetime: this platform's chain ({@link PLATFORM_CHAINS}), its sole
+546:    * candidate selected directly, multiple candidates arbitrated by
+547:    * functional probes in chain order. Fail closed when the platform has no
+548:    * chain or no candidate passes — the command never runs.
+549:    */
+550:   private selectRunner(mode: ConfinedSandboxMode): SelectedRunner {
+551:     this.selectedRunner ??= this.chainVerdict()
+552:     if (this.selectedRunner === 'unavailable') throw new SandboxUnavailableError(mode)
+553:     return this.selectedRunner
+554:   }
+555: 
+556:   /** Walk this platform's chain: sole candidate unprobed, several probed in order, none usable → unavailable. */
+557:   private chainVerdict(): SelectedRunner | 'unavailable' {
+558:     const chain = this.internals.chain ?? PLATFORM_CHAINS[this.internals.platform ?? process.platform] ?? []
+559:     const [first, ...rest] = chain
+560:     if (first === undefined) return 'unavailable'
+561:     // A sole candidate needs no arbitration; its execution-time refusal still fails closed.
+562:     if (rest.length === 0) return { runner: first, enforcement: STATIC_ENFORCEMENT[first] }
+563:     for (const runner of chain) {
+564:       const enforcement = this.probeRunner(runner)
+565:       if (enforcement !== 'unusable') return { runner, enforcement }
+566:     }
+567:     return 'unavailable'
+568:   }
+569: 
+570:   /** One rung's functional probe (each at most once, via the chain walk). */
+571:   private probeRunner(runner: SelectedRunner['runner']): SandboxEnforcement | 'unusable' {
+572:     // bwrap's mount profile and Seatbelt's deny-file-write* profile govern
+573:     // every promised file effect by construction, so their passing probes
+574:     // are always full enforcement; the Landlock launcher's probe report
+575:     // distinguishes full from per-ABI-partial, while windows-acl is always
+576:     // partial for its documented hard-link, unconfined-read, and
+577:     // AppContainer-ACL boundaries.
+578:     switch (runner) {
+579:       case 'bwrap': {
+580:         const probe = this.internals.probeBwrap ?? (() => defaultProbeBwrap(this.probeTimeoutMs))
+581:         return probe() ? 'full' : 'unusable'
+582:       }
+583:       case 'landlock': {
+584:         const probe = this.internals.probeLandlock ?? (launcher => defaultProbeLandlock(launcher, { timeoutMs: this.probeTimeoutMs }))
+585:         return probe(this.landlockLauncher())
+586:       }
+587:       case 'seatbelt': {
+588:         const probe = this.internals.probeSeatbelt ?? (exec => defaultProbeSeatbelt(exec, this.probeTimeoutMs))
+589:         return probe(this.seatbeltExec()) ? 'full' : 'unusable'
+590:       }
+591:       case 'windows-acl': {
+592:         const probe = this.internals.probeWindowsAcl
+593:           ?? (() => defaultProbeWindowsAcl(this.windowsAclRunnerInvocation(), this.probeTimeoutMs))
+594:         return probe() ? 'partial' : 'unusable'
+595:       }
+596:       default: return assertNever(runner)
+597:     }
+598:   }
+599: 
+600:   /** The Landlock launcher to probe and exec (test hook over the resolved one). */
+601:   private landlockLauncher(): string {
+602:     return this.internals.landlockLauncher ?? landlockLauncherPath()
+603:   }
+604: 
+605:   /** The `sandbox-exec` executable to probe and exec (test hook over the system one). */
+606:   private seatbeltExec(): string {
+607:     return this.internals.seatbeltExec ?? 'sandbox-exec'
+608:   }
+609: 
+610:   /**
+611:    * The windows-acl runner argv prefix: the built lib/runner.js entry when
+612:    * present (production), else the package source through tsx (development).
+613:    * Pin the source loader and TypeScript paths to this installation, independently
+614:    * of target cwd or environment overrides.
+615:    * The prefix stays `[node, runner, ...]` — a future native-exe runner keeps
+616:    * the same argv contract and only swaps these entries.
+617:    */
+618:   private windowsAclRunnerInvocation(): string[] {
+619:     const override = this.internals.windowsAclRunnerArgs
+620:     if (override !== undefined) return override
+621:     const builtEntry = this.internals.windowsAclRunnerEntry ?? resolveModulePath('@deepseek-ai/dsh-sandbox-windows-acl/runner')
+622:     if (existsSync(builtEntry)) return [process.execPath, builtEntry]
+623:     const sourceEntry = fileURLToPath(new URL('../../sandbox-windows-acl/src/runner.ts', import.meta.url))
+624:     const sourceConfig = fileURLToPath(new URL('../../../../tsconfig.base.json', import.meta.url))
+625:     const registration = `import { register } from ${JSON.stringify(resolveModuleUrl('tsx/esm/api'))}; register({ tsconfig: ${JSON.stringify(sourceConfig)} });`
+626:     return [process.execPath, '--import', `data:text/javascript,${encodeURIComponent(registration)}`, sourceEntry]
+627:   }
+628: }
+629: 
+630: export default LocalSandboxProvider
+FILE reference/packages/sandbox/sandbox-local/src/profiles.ts
+1: /**
+2:  * Internal platform-profile builders for the local sandbox provider.
+3:  *
+4:  * @module @deepseek-ai/dsh-sandbox-local/profiles
+5:  */
+6: 
+7: import { grantArgs as landlockGrantArgs } from '@deepseek-ai/node-addon-system/landlock-run'
+8: import { writableRoots } from '@deepseek-ai/dsh-sandbox'
+9: import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
+10: 
+11: /**
+12:  * Build the bwrap profile arguments for one file-effect policy.
+13:  * @param policy - file-effect policy to express as bwrap mounts.
+14:  * @returns profile arguments before the trailing separator and command argv.
+15:  */
+16: export function bwrapProfileArgs(policy: SandboxPolicy): string[] {
+17:   const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent']
+18:   if (policy.mode === 'workspace-write') {
+19:     args.push('--perms', '1777', '--tmpfs', '/tmp')
+20:     args.push('--bind', policy.workspaceRoot, policy.workspaceRoot)
+21:   }
+22:   return args
+23: }
+24: 
+25: /**
+26:  * Build the Landlock launcher grants for one file-effect policy.
+27:  * @param policy - file-effect policy to express as Landlock allow-list grants.
+28:  * @returns launcher grant arguments before the trailing separator and command argv.
+29:  */
+30: export function landlockProfileArgs(policy: SandboxPolicy): string[] {
+31:   const readWrite = ['/dev/null']
+32:   if (policy.mode === 'workspace-write') {
+33:     readWrite.push('/tmp', policy.workspaceRoot)
+34:   }
+35:   return landlockGrantArgs({ readOnly: ['/'], readWrite })
+36: }
+37: 
+38: /** Quote one path as an SBPL string literal. */
+39: function sbplString(path: string): string {
+40:   return `"${path.replaceAll('\\', String.raw`\\`).replaceAll('"', String.raw`\"`)}"`
+41: }
+42: 
+43: /**
+44:  * Build the sandbox-exec arguments and SBPL profile for one policy. The
+45:  * writable roots come from the shared {@link writableRoots} helper (canonical,
+46:  * deduplicated) so the Seatbelt grant and the in-process fs fence
+47:  * (`@deepseek-ai/dsh-fs-sandbox`) can never drift apart.
+48:  * @param policy - file-effect policy to express as an SBPL profile.
+49:  * @returns sandbox-exec arguments before the trailing separator and command argv.
+50:  */
+51: export function seatbeltProfileArgs(policy: SandboxPolicy): string[] {
+52:   const forms = ['(version 1)', '(allow default)', '(deny file-write*)', `(allow file-write* (literal ${sbplString('/dev/null')}))`]
+53:   const roots = writableRoots(policy)
+54:   if (roots.length > 0) {
+55:     forms.push(`(allow file-write* ${roots.map(root => `(subpath ${sbplString(root)})`).join(' ')})`)
+56:   }
+57:   return ['-p', forms.join(' ')]
+58: }
+FILE reference/packages/sandbox/sandbox/src/diagnostics.ts
+1: /** Classify observed sandbox runner failures and file-effect denials. */
+2: import { accessSync, constants, statSync } from 'node:fs'
+3: import type { RunnerFailureRule } from './index.ts'
+4: 
+5: /** Node-local spawn codes proven to identify executable resolution or permission failure. */
+6: const EXECUTABLE_SPAWN_CODES = new Set(['EACCES', 'ENOENT'])
+7: 
+8: /** Whether the caller-owned spawn cwd can be entered. */
+9: function isUsableWorkdir(path: string): boolean {
+10:   try {
+11:     if (!statSync(path).isDirectory()) return false
+12:     accessSync(path, constants.X_OK)
+13:     return true
+14:   } catch {
+15:     return false
+16:   }
+17: }
+18: 
+19: /**
+20:  * Attribute only Node ENOENT/EACCES failures whose error path equals argv[0]
+21:  * after independently ruling out the caller-owned cwd. A supplied error path
+22:  * must exactly identify the runner; without one, the syscall must. With a
+23:  * usable cwd, these codes describe resolution or execute permission for that
+24:  * argv[0] or its shebang interpreter.
+25:  * The workdir is checked at classification time, not atomically with spawn;
+26:  * concurrent path replacement may change attribution but cannot permit an
+27:  * unconfined execution.
+28:  * @param error - the original spawn rejection.
+29:  * @param runnerProgram - provider argv[0], the executable that establishes confinement.
+30:  * @param workdir - the caller-owned spawn cwd, checked independently for usability.
+31:  * @returns whether the rejection has executable-specific runner evidence.
+32:  */
+33: export function isRunnerSpawnFailure(
+34:   error: unknown,
+35:   runnerProgram: string | undefined,
+36:   workdir: string,
+37: ): boolean {
+38:   if (runnerProgram === undefined || !isUsableWorkdir(workdir)) return false
+39:   if (typeof error !== 'object' || error === null) return false
+40:   const { code, path, syscall } = error as { code?: unknown; path?: unknown; syscall?: unknown }
+41:   if (typeof code !== 'string' || !EXECUTABLE_SPAWN_CODES.has(code)) return false
+42:   if (typeof syscall !== 'string') return false
+43:   const exactSyscall = `spawn ${runnerProgram}`
+44:   if (path === undefined) return syscall === exactSyscall
+45:   if (typeof path !== 'string' || path.length === 0 || path !== runnerProgram) return false
+46:   return syscall === 'spawn' || syscall === exactSyscall
+47: }
+48: 
+49: /** Fatal runner evidence retained for infrastructure-error detail. */
+50: interface RunnerFailureMatch {
+51:   /** The original stderr line that matched a fatal signature. */
+52:   detail: string
+53: }
+54: 
+55: /**
+56:  * Classify one settled process against the selected backend's structured
+57:  * runner-failure rules. Each rule requires a nonzero exit, its optional
+58:  * exit-code gate, and a fatal signature on one stderr line after exact
+59:  * informational lines are excluded.
+60:  * @param exitCode - process exit code; null means signal termination.
+61:  * @param stderr - collected stderr text, left unchanged.
+62:  * @param rules - structured runner-failure rules from the active wrap.
+63:  * @returns the first matching fatal line, or undefined when evidence is insufficient.
+64:  */
+65: export function classifyRunnerFailure(
+66:   exitCode: number | null,
+67:   stderr: string,
+68:   rules: readonly RunnerFailureRule[],
+69: ): RunnerFailureMatch | undefined {
+70:   if (exitCode === null || exitCode === 0) return undefined
+71:   const lines = stderr.split(/\r?\n/)
+72:   for (const rule of rules) {
+73:     if (rule.allowedExitCodes !== undefined && !rule.allowedExitCodes.includes(exitCode)) continue
+74:     const informationalLines = new Set((rule.informationalLines ?? []).map(line => line.toLowerCase()))
+75:     // An empty or whitespace-only substring is not meaningful runner evidence.
+76:     // Ignore it while keeping any valid signatures beside it active.
+77:     const fatalSignatures = rule.fatalSignatures
+78:       .filter(signature => signature.trim().length > 0)
+79:       .map(signature => signature.toLowerCase())
+80:     for (const line of lines) {
+81:       const lowered = line.toLowerCase()
+82:       if (informationalLines.has(lowered)) continue
+83:       if (fatalSignatures.some(signature => lowered.includes(signature))) return { detail: line }
+84:     }
+85:   }
+86:   return undefined
+87: }
+88: 
+89: /**
+90:  * Match a non-zero exit against case-insensitive stderr signatures.
+91:  * @param exitCode - process exit code; null means signal termination.
+92:  * @param stderr - collected stderr text.
+93:  * @param signatures - substrings identifying the selected backend's dialect.
+94:  * @returns whether this is a non-zero exit whose stderr matches a signature.
+95:  */
+96: export function matchesSignature(exitCode: number | null, stderr: string, signatures: readonly string[]): boolean {
+97:   if (exitCode === null || exitCode === 0) return false
+98:   const lowered = stderr.toLowerCase()
+99:   return signatures.some(signature => lowered.includes(signature.toLowerCase()))
+100: }
+FILE reference/packages/sandbox/sandbox-windows-acl/src/grant.ts
+1: /**
+2:  * Server-side write-grant materialization. The sandbox seam holds one
+3:  * standing workspace grant per workspace and one revocable temp grant per
+4:  * live session/workspace pair. Workspace identities survive by deterministic
+5:  * derivation and their standing ACE; temp identities derive from random
+6:  * private paths and are deliberately new after a restart.
+7:  *
+8:  * Fail-closed: `add` throws on any grant failure and the caller disposes the
+9:  * instance (revoking every path granted so far); `dispose` revokes every
+10:  * revocable grant, leaves the standing workspace edits in place, and reports
+11:  * every cleanup failure.
+12:  * @module @deepseek-ai/dsh-sandbox-windows-acl/grant
+13:  */
+14: 
+15: import { grantWrite, revokeWrite } from './acl.ts'
+16: import { allocPtrSlot, decodePtr, isNullPtr, throwLastError, win32Sync } from './ffi.ts'
+17: import type { NativePtr, Win32Bindings } from './ffi.ts'
+18: import { makeWellKnownSid } from './token.ts'
+19: import * as abi from './win32-abi.ts'
+20: 
+21: /**
+22:  * One write SID's provider-lifetime grant materialization: the parsed SID
+23:  * pointer plus every directory whose DACL currently carries its ACE and whose
+24:  * label ACL carries the Low mandatory label. Workspace paths are added
+25:  * STANDING (their security descriptor edits are the cross-session reuse cache
+26:  * and outlive the grant — dispose() skips revoking them, or the next
+27:  * provision would re-propagate the whole tree); temp paths are revocable
+28:  * (dispose() revokes them — an inheritable ACE must not outlive its
+29:  * session's temp directory). Create with {@link AclWriteGrant.create};
+30:  * dispose revokes the revocable paths and frees every SID.
+31:  */
+32: export class AclWriteGrant {
+33:   /** The write SID in SDDL string form. */
+34:   readonly writeSid: string
+35:   private readonly api: Win32Bindings
+36:   private readonly sidPtr: NativePtr
+37:   private readonly lowLabelSidPtr: NativePtr
+38:   private readonly worldSidPtr: NativePtr
+39:   private readonly revocablePaths: string[] = []
+40:   private readonly standingPaths: string[] = []
+41: 
+42:   private constructor(
+43:     api: Win32Bindings,
+44:     sidPtr: NativePtr,
+45:     lowLabelSidPtr: NativePtr,
+46:     worldSidPtr: NativePtr,
+47:     writeSid: string,
+48:   ) {
+49:     this.api = api
+50:     this.sidPtr = sidPtr
+51:     this.lowLabelSidPtr = lowLabelSidPtr
+52:     this.worldSidPtr = worldSidPtr
+53:     this.writeSid = writeSid
+54:   }
+55: 
+56:   /**
+57:    * Parse the SID string, create the Low integrity SID the grants label with
+58:    * and the world SID their ambient-delete deny names, and open the binding
+59:    * table (lazily, once per server). Fail-closed: any failure throws — nothing
+60:    * is granted yet.
+61:    * @param writeSid - the workspace (`S-1-4-x-y`) or temp (`S-1-4-x-y-1`) capability SID string.
+62:    * @param api - optional already-resolved bindings (tests).
+63:    * @returns the ready grant (no ACEs yet).
+64:    */
+65:   static create(writeSid: string, api?: Win32Bindings): AclWriteGrant {
+66:     const bindings = api ?? win32Sync()
+67:     const sidSlot = allocPtrSlot()
+68:     if (bindings.convertStringSidToSidW(writeSid, sidSlot) === 0) {
+69:       throwLastError(bindings, 'ConvertStringSidToSidW', writeSid)
+70:     }
+71:     const sidPtr = decodePtr(sidSlot)
+72:     if (sidPtr === null) throwLastError(bindings, 'ConvertStringSidToSidW', `null SID for ${writeSid}`)
+73:     try {
+74:       const lowLabelSidPtr = makeWellKnownSid(bindings, abi.WinLowLabelSid)
+75:       try {
+76:         const worldSidPtr = makeWellKnownSid(bindings, abi.WinWorldSid)
+77:         return new AclWriteGrant(bindings, sidPtr, lowLabelSidPtr, worldSidPtr, writeSid)
+78:       } catch (error) {
+79:         // The Low label SID is LocalAlloc'd: release it before the world-SID
+80:         // failure propagates to the sidPtr release below.
+81:         bindings.localFree(lowLabelSidPtr)
+82:         throw error
+83:       }
+84:     } catch (error) {
+85:       bindings.localFree(sidPtr)
+86:       throw error
+87:     }
+88:   }
+89: 
+90:   /**
+91:    * Grant the write ACE, the ambient-delete deny, and the Low mandatory label
+92:    * on one directory (idempotent: an already-standing exact ACE, deny, and
+93:    * label skip the eager full-tree re-propagation — see {@link grantWrite})
+94:    * and record the path for {@link dispose} unless it is standing. The path is
+95:    * recorded BEFORE the grant: a post-apply throw (a LocalFree failure after
+96:    * SetNamedSecurityInfoW succeeded) must still revoke it, and revoking an
+97:    * ungranted path is a no-op merge. Callers treat a throw as a failed
+98:    * materialization and dispose the instance to revoke the paths granted so
+99:    * far.
+100:    * @param path - the directory whose DACL and label gain the grant.
+101:    * @param standing - the edits outlive this grant (the workspace reuse
+102:    *   cache; dispose() skips revoking it). Default false (revoked on
+103:    *   dispose — the temp-directory lifecycle).
+104:    */
+105:   add(path: string, standing = false): void {
+106:     ;(standing ? this.standingPaths : this.revocablePaths).push(path)
+107:     grantWrite(this.api, path, this.sidPtr, this.lowLabelSidPtr, this.worldSidPtr)
+108:   }
+109: 
+110:   /** Every directory currently carrying the grant, in grant order. */
+111:   get paths(): readonly string[] {
+112:     return [...this.standingPaths, ...this.revocablePaths]
+113:   }
+114: 
+115:   /** Revoke every revocable grant (standing security descriptor edits stay) and free the SIDs; reports every cleanup failure. */
+116:   dispose(): void {
+117:     const failures: unknown[] = []
+118:     for (const path of this.revocablePaths) {
+119:       try {
+120:         revokeWrite(this.api, path, this.sidPtr)
+121:       } catch (error) {
+122:         failures.push(error)
+123:       }
+124:     }
+125:     for (const [label, sidPtr] of [
+126:       ['write SID', this.sidPtr],
+127:       ['Low label SID', this.lowLabelSidPtr],
+128:       ['world SID', this.worldSidPtr],
+129:     ] as const) {
+130:       try {
+131:         const freed = this.api.localFree(sidPtr)
+132:         if (!isNullPtr(freed)) throwLastError(this.api, 'LocalFree', label)
+133:       } catch (error) {
+134:         failures.push(error)
+135:       }
+136:     }
+137:     if (failures.length > 0) {
+138:       throw new AggregateError(failures, `AclWriteGrant dispose completed with ${failures.length} cleanup failure(s)`)
+139:     }
+140:   }
+141: }
+

@@ -1,0 +1,82 @@
+// Read source and resolve package paths only. Never import the reference bodies.
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const assert = require('node:assert/strict');
+const { createRequire } = require('node:module');
+const base = '/tmp/cvg-pare100-exec-20261014-6az3hlay';
+const w = path.join(base, 'worktree');
+const r2 = path.join(base, 'qualification-current-r1/author-r2');
+const closure = JSON.parse(fs.readFileSync(path.join(r2, 'reference-static-closure.json')));
+const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+const tsPath = path.join(w, 'node_modules/typescript/lib/typescript.js');
+assert.equal(sha(fs.readFileSync(tsPath)), closure.parser.sha256);
+const ts = require(tsPath);
+const parse = file => ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+const nodes = (root, predicate) => {
+  const out = [];
+  const walk = n => { if (predicate(n)) out.push(n); ts.forEachChild(n, walk); };
+  walk(root); return out;
+};
+const driver = path.join(w, 'tests/differential/reference-agent-driver.mjs');
+const ast = parse(driver);
+const declarations = nodes(ast, n => ts.isVariableDeclaration(n) && n.name.getText(ast) === 'load');
+assert.equal(declarations.length, 1);
+const load = declarations[0];
+assert(ts.isArrowFunction(load.initializer));
+const identifiers = nodes(ast, n => ts.isIdentifier(n) && n.text === 'load');
+const uses = identifiers.filter(n => n !== load.name);
+assert.equal(uses.length, 4);
+const literals = uses.map(n => {
+  assert(ts.isCallExpression(n.parent) && n.parent.expression === n);
+  assert.equal(n.parent.arguments.length, 1);
+  assert(ts.isStringLiteral(n.parent.arguments[0]));
+  return n.parent.arguments[0].text;
+});
+assert.deepEqual(literals, ['@deepseek-ai/cordis', '@deepseek-ai/dsh-agent-loop-testkit', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-session']);
+const dynamic = nodes(ast, n => ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword);
+assert.equal(dynamic.length, 1);
+assert.equal(dynamic[0].getText(ast), 'import(pathToFileURL(file).href)');
+assert.equal(dynamic[0].pos >= load.pos && dynamic[0].end <= load.end, true);
+const requiredStatements = [
+  'const file = fs.realpathSync(require.resolve(name))',
+  "if (!file.startsWith(`${REFERENCE_ROOT}${path.sep}`))\n      fail('reference export outside frozen root')",
+  'return import(pathToFileURL(file).href)'
+];
+for (const text of requiredStatements) assert(load.getText(ast).includes(text));
+const req = createRequire(closure.seeds[0].context);
+const anchors = closure.seeds.map(seed => {
+  const resolved = fs.realpathSync(req.resolve(seed.name));
+  assert.equal(resolved, seed.path);
+  assert(resolved.startsWith(closure.root + path.sep));
+  const row = closure.files.find(f => f.path === resolved);
+  assert(row); assert.equal(sha(fs.readFileSync(resolved)), row.sha256);
+  return { name: seed.name, path: resolved, sha256: row.sha256, importedByLoad: literals.includes(seed.name) };
+});
+assert.equal(anchors.length, 9);
+const checkedFiles = closure.files.map(row => {
+  const st = fs.lstatSync(row.path);
+  assert(st.isFile()); assert.equal(fs.realpathSync(row.path), row.path);
+  assert.equal(st.size, row.bytes); assert.equal(sha(fs.readFileSync(row.path)), row.sha256);
+  return { path: row.path, sha256: row.sha256 };
+});
+const source = path.join(closure.root, 'packages/core/agent-loop/src/index.ts');
+const srcAst = parse(source);
+const typeImport = nodes(srcAst, n => ts.isImportDeclaration(n) && n.moduleSpecifier.text === '@deepseek-ai/cosmokit');
+assert.equal(typeImport.length, 1); assert.equal(typeImport[0].importClause.isTypeOnly, true);
+const compiled = path.join(closure.root, 'packages/core/agent-loop/lib/index.js');
+const libAst = parse(compiled);
+assert.equal(nodes(libAst, n => ts.isStringLiteral(n) && n.text === '@deepseek-ai/cosmokit').length, 0);
+const output = {
+  kind: 'LEAD_STATIC_ADJUDICATION_I0', timestamp: new Date().toISOString(),
+  analyzerSHA256: sha(fs.readFileSync(__filename)), parserSHA256: closure.parser.sha256,
+  driver: { path: driver, sha256: sha(fs.readFileSync(driver)), loader: load.getText(ast), calls: literals, otherLoaderUses: uses.length - literals.length },
+  dynamicImport: { line: ast.getLineAndCharacterOfPosition(dynamic[0].getStart(ast)).line + 1, expression: dynamic[0].getText(ast), verdict: 'FINITE_FOUR_LITERAL_LOAD_CALLS_WITH_NINE_RESOLVED_ANCHORS' },
+  anchors, checkedFiles,
+  typeImport: { source, declaration: typeImport[0].getText(srcAst), sourceResolution: 'UNRESOLVED_RETAINED', compiled, compiledLiteralSpecifierCount: 0, verdict: 'SOURCE_TYPE_ONLY_GAP_WITH_NO_CORRESPONDING_COMPILED_IMPORT' },
+  limits: ['No reference body executed', 'No independent source-to-lib emission replay', 'No runtime lifecycle or descendant proof', 'No official checker change or exception activation', 'No independent review or qualification of the 14 sites'],
+  qualification: 'NOT_GRANTED'
+};
+const target = path.join(__dirname, 'reference-static-adjudication.json');
+fs.writeFileSync(target, JSON.stringify(output, null, 2) + '\n', { flag: 'wx' });
+process.stdout.write(JSON.stringify({ output: target, sha256: sha(fs.readFileSync(target)), files: checkedFiles.length, loadCalls: literals.length, anchors: anchors.length, qualification: output.qualification }) + '\n');

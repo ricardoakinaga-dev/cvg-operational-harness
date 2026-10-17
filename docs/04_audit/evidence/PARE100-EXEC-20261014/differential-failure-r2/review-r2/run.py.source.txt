@@ -1,0 +1,29 @@
+import os,pathlib,json,time,subprocess,hashlib,signal,selectors,sys
+O=pathlib.Path(__file__).parent; NODE='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+def run(label,argv,cwd=None,extra=None):
+ sandbox=O/'runs'/label;sandbox.mkdir(parents=True,exist_ok=True)
+ for n in ['home','tmp','config','data','cache','state','dsh']:(sandbox/n).mkdir(exist_ok=True)
+ env={'PATH':str(pathlib.Path(NODE).parent)+':/usr/bin:/bin','HOME':str(sandbox/'home'),'TMPDIR':str(sandbox/'tmp'),'TMP':str(sandbox/'tmp'),'TEMP':str(sandbox/'tmp'),'XDG_CONFIG_HOME':str(sandbox/'config'),'XDG_DATA_HOME':str(sandbox/'data'),'XDG_CACHE_HOME':str(sandbox/'cache'),'XDG_STATE_HOME':str(sandbox/'state'),'DSH_HOME':str(sandbox/'dsh'),'NODE_ENV':'test','LANG':'C.UTF-8','CI':'1','NO_COLOR':'1'}
+ env.update(extra or {});cwd=str(cwd or O/'project');start=time.monotonic();p=subprocess.Popen(argv,cwd=cwd,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True);sel=selectors.DefaultSelector();raw={'stdout':bytearray(),'stderr':bytearray()}
+ for n in raw:sel.register(getattr(p,n),selectors.EVENT_READ,n)
+ limit=None
+ while sel.get_map():
+  if time.monotonic()-start>80:limit='timeout'
+  if sum(map(len,raw.values()))>2*1024*1024:limit='output'
+  if limit:
+   os.killpg(p.pid,signal.SIGKILL)
+  for key,_ in sel.select(.1):
+   data=os.read(key.fileobj.fileno(),65536)
+   if data:raw[key.data].extend(data)
+   else:sel.unregister(key.fileobj)
+  if limit and time.monotonic()-start>85:break
+ exitcode=p.wait(timeout=3);duration=time.monotonic()-start
+ record={'label':label,'argv':argv,'cwd':cwd,'environment':env,'pid':p.pid,'exit':exitcode,'durationMs':round(duration*1000),'timeoutMs':80000,'maxCombinedOutputBytes':2097152,'limitTriggered':limit,'childExitObserved':True,'logs':{}}
+ for n,v in raw.items():
+  f=O/'logs'/f'{label}.{n}.log';f.write_bytes(v);record['logs'][n]={'path':str(f),'bytes':len(v),'sha256':hashlib.sha256(v).hexdigest()}
+ (O/'logs'/f'{label}.command.json').write_text(json.dumps(record,indent=2));print(label,'pid',p.pid,'exit',exitcode,'durationMs',record['durationMs'],'outputBytes',sum(map(len,raw.values())),flush=True)
+ return record,raw
+if __name__=='__main__':
+ label=sys.argv[1];extra={}
+ if len(sys.argv)>2:extra['CVG_DIFFERENTIAL_EVIDENCE_DIR']=str(O/'own-results'/sys.argv[2])
+ run(label,[NODE,str(O/'project/node_modules/vitest/vitest.mjs'),'run','--config','vitest.config.mjs','--reporter=verbose'],extra=extra)

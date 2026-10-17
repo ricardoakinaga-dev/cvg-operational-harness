@@ -1,0 +1,48 @@
+import pathlib,json,hashlib,subprocess,sys
+r=pathlib.Path.cwd()
+(r/'bootstrap.stderr.log').write_text('INITIAL TOOL PROCESS (cwd review-r1 absent): Failed to create unified exec process: No such file or directory (os error 2)\nPYTHON ALIAS ATTEMPT: /bin/bash: line 2: python: command not found (exit 127)\nREVIEWER-LOCAL INSPECTION HELPER INITIAL ATTEMPT (exit 1):\nTraceback (most recent call last):\n  File "inspect_proofs.py", line 2, in <module>\n    from review_io import emit\n  File "review_io.py", line 11, in <module>\n    mode=sys.argv[1]\nIndexError: list index out of range\nCORRECTED: mode defaults to None when imported; inspect_proofs.py rerun successfully.\n')
+rg_commands={
+ 'rg-journal.stdout.log':"rg -n 'PostgresOperationalEffectJournal|journalRecord|result_present|async reserve|async transition|async get|guardOptionalPublishedWrite|jsonText\\(' ../packet-r1/source/packages/persistence/src/operational-execution-postgres.ts",
+ 'rg-flow.stdout.log':"rg -n 'capture|snapshot|journal|confirm|markUncertain|UNAVAILABLE|8388608|8MiB|boundary|fase|storage|armazen|settlement' ../packet-r1/source/packages/harness/src/complete-tool-results.ts ../packet-r1/source/packages/harness/src/iterative-runtime.ts ../packet-r1/source/docs/02_spec/0224_pare100_complete_tool_result_context.md",
+ 'rg-controls.stdout.log':"rg -n 'role|member|grant|trigger|search_path|migration|schema|checksum|journal|SECURITY|current_user|session_user' ../packet-r1/source/apps/worker/src/postgres-role-preflight.ts ../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql ../packet-r1/source/packages/persistence/src/postgres-migrations.ts",
+ 'rg-composition.stdout.log':"rg -n 'journal|Effect|confirm|markUncertain|capture|prepareComplete|storage|checkpointVersion|toolResultContext' ../packet-r1/source/packages/persistence/src/controlled-published-kernel-store.ts ../packet-r1/source/packages/harness/src/execution-spine.ts ../packet-r1/source/apps/worker/src/operational-harness-worker.ts ../packet-r1/source/packages/harness/src/createOperationalHarness.ts",
+ 'rg-tests.stdout.log':"rg -n 'CONFIRMED_JOURNAL|journalTrace|confirm|before|result_present|SQL NULL|jsonb|checkpoint|SIGKILL' ../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts ../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts ../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts ../packet-r1/source/packages/persistence/src/operational-step-postgres.ts",
+ 'rg-transactions.stdout.log':"rg -n 'function transaction|BEGIN|COMMIT|ROLLBACK|withTenantContext|release|search_path|reset|set_config' ../packet-r1/source/packages/persistence/src/operational-execution-postgres.ts ../packet-r1/source/packages/persistence/src/tenant-scoped-postgres.ts"
+}
+operations={
+ 'cwd':str(r),'environment':{'TMPDIR':str(r),'TMP':str(r),'TEMP':str(r),'XDG_CACHE_HOME':str(r/'.cache'),'PYTHONDONTWRITEBYTECODE':'1','login_shell':False},
+ 'bootstrap':[{'command':'pwd','cwd':str(r),'result':'process creation failed; nonexistent cwd; no command ran'},{'command':'mkdir -p /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/review-r1','cwd':'/tmp','exit_code':0,'stdout':'EMPTY','stderr':'EMPTY'},{'command':'python - <<PY (hash-only packet enumeration)','exit_code':127,'stdout':'EMPTY','stderr':'bootstrap.stderr.log'},{'command':'python3 hash-only pathlib.rglob packet enumeration, len(bytes), SHA256(bytes)','exit_code':0,'output':'packet-initial-hashes.json','semantic_reads':False},{'command':'python3 read already-hashed manifest for external paths; print/save exact text','exit_code':0,'stdout':'manifest-read.stdout.log'}],
+ 'review_driver':{'source':'review_io.py','invocations':'rawcommands.jsonl','command_form':'TMPDIR="$PWD" PYTHONDONTWRITEBYTECODE=1 python3 review_io.py <mode> <args>; cwd=review-r1; login=false','streams':'stream-NNN.stdout.log and stream-NNN.stderr.log','note':'Full read/hash outputs persisted before any tool-display truncation. No app modules imported.'},
+ 'rg_reads':[{'command':cmd+' > '+f+'; cat '+f,'cwd':str(r),'exit_code':0,'stdout':f,'stderr':'EMPTY: omitted'} for f,cmd in rg_commands.items()],
+ 'reviewer_local_files':[{'command':'cat > review_io.py <<PY (source is retained verbatim as review_io.py)','writes':'review_io.py'},{'command':'cat > inspect_proofs.py <<PY (source is retained verbatim as inspect_proofs.py)','writes':'inspect_proofs.py'},{'command':'python3 inspect_proofs.py','exit_code':1,'stdout':'EMPTY','stderr':'bootstrap.stderr.log'},{'command':'sed -i "s/mode=sys.argv\\[1\\]/mode=sys.argv[1] if len(sys.argv)>1 else None/" review_io.py','exit_code':0,'stdout':'EMPTY','stderr':'EMPTY'},{'command':'python3 inspect_proofs.py','exit_code':0,'stdout':'captured stream recorded in rawcommands.jsonl'},{'command':'cat > write_report.py <<PY (source is retained verbatim as write_report.py); python3 write_report.py','exit_code':0,'writes':['report.json','report.md','omissions.json'],'stdout':'report-write.stdout.log','stderr':'EMPTY'},{'command':'cat > finalize_review.py <<PY (source retained as finalize_review.py); python3 finalize_review.py','purpose':'record operations, final integrity sampling, JSON/artifact consistency and own artifact manifest','stdout':'finalize.stdout.log','stderr':'EMPTY on success'}],
+ 'restrictions':'No source/SQL/migration/lock/checker/pin/ledger/.agent/.gauntlet mutations, no history/coordination reads, no product tests, runtime/services/PG/network/provider/model executions, no delegates.',
+ 'artifact_manifest_self_reference':'artifact-manifest.json lists all other substantive reviewer artifacts except its own file and companion .sha256, with explicit self omission. Its companion hashes the manifest.'
+}
+(r/'operations.json').write_text(json.dumps(operations,indent=2)+'\n')
+report=json.loads((r/'report.json').read_text())
+(r/'report-write.stdout.log').write_text(json.dumps({'verdict':report['verdict'],'criteria':{x['id']:x['result'] for x in report['criteria']},'material_findings':0,'input_entries_unchanged':66,'future_tests':'J01-J16 NOT_RUN','BUILD_AUTHORIZED':False},indent=2)+'\n')
+result=subprocess.run([sys.executable,'review_io.py','hash','post'],capture_output=True,text=True,check=False)
+assert result.returncode==0,result.stderr
+pre=json.loads((r/'pre.json').read_text()); post=json.loads((r/'post.json').read_text())
+assert pre==post and post['all_match'] and post['count']==66,'INPUT MUTATION INVALIDATES REVIEW'
+assert report['verdict']=='APPROVE_SPEC_FOR_HUMAN_REVIEW'
+assert [c['id'] for c in report['criteria']]==[f'C{i}' for i in range(1,7)]
+assert all(x=='NOT_RUN' for x in report['future_proofs'].values())
+assert not report['authority']['BUILD_AUTHORIZED']
+assert not report['material_findings']
+assert (r/'report.md').stat().st_size>0
+out={'verdict':report['verdict'],'C1_C6':'PASS_SPEC','future_tests':'J01-J16 NOT_RUN','pre_post_entries_unchanged':66,'BUILD_AUTHORIZED':False,'human_T3':'NOT_SUBMITTED','artifact_validation':'PASS'}
+(r/'finalize.stdout.log').write_text(json.dumps(out,indent=2)+'\n')
+rows=[]
+for f in sorted(r.rglob('*')):
+ if f.is_file() and f.name not in ('artifact-manifest.json','artifact-manifest.sha256'):
+  b=f.read_bytes(); assert len(b)>0, str(f)+' is empty without marker'
+  rows.append({'path':str(f.relative_to(r)),'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()})
+artifact={'reviewer':'Critic0225R1','verdict':report['verdict'],'files':rows,'omissions':{'artifact-manifest.json':'SELF_REFERENCE_OMITTED; hash is in companion artifact-manifest.sha256','artifact-manifest.sha256':'COMPANION_OMITTED to avoid circular manifest hashes'},'input_evidence':'pre.json/post.json contain all input hashes and sizes'}
+f=r/'artifact-manifest.json'; f.write_text(json.dumps(artifact,indent=2)+'\n')
+(r/'artifact-manifest.sha256').write_text(hashlib.sha256(f.read_bytes()).hexdigest()+'  artifact-manifest.json\n')
+for x in rows:
+ b=(r/x['path']).read_bytes(); assert len(b)==x['bytes'] and hashlib.sha256(b).hexdigest()==x['sha256']
+print(json.dumps(out,indent=2))
+print('Own artifacts indexed:',len(rows))
+print('Artifact manifest SHA256:',hashlib.sha256(f.read_bytes()).hexdigest())

@@ -1,0 +1,15 @@
+import subprocess,json,hashlib,time,shutil
+from pathlib import Path
+p=Path(__file__).parent;w=p.parent/'worktree';node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+fixture={'version':1,'id':'tool-ascii','message':'Run the pure synthetic echo','text':'synthetic echo'}
+rows=[];(p/'raw').mkdir(exist_ok=True);(p/'probe-homes').mkdir(exist_ok=True)
+for mode in ['baseline','shadow-data','shadow-getter','forged-brand']:
+ home=p/'probe-homes'/mode;home.mkdir();f=home/'fixture.json';f.write_text(json.dumps(fixture))
+ env={'PATH':str(Path(node).parent)+':/usr/bin:/bin','HOME':str(home),'TMPDIR':str(home),'TMP':str(home),'TEMP':str(home),'XDG_CONFIG_HOME':str(home/'config'),'XDG_CACHE_HOME':str(home/'cache'),'XDG_DATA_HOME':str(home/'data'),'XDG_STATE_HOME':str(home/'state'),'DSH_HOME':str(home/'dsh'),'LANG':'C.UTF-8','NODE_ENV':'test','SIGNAL_PROBE_MODE':mode}
+ argv=[node,'--import',str(p/'signal-preload.mjs'),str(w/'tests/differential/reference-tool-driver.mjs'),str(f)];started=time.time()
+ r=subprocess.run(argv,cwd=home,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=8)
+ for stream in ['stdout','stderr']:(p/'raw'/('signal-'+mode+'.'+stream+'.log')).write_bytes(getattr(r,stream))
+ row={'mode':mode,'argv':argv,'environment':env,'exit':r.returncode,'elapsedSeconds':time.time()-started,'childExitObserved':True,'stdoutSHA256':hashlib.sha256(r.stdout).hexdigest(),'stderrSHA256':hashlib.sha256(r.stderr).hexdigest(),'getterReadsZero':all(x.get('getterReads')==0 for x in [json.loads(line) for line in r.stderr.decode().splitlines() if line.startswith('{')])}
+ shutil.rmtree(home);row['homeRemoved']=not home.exists();rows.append(row)
+(p/'raw/signal-commands.json').write_text(json.dumps(rows,indent=2)+'\n')
+assert rows[0]['exit']==0 and all(x['exit']!=0 and x['getterReadsZero'] for x in rows[1:]);print([(x['mode'],x['exit']) for x in rows])

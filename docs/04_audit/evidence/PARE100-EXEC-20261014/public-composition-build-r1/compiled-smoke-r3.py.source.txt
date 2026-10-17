@@ -1,0 +1,14 @@
+from pathlib import Path
+import json,subprocess,time,datetime,hashlib
+base=Path(__file__).parent;record_path=base/'compiled-smoke-command-r3.json'
+assert not record_path.exists()
+program=(base/'compiled-smoke-program-r3.mjs').read_text()
+env=json.loads((base/'command.json').read_text())['environment']
+argv=['node','--input-type=module','--eval',program];t=time.monotonic();started=datetime.datetime.now(datetime.timezone.utc).isoformat()
+result=subprocess.run(argv,cwd=base.parent/'worktree',env=env,capture_output=True,timeout=60)
+for label,data in [('stdout',result.stdout),('stderr',result.stderr)]:(base/('compiled-smoke-r3.'+label+'.log')).write_bytes(data)
+record={'argv':['node','--input-type=module','--eval','<exact compiled-smoke-program-r3.mjs bytes>'],'programSHA256':hashlib.sha256(program.encode()).hexdigest(),
+        'startedAt':started,'finishedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'exit':result.returncode,'durationSeconds':time.monotonic()-t,
+        'cwd':str(base.parent/'worktree'),'scope':'I0 compiled generic public API smoke, no published226/PG/parity/global acceptance'}
+record_path.write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record))
+if result.returncode:print(result.stderr.decode()[-2500:])

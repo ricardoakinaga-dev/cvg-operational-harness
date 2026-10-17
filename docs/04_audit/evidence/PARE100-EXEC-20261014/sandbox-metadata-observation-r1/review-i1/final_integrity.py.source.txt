@@ -1,0 +1,72 @@
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+
+D = Path(__file__).resolve().parent
+P = D.parent
+W = P.parent / 'worktree'
+EXPECTED = '5844ddc39924126d61f783cc8012ebb54e8df1078c068c2a73c396a9e1d6406f'
+
+
+def read(path):
+    return json.loads(path.read_bytes())
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+packet_path = P / 'review-packet.json'
+packet_hash = digest(packet_path)
+assert packet_hash == EXPECTED, 'fail closed: packet changed'
+packet = read(packet_path)
+prior = read(D / 'integrity-before.json')
+before = read(Path(packet['frozenSourceMap']))
+saved_after = read(P / 'runs/attempt-03/sources-after.json')
+prior_sources = {v['path']: v for v in prior['sources']}
+errors = []
+candidates = []
+sources = []
+for expected in packet['candidateFiles']:
+    f = Path(expected['path'])
+    actual = {'actualSha256': digest(f), 'actualBytes': f.stat().st_size}
+    match = actual['actualSha256'] == expected['sha256'] and actual['actualBytes'] == expected['bytes']
+    candidates.append({**expected, **actual, 'match': match})
+    if not match:
+        errors.append(str(f))
+for name, sha in before.items():
+    f = Path(name)
+    actual = {'actualSha256': digest(f), 'actualBytes': f.stat().st_size}
+    match = actual['actualSha256'] == sha and actual['actualBytes'] == prior_sources[name]['bytes']
+    sources.append({'path': name, 'expectedSha256': sha, **actual, 'match': match})
+    if not match:
+        errors.append(name)
+same_maps = before == saved_after == read(P / 'runs/i1-01/sources-before.json') == read(P / 'runs/i1-01/sources-after.json')
+assert len(candidates) == 11 and len(sources) == 1054
+if not same_maps:
+    errors.append('saved/own maps differ')
+current_sources = {str(f) for tree in ['packages', 'apps', 'legacy/packages', 'products'] for src in (W / tree).glob('*/src') for f in src.rglob('*') if f.is_file()}
+new_sources = sorted(current_sources - set(before))
+if new_sources:
+    errors.append('new source paths')
+result = {'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'expectedPacketSha256': EXPECTED, 'actualPacketSha256': packet_hash, 'packetBytes': packet_path.stat().st_size, 'candidateCount': len(candidates), 'sourceCount': len(sources), 'savedAndOwnMapsEqual': same_maps, 'newSourcePaths': new_sources, 'candidates': candidates, 'sources': sources, 'errors': errors, 'pass': not errors, 'limits': 'Before/after snapshots, not continuous monitoring; source-map membership is the frozen authority, no broader closure claim.'}
+(D / 'integrity.json').write_text(json.dumps(result, indent=2) + '\n')
+cleanup = []
+for run_name in ['attempt-03', 'i1-01']:
+    meta = read(P / 'runs' / run_name / 'process.json')
+    members = []
+    for path in Path('/proc').iterdir():
+        if path.name.isdigit():
+            try:
+                if os.getpgid(int(path.name)) == meta['dedicatedProcessGroup']:
+                    members.append(int(path.name))
+            except (ProcessLookupError, PermissionError):
+                pass
+    cleanup.append({'run': str(P / 'runs' / run_name), 'dedicatedProcessGroup': meta['dedicatedProcessGroup'], 'membersAtReviewEnd': members, 'scope': 'read-only getpgid enumeration; does not prove absence of descendants that changed groups'})
+(D / 'cleanup-check.json').write_text(json.dumps(cleanup, indent=2) + '\n')
+print(json.dumps({k: v for k, v in result.items() if k not in ['candidates', 'sources']}))
+print(json.dumps(cleanup))
+print('protected-paths-hash-only', json.dumps([name for name in before if '/docs/02_spec/0217' in name or '/docs/02_spec/0220' in name or '/docs/02_spec/0221' in name or '/docs/02_spec/0222' in name]))
+assert not errors

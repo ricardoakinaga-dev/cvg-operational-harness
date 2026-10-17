@@ -1,0 +1,16 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import crypto from 'node:crypto'
+import {isDeepStrictEqual} from 'node:util'
+import {measureToolTurn} from './tests/differential/compare-tool-turn.mjs'
+const hash=f=>crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex'),out={packet:[],fresh:[],faults:[],copies:[]}
+for(const id of ['tool-ascii','tool-unicode','tool-json']){
+ const dir='../review-packet/raw-current/observed/tool-turn/',data=JSON.parse(fs.readFileSync(dir+id+'.native.json')),stdout=JSON.parse(fs.readFileSync(dir+id+'.reference.stdout.log'));let accepted=false;try{measureToolTurn(data.reference,data.cvg,data.fixture);accepted=true}catch{};out.packet.push({id,stdoutMatchesNative:isDeepStrictEqual(stdout,data.reference),accepted,referenceEvents:data.reference.native.events.length,cvgEvents:data.cvg.native.events.length,sessionStatuses:data.reference.native.events.filter(e=>e.type.includes('session')).map(e=>e.type),sideEffecting:data.cvg.native.steps[0].sideEffecting,descriptorSideEffect:data.cvg.native.policyDecisions[0].request.tool.sideEffect})
+ const fresh=JSON.parse(fs.readFileSync('evidence/focus-explicit-with-primary-extra/tool-turn/'+id+'.native.json'));out.fresh.push({id,referenceEvents:fresh.reference.native.events.length,cvgEvents:fresh.cvg.native.events.length,modelResults:fresh.cvg.native.modelResults,decisionUsage:fresh.cvg.native.decisionTurns.map(t=>t.usage),capturedRequests:[fresh.reference.native.requests.length,fresh.cvg.native.requests.length]})
+}
+for(const name of fs.readdirSync('commands').filter(x=>x.endsWith('.json'))){const x=JSON.parse(fs.readFileSync('commands/'+name));out.faults.push({name,status:x.status,elapsedMs:x.elapsedMs,exitObserved:x.exitObserved})}
+const sm=JSON.parse(fs.readFileSync('../review-packet/source-manifest.json'));for(const x of sm.filter(x=>x.copy.startsWith('cvg/'))){const filename=x.copy.slice(4);out.copies.push({path:filename,expected:x.sha256,actual:hash(filename)})}
+const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(d,e.name)):e.isFile()?[path.join(d,e.name)]:[])
+const faultFiles=[...walk('evidence'),...walk('tmp')].filter(x=>x.endsWith('.command.json'))
+out.cleanup=faultFiles.map(file=>{const x=JSON.parse(fs.readFileSync(file));let running=false;try{process.kill(x.pid,0);running=true}catch{}return {file,pid:x.pid,running,homeRemoved:x.cwd?!fs.existsSync(x.cwd):null,status:x.exit??x.status,signal:x.signal,exitObserved:x.childExitObserved,retainedStdout:fs.existsSync(file.replace('.command.json','.reference.stdout.log'))}})
+fs.writeFileSync('evidence/critic/evidence-audit.json',JSON.stringify(out,null,2));console.log({packet:out.packet,candidatePrivateCopies:out.copies.length,copyMismatches:out.copies.filter(x=>x.expected!==x.actual).length,recordedChildren:out.cleanup.length,stillRunning:out.cleanup.filter(x=>x.running),homesRemaining:out.cleanup.filter(x=>!x.homeRemoved)})

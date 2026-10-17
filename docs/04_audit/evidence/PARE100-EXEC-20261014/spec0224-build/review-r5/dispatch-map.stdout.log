@@ -1,0 +1,450 @@
+1: import type {
+2:   ClaimValidation,
+3:   CompletionEvaluator,
+4:   DecisionValidationResult,
+5:   ExecutionCheckpoint,
+6:   ExecutionStep,
+7:   KnowledgeSearchResult,
+8:   LoopDecision,
+9:   Observation,
+10:   StopReason
+11: } from '@cvg/harness-contracts'
+12: import {
+13:   MAX_CHECKPOINT_OBSERVATIONS,
+14:   validateLoopDecision
+15: } from '@cvg/harness-contracts'
+16: import {
+17:   DEADLINE_EXCEEDED,
+18:   boundedPayload,
+19:   errorMessage,
+20:   mapEvaluationToStopReason,
+21:   stringifySummary,
+22:   type DispatchOutcome,
+23:   type IterativeGovernedRuntimeOptions,
+24:   type LoopRun
+25: } from './iterative-runtime.ts'
+26: import { agentExposesTool } from './runtime.ts'
+27: import { retainCompleteObservations } from './complete-tool-results.ts'
+28: import type { KernelHost } from './kernel/host.ts'
+29: import {
+30:   CANCELLED_RESPONSE,
+31:   runModelCall,
+32:   runToolCall,
+33:   unrecordedBlock
+34: } from './kernel/pipeline.ts'
+35: import type { KernelStop, ToolCallState, TurnState } from './kernel/types.ts'
+36: 
+37: /**
+38:  * Explicit dependency surface for the extracted dispatch domain. The runtime
+39:  * builds it from its own private members, so no visibility changes are needed
+40:  * on the exported class and the public contract stays identical.
+41:  */
+42: export interface IterativeDispatchContext {
+43:   readonly options: IterativeGovernedRuntimeOptions
+44:   readonly maxObservationPayloadChars: number
+45:   stop(
+46:     stopReason: StopReason,
+47:     response: string
+48:   ): Extract<DispatchOutcome, { kind: 'stop' }>
+49:   operationKey(run: LoopRun, stepNumber: number, toolId: string): string
+50:   remainingDuration(run: LoopRun): number
+51:   makeObservation(
+52:     run: LoopRun,
+53:     input: {
+54:       stepId: string
+55:       stepNumber: number
+56:       type: Observation['type']
+57:       source: Observation['source']
+58:       trust: Observation['trust']
+59:       payload: unknown
+60:       summary: string
+61:       provenance: Observation['provenance']
+62:     }
+63:   ): Observation
+64:   checkAfterUsage(run: LoopRun): { reason: StopReason; response: string } | null
+65:   allowedDecisionTypes(run: LoopRun): LoopDecision['decisionType'][]
+66:   evaluatorFor(run: LoopRun): CompletionEvaluator
+67:   validateClaims(run: LoopRun, responseText: string): ClaimValidation
+68:   withDeadline<T>(
+69:     operation: Promise<T>,
+70:     remainingMs: number
+71:   ): Promise<T | typeof DEADLINE_EXCEEDED>
+72:   recordObservation(run: LoopRun, observation: Observation): Promise<void>
+73:   recordStep(
+74:     run: LoopRun,
+75:     input: {
+76:       stepNumber: number
+77:       stepType: ExecutionStep['stepType']
+78:       status: ExecutionStep['status']
+79:       sideEffecting: boolean
+80:       decisionType?: ExecutionStep['decisionType']
+81:       reasonCode?: ExecutionStep['reasonCode']
+82:       errorCode?: string
+83:       observationRefs?: readonly string[]
+84:     }
+85:   ): Promise<void>
+86:   persistCheckpoint(run: LoopRun): Promise<void>
+87:   preflightCompleteTool?(
+88:     run: LoopRun,
+89:     decision: LoopDecision,
+90:     stepNumber: number
+91:   ): void
+92:   safeAudit(
+93:     run: LoopRun,
+94:     action: string,
+95:     extras: { result: string; tool?: string | null }
+96:   ): Promise<void>
+97:   composeResponse(
+98:     run: LoopRun,
+99:     decision: LoopDecision
+100:   ): Promise<
+101:     { response: string } | { stopReason: StopReason; response: string }
+102:   >
+103:   /** Kernel host and turn view for the shared governed pipelines. */
+104:   kernel(run: LoopRun): KernelHost
+105:   turn(run: LoopRun): TurnState
+106: }
+107: 
+108: export function validateDecision(
+109:   ctx: IterativeDispatchContext,
+110:   run: LoopRun,
+111:   decision: LoopDecision
+112: ): DecisionValidationResult {
+113:   const allowed = ctx.allowedDecisionTypes(run)
+114:   if (!allowed.includes(decision.decisionType)) {
+115:     return {
+116:       valid: false,
+117:       errors: [
+118:         `capability: decision ${decision.decisionType} is not available in this state`
+119:       ]
+120:     }
+121:   }
+122:   const validation = validateLoopDecision(decision)
+123:   if (!validation.valid) return validation
+124:   if (
+125:     decision.decisionType === 'CALL_TOOL' ||
+126:     decision.decisionType === 'REQUEST_APPROVAL'
+127:   ) {
+128:     if (!decision.toolId) {
+129:       return {
+130:         valid: false,
+131:         errors: ['capability: tool selection requires a toolId']
+132:       }
+133:     }
+134:     const tool = ctx.options.tools.resolve(
+135:       decision.toolId,
+136:       decision.toolVersion
+137:     )
+138:     if (!tool) {
+139:       return {
+140:         valid: false,
+141:         errors: [`capability: tool "${decision.toolId}" is not in the catalog`]
+142:       }
+143:     }
+144:     const profileTools = run.input.agent.tools
+145:     if (!agentExposesTool(profileTools, tool.id)) {
+146:       return {
+147:         valid: false,
+148:         errors: [
+149:           `capability: tool "${tool.id}" is not exposed to this agent profile`
+150:         ]
+151:       }
+152:     }
+153:   }
+154:   if (decision.decisionType === 'SEARCH_KNOWLEDGE' && !ctx.options.knowledge) {
+155:     return {
+156:       valid: false,
+157:       errors: ['capability: no knowledge provider is configured']
+158:     }
+159:   }
+160:   return { valid: true, errors: [] }
+161: }
+162: 
+163: export function applyResume(
+164:   ctx: IterativeDispatchContext,
+165:   run: LoopRun,
+166:   checkpoint: ExecutionCheckpoint | null
+167: ): Extract<DispatchOutcome, { kind: 'stop' }> | null {
+168:   const resume = run.input.resume
+169:   if (!resume) return null
+170:   if (!checkpoint) {
+171:     return {
+172:       kind: 'stop',
+173:       stopReason: 'STATE_CONFLICT',
+174:       response: 'Resume input arrived without a durable checkpoint.'
+175:     }
+176:   }
+177:   if (resume.kind === 'approval') {
+178:     if (run.state.pendingQuestion) {
+179:       // Wrong-kind resume: the execution is paused for an answer, not for an
+180:       // approval. Never let this open the loop with a question unresolved.
+181:       return {
+182:         kind: 'stop',
+183:         stopReason: 'STATE_CONFLICT',
+184:         response: 'Approval resume arrived while a user question is pending.',
+185:         preserveCheckpoint: true
+186:       }
+187:     }
+188:     if (!run.state.pendingApprovalId) {
+189:       if (run.state.stopReason === 'APPROVAL_REQUIRED') {
+190:         return {
+191:           kind: 'stop',
+192:           stopReason: 'STATE_CONFLICT',
+193:           response: 'The paused approval binding is missing.',
+194:           preserveCheckpoint: true
+195:         }
+196:       }
+197:       // The approval was already consumed and the checkpoint cleared the
+198:       // binding; a retry of the same attempt is a safe no-op.
+199:       return null
+200:     }
+201:     if (run.state.pendingApprovalId !== resume.approvalId) {
+202:       return {
+203:         kind: 'stop',
+204:         stopReason: 'STATE_CONFLICT',
+205:         response: 'Approval does not match the paused execution binding.',
+206:         preserveCheckpoint: true
+207:       }
+208:     }
+209:     return null
+210:   }
+211:   if (run.state.pendingApprovalId) {
+212:     return {
+213:       kind: 'stop',
+214:       stopReason: 'STATE_CONFLICT',
+215:       response: 'User input arrived while an approval is pending.',
+216:       preserveCheckpoint: true
+217:     }
+218:   }
+219:   if (!run.state.pendingQuestion) {
+220:     const alreadyResolved = Object.values(run.state.resolvedInputs).includes(
+221:       resume.message
+222:     )
+223:     if (alreadyResolved) {
+224:       if (ctx.options.toolResultContext)
+225:         run.resumeObservation = userResumeObservation(ctx, run, resume.message)
+226:       return null
+227:     }
+228:     return {
+229:       kind: 'stop',
+230:       stopReason: 'STATE_CONFLICT',
+231:       response: 'User input arrived without a pending question.',
+232:       preserveCheckpoint: true
+233:     }
+234:   }
+235:   const stepNumber = Math.max(1, run.state.stepNumber)
+236:   const observation = userResumeObservation(ctx, run, resume.message)
+237:   if (ctx.options.toolResultContext) run.resumeObservation = observation
+238:   run.observations = ctx.options.toolResultContext
+239:     ? retainCompleteObservations([...run.observations, observation])
+240:     : [...run.observations, observation].slice(-MAX_CHECKPOINT_OBSERVATIONS)
+241:   const pendingQuestion = run.state.pendingQuestion
+242:   run.state = {
+243:     ...run.state,
+244:     pendingQuestion: undefined,
+245:     openQuestions: run.state.openQuestions.filter(
+246:       (question) => question !== pendingQuestion.promptIntent
+247:     ),
+248:     resolvedInputs: {
+249:       ...run.state.resolvedInputs,
+250:       [`answer_${stepNumber}`]: resume.message
+251:     }
+252:   }
+253:   return null
+254: }
+255: 
+256: function userResumeObservation(
+257:   ctx: IterativeDispatchContext,
+258:   run: LoopRun,
+259:   message: string
+260: ): Observation {
+261:   const stepNumber = Math.max(1, run.state.stepNumber)
+262:   return ctx.makeObservation(run, {
+263:     stepId: `step_${run.executionId}_${stepNumber}_user_input`,
+264:     stepNumber,
+265:     type: 'USER_MESSAGE',
+266:     source: 'USER',
+267:     trust: 'UNTRUSTED',
+268:     payload: { message },
+269:     summary: 'User answered the pending question.',
+270:     provenance: { sourceId: 'user' }
+271:   })
+272: }
+273: 
+274: type StepRecord = Parameters<IterativeDispatchContext['recordStep']>[1] & {
+275:   errorCode: string
+276: }
+277: 
+278: /** The error code a step carries when a control blocked its call. */
+279: function blockedErrorCode(gate: KernelStop): string {
+280:   switch (gate.cause) {
+281:     case 'policy_denied':
+282:     case 'policy_handoff':
+283:     case 'approval_denied':
+284:       return gate.cause
+285:     case 'policy_unsupported':
+286:       return 'policy_outcome_invalid'
+287:     default:
+288:       return gate.stopReason === 'MAX_DURATION'
+289:         ? 'deadline'
+290:         : gate.stopReason === 'CANCELLED'
+291:           ? 'cancelled'
+292:           : 'not_started'
+293:   }
+294: }
+295: 
+296: /** The step recorded for a blocked call, by the control that decided. */
+297: function blockedStepRecord(
+298:   gate: KernelStop,
+299:   stepNumber: number,
+300:   reasonCode: ExecutionStep['reasonCode']
+301: ): StepRecord {
+302:   const errorCode = blockedErrorCode(gate)
+303:   switch (gate.cause) {
+304:     case 'policy_denied':
+305:     case 'policy_unsupported':
+306:       return {
+307:         stepNumber,
+308:         stepType: 'POLICY',
+309:         status: 'FAILED',
+310:         sideEffecting: false,
+311:         reasonCode: 'POLICY_REQUIRED',
+312:         errorCode
+313:       }
+314:     case 'approval_denied':
+315:       return {
+316:         stepNumber,
+317:         stepType: 'APPROVAL',
+318:         status: 'FAILED',
+319:         sideEffecting: false,
+320:         reasonCode: 'POLICY_REQUIRED',
+321:         errorCode
+322:       }
+323:     default:
+324:       return {
+325:         stepNumber,
+326:         stepType: 'TOOL',
+327:         status: 'FAILED',
+328:         sideEffecting: true,
+329:         reasonCode,
+330:         errorCode
+331:       }
+332:   }
+333: }
+334: 
+335: export async function dispatchTool(
+336:   ctx: IterativeDispatchContext,
+337:   run: LoopRun,
+338:   decision: LoopDecision,
+339:   stepNumber: number,
+340:   forceApproval: boolean
+341: ): Promise<DispatchOutcome> {
+342:   // A previous successful dispatch is trajectory evidence, not the result
+343:   // of this attempt. Only this dispatch's success may populate toolResult.
+344:   run.lastToolObservation = null
+345:   // A resumed in-flight step was already counted when it reached dispatch.
+346:   const alreadyCounted =
+347:     run.inFlightCounted && run.state.pendingStepNumber === stepNumber
+348:   if (
+349:     !alreadyCounted &&
+350:     run.usage.toolCalls + 1 > run.input.budget.maxToolCalls
+351:   ) {
+352:     return ctx.stop(
+353:       'MAX_TOOL_CALLS',
+354:       'Tool-call budget exhausted before the tool could run.'
+355:     )
+356:   }
+357:   const tool = ctx.options.tools.resolve(
+358:     decision.toolId as string,
+359:     decision.toolVersion
+360:   )
+361:   if (!tool) {
+362:     return ctx.stop(
+363:       'STATE_CONFLICT',
+364:       `Tool "${decision.toolId}" is unavailable.`
+365:     )
+366:   }
+367:   const operationKey = ctx.operationKey(run, stepNumber, tool.id)
+368:   if (ctx.options.toolResultContext) {
+369:     if (!ctx.preflightCompleteTool)
+370:       return ctx.stop(
+371:         'STATE_CONFLICT',
+372:         'Complete tool dispatch requires its native capacity guard.'
+373:       )
+374:     ctx.preflightCompleteTool(run, decision, stepNumber)
+375:   }
+376:   const invocation = {
+377:     toolId: tool.id,
+378:     ...(tool.version ? { toolVersion: tool.version } : {}),
+379:     input: decision.toolInput ?? {},
+380:     operationKey
+381:   }
+382:   if (ctx.remainingDuration(run) <= 0) {
+383:     return ctx.stop(
+384:       'MAX_DURATION',
+385:       'Duration budget exhausted before tool execution.'
+386:     )
+387:   }
+388: 
+389:   const stepId = `step_${run.executionId}_${stepNumber}_tool`
+390:   // A resumed step already holds this step number as a tool step (waiting for
+391:   // approval or in flight), and the dispatch checkpoint opens it as RUNNING;
+392:   // a control that then blocks the call closes that same step instead of
+393:   // recording a second one under the same number, or leaving it open while
+394:   // the checkpoint ends (AUD-0599 F02).
+395:   let stepOpen = run.state.pendingStepNumber === stepNumber
+396:   // Opened as RUNNING by this invocation's dispatch checkpoint.
+397:   let openedHere = false
+398:   // An operator pause proves that nothing ran and nothing stays reserved: the
+399:   // step waits for the resume instead of looking in flight, so a later
+400:   // terminal stop can close it as not executed (AUD-0600 F02).
+401:   const parkForResume = async (): Promise<void> => {
+402:     if (!openedHere) return
+403:     await ctx.recordStep(run, {
+404:       stepNumber,
+405:       stepType: 'TOOL',
+406:       status: 'WAITING',
+407:       sideEffecting: true,
+408:       reasonCode: decision.reasonCode
+409:     })
+410:   }
+411:   const recordDenial = (record: StepRecord): Promise<void> =>
+412:     ctx.recordStep(
+413:       run,
+414:       stepOpen
+415:         ? {
+416:             stepNumber,
+417:             stepType: 'TOOL',
+418:             status: 'FAILED',
+419:             sideEffecting: true,
+420:             reasonCode: decision.reasonCode,
+421:             errorCode: record.errorCode
+422:           }
+423:         : record
+424:     )
+425:   const call: ToolCallState = {
+426:     turn: ctx.turn(run),
+427:     tool,
+428:     invocation,
+429:     needsApproval: forceApproval,
+430:     executionRef: run.executionId
+431:   }
+432:   let policyRecorded = false
+433:   const recordPolicy = async (): Promise<void> => {
+434:     if (policyRecorded || !call.policyDecision) return
+435:     policyRecorded = true
+436:     await ctx.recordObservation(
+437:       run,
+438:       ctx.makeObservation(run, {
+439:         stepId,
+440:         stepNumber,
+441:         type: 'POLICY_DECISION',
+442:         source: 'POLICY',
+443:         trust: 'TRUSTED',
+444:         payload: {
+445:           outcome: call.policyDecision.outcome,
+446:           policyVersion: call.policyDecision.policyVersion
+447:         },
+448:         summary: `Policy outcome ${call.policyDecision.outcome}.`,
+449:         provenance: { sourceId: 'policy-engine' }
+450:       })

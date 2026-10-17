@@ -1,0 +1,93 @@
+
+packages/harness/src/iterative-dispatch.ts:860:950
+860:   if (ctx.options.sufficiencyEvaluator) {
+861:     const sufficiency = await ctx.options.sufficiencyEvaluator.evaluate({
+862:       query,
+863:       requestedCategories: decision.knowledgeCategories ?? [],
+864:       observations: run.observations.filter(
+865:         (entry) => entry.type === 'KNOWLEDGE_RESULT'
+866:       )
+867:     })
+868:     run.lastSufficiency = sufficiency.level
+869:     await ctx.recordObservation(
+870:       run,
+871:       ctx.makeObservation(run, {
+872:         stepId: `step_${run.executionId}_${stepNumber}_knowledge`,
+873:         stepNumber,
+874:         type: 'SUFFICIENCY',
+875:         source: 'SYSTEM',
+876:         trust: 'TRUSTED',
+877:         payload: sufficiency,
+878:         summary: `Evidence sufficiency is ${sufficiency.level}.`,
+879:         provenance: { sourceId: 'sufficiency-evaluator' }
+880:       })
+881:     )
+882:   }
+883:   return { kind: 'continue' }
+884: }
+885: 
+886: export async function dispatchRespond(
+887:   ctx: IterativeDispatchContext,
+888:   run: LoopRun,
+889:   decision: LoopDecision,
+890:   stepNumber: number
+891: ): Promise<DispatchOutcome> {
+892:   try {
+893:     return await dispatchRespondAttempt(ctx, run, decision, stepNumber)
+894:   } catch (error) {
+895:     if (ctx.options.toolResultContext) {
+896:       const terminal = (step: ExecutionStep) =>
+897:         step.tenantId === run.input.tenantId &&
+898:         step.executionId === run.executionId &&
+899:         step.stepNumber === stepNumber &&
+900:         step.stepType === 'RESPOND' &&
+901:         (step.status === 'SUCCEEDED' || step.status === 'FAILED')
+902:       try {
+903:         const existing = await ctx.options.stepStore.listSteps(
+904:           run.input.tenantId,
+905:           run.executionId
+906:         )
+907:         if (!existing.some(terminal)) {
+908:           await ctx.recordStep(run, {
+909:             stepNumber,
+910:             stepType: 'RESPOND',
+911:             status: 'FAILED',
+912:             sideEffecting: false,
+913:             reasonCode: decision.reasonCode,
+914:             errorCode: 'response_attempt_failed'
+915:           })
+916:         }
+917:       } catch {
+918:         // A write or its audit may be uncertain. Reconcile only an actual
+919:         // acknowledged terminal row below; never manufacture a step/counter.
+920:       }
+921:       try {
+922:         const stored = await ctx.options.stepStore.listSteps(
+923:           run.input.tenantId,
+924:           run.executionId
+925:         )
+926:         if (stored.some(terminal)) {
+927:           if (!run.countedSteps.has(stepNumber)) {
+928:             run.countedSteps.add(stepNumber)
+929:             run.usage.steps += 1
+930:           }
+931:           run.stepNumber = Math.max(run.stepNumber, stepNumber)
+932:           run.state = {
+933:             ...run.state,
+934:             stepNumber: Math.max(run.state.stepNumber, stepNumber),
+935:             pendingDecision: undefined,
+936:             pendingStepNumber: undefined,
+937:             toolResultContext: {
+938:               ...run.state.toolResultContext!,
+939:               acceptedDecision: undefined
+940:             }
+941:           }
+942:         }
+943:       } catch {
+944:         // Preserve the unresolved accepted decision when no row can be proven.
+945:       }
+946:     }
+947:     throw error
+948:   }
+949: }
+950: 

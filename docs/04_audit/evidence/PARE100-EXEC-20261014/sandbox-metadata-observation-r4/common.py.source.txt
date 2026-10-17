@@ -1,0 +1,91 @@
+from pathlib import Path
+import hashlib
+import json
+
+P = Path(__file__).resolve().parent
+W = P.parent / 'worktree'
+NODE = Path('/home/ricardo/.nvm/versions/node/v22.23.2/bin/node')
+CAP = 1048576
+
+def require(ok, reason):
+    if not ok:
+        raise ValueError(reason)
+
+def digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+def strict_load(raw):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            require(key not in result, 'duplicate JSON key: ' + key)
+            result[key] = value
+        return result
+    def invalid(value):
+        raise ValueError('invalid JSON number: ' + value)
+    return json.loads(raw, object_pairs_hook=pairs, parse_constant=invalid)
+
+def load(path):
+    return strict_load(Path(path).read_bytes())
+
+def put(path, value):
+    Path(path).write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + '\n')
+
+def integer(value, minimum=0, maximum=5000):
+    return type(value) is int and minimum <= value <= maximum
+
+def equal(actual, expected, reason):
+    # JSON equality must distinguish booleans from integers.
+    require(type(actual) is type(expected), reason + ': type')
+    if isinstance(expected, dict):
+        require(set(actual) == set(expected), reason + ': keys')
+        for key in expected:
+            equal(actual[key], expected[key], reason + '.' + key)
+    elif isinstance(expected, list):
+        require(len(actual) == len(expected), reason + ': length')
+        for a, b in zip(actual, expected):
+            equal(a, b, reason + '[]')
+    else:
+        require(actual == expected, reason)
+
+def env_for(folder):
+    return {
+        'PATH': f'{NODE.parent}:/usr/bin:/bin', 'HOME': str(folder / 'home'),
+        'TMPDIR': str(folder / 'tmp'), 'TMP': str(folder / 'tmp'), 'TEMP': str(folder / 'tmp'),
+        'XDG_CACHE_HOME': str(folder / 'cache'), 'XDG_CONFIG_HOME': str(folder / 'config'),
+        'XDG_DATA_HOME': str(folder / 'data'), 'TSX_DISABLE_CACHE': '1',
+        'NODE_DISABLE_COMPILE_CACHE': '1', 'PYTHONDONTWRITEBYTECODE': '1',
+        'TSX_TSCONFIG_PATH': str(W / 'tsconfig.base.json'),
+        'LANG': 'C.UTF-8', 'TZ': 'UTC', 'NO_COLOR': '1'
+    }
+
+def source_paths():
+    paths = set()
+    for tree in ['packages', 'apps', 'legacy/packages', 'products']:
+        for src in (W / tree).glob('*/src'):
+            paths.update(f for f in src.rglob('*') if f.is_file())
+    paths.update(f for f in (W / 'node_modules/tsx').rglob('*') if f.is_file())
+    paths.update([NODE, W / 'package.json', W / 'package-lock.json', W / 'tsconfig.base.json'])
+    frozen = load(P.parent / 'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json')
+    pins = frozen['newGroups'][0]['pins']
+    require(len(pins) == 465, 'pins count')
+    require(all(digest(W / name) == sha for name, sha in pins.items()), 'pin drift')
+    paths.update(W / name for name in pins)
+    paths.update(P / n for n in ['observe.mts', 'run.py', 'launcher.py', 'common.py', 'validate.py', 'checks.py', 'seal.py', 'fixture.json', 'tsconfig.json'])
+    return sorted(paths)
+
+def snapshot(paths):
+    return {str(f): digest(f) for f in paths}
+
+def authority(path, expected_sha):
+    require(len(expected_sha) == 64 and digest(path) == expected_sha, 'untrusted authority digest')
+    value = load(path)
+    require(set(value) == {'schema', 'sources', 'argv', 'cwd', 'pins', 'fixtureSHA256'}, 'authority schema')
+    require(value['schema'] == 'sandbox-observer-authority-v2' and value['pins'] == 465, 'authority version')
+    paths = source_paths()
+    equal(value['sources'], snapshot(paths), 'trusted source membership/digests')
+    require(value['fixtureSHA256'] == digest(P / 'fixture.json'), 'fixture authority')
+    require(value['cwd'] == str(P), 'trusted cwd')
+    loader = W / 'node_modules/tsx/dist/loader.mjs'
+    equal(value['argv'], [str(NODE), '--import', str(loader), str(P / 'observe.mts')], 'trusted argv')
+    return value

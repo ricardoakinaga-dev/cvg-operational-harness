@@ -1,0 +1,67 @@
+import os,pathlib,subprocess,json,hashlib,datetime,urllib.parse,signal,time,sys
+b=pathlib.Path(__file__).resolve().parent;w=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree'); parent=b.parent.parent
+cid='0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c'
+node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+now=lambda:datetime.datetime.now(datetime.timezone.utc).isoformat()
+sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+def save(p,x):p.write_text(json.dumps(x,indent=2)+'\n')
+def docker(*args):return subprocess.run(['docker',*args],check=True,capture_output=True,text=True)
+def inspect():return json.loads(docker('inspect','--format','{{json .}}',cid).stdout)
+def public(i):return {'id':i['Id'],'name':i['Name'],'image':i['Config']['Image'],'imageId':i['Image'],'state':i['State'],'ports':i['NetworkSettings']['Ports'],'observedAt':now()}
+def validate(i):assert i['Id']==cid and i['Name']=='/cvg-pare100-224-pg' and i['Config']['Image']=='postgres:16.4-alpine'
+def cut(path):
+ candidate=json.loads((parent/'candidate-r10.json').read_text()); rows=[]
+ inputs=[r['live'] for r in candidate['sourceBindings']]+[str(w/'packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts')]
+ inputs+= [str(p) for p in (w/'packages/persistence/migrations').glob('*.sql')]
+ inputs+= [str(w/p) for p in ['packages/persistence/src/operational-step-postgres.ts','packages/persistence/src/operational-execution-postgres.ts','packages/persistence/src/tenant-scoped-postgres.ts','packages/persistence/src/postgres-migrations.ts','tsconfig.base.json']]
+ for p in dict.fromkeys(inputs):
+  q=pathlib.Path(p);rows.append({'path':str(q.relative_to(w)),'bytes':q.stat().st_size,'sha256':sha(q)})
+ save(path,{'at':now(),'candidateManifestSha256':candidate['manifestSha256'],'rows':rows})
+ for r in candidate['sourceBindings']: assert sha(pathlib.Path(r['live']))==r['sha256']
+ return rows
+runName=sys.argv[1];assert runName=='r2'
+run=b/('runs/'+runName);run.mkdir(parents=True,exist_ok=False)
+cmd=[node,str(w/'node_modules/vitest/vitest.mjs'),'run','--config',str(b/'vitest.config.mjs'),'--configLoader','runner']
+log=b/('pg-'+runName+'.log');record={'command':cmd,'cwd':str(w),'startedAt':now(),'run':runName,'log':log.name}
+source=w/'packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts'
+record['sourceBeforeSHA256']=sha(source);(b/('source-before-pg-'+runName+'.ts')).write_bytes(source.read_bytes());before=cut(b/('source-cut-before-pg-'+runName+'.json'))
+started=False
+try:
+ i=inspect();validate(i);save(b/('container-before-'+runName+'.json'),public(i));assert not i['State']['Running']
+ docker('start',cid);started=True
+ i=inspect();validate(i);assert i['State']['Running'];ports=i['NetworkSettings']['Ports']['5432/tcp'];assert len(ports)==1 and ports[0]['HostIp']=='127.0.0.1'
+ save(b/('container-running-'+runName+'.json'),public(i))
+ prototype=json.loads((parent/'public-json-boundaries/assigned-i1-resource-prototype-private.json').read_text());u=urllib.parse.urlsplit(prototype['test_database_url'])
+ assert prototype['containerId']==cid and prototype['synthetic'] is True and u.scheme=='postgresql' and u.hostname=='127.0.0.1' and u.username=='pare224' and u.path=='/pare224_synthetic' and not u.query and not u.fragment
+ assert prototype['imageId']==i['Image']
+ url=urllib.parse.urlunsplit((u.scheme,u.netloc.rsplit(':',1)[0]+':'+ports[0]['HostPort'],u.path,'',''))
+ prototype.update(test_database_url=url,hostPort=ports[0],schemaName='pare224_admission_r1',roleName='pare224_admission_r1_service',exclusiveClaim='Builder_r1_SPEC224_admission_synthetic_only')
+ (b/'resource-private-pg-r1.json').write_bytes((b/'resource-private.json').read_bytes());os.chmod(b/'resource-private-pg-r1.json',0o600)
+ fd=os.open(b/'resource-private.json',os.O_WRONLY|os.O_TRUNC,0o600)
+ with os.fdopen(fd,'w') as f:json.dump(prototype,f,indent=2);f.write('\n')
+ # Readiness only on assigned database/container; never another resource.
+ readiness=[]
+ for attempt in range(20):
+  ready=subprocess.run(['docker','exec',cid,'pg_isready','-U','pare224','-d','pare224_synthetic'],capture_output=True,text=True)
+  readiness.append({'attempt':attempt+1,'exit':ready.returncode,'stdout':ready.stdout,'stderr':ready.stderr,'at':now()})
+  if ready.returncode==0:break
+  time.sleep(1)
+ save(b/('readiness-'+runName+'.json'),{'command':['docker','exec',cid,'pg_isready','-U','pare224','-d','pare224_synthetic'],'attempts':readiness})
+ assert ready.returncode==0
+ env=os.environ.copy();env.update(PATH=str(pathlib.Path(node).parent)+':'+env['PATH'],TMPDIR=str(b/'tmp'),SPEC0224_ADMISSION_PG_RESOURCE=str(b/'resource-private.json'),SPEC0224_ADMISSION_PG_EVIDENCE=str(run),SPEC0224_ADMISSION_PG_RUN_ID=runName,NO_COLOR='1')
+ with log.open('x') as out:
+  p=subprocess.Popen(cmd,cwd=w,stdout=out,stderr=subprocess.STDOUT,env=env,start_new_session=True)
+  try:record['exit']=p.wait(timeout=410)
+  except subprocess.TimeoutExpired:
+   os.killpg(p.pid,signal.SIGTERM);record['exit']=p.wait(timeout=10);record['runnerTimeout']=True
+ close=subprocess.run([node,str(b/'connection-close-proof.mjs')],cwd=w,capture_output=True,text=True)
+ (b/'connection-close-proof.log').write_text(close.stdout+close.stderr);record['connectionCloseProofExit']=close.returncode
+except Exception as e:
+ record['runnerError']={'type':type(e).__name__,'message':'Resource or execution runner failure; see phase artifacts. No credentials published.'}
+ raise
+finally:
+ record['finishedAt']=now();record['sourceAfterSHA256']=sha(source);after=cut(b/('source-cut-after-pg-'+runName+'.json'));record['sourceInputsUnchanged']=before==after
+ (b/('source-after-pg-'+runName+'.ts')).write_bytes(source.read_bytes());save(b/('pg-'+runName+'.command.json'),record)
+ if started:
+  stopped=docker('stop',cid);i=inspect();validate(i);assert not i['State']['Running'];save(b/('container-stopped-proof-'+runName+'.json'),{'stopCommand':['docker','stop',cid],'exit':stopped.returncode,'stdout':stopped.stdout,**public(i)})
+ print(json.dumps(record))

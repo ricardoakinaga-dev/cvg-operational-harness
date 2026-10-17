@@ -1,0 +1,210 @@
+1: import { createHash, randomUUID } from 'node:crypto'
+2: import {
+3:   CHECKPOINT_VERSION,
+4:   isStepTransitionAllowed,
+5:   type ExecutionCheckpoint,
+6:   type ExecutionStep,
+7:   type ExecutionStepStore,
+8:   type CheckpointCompareAndSwapInput,
+9:   type CheckpointCompareAndSwapResult
+10: } from '@cvg/harness-contracts'
+11: import {
+12:   completeCheckpointDigest,
+13:   encodeCompleteCheckpointState,
+14:   decodeCompleteCheckpointState,
+15:   validateCompleteCheckpointTransition
+16: } from './complete-checkpoint.ts'
+17: 
+18: export class CheckpointError extends Error {
+19:   public constructor(
+20:     public readonly code:
+21:       | 'checkpoint_integrity'
+22:       | 'checkpoint_version'
+23:       | 'checkpoint_binding'
+24:       | 'step_conflict'
+25:       | 'step_transition',
+26:     message: string
+27:   ) {
+28:     super(message)
+29:     this.name = 'CheckpointError'
+30:   }
+31: }
+32: 
+33: export type UnsignedCheckpoint = Omit<
+34:   ExecutionCheckpoint,
+35:   'checkpointId' | 'createdAt' | 'digest'
+36: >
+37: 
+38: export function checkpointDigest(checkpoint: UnsignedCheckpoint): string {
+39:   if (checkpoint.checkpointVersion === 2)
+40:     return completeCheckpointDigest(checkpoint)
+41:   return createHash('sha256')
+42:     .update(JSON.stringify(normalizeForHash(checkpoint)))
+43:     .digest('hex')
+44: }
+45: 
+46: function normalizeForHash(value: unknown): unknown {
+47:   if (Array.isArray(value)) return value.map(normalizeForHash)
+48:   if (value && typeof value === 'object') {
+49:     const record = value as Record<string, unknown>
+50:     return Object.fromEntries(
+51:       Object.keys(record)
+52:         .filter((key) => record[key] !== undefined)
+53:         .sort()
+54:         .map((key) => [key, normalizeForHash(record[key])])
+55:     )
+56:   }
+57:   return value
+58: }
+59: 
+60: export function sealCheckpoint(
+61:   unsigned: UnsignedCheckpoint
+62: ): ExecutionCheckpoint {
+63:   return {
+64:     ...unsigned,
+65:     checkpointId: `ckpt_${randomUUID()}`,
+66:     createdAt: new Date().toISOString(),
+67:     digest: checkpointDigest(unsigned)
+68:   }
+69: }
+70: 
+71: export function validateCheckpointIntegrity(
+72:   checkpoint: ExecutionCheckpoint,
+73:   expected: { readonly tenantId: string; readonly executionId: string }
+74: ): void {
+75:   if (
+76:     checkpoint.checkpointVersion !== CHECKPOINT_VERSION &&
+77:     checkpoint.checkpointVersion !== 2
+78:   ) {
+79:     throw new CheckpointError(
+80:       'checkpoint_version',
+81:       `Checkpoint version ${checkpoint.checkpointVersion} is not supported`
+82:     )
+83:   }
+84:   if (
+85:     checkpoint.checkpointVersion === 2 &&
+86:     (typeof checkpoint.checkpointId !== 'string' ||
+87:       !checkpoint.checkpointId ||
+88:       checkpoint.checkpointId.includes('\u0000') ||
+89:       typeof checkpoint.createdAt !== 'string' ||
+90:       !Number.isFinite(Date.parse(checkpoint.createdAt)))
+91:   ) {
+92:     throw new CheckpointError(
+93:       'checkpoint_integrity',
+94:       'Invalid V2 checkpoint metadata'
+95:     )
+96:   }
+97:   if (
+98:     checkpoint.tenantId !== expected.tenantId ||
+99:     checkpoint.executionId !== expected.executionId
+100:   ) {
+101:     throw new CheckpointError(
+102:       'checkpoint_binding',
+103:       'Checkpoint does not belong to the requested execution/tenant'
+104:     )
+105:   }
+106:   const {
+107:     checkpointId: _id,
+108:     createdAt: _createdAt,
+109:     digest,
+110:     ...unsigned
+111:   } = checkpoint
+112:   void _id
+113:   void _createdAt
+114:   if (checkpointDigest(unsigned) !== digest) {
+115:     throw new CheckpointError(
+116:       'checkpoint_integrity',
+117:       'Checkpoint digest does not match its content'
+118:     )
+119:   }
+120: }
+121: 
+122: function key(tenantId: string, executionId: string): string {
+123:   return `${tenantId}\u0000${executionId}`
+124: }
+125: 
+126: function copy<T>(value: T): T {
+127:   return structuredClone(value)
+128: }
+129: 
+130: /** Process-local step/checkpoint store used by controlled proofs. */
+131: export class InMemoryExecutionStepStore implements ExecutionStepStore {
+132:   private readonly steps = new Map<string, Map<number, ExecutionStep>>()
+133:   private readonly checkpoints = new Map<string, ExecutionCheckpoint>()
+134: 
+135:   public async recordStep(step: ExecutionStep): Promise<void> {
+136:     const identity = key(step.tenantId, step.executionId)
+137:     const steps = this.steps.get(identity) ?? new Map<number, ExecutionStep>()
+138:     const existing = steps.get(step.stepNumber)
+139:     if (existing) {
+140:       if (existing.stepId !== step.stepId) {
+141:         throw new CheckpointError(
+142:           'step_conflict',
+143:           'A different step already occupies this step number'
+144:         )
+145:       }
+146:       if (
+147:         existing.status !== step.status &&
+148:         !isStepTransitionAllowed(existing.status, step.status)
+149:       ) {
+150:         throw new CheckpointError(
+151:           'step_transition',
+152:           `Step transition ${existing.status} -> ${step.status} is not allowed`
+153:         )
+154:       }
+155:     } else {
+156:       if (!Number.isSafeInteger(step.stepNumber) || step.stepNumber < 1) {
+157:         throw new CheckpointError(
+158:           'step_conflict',
+159:           'A step number must be a positive integer'
+160:         )
+161:       }
+162:       const blocking = [...steps.values()].filter(
+163:         (candidate) =>
+164:           candidate.stepNumber < step.stepNumber &&
+165:           !['SUCCEEDED', 'FAILED', 'SKIPPED', 'WAITING'].includes(
+166:             candidate.status
+167:           )
+168:       )
+169:       if (blocking.length > 0) {
+170:         throw new CheckpointError(
+171:           'step_transition',
+172:           `Step ${step.stepNumber} cannot start before step ${blocking[0]?.stepNumber} settles`
+173:         )
+174:       }
+175:     }
+176:     steps.set(step.stepNumber, copy(step))
+177:     this.steps.set(identity, steps)
+178:   }
+179: 
+180:   public async listSteps(
+181:     tenantId: string,
+182:     executionId: string
+183:   ): Promise<readonly ExecutionStep[]> {
+184:     const steps = this.steps.get(key(tenantId, executionId))
+185:     if (!steps) return []
+186:     return [...steps.values()]
+187:       .sort((left, right) => left.stepNumber - right.stepNumber)
+188:       .map((step) => copy(step))
+189:   }
+190: 
+191:   public async saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {
+192:     if (
+193:       checkpoint.checkpointVersion === 2 ||
+194:       this.checkpoints.get(key(checkpoint.tenantId, checkpoint.executionId))
+195:         ?.checkpointVersion === 2
+196:     ) {
+197:       throw new CheckpointError(
+198:         'checkpoint_version',
+199:         'V2 checkpoints require compareAndSwapCheckpoint'
+200:       )
+201:     }
+202:     validateCheckpointIntegrity(checkpoint, {
+203:       tenantId: checkpoint.tenantId,
+204:       executionId: checkpoint.executionId
+205:     })
+206:     this.checkpoints.set(
+207:       key(checkpoint.tenantId, checkpoint.executionId),
+208:       copy(checkpoint)
+209:     )
+210:   }

@@ -1,0 +1,123 @@
+10:     9   CompleteToolContextConfiguration,
+11:    10   CompleteToolContextState,
+38:    37   canonicalizeCompleteJson,
+42:    41 import { CompleteDecisionAdmission } from './complete-decision-admission.ts'
+44:    43   assertCompleteToolObservation,
+45:    44   completeSnapshot,
+46:    45   completeToolPayload,
+47:    46   retainCompleteObservations,
+48:    47   validateCompleteStepContext
+49:    48 } from './complete-tool-results.ts'
+109:   108   readonly toolResultContext?: CompleteToolContextConfiguration
+285:   284   toolResultContext?: CompleteToolContextState | undefined
+329:   328   checkpointToken?: CheckpointToken | null
+402:   401       options.toolResultContext &&
+403:   402       (options.toolResultContext.version !== 1 ||
+405:   404         options.orchestrator.contextProtocol !== 'complete-tool-v1' ||
+409:   408         'complete-tool-v1 requires protocol1, atomic checkpoint CAS and no legacy payload truncation option.'
+452:   451       preflightCompleteTool: (run, decision, stepNumber) =>
+453:   452         this.preflightCompleteTool(run, decision, stepNumber),
+550:   549                 'Token budget exhausted before a response could be completed.'
+558:   557                 'Cost budget exhausted before a response could be completed.'
+639:   638         this.options.toolResultContext &&
+647:   646           'LEGACY_RESULT_UNKNOWN: old tool results cannot be promoted to complete.',
+659:   658       checkpointToken: checkpoint
+702:   701     if (this.options.toolResultContext) {
+703:   702       run.state.toolResultContext ??= {
+706:   705         pendingDecisionAdmission: null,
+707:   706         decisionAdmissions: []
+768:   767         this.options.toolResultContext &&
+798:   797                 'RESULT_UNAVAILABLE: a settled tool step has no complete saved result; reconciliation is required.'
+825:   824           // The acknowledged result and successful step complete this dispatch.
+842:   841             toolResultContext: {
+843:   842               ...run.state.toolResultContext!,
+844:   843               acceptedDecision: undefined
+859:   858       if (this.options.toolResultContext) {
+860:   859         const state = run.state.toolResultContext!
+861:   860         const orphaned = state.decisionAdmissions.filter(
+866:   865               !state.acceptedDecision &&
+871:   870           state.decisionAdmissions.some((value) => value.status === 'UNKNOWN')
+876:   875               .map((value) => value.admissionId)
+895:   894           run.state.toolResultContext = {
+897:   896             pendingDecisionAdmission: null,
+898:   897             decisionAdmissions: state.decisionAdmissions.map((value) =>
+899:   898               ids.has(value.admissionId)
+908:   907           // A settled receipt is immutable: a crash before acceptedDecision is
+956:   955     if (checkpoint.checkpointVersion === 2 && !this.options.toolResultContext) {
+957:   956       return 'Complete checkpoint requires the explicitly configured complete-tool-v1 mode.'
+966:   965       this.options.toolResultContext &&
+1038:  1037       let decisionAdmissionIds: readonly string[] | undefined
+1046:  1045         this.options.toolResultContext &&
+1047:  1046         run.state.toolResultContext?.acceptedDecision
+1049:  1048         const accepted = run.state.toolResultContext.acceptedDecision
+1058:  1057         decisionAdmissionIds = accepted.decisionAdmissionIds
+1068:  1067         decisionAdmissionIds = decisionResult.decisionAdmissionIds
+1075:  1074         if (!this.options.toolResultContext) run.usage.decisionRepairs += 1
+1079:  1078           (this.options.toolResultContext
+1095:  1094       if (this.options.toolResultContext && !run.state.pendingDecision) {
+1096:  1095         const state = run.state.toolResultContext!
+1097:  1096         run.state.toolResultContext = {
+1107:  1106           acceptedDecision: {
+1110:  1109             decisionAdmissionIds: decisionAdmissionIds ?? []
+1152:  1151         if (this.options.toolResultContext) {
+1154:  1153           run.state.toolResultContext = {
+1155:  1154             ...run.state.toolResultContext!,
+1156:  1155             acceptedDecision: undefined
+1177:  1176       if (this.options.toolResultContext) {
+1178:  1177         run.state.toolResultContext = {
+1179:  1178           ...run.state.toolResultContext!,
+1180:  1179           acceptedDecision: undefined
+1224:  1223     decisionAdmissionIds?: readonly string[]
+1256:  1255           this.options.toolResultContext &&
+1266:  1265       ...(this.options.toolResultContext
+1267:  1266         ? { toolResultContext: this.options.toolResultContext }
+1280:  1279         this.options.toolResultContext
+1286:  1285               attempt: this.options.toolResultContext
+1294:  1293     const complete = Boolean(this.options.toolResultContext)
+1295:  1294     const nativeInput = complete ? structuredClone(buildInput) : buildInput
+1297:  1296       complete ? structuredClone(nativeInput) : nativeInput
+1299:  1298     const built = complete
+1311:  1310     if (complete) {
+1315:  1314       validateCompleteStepContext(context, native)
+1318:  1317           assertCompleteToolObservation(observation)
+1325:  1324               'A complete tool result is unavailable.'
+1337:  1336       run.state.toolResultContext?.decisionAdmissions.map(
+1338:  1337         (value) => value.admissionId
+1341:  1340     const admission = complete
+1342:  1341       ? new CompleteDecisionAdmission({
+1357:  1356           ...(admission ? { decisionAdmission: admission } : {}),
+1360:  1359         complete ? this.remainingDuration(run) : remaining
+1372:  1371       if (complete) {
+1373:  1372         const state = run.state.toolResultContext!
+1374:  1373         const expected = state.decisionAdmissions
+1379:  1378           .map((value) => value.admissionId)
+1382:  1381           !Array.isArray(turn.decisionAdmissionIds) ||
+1383:  1382           completeSnapshot(turn.decisionAdmissionIds) !==
+1384:  1383             completeSnapshot(expected) ||
+1385:  1384           state.pendingDecisionAdmission ||
+1386:  1385           state.decisionAdmissions.some((value) => value.status === 'UNKNOWN')
+1396:  1395           decisionAdmissionIds: expected,
+1413:  1412         await admission?.close(failed ? 'decision_failed' : 'decision_closed')
+1804:  1803     if (this.options.toolResultContext && input.type === 'TOOL_RESULT') {
+1824:  1823             ? completeToolPayload(value.output, tool.sideEffect)
+1847:  1846         this.options.toolResultContext && input.type === 'TOOL_RESULT'
+1854:  1853     if (this.options.toolResultContext && input.type === 'TOOL_RESULT')
+1855:  1854       assertCompleteToolObservation(observation)
+1863:  1862     run.observations = this.options.toolResultContext
+1864:  1863       ? retainCompleteObservations([...run.observations, observation])
+1899:  1898       ...(terminal ? { completedAt: this.clock().toISOString() } : {}),
+1914:  1913       input.status === 'RUNNING' ? 'step.started' : 'step.completed',
+1923:  1922       checkpointVersion: this.options.toolResultContext ? 2 : 1,
+1930:  1929         observations: this.options.toolResultContext
+1931:  1930           ? retainCompleteObservations(run.observations)
+1936:  1935     if (this.options.toolResultContext) {
+1940:  1939         expected: run.checkpointToken ?? null,
+1955:  1954       run.checkpointToken = result.token
+1961:  1960   private preflightCompleteTool(
+1966:  1965     if (!this.options.toolResultContext) return
+2013:  2012         observations: retainCompleteObservations([
+2023:  2022       canonicalizeCompleteJson(JSON.parse(JSON.stringify(prospective)), {
+2065:  2064       if (this.options.toolResultContext) {
+2199:  2198         ? 'runtime.completed'
+2233:  2232           'Execution could not be completed because audit recording failed.',
+2305:  2304           'Execution could not be completed because audit recording failed.',

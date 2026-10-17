@@ -1,0 +1,28 @@
+import { approvalsControl, auditControl, budgetControl, effectsControl, logControl, modelCapability, pauseControl, plannerCapability, policyControl, sandboxControl, telemetryCapability, toolsCapability } from "./controls.ts";
+import { KernelRuntime } from "./kernel-runtime.ts";
+/**
+* The standard profile: every control the kernel requires (I1), in a fixed
+* order, followed by the capabilities of the single-turn loop.
+*/
+export function standardKernelPlugins(options) {
+	const eventName = options.eventName ?? "harness.kernel";
+	return [
+		budgetControl(),
+		pauseControl(options.pause),
+		logControl(options.log),
+		effectsControl(options.effects),
+		policyControl(options.policy),
+		approvalsControl(options.approvals, options.capabilityFingerprint ? { capabilityFingerprint: options.capabilityFingerprint } : {}),
+		auditControl(options.audit, { action: eventName }),
+		...options.sandbox ? [sandboxControl(options.sandbox)] : [],
+		plannerCapability(options.orchestrator),
+		modelCapability(options.modelGateway),
+		toolsCapability(options.tools),
+		telemetryCapability(options.telemetry, { name: eventName }),
+		...options.plugins ?? []
+	];
+}
+/** Kernel runtime with the standard profile, booted on first use. */
+export function createKernelRuntime(options) {
+	return KernelRuntime.lazy(standardKernelPlugins(options));
+}

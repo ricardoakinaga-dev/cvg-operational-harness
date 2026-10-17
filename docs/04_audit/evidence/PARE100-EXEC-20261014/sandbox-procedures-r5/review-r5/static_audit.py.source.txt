@@ -1,0 +1,58 @@
+import pathlib,json,hashlib,collections,re
+D=pathlib.Path.cwd();Q=D.parent/'review-packet'
+read=lambda n:json.loads((Q/n).read_text())
+orig=read('original-leaf-bindings.json'); props=read('semantic-proposals.json'); pending=read('pending-bindings.json'); selected=read('selected-catalog-contracts.json'); procs=read('procedures.json'); clauses=read('observation-clauses.json'); ext=read('external-inputs.json')
+cat=json.loads(pathlib.Path(ext[0]['path']).read_text());origids={x['id'] for x in orig}
+catrows=[x for x in cat['entries'] if x.get('id') in origids];catmap={x['id']:x for x in catrows}
+rows=[json.loads(l) for l in pathlib.Path(ext[1]['path']).read_text().splitlines() if l]; total=len(rows);raw=[x for x in rows if x.get('owner_task')=='P100-024'];del rows,cat
+om={x['id']:x for x in orig};sm={x['id']:x for x in selected};pm={x['id']:x for x in procs};cm={x['id']:x for x in clauses};src={x['copy'].removeprefix('reference/'): (Q/x['copy']).read_text().splitlines() for x in read('source-manifest.json') if x['copy'].startswith('reference/')}
+globalchecks=[]
+def g(name,ok,details=None):globalchecks.append({'criterion':name,'status':'PASS' if ok else 'FAIL','details':details})
+g('full_denominator',total==44132,total)
+g('exact_original_rows',raw==orig,{'rows':len(raw),'order_and_all_fields':raw==orig})
+g('original_catalog_membership',len(catrows)==427 and set(catmap)==origids)
+g('original_extraction',collections.Counter(x['extraction_status'] for x in orig)=={'STATIC':250,'UNKNOWN':177})
+g('proposed_extraction',collections.Counter(x['originalLeaf']['extraction_status'] for x in props)=={'STATIC':122,'UNKNOWN':18})
+a={x['leafId'] for x in props}; b={x['leaf']['id'] for x in pending}
+g('partition_427',len(a)==140 and len(b)==287 and not a&b and a|b==origids)
+g('selected149_raw_catalog_exact',len(selected)==149 and len(sm)==149 and all(x==catmap[x['id']] for x in selected))
+g('pending_rows_exact',all(x['leaf']==om[x['leaf']['id']] and x['association']=='NOT_ASSIGNED' for x in pending))
+g('selected_partition',len(set(sm)-a)==9 and a<=set(sm) and len(b-set(sm))==278)
+surfaces=[x['id'] for x in orig if catmap[x['id']]['kind']=='source-surface'];g('all37_source_surfaces_pending',len(surfaces)==37 and set(surfaces)<=b,{'count':len(surfaces),'all_pending':set(surfaces)<=b})
+g('all_original_statuses_unchanged',all(x['parity_status']=='NOT_VERIFIED' and x['procedure'] is None and x['procedure_status']=='PENDING_BEHAVIORAL_CONTRACT' and x['evidence']==[] for x in orig))
+g('12_future_families',len(procs)==12 and all(x['status']=='PROPOSED_NOT_RUN' and x['execution']=='NOT_RUN' and not x.get('runtimeExecuted',False) and not x.get('semanticAcceptance',False) for x in procs))
+g('27_future_clauses',len(clauses)==27 and all(x['status']=='PROPOSED_NOT_RUN' and x['runtimeEvidence']==[] for x in clauses))
+g('procedure_embedded_clauses_exact',all(x.get('observationClauses',[])==[c for c in clauses if c['procedure']==x['id']] for x in procs[4:]))
+for label,part,key in [('procedures',procs[:4],'oldProceduresCanonicalSHA256'),('bindings',props[:32],'oldBindingsCanonicalSHA256')]:
+ actual=hashlib.sha256(json.dumps(part,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest();expected=read('retained-base.json')[key];g('retained_'+label+'_canonical_digest',actual==expected,{'actual':actual,'expected':expected,'scope':'retained digest only; no history read, no prior verdict inherited'})
+checks=[]
+def anchor(a):
+ lines=src.get(a['source']);r=a.get('lines',a.get('range'));return lines is not None and isinstance(r,list) and len(r)==2 and 1<=r[0]<=r[1]<=len(lines)
+for i,p in enumerate(props):
+ c=p['catalogContract'];o=p['originalLeaf'];pid=p['primaryProcedure']; proc=pm.get(pid); obs=[cm.get(z) for z in p.get('observationClauses',[])]; retained=i<32
+ rawok=p['leafId']==o['id']==c['id'] and o==om.get(p['leafId']) and c==catmap.get(p['leafId'])==sm.get(p['leafId'])
+ stat=p['association']=='SEMANTIC_PROPOSAL_NOT_ACCEPTED' and p['procedureStatus']=='PROPOSED_NOT_RUN' and p['acceptance']=='NOT_GRANTED' and p['runtimeEvidence']==[]
+ facet=retained or all(p['individualFacet'][k]==c[k] for k in ['symbol','kind','shape'])
+ anchors=[p['sourceAnchor']]+p.get('supportingSourceAnchors',[])
+ valid=all(anchor(x) for x in anchors) and p['sourceAnchor']['source']==c['source'] and all(anchor(x) for x in proc['anchors'])
+ clauseok=bool(proc) and ((retained and bool(proc.get('cases')) and bool(proc.get('knownBadControls'))) or (len(obs)>0 and all(z and z['procedure']==pid and z['futureVectors'] and z['knownBadControl'] and all(anchor(y) for y in z['anchors']) for z in obs)))
+ source_sha=hashlib.sha256((Q/'reference'/c['source']).read_bytes()).hexdigest()==c['source_sha256']
+ checks.append({'ordinal':i+1,'leafId':p['leafId'],'symbol':c['symbol'],'kind':c['kind'],'extraction_status':o['extraction_status'],'raw_identity_status':'PASS' if rawok and stat else 'FAIL','facet_exact':'PASS' if facet else 'FAIL','source_hash_and_anchor':'PASS' if valid and source_sha else 'FAIL','observation_link':'PASS' if clauseok else 'FAIL','documentary_discriminator':'PRESENT_FUTURE_NOT_EXECUTED' if clauseok else 'MISSING','procedure':pid,'clauses':p.get('observationClauses',[]),'observation_anchor':'procedures.json#'+pid if retained else 'observation-clauses.json#'+','.join(p.get('observationClauses',[])),'sourceAnchor':p['sourceAnchor'],'source_sha256':c['source_sha256'],'status':'PASS_PROPOSAL_ONLY' if rawok and stat and facet and valid and source_sha and clauseok else 'FAIL','limit':'Traceability/future facet only, not exhaustive executable oracle, runtime evidence or compiled public export proof.'})
+g('every140_binding_checks',len(checks)==140 and all(x['status']=='PASS_PROPOSAL_ONLY' for x in checks))
+# Closed event witness is checked against authenticated source text, not inferred from opaque ID.
+witnesses=[]
+for ident,w in read('closed-event-witnesses.json').items():
+ c=catmap[ident]; data=w['name'].encode(); lines=src[w['source']]; declaration="'"+w['name']+"':"
+ value_nodes=[]
+ def walk(v):
+  if isinstance(v,dict):
+   if 'byte_length' in v and 'value_sha256' in v:value_nodes.append(v)
+   for z in v.values():walk(z)
+  elif isinstance(v,list):
+   for z in v:walk(z)
+ walk(c['shape'])
+ result={'leafId':ident,'literal':w['name'],'module':w['module'],'source':w['source'],'line':w['line'],'literal_bytes_digest':len(data)==w['utf8Bytes'] and hashlib.sha256(data).hexdigest()==w['sha256'],'source_declaration_unique':sum(declaration in l for l in lines)==1 and declaration in lines[w['line']-1], 'module_context':any(w['module'] in l and 'declare module' in l for l in lines[:w['line']]),'catalog_byte_digest_match':any(n['byte_length']==w['utf8Bytes'] and n['value_sha256']==w['sha256'] for n in value_nodes),'UNKNOWN_retained':om[ident]['extraction_status']=='UNKNOWN' and next(p for p in props if p['leafId']==ident)['originalLeaf']==om[ident]}
+ witnesses.append(result)
+g('two_closed_event_witnesses',len(witnesses)==2 and all(all(v for k,v in w.items() if isinstance(v,bool)) for w in witnesses))
+r={'kind':'static copied JSON/text documentary audit; no sandbox engines/probes/mutants executed','criteria':globalchecks,'bindings':checks,'closed_event_witnesses':witnesses,'all_static_checks_pass':all(x['status']=='PASS' for x in globalchecks)}
+(D/'binding-audit.json').write_text(json.dumps(r,ensure_ascii=False,indent=2));print(json.dumps({'criteria':globalchecks,'binding_status_counts':dict(collections.Counter(x['status'] for x in checks)),'witnesses':witnesses},ensure_ascii=False,indent=2))

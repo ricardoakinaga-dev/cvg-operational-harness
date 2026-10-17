@@ -1,0 +1,323 @@
+   223     }
+   224     return this.run(tenant, (client) =>
+   225       transaction(client, async () => {
+   226         const guard = await guardOptionalPublishedWrite(
+   227           client,
+   228           tenant,
+   229           step.executionId,
+   230           this.fence,
+   231           ['SUCCEEDED', 'FAILED', 'SKIPPED', 'WAITING'].includes(step.status)
+   232         )
+   233         await recordOperationalStepOnClient(client, tenant, step, guard)
+   234         await guard?.recheck()
+   235       })
+   236     )
+   237   }
+   238 
+   239   public listSteps(
+   240     tenantId: string,
+   241     executionId: string
+   242   ): Promise<readonly ExecutionStep[]> {
+   243     const tenant = TenantIdSchema.parse(tenantId)
+   244     const id = text(executionId, 'executionId')
+   245     return this.run(tenant, async (client) => {
+   246       const result = await client.query<StepRow>(
+   247         `SELECT ${stepColumns}
+   248            FROM operational_execution_steps
+   249           WHERE tenant_id = $1 AND execution_id = $2
+   250           ORDER BY step_number ASC`,
+   251         [tenant, id]
+   252       )
+   253       return result.rows.map(mapStep)
+   254     })
+   255   }
+   256 
+   257   public saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {
+   258     if (checkpoint.checkpointVersion === 2)
+   259       throw new CheckpointError(
+   260         'checkpoint_version',
+   261         'V2 checkpoints require CAS'
+   262       )
+   263     const tenant = TenantIdSchema.parse(checkpoint.tenantId)
+   264     validateCheckpointIntegrity(checkpoint, {
+   265       tenantId: checkpoint.tenantId,
+   266       executionId: checkpoint.executionId
+   267     })
+   268     return this.run(tenant, (client) =>
+   269       transaction(client, async () => {
+   270         const guard = await guardOptionalPublishedWrite(
+   271           client,
+   272           tenant,
+   273           checkpoint.executionId,
+   274           this.fence,
+   275           !!checkpoint.state.stopReason
+   276         )
+   277         await guard?.recheck()
+   278         await saveOperationalCheckpointOnClient(client, tenant, checkpoint)
+   279         await guard?.recheck()
+   280       })
+   281     )
+   282   }
+   283 
+   284   public compareAndSwapCheckpoint(
+   285     input: CheckpointCompareAndSwapInput
+   286   ): Promise<CheckpointCompareAndSwapResult> {
+   287     const tenant = TenantIdSchema.parse(input.tenantId)
+   288     validateCheckpointIntegrity(input.next, input)
+   289     if (
+   290       input.expected &&
+   291       input.expected.checkpointId === input.next.checkpointId
+   292     ) {
+   293       throw new CheckpointError(
+   294         'checkpoint_integrity',
+   295         'CAS requires a fresh checkpoint ID'
+   296       )
+   297     }
+   298     // Snapshot before the first await; callers cannot alter a validated write in flight.
+   299     const next = structuredClone(input.next)
+   300     const expected = input.expected ? { ...input.expected } : null
+   301     const state =
+   302       next.checkpointVersion === 2
+   303         ? encodeCompleteCheckpointState(next.state)
+   304         : next.state
+   305     const values = [
+   306       tenant,
+   307       next.executionId,
+   308       next.checkpointId,
+   309       next.checkpointVersion,
+   310       next.runtimeProfile,
+   311       next.runtimeVersion,
+   312       next.orchestratorVersion,
+   313       next.stepNumber,
+   314       jsonText(state, 'checkpoint state'),
+   315       jsonText(next.budgetUsage, 'checkpoint budget usage'),
+   316       next.digest,
+   317       next.createdAt
+   318     ]
+   319     return this.run(tenant, (client) =>
+   320       transaction(client, async () => {
+   321         const guard = await guardOptionalPublishedWrite(
+   322           client,
+   323           tenant,
+   324           next.executionId,
+   325           this.fence,
+   326           !!next.state.stopReason
+   327         )
+   328         const existing = await client.query<CheckpointRow>(
+   329           `SELECT ${boundedCheckpointColumns} FROM operational_execution_checkpoints
+   330          WHERE tenant_id = $1 AND execution_id = $2 FOR UPDATE`,
+   331           [tenant, next.executionId]
+   332         )
+   333         const row = existing.rows[0]
+   334         const current = row ? mapCheckpoint(row) : null
+   335         if (current)
+   336           validateCheckpointIntegrity(current, {
+   337             tenantId: tenant,
+   338             executionId: next.executionId
+   339           })
+   340         const currentToken = current
+   341           ? { checkpointId: current.checkpointId, digest: current.digest }
+   342           : undefined
+   343         if (
+   344           expected === null
+   345             ? current !== null
+   346             : !current ||
+   347               current.checkpointId !== expected.checkpointId ||
+   348               current.digest !== expected.digest
+   349         ) {
+   350           await guard?.recheck()
+   351           return {
+   352             status: 'CONFLICT',
+   353             ...(currentToken ? { currentToken } : {})
+   354           }
+   355         }
+   356         validateCompleteCheckpointTransition(current, next)
+   357         await guard?.recheck()
+   358         const result =
+   359           expected === null
+   360             ? await client.query(
+   361                 `INSERT INTO operational_execution_checkpoints
+   362           (tenant_id,execution_id,checkpoint_id,checkpoint_version,runtime_profile,runtime_version,
+   363            orchestrator_version,step_number,state,budget_usage,digest,created_at)
+   364           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12)
+   365           ON CONFLICT (tenant_id,execution_id) DO NOTHING RETURNING checkpoint_id`,
+   366                 values
+   367               )
+   368             : await client.query(
+   369                 `UPDATE operational_execution_checkpoints SET
+   370           checkpoint_id=$3,checkpoint_version=$4,runtime_profile=$5,runtime_version=$6,
+   371           orchestrator_version=$7,step_number=$8,state=$9::jsonb,budget_usage=$10::jsonb,digest=$11,created_at=$12
+   372           WHERE tenant_id=$1 AND execution_id=$2 AND checkpoint_id=$13 AND digest=$14
+   373           RETURNING checkpoint_id`,
+   374                 [...values, expected.checkpointId, expected.digest]
+   375               )
+   376         await guard?.recheck()
+   377         return result.rows.length
+   378           ? {
+   379               status: 'APPLIED',
+   380               token: { checkpointId: next.checkpointId, digest: next.digest }
+   381             }
+   382           : { status: 'CONFLICT' }
+   383       })
+   384     )
+   385   }
+   386 
+   387   public loadCheckpoint(
+   388     tenantId: string,
+   389     executionId: string
+   390   ): Promise<ExecutionCheckpoint | null> {
+   391     const tenant = TenantIdSchema.parse(tenantId)
+   392     const id = text(executionId, 'executionId')
+   393     return this.run(tenant, async (client) => {
+   394       const result = await client.query<CheckpointRow>(
+   395         `SELECT ${boundedCheckpointColumns}
+   396            FROM operational_execution_checkpoints
+   397           WHERE tenant_id = $1 AND execution_id = $2`,
+   398         [tenant, id]
+   399       )
+   400       const row = result.rows[0]
+   401       if (!row) return null
+   402       const checkpoint = mapCheckpoint(row)
+   403       validateCheckpointIntegrity(checkpoint, { tenantId, executionId: id })
+   404       return checkpoint
+   405     })
+   406   }
+   407 
+   408   private async run<T>(
+   409     tenant: TenantId,
+   410     operation: (client: PostgresQueryable) => Promise<T>
+   411   ): Promise<T> {
+   412     if (isPool(this.connection)) {
+   413       return withTenantContext(
+   414         this.connection,
+   415         tenant,
+   416         (client: PostgresPoolClient) => operation(client)
+   417       )
+   418     }
+   419     return operation(this.connection)
+   420   }
+   421 }
+   422 
+   423 async function transaction<T>(
+   424   client: PostgresQueryable,
+   425   operation: () => Promise<T>
+   426 ): Promise<T> {
+   427   await client.query('BEGIN')
+   428   try {
+   429     const result = await operation()
+   430     await client.query('COMMIT')
+   431     return result
+   432   } catch (error) {
+   433     await client.query('ROLLBACK').catch(() => undefined)
+   434     throw error
+   435   }
+   436 }
+   437 
+   438 /** Package-internal: caller supplies parent fence and owns the transaction. */
+   439 export async function recordOperationalStepOnClient(
+   440   client: PostgresQueryable,
+   441   tenant: TenantId,
+   442   step: ExecutionStep,
+   443   guard?: { recheck: () => Promise<Date> } | null
+   444 ): Promise<void> {
+   445   const existing = await client.query<StepRow>(
+   446     `SELECT ${stepColumns}
+   447      FROM operational_execution_steps
+   448     WHERE tenant_id = $1 AND execution_id = $2 AND step_number = $3
+   449     FOR UPDATE`,
+   450     [tenant, step.executionId, step.stepNumber]
+   451   )
+   452   const current = existing.rows[0]
+   453   if (current) {
+   454     if (current.step_id !== step.stepId) {
+   455       throw new CheckpointError(
+   456         'step_conflict',
+   457         'A different step already occupies this step number'
+   458       )
+   459     }
+   460     if (
+   461       current.status !== step.status &&
+   462       !isStepTransitionAllowed(current.status, step.status)
+   463     ) {
+   464       throw new CheckpointError(
+   465         'step_transition',
+   466         `Step transition ${current.status} -> ${step.status} is not allowed`
+   467       )
+   468     }
+   469     await guard?.recheck()
+   470     await client.query(
+   471       `UPDATE operational_execution_steps
+   472         SET status = $4, attempt = $5, side_effecting = $6,
+   473             decision_type = $7, reason_code = $8, error_code = $9,
+   474             observation_refs = $10::jsonb,
+   475             started_at = $11, completed_at = $12
+   476       WHERE tenant_id = $1 AND execution_id = $2 AND step_number = $3`,
+   477       [
+   478         tenant,
+   479         step.executionId,
+   480         step.stepNumber,
+   481         step.status,
+   482         step.attempt,
+   483         step.sideEffecting,
+   484         step.decisionType ?? null,
+   485         step.reasonCode ?? null,
+   486         step.errorCode ?? null,
+   487         jsonText(step.observationRefs, 'observation refs'),
+   488         step.startedAt,
+   489         step.completedAt ?? null
+   490       ]
+   491     )
+   492     return
+   493   }
+   494   const blocking = await client.query<{ step_number: number }>(
+   495     `SELECT step_number
+   496      FROM operational_execution_steps
+   497     WHERE tenant_id = $1 AND execution_id = $2
+   498       AND step_number < $3
+   499       AND status NOT IN ('SUCCEEDED', 'FAILED', 'SKIPPED', 'WAITING')
+   500     ORDER BY step_number ASC
+   501     LIMIT 1`,
+   502     [tenant, step.executionId, step.stepNumber]
+   503   )
+   504   if (blocking.rows[0]) {
+   505     throw new CheckpointError(
+   506       'step_transition',
+   507       `Step ${step.stepNumber} cannot start before step ${blocking.rows[0].step_number} settles`
+   508     )
+   509   }
+   510   await guard?.recheck()
+   511   await client.query(
+   512     `INSERT INTO operational_execution_steps
+   513      (tenant_id, execution_id, step_number, step_id, step_type, status,
+   514       attempt, side_effecting, decision_type, reason_code, error_code,
+   515       observation_refs, started_at, completed_at)
+   516    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb,
+   517            $13, $14)`,
+   518     [
+   519       tenant,
+   520       step.executionId,
+   521       step.stepNumber,
+   522       step.stepId,
+   523       step.stepType,
+   524       step.status,
+   525       step.attempt,
+   526       step.sideEffecting,
+   527       step.decisionType ?? null,
+   528       step.reasonCode ?? null,
+   529       step.errorCode ?? null,
+   530       jsonText(step.observationRefs, 'observation refs'),
+   531       step.startedAt,
+   532       step.completedAt ?? null
+   533     ]
+   534   )
+   535 }
+   536 
+   537 /** Package-internal; used by the atomic snapshot/checkpoint seal. */
+   538 export async function saveOperationalCheckpointOnClient(
+   539   client: PostgresQueryable,
+   540   tenant: TenantId,
+   541   checkpoint: ExecutionCheckpoint
+   542 ): Promise<void> {
+   543   if (checkpoint.checkpointVersion === 2)
+   544     throw new CheckpointError(
+   545       'checkpoint_version',

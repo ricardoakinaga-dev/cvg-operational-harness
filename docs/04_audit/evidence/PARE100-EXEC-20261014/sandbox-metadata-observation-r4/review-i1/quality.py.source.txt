@@ -1,0 +1,14 @@
+from pathlib import Path
+import os,sys,json,subprocess,time,hashlib,signal
+D=Path(__file__).parent; P=D.parent; W=P.parent/'worktree'; node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+env={k:v for k,v in os.environ.items() if k in ('PATH','LANG','HOME','TMPDIR','XDG_CACHE_HOME','XDG_CONFIG_HOME','XDG_DATA_HOME','NODE_DISABLE_COMPILE_CACHE','PYTHONDONTWRITEBYTECODE','TSX_DISABLE_CACHE')}
+env['PATH']=str(Path(node).parent)+':/usr/bin:/bin';env['NO_COLOR']='1'
+commands=[('format',[node,str(W/'node_modules/prettier/bin/prettier.cjs'),'--check',str(P/'observe.mts')],None),('typecheck',[node,str(W/'node_modules/typescript/bin/tsc'),'-p',str(P/'tsconfig.json'),'--noEmit','--incremental','false'],None),('lint',[node,str(W/'node_modules/eslint/bin/eslint.js'),'--config',str(W/'eslint.config.js'),'--stdin','--stdin-filename',str(W/'tests/differential/sandbox-metadata-observation.mts')],(P/'observe.mts').read_bytes())]
+results=[]
+for name,argv,inp in commands:
+ t=time.monotonic();p=subprocess.Popen(argv,cwd=W,env=env,stdin=subprocess.PIPE if inp is not None else subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+ try: out,err=p.communicate(inp,timeout=60); timeout=False
+ except subprocess.TimeoutExpired: os.killpg(p.pid,signal.SIGKILL);out,err=p.communicate();timeout=True
+ (D/('quality-'+name+'.stdout')).write_bytes(out);(D/('quality-'+name+'.stderr')).write_bytes(err)
+ r={'name':name,'argv':argv,'cwd':str(W),'env':env,'exit':p.returncode,'timeout':timeout,'elapsedMonotonic':time.monotonic()-t,'stdinSHA256':hashlib.sha256(inp).hexdigest() if inp is not None else None,'stdinBytes':len(inp) if inp is not None else 0,'stdoutBytes':len(out),'stderrBytes':len(err),'truncated':False};results.append(r);print(json.dumps(r));print(out.decode());print(err.decode())
+(D/'quality-commands.json').write_text(json.dumps(results,indent=2)+'\n');sys.exit(0 if all(r['exit']==0 and not r['timeout'] for r in results) else 1)

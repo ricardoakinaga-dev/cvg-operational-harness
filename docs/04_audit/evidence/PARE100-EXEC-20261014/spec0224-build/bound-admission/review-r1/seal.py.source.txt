@@ -1,0 +1,33 @@
+import pathlib,json,hashlib,os,urllib.parse,collections,datetime
+R=pathlib.Path(__file__).parent;P=R.parent/'review-packet-r1';M=json.loads((P/'manifest.json').read_text());H=lambda b:hashlib.sha256(b).hexdigest()
+# Final integrity check and fixed templates. No native tests or SQL repeated.
+for e in M['inputs']+M['proofs']+M['environmentTemplates']:
+ b=pathlib.Path(e['copy']).read_bytes();assert len(b)==e['bytes'] and H(b)==e['sha256'],e['copy']
+for e in M['environmentTemplates']:assert H((R/pathlib.Path(e['copy']).name).read_bytes())==e['sha256']
+res=json.loads((R/'resource-private.json').read_text());svc=json.loads((R/'service-connection-private.json').read_text());u=urllib.parse.urlsplit(res['test_database_url']);secrets=[('admin_url',res['test_database_url']),('admin_username',urllib.parse.unquote(u.username)),('admin_password',urllib.parse.unquote(u.password)),('service_username',svc['user']),('service_password',svc['password'])]
+secrets=[(name,val.encode()) for name,val in secrets if val]
+entries=[];excluded=[];empty=[];categories=collections.defaultdict(list)
+rawpaths={'reads.jsonl','transforms.jsonl','source-pre.json','source-post.json'}
+for f in sorted(R.rglob('*')):
+ if not f.is_file():continue
+ assert not f.is_symlink(),'unexpected symlink'
+ rel=str(f.relative_to(R));assert rel not in ['seal-manifest.json','seal-manifest.sha256'],'seal exists; never overwrite a packaging attempt'
+ b=f.read_bytes();collisions=[name for name,val in secrets if val in b];private='private' in f.name or bool(collisions)
+ if private:f.chmod(0o600)
+ if f.suffix in ['.py','.cjs'] and f.name!='trace-reads.cjs':cat='tools'
+ elif rel in ['vitest.i1.mjs','trace-reads.cjs']:cat='copied-input'
+ elif rel.startswith(('cache/','tmp/','nodecache/')) or '__pycache__' in rel:cat='cachederived'
+ elif rel.startswith(('commands/','runs/')) or rel in rawpaths:cat='rawcommand'
+ else:cat='primary'
+ e={'path':rel,'bytes':len(b),'sha256':H(b),'category':cat,'mode':oct(f.stat().st_mode&0o777),'private':private,'publicationEligibleWithoutLeadCuration':False}
+ entries.append(e);categories[cat].append(rel)
+ if not b:empty.append(rel)
+ if private:excluded.append({'path':rel,'bytes':len(b),'sha256':H(b),'reason':'credential file' if 'private' in f.name else 'full credential literal collision','matchedCredentialClasses':collisions,'preservedOriginal':True,'mode':'0o600','excludePublication':True})
+manifest={'format':'I1-private-review-seal/1','createdAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'decision':'APPROVE_SCOPED_BOUND_ADMISSION_PROOF','root':str(R),'allOutputsPrivateUntilLeadCuration':True,'fixtureSha256':'f81562fd0086739296cccab0f10f0befa4b367cb22edd9b385f1ad2976dcb8c9','sourceAndProofBindingsFinal':True,'files':entries,'categories':dict(categories),'empty':empty,'privateCredentialExclusions':excluded,'coverage':{'allRegularOwnFilesBeforeSeal':len(entries),'recursivePathsIncluded':True,'ownSymlinks':0,'envelopeExclusions':[{'path':'seal-manifest.json','reason':'This inventory cannot contain its own hash; covered by detached seal-manifest.sha256.'},{'path':'seal-manifest.sha256','reason':'Detached checksum envelope; no self-referential hash claimed.'}],'externalSourceCopies':'Not own files; exact paths/bytes/hash in source-pre.json/source-post.json and input-inventory.json. No original repository/source write authorized.'},'captureLimitations':'See inspection-failures.json and REVIEW.md. Bootstrap streams not captured as files are not claimed captured. No native failures or failed packaging attempt overwritten.'}
+f=R/'seal-manifest.json';fd=os.open(f,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);os.write(fd,(json.dumps(manifest,indent=2)+'\n').encode());os.close(fd)
+det=R/'seal-manifest.sha256';fd=os.open(det,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);os.write(fd,(H(f.read_bytes())+'  seal-manifest.json\n').encode());os.close(fd)
+# Verify the sealed inventory once; nothing else is created after the seal.
+for e in entries:
+ b=(R/e['path']).read_bytes();assert len(b)==e['bytes'] and H(b)==e['sha256']
+assert len([f for f in R.rglob('*') if f.is_file()])==len(entries)+2
+print(json.dumps({'decision':manifest['decision'],'inventoriedFiles':len(entries),'sealEnvelopes':2,'categories':{k:len(v) for k,v in categories.items()},'emptyFiles':len(empty),'privateCredentialExclusions':len(excluded),'sealSha256':H(f.read_bytes()),'sealedInventoryVerified':True}))

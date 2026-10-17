@@ -1,0 +1,40 @@
+'use strict';async (__vite_ssr_exports__,__vite_ssr_import_meta__,__vite_ssr_import__,__vite_ssr_dynamic_import__,__vite_ssr_exportAll__,__vite_ssr_exportName__,__filename,__dirname,module,exports,require)=>{{__vite_ssr_exportName__("SinglePassOrchestrator", () => { try { return SinglePassOrchestrator } catch {} });
+__vite_ssr_exportName__("NoopOrchestrator", () => { try { return NoopOrchestrator } catch {} });
+/**
+* Deterministic compatibility orchestrator. It chooses one action and never
+* executes tools, calls a model, or evaluates policy.
+*/
+class SinglePassOrchestrator {
+	async decideNextStep(input) {
+		const requestedTool = input.runtime.requestedTool;
+		if (!requestedTool) {
+			return { action: "RESPOND" };
+		};
+		const tool = input.availableTools.find((candidate) => candidate.id === requestedTool.toolId && (!requestedTool.toolVersion || candidate.version === requestedTool.toolVersion));
+		if (!tool) {
+			return {
+				action: "STOP",
+				response: `Tool "${requestedTool.toolId}" is unavailable.`,
+				reason: "requested_tool_unavailable"
+			};
+		};
+		return {
+			action: "CALL_TOOL",
+			toolInvocation: requestedTool,
+			reason: "explicit_single_pass_request"
+		};
+	}
+};
+/** Small deterministic adapter useful for smoke tests and safe boot checks. */
+class NoopOrchestrator {
+	async decideNextStep() {
+		return {
+			action: "RESPOND",
+			response: "Acknowledged."
+		};
+	}
+}
+//# sourceMappingSource=vite-generated
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJtYXBwaW5ncyI6IkFBQUEsQ0FBQTs7Ozs7O0FBVU8sTUFBTSx1QkFBK0M7Q0FDMUQsTUFBTSxlQUNKLE9BQytCO0VBQy9CLE1BQU0sZ0JBQWdCLE1BQU0sUUFBUTtFQUVwQyxJQUFJLENBQUMsZUFBZTtHQUNsQixPQUFPLEVBQUUsUUFBUSxVQUFVO0VBQzdCO0VBRUEsTUFBTSxPQUFPLE1BQU0sZUFBZSxNQUMvQixjQUNDLFVBQVUsT0FBTyxjQUFjLFdBQzlCLENBQUMsY0FBYyxlQUNkLFVBQVUsWUFBWSxjQUFjLFlBQzFDO0VBRUEsSUFBSSxDQUFDLE1BQU07R0FDVCxPQUFPO0lBQ0wsUUFBUTtJQUNSLFVBQVUsU0FBUyxjQUFjLE9BQU87SUFDeEMsUUFBUTtHQUNWO0VBQ0Y7RUFFQSxPQUFPO0dBQ0wsUUFBUTtHQUNSLGdCQUFnQjtHQUNoQixRQUFRO0VBQ1Y7Q0FDRjtBQUNGOztBQUdPLE1BQU0saUJBQXlDO0NBQ3BELE1BQU0saUJBQWdEO0VBQ3BELE9BQU87R0FDTCxRQUFRO0dBQ1IsVUFBVTtFQUNaO0NBQ0Y7QUFDRiIsIm5hbWVzIjpbXSwiaWdub3JlTGlzdCI6W10sInNvdXJjZXMiOlsiY29tcGF0aWJpbGl0eS50cyJdLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQgdHlwZSB7XG4gIE9yY2hlc3RyYXRvcixcbiAgT3JjaGVzdHJhdG9yRGVjaXNpb24sXG4gIE9yY2hlc3RyYXRvcklucHV0XG59IGZyb20gJ0BjdmcvaGFybmVzcy1jb250cmFjdHMnXG5cbi8qKlxuICogRGV0ZXJtaW5pc3RpYyBjb21wYXRpYmlsaXR5IG9yY2hlc3RyYXRvci4gSXQgY2hvb3NlcyBvbmUgYWN0aW9uIGFuZCBuZXZlclxuICogZXhlY3V0ZXMgdG9vbHMsIGNhbGxzIGEgbW9kZWwsIG9yIGV2YWx1YXRlcyBwb2xpY3kuXG4gKi9cbmV4cG9ydCBjbGFzcyBTaW5nbGVQYXNzT3JjaGVzdHJhdG9yIGltcGxlbWVudHMgT3JjaGVzdHJhdG9yIHtcbiAgYXN5bmMgZGVjaWRlTmV4dFN0ZXAoXG4gICAgaW5wdXQ6IE9yY2hlc3RyYXRvcklucHV0XG4gICk6IFByb21pc2U8T3JjaGVzdHJhdG9yRGVjaXNpb24+IHtcbiAgICBjb25zdCByZXF1ZXN0ZWRUb29sID0gaW5wdXQucnVudGltZS5yZXF1ZXN0ZWRUb29sXG5cbiAgICBpZiAoIXJlcXVlc3RlZFRvb2wpIHtcbiAgICAgIHJldHVybiB7IGFjdGlvbjogJ1JFU1BPTkQnIH1cbiAgICB9XG5cbiAgICBjb25zdCB0b29sID0gaW5wdXQuYXZhaWxhYmxlVG9vbHMuZmluZChcbiAgICAgIChjYW5kaWRhdGUpID0+XG4gICAgICAgIGNhbmRpZGF0ZS5pZCA9PT0gcmVxdWVzdGVkVG9vbC50b29sSWQgJiZcbiAgICAgICAgKCFyZXF1ZXN0ZWRUb29sLnRvb2xWZXJzaW9uIHx8XG4gICAgICAgICAgY2FuZGlkYXRlLnZlcnNpb24gPT09IHJlcXVlc3RlZFRvb2wudG9vbFZlcnNpb24pXG4gICAgKVxuXG4gICAgaWYgKCF0b29sKSB7XG4gICAgICByZXR1cm4ge1xuICAgICAgICBhY3Rpb246ICdTVE9QJyxcbiAgICAgICAgcmVzcG9uc2U6IGBUb29sIFwiJHtyZXF1ZXN0ZWRUb29sLnRvb2xJZH1cIiBpcyB1bmF2YWlsYWJsZS5gLFxuICAgICAgICByZWFzb246ICdyZXF1ZXN0ZWRfdG9vbF91bmF2YWlsYWJsZSdcbiAgICAgIH1cbiAgICB9XG5cbiAgICByZXR1cm4ge1xuICAgICAgYWN0aW9uOiAnQ0FMTF9UT09MJyxcbiAgICAgIHRvb2xJbnZvY2F0aW9uOiByZXF1ZXN0ZWRUb29sLFxuICAgICAgcmVhc29uOiAnZXhwbGljaXRfc2luZ2xlX3Bhc3NfcmVxdWVzdCdcbiAgICB9XG4gIH1cbn1cblxuLyoqIFNtYWxsIGRldGVybWluaXN0aWMgYWRhcHRlciB1c2VmdWwgZm9yIHNtb2tlIHRlc3RzIGFuZCBzYWZlIGJvb3QgY2hlY2tzLiAqL1xuZXhwb3J0IGNsYXNzIE5vb3BPcmNoZXN0cmF0b3IgaW1wbGVtZW50cyBPcmNoZXN0cmF0b3Ige1xuICBhc3luYyBkZWNpZGVOZXh0U3RlcCgpOiBQcm9taXNlPE9yY2hlc3RyYXRvckRlY2lzaW9uPiB7XG4gICAgcmV0dXJuIHtcbiAgICAgIGFjdGlvbjogJ1JFU1BPTkQnLFxuICAgICAgcmVzcG9uc2U6ICdBY2tub3dsZWRnZWQuJ1xuICAgIH1cbiAgfVxufVxuIl0sImZpbGUiOiIvcGFja2FnZXMvb3JjaGVzdHJhdG9yL3NyYy9jb21wYXRpYmlsaXR5LnRzIn0=
+
+}}

@@ -81,7 +81,8 @@ const allowGate: SandboxGate = {
     handle: {
       mode: input.policy?.requiredMode ?? 'WORKSPACE',
       allowNetwork: false,
-      allowSubprocess: false
+      allowSubprocess: false,
+      workspaceRoot: '/tmp'
     }
   })
 }

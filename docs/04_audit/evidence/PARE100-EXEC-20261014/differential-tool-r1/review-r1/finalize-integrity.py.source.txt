@@ -1,0 +1,19 @@
+import json,hashlib,stat,time
+from pathlib import Path
+O=Path(__file__).resolve().parent;P=O.parent/'review-packet'
+z=json.loads((O/'source-integrity.json').read_text())
+def rec(f):
+ try:
+  st=f.lstat();return {'path':str(f),'kind':'symlink' if f.is_symlink() else 'file','realpath':str(f.resolve()),'size':st.st_size,'mode':oct(stat.S_IMODE(st.st_mode)),'mtime_ns':st.st_mtime_ns,'sha256':hashlib.sha256(f.read_bytes()).hexdigest()}
+ except Exception as ex:return {'path':str(f),'error':str(ex)}
+post={'phase':'post','time':time.time(),'files':[rec(Path(r['path'])) for r in z['pre']['files']],'memberships':{root:sorted(str(f.relative_to(root)) for f in (Path(root)/'tests/differential').rglob('*') if f.is_file() or f.is_symlink()) for root in z['pre']['memberships']}}
+z['post']=post;z['extras_post']=[rec(Path(r['path'])) for r in z['extras_pre']]
+z['differences']=[{'pre':a,'post':b} for a,b in zip(z['pre']['files'],post['files']) if a!=b]
+z['extra_differences']=[{'pre':a,'post':b} for a,b in zip(z['extras_pre'],z['extras_post']) if any(a[k]!=b[k] for k in a)]
+z['membership_changed']=z['pre']['memberships']!=post['memberships']
+manifest=json.loads((P/'packet-manifest.json').read_text()); expected={r['path'] for r in manifest}|{'packet-manifest.json'};actual={str(f.relative_to(P)) for f in P.rglob('*') if f.is_file() or f.is_symlink()}
+z['packet_post_membership']={'expectedCount':len(expected),'actualCount':len(actual),'extra':sorted(actual-expected),'missing':sorted(expected-actual)}
+z['candidate_copy_checks']=[{'path':r['copy'],'sha256':hashlib.sha256((O/'candidate'/Path(r['copy']).relative_to('cvg')).read_bytes()).hexdigest(),'expected':r['sha256']} for r in json.loads((P/'source-manifest.json').read_text()) if r['copy'].startswith('cvg/')]
+z['scope']={'sourcePairs':133,'packetManifestFiles':178,'primaryExtraFiles':len(z['extras_pre']),'executedReferenceExports':9,'notClaimed':['full worktree/global ledger fingerprint','full node_modules/transitive artifact closure','continuous snapshot or filesystem write enforcement'],'note':'Pre captured after initial read-only instruction/source inspection, before candidate execution. Extras fingerprinted before copying/execution, with policy-engine index/package and SDK index read before their individual capture. Source bytes and metadata were compared, no remediation/reset/cleanup of external paths.'}
+z['unchanged']=not(z['differences'] or z['extra_differences'] or z['membership_changed'] or z['packet_post_membership']['extra'] or z['packet_post_membership']['missing']) and all(r['sha256']==r['expected'] for r in z['candidate_copy_checks'])
+(O/'source-integrity.json').write_text(json.dumps(z,indent=2)+'\n');print(json.dumps({'unchanged':z['unchanged'],'records':len(post['files']),'extras':len(z['extras_pre']),'differences':len(z['differences']),'extra_differences':len(z['extra_differences']),'packetMembership':z['packet_post_membership']},indent=2))

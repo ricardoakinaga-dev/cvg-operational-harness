@@ -1,0 +1,18 @@
+import json,hashlib,pathlib,sys,datetime
+root=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-json-boundaries')
+out=root/'review-r1'; packet=root/'review-packet-r1'; mp=packet/'manifest.json'
+def measure(p):
+ b=p.read_bytes();return {'path':str(p),'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()}
+mraw=measure(mp);assert mraw['sha256']=='59e9ceee12c3a31db33fde1aaed1a046000cc11b4460c69b04cd1218d9f02d9d'
+m=json.loads(mp.read_bytes());rows=[]
+for e in m['sources']:
+ for kind,p in [('live',pathlib.Path(e['live'])),('copy',packet/e['copy'])]:
+  r=measure(p);r['kind']=kind;r['ok']=r['bytes']==e['bytes'] and r['sha256']==e['sha256']; rows.append(r)
+for group in ['constraints','proofs']:
+ for e in m[group]:
+  p=pathlib.Path(e['path']);p=p if p.is_absolute() else packet/p
+  r=measure(p);r['kind']=group;r['ok']=r['bytes']==e['bytes'] and r['sha256']==e['sha256'];rows.append(r)
+e=m['resourcePrototype'];r=measure(pathlib.Path(e['path']));r.update(kind='resourcePrototype',ok=r['bytes']==e['bytes'] and r['sha256']==e['sha256']);rows.append(r)
+result={'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'manifest':mraw,'entries':rows,'ok':all(r['ok'] for r in rows)}
+(out/(sys.argv[1]+'.json')).write_text(json.dumps(result,indent=2)+'\n')
+print(json.dumps({'count':len(rows),'counts':{k:sum(r['kind']==k for r in rows) for k in ['live','copy','constraints','proofs','resourcePrototype']},'ok':result['ok'],'failures':[r for r in rows if not r['ok']]}));assert result['ok']

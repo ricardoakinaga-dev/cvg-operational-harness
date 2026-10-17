@@ -1,0 +1,21 @@
+import pathlib,json,hashlib,os
+R=pathlib.Path(__file__).resolve().parents[1];P=R.parent/'review-packet-r1';M=json.loads((P/'manifest.json').read_text());A=pathlib.Path(M['artifactRoot'])
+def read(rel):
+ b=(A/rel).read_bytes()
+ with (R/'logs/manual-reads.jsonl').open('a') as f:f.write(json.dumps(dict(pid=os.getpid(),path=str(A/rel),bytes=len(b),sha256=hashlib.sha256(b).hexdigest()))+'\n')
+ return b.decode()
+def show(rel,spans=None,match=None):
+ t=read(rel).splitlines();o=['FILE '+rel]
+ for n,l in enumerate(t,1):
+  if spans is None or any(a<=n<=b for a,b in spans):
+   if match is None or __import__('re').search(match,l):o.append(f'{n}: {l}')
+ s='\n'.join(o);print(s)
+ with (R/'logs/static-inspection.txt').open('a') as f:f.write(s+'\n')
+if __name__=='__main__':
+ show('packages/harness/src/createOperationalHarness.ts',[(70,165),(215,285)])
+ show('packages/harness/src/context-engine.ts',[(30,170),(195,270)])
+ show('packages/harness/src/complete-tool-results.ts',[(239,340)])
+ show('packages/harness/src/iterative-runtime.ts',[(880,1000),(1250,1285),(1830,1870)])
+ for x in M['inputs']:
+  if x['relative'].endswith(('/step-store.ts','/turn-state.ts','/log.ts')) or ('orchestrator' in x['relative'] and x['category']=='source'): print('RELATED',x['relative'])
+ show('packages/harness/src/kernel/controls.ts',[(1,185)])

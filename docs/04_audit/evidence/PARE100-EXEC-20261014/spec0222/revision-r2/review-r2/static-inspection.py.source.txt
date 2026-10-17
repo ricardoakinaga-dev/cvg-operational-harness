@@ -1,0 +1,17 @@
+"""Bounded text/hash/arithmetic inspection only. Never imports or executes CVG/DSH."""
+import json,pathlib,datetime,collections
+P=pathlib.Path.cwd().parent/'review-packet'
+def witnesses(name, needles):
+ lines=(P/name).read_text().splitlines()
+ return {n:[{'line':i+1,'text':s.strip()} for i,s in enumerate(lines) if n in s] for n in needles}
+leaves=json.loads((P/'original-leaf-bindings.json').read_text())
+r={'kind':'STATIC_TEXT_AND_ARITHMETIC_ONLY','utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'runtime_execution':False,'witnesses':{
+ 'spec':witnesses('spec.md',['owner BOOTING','checar owner OPEN','se o owner ainda estiver OPEN','EVIDENCE_PENDING pode voltar OPEN','16MiB','AgentProfile inteiro','Close não pode fazer self-join','lease.release','unwinds reversos','antes de esperar tarefas']),
+ 'native_host':witnesses('cvg/packages/harness/src/kernel/host.ts',['await host.dispose()','await dispose?.()','this.#disposers.pop()','isControlService']),
+ 'native_iterative':witnesses('cvg/packages/harness/src/iterative-runtime.ts',['return this.earlyFinish','private async earlyFinish','private async finalize','this.recordTelemetry','runtime.completed','runtime.paused','runtime.stopped','runtime_v2.started','observation.recorded','step.completed','orchestrator.decided']),
+ 'native_contract':witnesses('cvg/packages/contracts/src/contracts.ts',['readonly instructions: readonly string[]','readonly result: string','readonly action: string'])},
+ 'leaf_inventory':{'count':len(leaves),'extraction_status':dict(collections.Counter(x['extraction_status'] for x in leaves)),'parity_status':dict(collections.Counter(x['parity_status'] for x in leaves)),'procedure_status':dict(collections.Counter(x['procedure_status'] for x in leaves)),'assigned_procedures':sum(x['procedure'] is not None for x in leaves)},
+ 'memory_counterexample_arithmetic':{'instruction_count':2048,'ascii_bytes_each':16384,'payload_bytes_excluding_json_overhead':2048*16384,'bookkeeping_mib':16,'note':'One native AgentProfile can contain this array; each string meets the proposed per-string ceiling. This computes a size only; no profile is allocated and no lifecycle is simulated.'},
+ 'future_procedures':{'ML':['ML%02d'%i for i in range(1,21)],'ML_status':'NOT_RUN','PL_family_count':12,'PL_status':'NOT_RUN','PL_limit':'Family count supplied by task/spec; no procedures.json outside packet was accessed.'}}
+pathlib.Path('static-inspection.json').write_text(json.dumps(r,indent=2)+'\n')
+print(json.dumps({'kind':r['kind'],'leaf_inventory':r['leaf_inventory'],'memory_payload_bytes':r['memory_counterexample_arithmetic']['payload_bytes_excluding_json_overhead'],'ML':'20 NOT_RUN','PL':'12 NOT_RUN'},indent=2))

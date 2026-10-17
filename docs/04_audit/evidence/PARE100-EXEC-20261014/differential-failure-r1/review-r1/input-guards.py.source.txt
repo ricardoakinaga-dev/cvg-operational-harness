@@ -1,0 +1,20 @@
+from pathlib import Path
+import json,sys,os
+R=Path(__file__).resolve().parent;sys.path.insert(0,str(R));from run import run,env_for,NODE
+root=R/'input-guard-env';root.mkdir(exist_ok=True);out=[]
+for kind in ['symlink','hardlink','directory','outside-home','too-large','long-string','bad-argv','cwd-sibling']:
+ base=root/kind;env=env_for(base);home=Path(env['HOME']);fixture={'version':1,'id':'guard','message':'synthetic','failure':{'message':'synthetic failure'}};p=home/'fixture.json';cwd=home;extra=[]
+ if kind=='directory':p.mkdir()
+ elif kind=='symlink':
+  target=home/'real.json';target.write_text(json.dumps(fixture));p.symlink_to(target)
+ elif kind=='hardlink':
+  target=home/'real.json';target.write_text(json.dumps(fixture));os.link(target,p)
+ elif kind=='outside-home':p=base/'outside.json';p.write_text(json.dumps(fixture))
+ elif kind=='too-large':p.write_text(' '*65537)
+ elif kind=='long-string':fixture['message']='x'*4097;p.write_text(json.dumps(fixture))
+ else:p.write_text(json.dumps(fixture))
+ if kind=='bad-argv':extra=['--mode=reply']
+ if kind=='cwd-sibling':cwd=base/'home-sibling';cwd.mkdir()
+ code=run('guard-'+kind,[NODE,str(R/'private/tests/differential/reference-failure-driver.mjs'),str(p)]+extra,cwd,env,5,1048576)
+ out.append({'probe':kind,'exit':code})
+(R/'input-guard-results.json').write_text(json.dumps(out,indent=2));assert all(x['exit']==1 for x in out)

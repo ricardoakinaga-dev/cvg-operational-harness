@@ -1,0 +1,92 @@
+          this.options.approvals,
+          this.options.capabilityFingerprint
+            ? { capabilityFingerprint: this.options.capabilityFingerprint }
+            : {}
+        ),
+        auditControl(this.options.audit, { action: 'harness.iterative' }),
+        modelCapability(this.options.modelGateway),
+        toolsCapability(this.options.tools),
+        telemetryCapability(this.options.telemetry, {
+          name: 'harness.iterative'
+        })
+      ],
+      ITERATIVE_REQUIRED_SERVICES
+    )
+    return this.#kernel
+  }
+
+  private kernelFor(run: LoopRun): KernelHost {
+    const entry = this.#turns.get(run)
+    /* v8 ignore next -- defensive: the loop only asks for its own bound run */
+    if (!entry) throw new Error('Kernel turn is not bound to this run.')
+    return entry.host
+  }
+
+  /**
+   * Kernel view of the current run: the iterative active-duration budget and
+   * the caller's cancel signal drive the shared pipelines.
+   */
+  private turnFor(run: LoopRun): TurnState {
+    const entry = this.#turns.get(run)
+    /* v8 ignore next -- defensive: the loop only asks for its own bound run */
+    if (!entry) throw new Error('Kernel turn is not bound to this run.')
+    return createTurnState(
+      run.input,
+      run.startedAtMs,
+      {
+        remainingMs: () => this.remainingDuration(run),
+        withDeadline: async (operation, ms = this.remainingDuration(run)) => {
+          const outcome = await this.withDeadline(
+            ms <= 0 ? new Promise<never>(() => undefined) : operation(),
+            ms
+          )
+          return outcome === DEADLINE_EXCEEDED ? DEADLINE : outcome
+        },
+        beginModelRequest: () => {
+          // Single pre-model gate (PDSH-004 / I11): consume one slot.
+          if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
+            return {
+              kind: 'stop',
+              stopReason: 'MAX_MODEL_CALLS',
+              response:
+                'Model-call budget exhausted before the call was started.'
+            }
+          }
+          this.accountUsage(run, {
+            modelCalls: 1,
+            inputTokens: 0,
+            outputTokens: 0,
+            costUsd: 0
+          })
+          return undefined
+        },
+        recordModelResult: (result) => {
+          // Single post-result accounting site (PDSH-004).
+          this.accountUsage(run, {
+            modelCalls: 0,
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+            costUsd: result.costUsd
+          })
+          if (
+            run.usage.inputTokens + run.usage.outputTokens >
+            run.input.budget.maxTokens
+          ) {
+            return {
+              kind: 'stop',
+              stopReason: 'MAX_TOKENS',
+              response:
+                'Token budget exhausted before a response could be completed.'
+            }
+          }
+          if (run.usage.costUsd > run.input.budget.maxCostUsd) {
+            return {
+              kind: 'stop',
+              stopReason: 'MAX_COST',
+              response:
+                'Cost budget exhausted before a response could be completed.'
+            }
+          }
+          return undefined
+        }
+      },

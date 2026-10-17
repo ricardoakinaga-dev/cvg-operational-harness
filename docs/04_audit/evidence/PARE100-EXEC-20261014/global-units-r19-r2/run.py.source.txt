@@ -1,0 +1,56 @@
+from pathlib import Path
+import os, json, hashlib, subprocess, datetime, time, signal, shutil
+
+base=Path(__file__).parent
+parent=base.parent
+w=parent/'worktree'
+node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+now=lambda:datetime.datetime.now(datetime.timezone.utc).isoformat()
+assert not (base/'command.json').exists(), 'Never overwrite a run'
+assert not [p for p in w.glob('.env*') if p.name not in ['.env.example','.env.sample']]
+for name in ['home','tmp','cache','config','state','npm-cache','nodecache']:(base/name).mkdir(exist_ok=True)
+env={'PATH':str(Path(node).parent)+':/usr/bin:/bin','LANG':'C.UTF-8','TZ':'UTC','NODE_ENV':'test','CI':'1','TERM':'dumb','FORCE_COLOR':'0','NO_COLOR':'1','HOME':str(base/'home'),'TMPDIR':str(base/'tmp'),'XDG_CONFIG_HOME':str(base/'config'),'XDG_CACHE_HOME':str(base/'cache'),'XDG_STATE_HOME':str(base/'state'),'NODE_COMPILE_CACHE':str(base/'nodecache'),'npm_config_cache':str(base/'npm-cache'),'npm_config_update_notifier':'false','npm_config_offline':'true','CVG_GLOBAL_TEST_ROOT':str(base),'NODE_OPTIONS':'--require='+str(base/'network-guard.cjs')}
+# Qualification has separate logs; blocked negative controls are not run failures.
+qenv={**env,'CVG_GLOBAL_TEST_NET_REGISTRY':str(base/'preflight-qualification-network.jsonl'),'CVG_GLOBAL_TEST_NET_BLOCKED':str(base/'preflight-qualification-blocked.jsonl')}
+q=subprocess.run([node,str(base/'qualify-network.cjs')],env=qenv,cwd=w,capture_output=True,timeout=20)
+(base/'preflight-qualification.stdout.log').write_bytes(q.stdout);(base/'preflight-qualification.stderr.log').write_bytes(q.stderr)
+assert q.returncode==0,q.stderr[-2000:]
+env.update({'CVG_GLOBAL_TEST_NET_REGISTRY':str(base/'run-network.jsonl'),'CVG_GLOBAL_TEST_NET_BLOCKED':str(base/'run-blocked.jsonl')})
+candidate=json.loads((parent/'spec0224-build/candidate-r19.json').read_text())
+for e in candidate['sourceBindings']:assert sha(Path(e['live']))==e['sha256']
+source_roots=['apps','packages','products','legacy','scripts','tests','examples']
+exts={'.ts','.tsx','.js','.mjs','.cjs','.mts','.cts','.json','.py','.sh','.css','.html'}
+def source_snapshot():
+ rows={}
+ for dirname in source_roots:
+  for p in (w/dirname).rglob('*'):
+   if p.is_file() and not p.is_symlink() and p.suffix in exts and not any(x in p.parts for x in ['node_modules','dist','__pycache__','.cache']):rows[str(p.relative_to(w))]={'bytes':p.stat().st_size,'sha256':sha(p)}
+ for pattern in ['package*.json','tsconfig*.json','vitest*.mts','vitest*.mjs']:
+  for p in w.glob(pattern):rows[str(p.relative_to(w))]={'bytes':p.stat().st_size,'sha256':sha(p)}
+ return rows
+before=source_snapshot();(base/'source-before.json').write_text(json.dumps(before,indent=2)+'\n')
+# Preserve old generated certification/coverage/test outputs before any test can touch them.
+for dirname in ['certification','coverage','test-results']:
+ source=w/dirname
+ if source.exists():shutil.copytree(source,base/'before-generated'/dirname,symlinks=True)
+argv=['npm','test','--','apps/worker/src/__tests__/homolog-worker-lifecycle.test.ts','apps/worker/src/__tests__/startup-error-redaction.test.ts','packages/channel-gateway/src/__tests__/pdsh-016-bound-response.test.ts','packages/model-gateway/src/__tests__/bound-transport-node22.test.ts','tests/production-target-smoke.test.ts','--reporter=default','--reporter=json','--outputFile='+str(base/'results.json')]
+start=now();t=time.monotonic()
+record={'argv':argv,'cwd':str(w),'startedAt':start,'status':'RUNNING','timeoutSeconds':900,'environment':env,'noDatabaseOrProviderEnvironment':True,'noTestExcludedOrConfigChanged':True,'originalScope':'FOCUSED_ONLY five guard-affected files; does not replace R1 global failure','networkGuardLimit':'Node processes inheriting NODE_OPTIONS only; no OS sandbox claim; only sockets to listeners registered by this cohort are allowed','qualificationExit':q.returncode,'sourceFilesBefore':len(before),'sourceBeforeSHA256':sha(base/'source-before.json')}
+with (base/'stdout.log').open('xb') as stdout,(base/'stderr.log').open('xb') as stderr:
+ process=subprocess.Popen(argv,cwd=w,env=env,stdout=stdout,stderr=stderr,start_new_session=True)
+ record['pid']=process.pid;(base/'command.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps({'status':'RUNNING','pid':process.pid,'argv':argv,'sourceFiles':len(before)}),flush=True)
+ timedout=False
+ try:code=process.wait(timeout=900)
+ except subprocess.TimeoutExpired:
+  timedout=True;os.killpg(process.pid,signal.SIGTERM)
+  try:code=process.wait(timeout=10)
+  except subprocess.TimeoutExpired:os.killpg(process.pid,signal.SIGKILL);code=process.wait(timeout=10)
+after=source_snapshot();(base/'source-after.json').write_text(json.dumps(after,indent=2)+'\n')
+changed=[{'path':key,'before':before.get(key),'after':after.get(key)} for key in sorted(set(before)|set(after)) if before.get(key)!=after.get(key)]
+(base/'source-changes.json').write_text(json.dumps(changed,indent=2)+'\n')
+record.update({'status':'FINISHED','finishedAt':now(),'durationSeconds':time.monotonic()-t,'exit':code,'timedOut':timedout,'sourceChanges':len(changed),'sourceAfterSHA256':sha(base/'source-after.json'),'candidate81Unchanged':all(sha(Path(e['live']))==e['sha256'] for e in candidate['sourceBindings']),'streams':{name:{'bytes':(base/name).stat().st_size,'sha256':sha(base/name)} for name in ['stdout.log','stderr.log']},'resultPresent':(base/'results.json').is_file()})
+if (base/'results.json').exists():
+ data=json.loads((base/'results.json').read_text());record['vitest']={key:data.get(key) for key in ['numTotalTests','numPassedTests','numFailedTests','numPendingTests','numTotalTestSuites','numPassedTestSuites','numFailedTestSuites','numPendingTestSuites','success']};record['resultsSHA256']=sha(base/'results.json')
+blocked=base/'run-blocked.jsonl';record['blockedConnections']=len(blocked.read_text().splitlines()) if blocked.exists() else 0
+(base/'command.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record),flush=True)

@@ -1,0 +1,177 @@
+"""Independent read-only verification of the one preserved real-PG execution.
+
+This is artifact checking, NOT another PostgreSQL test run or acceptance.
+Never rewrites the original 18 failing assertions, streams, or observed verdicts.
+"""
+import base64
+import collections
+import hashlib
+import json
+import math
+import pathlib
+import sys
+import datetime
+
+BASE = pathlib.Path(__file__).resolve().parent
+RUN = BASE / 'run-r1'
+checks = []
+observations = []
+
+def canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+def digest(value):
+    return hashlib.sha256(value.encode('utf8')).hexdigest()
+
+def utf16length(value):
+    return len(value.encode('utf-16-le')) // 2
+
+def check(label, condition):
+    checks.append(dict(id=label, passed=bool(condition)))
+    if not condition:
+        print('RED', label)
+
+def read(path):
+    return json.loads(path.read_text())
+
+def shape(value, depth=1):
+    if isinstance(value, dict):
+        children = [shape(v, depth+1) for v in value.values()]
+    elif isinstance(value, list):
+        children = [shape(v, depth+1) for v in value]
+    else:
+        children = []
+    return (max([depth] + [v[0] for v in children]), 1 + sum(v[1] for v in children))
+
+def verify_checkpoint(label, snapshot):
+    cp = snapshot['checkpoint']
+    unsigned = {k:v for k,v in cp.items() if k not in ['checkpointId','createdAt','digest']}
+    check(label + ':checkpointDigest', digest('cvg.checkpoint.v2\n' + canonical(unsigned)) == cp['digest'])
+    check(label + ':checkpointBytes', len(canonical(unsigned).encode()) <= 8388608)
+    check(label + ':version', cp['checkpointVersion'] == 2)
+    check(label + ':rowBinding', len(snapshot['rows']['checkpoints']) == 1)
+    row = snapshot['rows']['checkpoints'][0]
+    wrapper = row['state']
+    raw = base64.b64decode(wrapper['data'], validate=True)
+    check(label + ':codec', wrapper['storageCodec'] == 'cvg.checkpoint-state/2' and wrapper['encoding'] == 'base64')
+    check(label + ':decodedBytes', wrapper['decodedBytes'] == len(raw))
+    check(label + ':decodedSha256', wrapper['decodedSha256'] == hashlib.sha256(raw).hexdigest())
+    check(label + ':physicalLogicalState', raw.decode() == canonical(cp['state']))
+    check(label + ':rowDigest', row['digest'] == cp['digest'])
+
+for plan in read(RUN / 'matrix-plan.json'):
+    case = plan['id']
+    kind = plan['kind']
+    p = RUN / 'cases' / case
+    obs = read(p / 'observed.json')
+    before, after = read(p / 'before-fresh-harness.json'), read(p / 'after-fresh-harness.json')
+    raw = read(p / 'raw-requests-responses.json')
+    trace = read(p / 'native-journal-cas-trace.json')
+    fixture = read(p / 'fixture.json')
+    cp, end = before['checkpoint'], after['checkpoint']
+    prefix = case + ':'
+    verify_checkpoint(prefix + 'before', before)
+    verify_checkpoint(prefix + 'after', after)
+    check(prefix + 'bodyOne', obs['counts']['body'] == 1)
+    check(prefix + 'getterHookZero', obs['counts']['getterHook'] == 0)
+    check(prefix + 'outputValidation', obs['counts']['outputValidation'] == (0 if kind == 'invalid' else 1))
+    check(prefix + 'freshNoReplay', obs['checks']['noReplayFreshConnectionAndFactory'])
+    check(prefix + 'modelCounts', obs['counts']['model'] == len(raw['requests']) == len(raw['responses']))
+    check(prefix + 'journalOne', len(before['rows']['journal']) == 1)
+    journal = before['rows']['journal'][0]
+    check(prefix + 'journalUnchangedOnRerun', before['rows']['journal'] == after['rows']['journal'])
+    check(prefix + 'observationsPreserved', end['state']['observations'][:len(cp['state']['observations'])] == cp['state']['observations'])
+    check(prefix + 'receiptsPreserved', end['state']['toolResultContext'] == cp['state']['toolResultContext'])
+    for field in ['modelCalls', 'inputTokens', 'outputTokens', 'costUsd']:
+        check(prefix + 'rerunUsage:' + field, end['budgetUsage'][field] == cp['budgetUsage'][field])
+    tool_observations = [o for o in cp['state']['observations'] if o['type'] == 'TOOL_RESULT']
+    check(prefix + 'observationOne', len(tool_observations) == 1)
+    tool = tool_observations[0]
+    payload = tool['payload']
+    check(prefix + 'untrusted', tool['trust'] == 'UNTRUSTED' and tool['source'] == 'TOOL')
+    check(prefix + 'operationBinding', tool['provenance']['operationKey'] == journal['operation_key'])
+    canon = fixture.get('canonical')
+    if canon is not None:
+        check(prefix + 'goldenBytes', len(canon.encode()) == plan['bytes'] == fixture['canonicalBytes'])
+        check(prefix + 'goldenSha', digest(canon) == fixture['canonicalSha256'])
+        check(prefix + 'goldenCanonical', canonical(json.loads(canon)) == canon)
+        depth, nodes = shape(json.loads(canon))
+        if 'depth' in plan: check(prefix + 'depth', depth == plan['depth'])
+        if 'nodes' in plan: check(prefix + 'nodes', nodes == plan['nodes'])
+    if kind in ['invalid', 'nul']:
+        check(prefix + 'uncertain', journal['state'] == 'UNCERTAIN')
+        check(prefix + 'notApplicable', payload['completion'] == 'NOT_APPLICABLE' and payload['status'] == 'REJECTED')
+        check(prefix + 'noNextModel', len(raw['requests']) == 1 and not raw['frameValues'])
+        check(prefix + 'noCompleteStop', obs['first']['stopReason'] == 'TOOL_FAILURE' and obs['rerun']['stopReason'] == 'TOOL_FAILURE')
+        classification = 'REQUIRED_PATH_FAIL_NATIVE_NUL' if kind == 'nul' else 'SAFE_NATIVE_UNCERTAIN_INVALID_JSON'
+        if kind == 'nul':
+            errors = [t for t in trace['journalTrace'] if t['method'] == 'confirm' and 'error' in t]
+            check(prefix + 'native22P05', len(errors) == 1 and errors[0]['error']['code'] == '22P05')
+        else:
+            check(prefix + 'noConfirmUnsafeValue', not any(t['method'] == 'confirm' for t in trace['journalTrace']))
+    else:
+        check(prefix + 'confirmed', journal['state'] == 'CONFIRMED')
+        check(prefix + 'journalValueCanonical', canonical(journal['result']) == canon)
+        check(prefix + 'confirmedBeforeNextDecision', next(i for i,t in enumerate(trace['journalTrace']) if t['method'] == 'confirm') >= 0)
+        if kind in ['too-large', 'complexity']:
+            expected = 'RESULT_TOO_LARGE' if kind == 'too-large' else 'RESULT_COMPLEXITY'
+            check(prefix + 'unavailable', payload['completion'] == 'UNAVAILABLE' and payload['reason'] == expected and 'output' not in payload and payload['status'] == 'SUCCEEDED')
+            check(prefix + 'noNextModel', len(raw['requests']) == 1 and not raw['frameValues'])
+            classification = 'CONFIRMED_UNAVAILABLE_' + expected
+        else:
+            check(prefix + 'captureAvailable', payload['completion'] == 'COMPLETE' and payload['resultAvailability'] == 'AVAILABLE')
+            check(prefix + 'captureValue', canonical(payload['output']) == canon and type(payload['output']) is type(json.loads(canon)))
+            check(prefix + 'captureMetadata', payload['outputBytes'] == plan['bytes'] and payload['outputSha256'] == digest(canon))
+            if kind == 'context-overflow':
+                check(prefix + 'actualOverflow', obs['first']['stopReason'] == 'INSUFFICIENT_EVIDENCE' and obs['first']['response'].startswith('CONTEXT_OVERFLOW:'))
+                check(prefix + 'noNextModel', len(raw['requests']) == 1 and not raw['frameValues'])
+                classification = 'CONFIRMED_AVAILABLE_CONTEXT_REFUSED'
+            else:
+                check(prefix + 'actualFrameOne', len(raw['frameValues']) == 1 and len(raw['requests']) == 2)
+                frame = json.loads(raw['requests'][1]['messages'][1]['content'])
+                actual = [i['value'] for i in frame['items'] if isinstance(i.get('value'), dict) and i['value'].get('type') == 'TOOL_RESULT']
+                check(prefix + 'actualFrameFullValue', len(actual) == 1 and canonical(actual[0]['payload']['output']) == canon)
+                check(prefix + 'actualFrameType', type(actual[0]['payload']['output']) is type(json.loads(canon)))
+                check(prefix + 'actualFrameEnvelope', actual[0] == tool == raw['frameValues'][0])
+                receipt = 'sha256:' + digest(canonical(actual[0]['payload']['output'])) + ';bytes:' + str(len(canonical(actual[0]['payload']['output']).encode()))
+                check(prefix + 'frameDerivedReceipt', raw['receipts'] == [receipt] and obs['first']['response'] == receipt)
+                check(prefix + 'completed', obs['first']['stopReason'] == 'COMPLETED')
+                classification = 'CONFIRMED_AVAILABLE_FULL_VALUE_DELIVERED'
+    admissions = cp['state']['toolResultContext']['decisionAdmissions']
+    check(prefix + 'admissionCount', len(admissions) == len(raw['requests']))
+    request_metrics = []
+    for i, (request, response, admission) in enumerate(zip(raw['requests'], raw['responses'], admissions)):
+        encoded = canonical(request)
+        input_tokens = math.ceil(len(encoded.encode()) / 64)
+        output_tokens = math.ceil(len(canonical(response['text']).encode()) / 64)
+        check(prefix + f'request{i}:nativeCap', request['maxOutputTokens'] == 512)
+        check(prefix + f'request{i}:nativeLimits', utf16length(request['messages'][0]['content']) <= 16000 and utf16length(request['messages'][1]['content']) <= 32000 and len(encoded.encode()) <= 131072)
+        check(prefix + f'request{i}:toy64Input', response['inputTokens'] == input_tokens == admission['measurement']['inputUpperBoundTokens'])
+        check(prefix + f'request{i}:toy64Output', response['outputTokens'] == output_tokens <= 512)
+        check(prefix + f'request{i}:settled', admission['status'] == 'SETTLED' and admission['reserved']['outputTokens'] == 512)
+        check(prefix + f'request{i}:requestSha', admission['requestSha256'] == digest(encoded))
+        check(prefix + f'request{i}:resultSha', admission['resultSha256'] == digest(canonical(response)))
+        check(prefix + f'request{i}:actualUsage', admission['actual'] == dict(modelCalls=1, inputTokens=input_tokens, outputTokens=output_tokens, costUsd=0))
+        request_metrics.append(dict(index=i, requestCanonicalBytes=len(encoded.encode()), requestSha256=digest(encoded), systemUtf16=utf16length(request['messages'][0]['content']), userUtf16=utf16length(request['messages'][1]['content']), modelInputTokens=input_tokens, modelOutputTokens=output_tokens))
+    for field in ['inputTokens', 'outputTokens', 'costUsd']:
+        check(prefix + 'usageSum:' + field, cp['budgetUsage'][field] == sum(r[field] for r in raw['responses']))
+    check(prefix + 'casApplied', all(t.get('result',{}).get('status') == 'APPLIED' for t in trace['casTrace']))
+    # The applied checkpoint containing this tool result is visible before a model request.
+    if kind == 'complete':
+        settled_result_cp = [t['input']['next'] for t in trace['casTrace'] if any(o['type'] == 'TOOL_RESULT' and o['payload'].get('completion') == 'COMPLETE' for o in t['input']['next']['state']['observations'])]
+        check(prefix + 'fullResultCheckpointBeforeSecondAdmission', any(len(x['state']['toolResultContext']['decisionAdmissions']) == 1 for x in settled_result_cp))
+    observations.append(dict(caseId=case, kind=kind, storageClassification=classification, capture=payload['completion'], nativeJournalState=journal['state'], body=obs['counts']['body'], model=obs['counts']['model'], outputValidation=obs['counts']['outputValidation'], getterHook=obs['counts']['getterHook'], initialStopReason=obs['first']['stopReason'], rawVitestVerdict=obs['verdict'], freshNoReplay=True, rerunNativeToolCallsDelta=end['budgetUsage']['toolCalls']-cp['budgetUsage']['toolCalls'], rerunCheckpointChanged=end != cp, requestMetrics=request_metrics))
+
+result = dict(kind='READ_ONLY_ARTIFACT_VERIFICATION_NOT_PG_RERUN_OR_ACCEPTANCE', observedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), checks=checks, failed=[x for x in checks if not x['passed']], observations=observations, counts={
+    'matrix':len(observations), 'byKind':dict(collections.Counter(x['kind'] for x in observations)),
+    'byCapture':dict(collections.Counter(x['capture'] for x in observations)),
+    'byStorageClassification':dict(collections.Counter(x['storageClassification'] for x in observations)),
+    'byNativeJournalState':dict(collections.Counter(x['nativeJournalState'] for x in observations)),
+    'actualBodyCalls':sum(x['body'] for x in observations), 'actualModelCalls':sum(x['model'] for x in observations),
+    'actualOutputValidationCalls':sum(x['outputValidation'] for x in observations), 'getterHookCalls':sum(x['getterHook'] for x in observations),
+    'freshHarnessNoReplayCases':len(observations), 'rerunCheckpointChanged':sum(x['rerunCheckpointChanged'] for x in observations)
+})
+output = BASE / sys.argv[1]
+with output.open('x') as f: json.dump(result, f, indent=2, ensure_ascii=True); f.write('\n')
+print(json.dumps(dict(checks=len(checks), failed=len(result['failed']), counts=result['counts']), indent=2))
+sys.exit(1 if result['failed'] else 0)

@@ -1,0 +1,162 @@
+    98     run: LoopRun,
+    99     decision: LoopDecision
+   100   ): Promise<
+   101     { response: string } | { stopReason: StopReason; response: string }
+   102   >
+   103   /** Kernel host and turn view for the shared governed pipelines. */
+   104   kernel(run: LoopRun): KernelHost
+   105   turn(run: LoopRun): TurnState
+   106 }
+   107 
+   108 export function validateDecision(
+   109   ctx: IterativeDispatchContext,
+   110   run: LoopRun,
+   111   decision: LoopDecision
+   112 ): DecisionValidationResult {
+   113   const allowed = ctx.allowedDecisionTypes(run)
+   114   if (!allowed.includes(decision.decisionType)) {
+   115     return {
+   116       valid: false,
+   117       errors: [
+   118         `capability: decision ${decision.decisionType} is not available in this state`
+   119       ]
+   120     }
+   121   }
+   122   const validation = validateLoopDecision(decision)
+   123   if (!validation.valid) return validation
+   124   if (
+   125     decision.decisionType === 'CALL_TOOL' ||
+   126     decision.decisionType === 'REQUEST_APPROVAL'
+   127   ) {
+   128     if (!decision.toolId) {
+   129       return {
+   130         valid: false,
+   131         errors: ['capability: tool selection requires a toolId']
+   132       }
+   133     }
+   134     const tool = ctx.options.tools.resolve(
+   135       decision.toolId,
+   136       decision.toolVersion
+   137     )
+   138     if (!tool) {
+   139       return {
+   140         valid: false,
+   141         errors: [`capability: tool "${decision.toolId}" is not in the catalog`]
+   142       }
+   143     }
+   144     const profileTools = run.input.agent.tools
+   145     if (!agentExposesTool(profileTools, tool.id)) {
+   146       return {
+   147         valid: false,
+   148         errors: [
+   149           `capability: tool "${tool.id}" is not exposed to this agent profile`
+   150         ]
+   151       }
+   152     }
+   153   }
+   154   if (decision.decisionType === 'SEARCH_KNOWLEDGE' && !ctx.options.knowledge) {
+   155     return {
+   156       valid: false,
+   157       errors: ['capability: no knowledge provider is configured']
+   158     }
+   159   }
+   160   return { valid: true, errors: [] }
+   161 }
+   162 
+   163 export function applyResume(
+   164   ctx: IterativeDispatchContext,
+   165   run: LoopRun,
+   166   checkpoint: ExecutionCheckpoint | null
+   167 ): Extract<DispatchOutcome, { kind: 'stop' }> | null {
+   168   const resume = run.input.resume
+   169   if (!resume) return null
+   170   if (!checkpoint) {
+   171     return {
+   172       kind: 'stop',
+   173       stopReason: 'STATE_CONFLICT',
+   174       response: 'Resume input arrived without a durable checkpoint.'
+   175     }
+   176   }
+   177   if (resume.kind === 'approval') {
+   178     if (run.state.pendingQuestion) {
+   179       // Wrong-kind resume: the execution is paused for an answer, not for an
+   180       // approval. Never let this open the loop with a question unresolved.
+   181       return {
+   182         kind: 'stop',
+   183         stopReason: 'STATE_CONFLICT',
+   184         response: 'Approval resume arrived while a user question is pending.',
+   185         preserveCheckpoint: true
+   186       }
+   187     }
+   188     if (!run.state.pendingApprovalId) {
+   189       if (run.state.stopReason === 'APPROVAL_REQUIRED') {
+   190         return {
+   191           kind: 'stop',
+   192           stopReason: 'STATE_CONFLICT',
+   193           response: 'The paused approval binding is missing.',
+   194           preserveCheckpoint: true
+   195         }
+   196       }
+   197       // The approval was already consumed and the checkpoint cleared the
+   198       // binding; a retry of the same attempt is a safe no-op.
+   199       return null
+   200     }
+   201     if (run.state.pendingApprovalId !== resume.approvalId) {
+   202       return {
+   203         kind: 'stop',
+   204         stopReason: 'STATE_CONFLICT',
+   205         response: 'Approval does not match the paused execution binding.',
+   206         preserveCheckpoint: true
+   207       }
+   208     }
+   209     return null
+   210   }
+   211   if (run.state.pendingApprovalId) {
+   212     return {
+   213       kind: 'stop',
+   214       stopReason: 'STATE_CONFLICT',
+   215       response: 'User input arrived while an approval is pending.',
+   216       preserveCheckpoint: true
+   217     }
+   218   }
+   219   if (!run.state.pendingQuestion) {
+   220     const alreadyResolved = Object.values(run.state.resolvedInputs).includes(
+   221       resume.message
+   222     )
+   223     if (alreadyResolved) {
+   224       if (ctx.options.toolResultContext)
+   225         run.resumeObservation = userResumeObservation(ctx, run, resume.message)
+   226       return null
+   227     }
+   228     return {
+   229       kind: 'stop',
+   230       stopReason: 'STATE_CONFLICT',
+   231       response: 'User input arrived without a pending question.',
+   232       preserveCheckpoint: true
+   233     }
+   234   }
+   235   const stepNumber = Math.max(1, run.state.stepNumber)
+   236   const observation = userResumeObservation(ctx, run, resume.message)
+   237   if (ctx.options.toolResultContext) run.resumeObservation = observation
+   238   run.observations = ctx.options.toolResultContext
+   239     ? retainCompleteObservations([...run.observations, observation])
+   240     : [...run.observations, observation].slice(-MAX_CHECKPOINT_OBSERVATIONS)
+   241   const pendingQuestion = run.state.pendingQuestion
+   242   run.state = {
+   243     ...run.state,
+   244     pendingQuestion: undefined,
+   245     openQuestions: run.state.openQuestions.filter(
+   246       (question) => question !== pendingQuestion.promptIntent
+   247     ),
+   248     resolvedInputs: {
+   249       ...run.state.resolvedInputs,
+   250       [`answer_${stepNumber}`]: resume.message
+   251     }
+   252   }
+   253   return null
+   254 }
+   255 
+   256 function userResumeObservation(
+   257   ctx: IterativeDispatchContext,
+   258   run: LoopRun,
+   259   message: string

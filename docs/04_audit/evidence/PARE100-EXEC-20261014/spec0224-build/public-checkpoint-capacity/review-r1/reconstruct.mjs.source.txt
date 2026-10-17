@@ -1,0 +1,93 @@
+import { readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import assert from 'node:assert/strict'
+import path from 'node:path'
+const R=path.dirname(new URL(import.meta.url).pathname)
+const hash=x=>createHash('sha256').update(x).digest('hex')
+// Independent encoder: no production serializer, checkpoint, fixture or runtime imports.
+function canon(v) {
+ if(v===null || typeof v!=='object')return JSON.stringify(v)
+ if(Array.isArray(v))return '['+v.map(canon).join(',')+']'
+ return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}'
+}
+function unsigned(c) { const {checkpointId,createdAt,digest,...v}=c;return v }
+let validated=0
+function expand(s,label) {
+ const cp=structuredClone(s.checkpointWithoutFixturePadding),r=s.paddingRecipe
+ assert.equal(r.field,'state.resolvedInputs.fixturePadding');assert.equal(r.character,'p')
+ assert.equal(Object.hasOwn(cp.state.resolvedInputs,'fixturePadding'),false)
+ assert.ok(Number.isSafeInteger(r.repeat)&&r.repeat>=0&&r.repeat<=8388608)
+ const padding=r.character.repeat(r.repeat);assert.equal(hash(padding),r.sha256)
+ if(r.present)cp.state.resolvedInputs.fixturePadding=padding
+ else assert.equal(r.repeat,0)
+ const raw=canon(unsigned(cp)),bytes=Buffer.byteLength(raw)
+ assert.equal(bytes,s.logicalUnsignedBytes,label+' bytes'); assert.equal(8388608-bytes,s.remainingBytes)
+ assert.ok(bytes<=8388608);assert.equal(hash('cvg.checkpoint.v2\n'+raw),cp.digest,label+' digest')
+ for(const o of cp.state.observations.filter(o=>o.type==='TOOL_RESULT')){
+  assert.equal(o.payload.completion,'COMPLETE');const output=canon(o.payload.output)
+  assert.equal(Buffer.byteLength(output),o.payload.outputBytes);assert.equal(hash(output),o.payload.outputSha256)
+ }
+ validated++;return cp
+}
+const results=c=>c.state.observations.filter(o=>o.type==='TOOL_RESULT')
+function one(x,source) {
+ const free=Number(x.name.match(/free-(\d+)/)[1]),prior=x.name.endsWith('-true'),refusal=free===80000
+ const before=expand(x.before,source+':before'),after=expand(x.after,source+':after')
+ assert.equal(x.before.remainingBytes,free)
+ assert.equal(x.first.stopReason,'NEEDS_USER_INPUT');assert.equal(before.state.stopReason,'NEEDS_USER_INPUT')
+ assert.equal(results(before).length,prior?1:0);assert.equal(before.budgetUsage.toolCalls,prior?1:0)
+ const writes=x.writes.map((w,i)=>{
+  assert.equal(w.result.status,'APPLIED');const c=expand(w.next,source+':write'+i)
+  assert.deepEqual(w.result.token,{checkpointId:c.checkpointId,digest:c.digest});return c
+ })
+ assert.equal(new Set(writes.map(c=>c.checkpointId)).size,writes.length)
+ assert.deepEqual(writes.at(-1),after)
+ const seedIndex=writes.findIndex(c=>c.digest===before.digest)
+ assert.ok(seedIndex>0);assert.deepEqual(writes[seedIndex],before)
+ const seedDelta=structuredClone(unsigned(before));delete seedDelta.state.resolvedInputs.fixturePadding
+ assert.deepEqual(seedDelta,unsigned(writes[seedIndex-1]),'seed must only add padding')
+ assert.equal(before.checkpointVersion,2);assert.equal(before.state.toolResultContext.version,1)
+ const attemptStep=prior?3:2
+ const rc=x.ruleContexts.find(c=>c.stepNumber===attemptStep);assert.ok(rc,'actual rule reached')
+ assert.deepEqual(rc.requiredObservationIds,results(before).map(o=>o.observationId))
+ assert.deepEqual(rc.observations.filter(o=>o.type==='TOOL_RESULT'),results(before))
+ const accepted=writes.slice(seedIndex+1).find(c=>c.state.toolResultContext.acceptedDecision?.stepNumber===attemptStep)
+ assert.ok(accepted);const decision=accepted.state.toolResultContext.acceptedDecision.decision
+ assert.deepEqual(decision,{decisionType:'CALL_TOOL',reasonCode:'TOOL_REQUIRED',toolId:'synthetic.checkpoint.capacity',toolVersion:'1',toolInput:{round:attemptStep}})
+ assert.equal(x.modelCalls,0);assert.equal(x.bodyCalls.length,x.bodies)
+ assert.deepEqual(results(after).slice(0,results(before).length),results(before))
+ assert.equal(after.state.resolvedInputs.fixturePadding,before.state.resolvedInputs.fixturePadding)
+ assert.deepEqual(after.state.toolResultContext.decisionAdmissions,[]);assert.equal(after.state.toolResultContext.deliveredThroughStep,0)
+ for(const k of ['modelCalls','inputTokens','outputTokens','costUsd','decisionRepairs','knowledgeCalls','verificationCalls','replans'])assert.equal(after.budgetUsage[k],before.budgetUsage[k])
+ if(prior){
+  assert.equal(x.oldJournal.state,'CONFIRMED');assert.deepEqual(x.oldJournal.result,results(before)[0].payload.output)
+  assert.equal(x.bodyCalls[0].operationKey,x.oldJournal.operationKey);assert.deepEqual(x.bodyCalls[0].output,x.oldJournal.result)
+  assert.ok(writes.slice(0,seedIndex).some(c=>results(c).some(o=>o.observationId===results(before)[0].observationId)))
+ }else assert.equal(x.oldJournal,null)
+ if(refusal){
+  assert.equal(x.result.stopReason,'INSUFFICIENT_EVIDENCE');assert.equal(x.result.response,'CONTEXT_OVERFLOW: Prospective checkpoint cannot reserve full tool result and step overhead.')
+  assert.equal(x.bodies,prior?1:0);assert.equal(x.attemptedJournal,null);assert.deepEqual(results(after),results(before))
+  for(const k of ['steps','toolCalls'])assert.equal(after.budgetUsage[k],before.budgetUsage[k])
+  assert.ok(x.steps.every(s=>s.stepNumber!==attemptStep));assert.equal(after.state.stepNumber,before.state.stepNumber)
+ }else{
+  assert.equal(x.result.stopReason,'COMPLETED');assert.equal(x.bodies,prior?2:1)
+  assert.equal(results(after).length,results(before).length+1)
+  assert.equal(x.attemptedJournal.state,'CONFIRMED');assert.deepEqual(x.attemptedJournal.result,{round:attemptStep,full:'retained'})
+  assert.deepEqual(results(after).at(-1).payload.output,x.bodyCalls.at(-1).output);assert.deepEqual(x.bodyCalls.at(-1).output,x.attemptedJournal.result)
+  assert.equal(after.budgetUsage.toolCalls,before.budgetUsage.toolCalls+1)
+ }
+ for(const c of writes.slice(seedIndex)) {
+  assert.deepEqual(results(c).slice(0,results(before).length),results(before),'original results survive every subsequent CAS')
+  assert.equal(c.state.resolvedInputs.fixturePadding,before.state.resolvedInputs.fixturePadding)
+  if(refusal)for(const k of Object.keys(before.budgetUsage).filter(k=>k!=='activeDurationMs'))assert.equal(c.budgetUsage[k],before.budgetUsage[k],'refusal CAS counter '+k)
+ }
+ const changes=Object.keys({...before.budgetUsage,...after.budgetUsage}).filter(k=>before.budgetUsage[k]!==after.budgetUsage[k])
+ return {name:x.name,passed:true,checkpoints:writes.length+2,seedDelta:'only resolvedInputs.fixturePadding',seedUnsignedBytes:x.before.logicalUnsignedBytes,remainingBefore:free,afterUnsignedBytes:x.after.logicalUnsignedBytes,remainingAfter:x.after.remainingBytes,maxCommittedBytes:Math.max(...x.writes.map(w=>w.next.logicalUnsignedBytes)),casWrites:writes.length,attemptStep,acceptedNativeDecision:decision,stopReason:x.result.stopReason,response:x.result.response,bodies:x.bodies,newBodies:x.bodies-(prior?1:0),modelCalls:x.modelCalls,previousToolResults:results(before).length,afterToolResults:results(after).length,budgetChanges:changes,budgetBefore:before.budgetUsage,budgetAfter:after.budgetUsage,attemptedJournal:x.attemptedJournal?.state??null,oldJournal:x.oldJournal?.state??null,allDigestsAndOutputHashesVerified:true}
+}
+const inputs=process.argv.slice(2);const output=[]
+for(const f of inputs){
+ const a=JSON.parse(readFileSync(f,'utf8'));assert.equal(a.length,4)
+ output.push({input:f,sha256:hash(readFileSync(f)),cases:a.map(x=>one(x,f))})
+}
+const report={method:'Independent canonical recursion and Node crypto, no production imports; reconstruct every padding recipe, unsigned bytes/digest/output digest, CAS token, seed delta and case invariants',validatedCheckpointSnapshots:validated,passed:true,inputs:output}
+writeFileSync(path.join(R,'reconstruction.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2))

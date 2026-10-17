@@ -1,0 +1,41 @@
+from pathlib import Path
+import sys,json,copy,shutil,hashlib
+D=Path(__file__).parent;P=D.parent;sys.path.insert(0,str(P))
+from common import load,put,env_for
+from seal import seal
+from validate import validate_run
+ASHA='c01bacf68ffe423dda7987ebfd59096bde7712589dc68922955ae470a5fbd1e2'
+assert hashlib.sha256((P/'authority.json').read_bytes()).hexdigest()==ASHA
+trusted=load(P/'authority.json'); source=P/'runs/i1-01';base=load(source/'stdout.txt');out=D/'extra-controls';out.mkdir(exist_ok=False)
+results=[]
+def check(name, mutate=None, raw_mutate=None, process_mutate=None, file_mutate=None, positive=False):
+ f=out/name;shutil.copytree(source,f); data=copy.deepcopy(base)
+ if mutate:mutate(data)
+ raw=(json.dumps(data,ensure_ascii=False,allow_nan=False)+'\n').encode()
+ if raw_mutate:raw=raw_mutate(raw)
+ (f/'stdout.txt').write_bytes(raw);process=load(f/'process.json');process['capture']['env']=env_for(f);process['capture']['retainedBytes']=len(raw)
+ if process_mutate:process_mutate(process)
+ put(f/'process.json',process)
+ if file_mutate:file_mutate(f)
+ receipt=out/(name+'.TEST_ONLY.receipt.json');seal(f,receipt);sha=hashlib.sha256(receipt.read_bytes()).hexdigest()
+ try:
+  validate_run(f,trusted,ASHA,receipt,sha);accepted=True;reason='accepted'
+ except Exception as e:accepted=False;reason=type(e).__name__+': '+str(e)
+ r={'test':name,'expected':'accept-copy-control' if positive else 'reject','accepted':accepted,'ok':accepted==positive,'reason':reason,'receiptScope':'TEST_ONLY_NOT_ACTUAL_CAPTURE','fullValidateRun':True};results.append(r)
+check('positive',positive=True)
+check('decision-authority',lambda d:d['cases'][1]['decisions'][0]['input']['runtime'].__setitem__('tenantId','forged'))
+check('policy-authority',lambda d:d['cases'][1]['policyEvaluations'][0].__setitem__('tenantId','forged'))
+check('native-extra',lambda d:d['cases'][0]['nativeResult'].__setitem__('securityPASS',True))
+check('log-omitted-result',lambda d:d['cases'][1]['kernelLogEvents'].pop(2))
+check('journal-nonuuid',lambda d:d['cases'][1]['journalRecord'].__setitem__('attemptId','fake'))
+check('float-native-counter',lambda d:d['cases'][1]['nativeResult'].__setitem__('toolCalls',1.0))
+check('float-retained',process_mutate=lambda p:p['capture'].__setitem__('retainedBytes',float(p['capture']['retainedBytes'])))
+check('negative-cleanup',process_mutate=lambda p:p['capture'].__setitem__('cleanupElapsedNs',-1))
+check('unknown-teardown',process_mutate=lambda p:p['capture'].__setitem__('remainingProcessGroup',None))
+check('unknown-eof',process_mutate=lambda p:p['capture']['eof'].__setitem__('stderr',None))
+check('nested-duplicate',raw_mutate=lambda raw:raw.replace(b'"toolCalls": 1',b'"toolCalls": 1, "toolCalls": 1',1))
+check('nan-duration',raw_mutate=lambda raw:raw.replace(b'"toolDurationMs": 0',b'"toolDurationMs": NaN',1))
+check('extra-run-file',file_mutate=lambda f:(f/'unexpected.txt').write_text('test only'))
+check('source-digest',file_mutate=lambda f:put(f/'sources-after.json',{**trusted['sources'],next(iter(trusted['sources'])):'0'*64}))
+put(out/'results.json',{'scope':'COPIED_RECORD_DIAGNOSTICS_ONLY','results':results,'ok':all(r['ok'] for r in results)})
+print(json.dumps(results,indent=2));sys.exit(0 if all(r['ok'] for r in results) else 1)

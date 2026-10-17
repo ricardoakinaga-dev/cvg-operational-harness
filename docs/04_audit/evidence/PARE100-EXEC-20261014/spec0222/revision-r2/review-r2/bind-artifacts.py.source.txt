@@ -1,0 +1,6 @@
+"""Bind every authored artifact including scripts/raw failures, except manifest itself."""
+import pathlib,hashlib,json,datetime
+p=pathlib.Path.cwd();m=p/'artifact-manifest.json'
+entries=[{'path':str(x.relative_to(p)),'size':x.stat().st_size,'sha256':hashlib.sha256(x.read_bytes()).hexdigest()} for x in sorted(p.rglob('*')) if x.is_file() and x!=m]
+r={'schema':'cvg-review-artifact-manifest-v1','root':str(p),'created_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'self_reference':False,'exclusion':'artifact-manifest.json only, to avoid self-reference','files':entries}
+m.write_text(json.dumps(r,indent=2)+'\n');print(json.dumps({'artifact_count':len(entries),'artifact_manifest_sha256':hashlib.sha256(m.read_bytes()).hexdigest()}))

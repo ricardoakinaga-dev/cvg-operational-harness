@@ -1,0 +1,28 @@
+import { createRequire } from 'node:module'
+import { readFileSync, readdirSync, statSync, realpathSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { createHash } from 'node:crypto'
+const base = dirname(new URL(import.meta.url).pathname)
+const root = '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree'
+const require = createRequire(join(root, 'package.json'))
+const hash = p => { const b = readFileSync(p); return { path: p, sha256: createHash('sha256').update(b).digest('hex'), bytes: b.length } }
+const packages = new Map(), unavailableOptional = []
+function visit(name, resolver) {
+  let entry
+  try { entry = realpathSync(resolver.resolve(name)) } catch (error) { unavailableOptional.push({ name, code: error.code }); return }
+  let dir = dirname(entry)
+  while (!readdirSync(dir).includes('package.json')) { const parent = dirname(dir); if (parent === dir) throw new Error('No manifest for ' + name); dir = parent }
+  if (packages.has(dir)) return
+  const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+  const files = []
+  function walk(p) { for (const n of readdirSync(p).sort()) { if (n === 'node_modules' || n === '.git') continue; const f = join(p,n), s = statSync(f); if (s.isDirectory()) walk(f); else if (s.size && /\.(js|cjs|mjs|json|node)$/.test(n)) files.push(hash(f)) } }
+  walk(dir)
+  packages.set(dir, { name: manifest.name, version: manifest.version, entry: hash(entry), files })
+  const next = createRequire(join(dir, 'package.json'))
+  for (const dep of Object.keys(manifest.dependencies ?? {})) visit(dep, next)
+}
+visit('pg', require); visit('zod', require)
+const tooling = ['vitest', 'vite', 'eslint', 'prettier'].map(name => ({ name, entry: hash(realpathSync(require.resolve(name))) }))
+const transformed = readFileSync(join(base, 'run-r1/transformed-inputs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+writeFileSync(join(base, 'additional-transitive-dependency-hashes.json'), JSON.stringify({ node: { executable: process.execPath, version: process.version, binary: hash(process.execPath) }, root, runtimeExternalPackages: [...packages.values()], unavailableOptional, tooling, transformed }, null, 2) + '\n', { flag: 'wx' })
+console.log(JSON.stringify({ node: process.version, runtimeExternalPackages: packages.size, externalFiles: [...packages.values()].reduce((n,p) => n + p.files.length, 0), transformedSources: transformed.length }))

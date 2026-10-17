@@ -1,0 +1,154 @@
+"""Lead authentication of I1 seal, frozen inputs and observed NodeFS reads.
+
+No OS attestation. Actor-owned mutable logs/metadata are distinguished from
+readonly source/dependency input bytes. Report interpretation remains Lead's.
+"""
+import collections
+import hashlib
+import json
+from pathlib import Path
+
+base = Path(__file__).parent
+b = base.parent
+w = b.parent / 'worktree'
+actor = base / 'review-r1'
+packet = base / 'review-packet-r1'
+sha = lambda raw: hashlib.sha256(raw).hexdigest()
+seal = actor / 'seal-manifest.json'
+seal_sha = sha(seal.read_bytes())
+assert (actor / 'seal-manifest.sha256').read_text().split()[0] == seal_sha
+manifest = json.loads(seal.read_text())
+entries = manifest['files']
+for entry in entries:
+    path = actor / entry['path']
+    assert path.resolve().is_relative_to(actor.resolve()), path
+    raw = path.read_bytes()
+    assert len(raw) == entry['bytes'] and sha(raw) == entry['sha256'], path
+sealed = {entry['path'] for entry in entries}
+unsealed = [str(p.relative_to(actor)) for p in actor.rglob('*') if p.is_file()
+            and str(p.relative_to(actor)) not in sealed and p.name not in ['seal-manifest.json', 'seal-manifest.sha256']]
+assert not unsealed, unsealed
+pm = json.loads((packet / 'manifest.json').read_text())
+comparisons = []
+actor_copy_comparisons = []
+for family in ['inputs', 'proofs', 'environmentTemplates']:
+    for entry in pm[family]:
+        path = Path(entry['copy'])
+        raw = path.read_bytes()
+        assert len(raw) == entry['bytes'] and sha(raw) == entry['sha256'], path
+        comparisons.append(str(path))
+        if family in ['inputs', 'proofs']:
+            copied = actor / 'inputs' / ('artifact' if family == 'inputs' else 'producer') / entry['relative']
+            if copied.exists():
+                assert copied.read_bytes() == raw, copied
+                actor_copy_comparisons.append(str(copied))
+candidate = json.loads((b / 'candidate-r13.json').read_text())
+for entry in candidate['sourceBindings']:
+    raw = Path(entry['live']).read_bytes()
+    assert len(raw) == entry['bytes'] and sha(raw) == entry['sha256'], entry['path']
+    assert raw == (Path(candidate['manifest']).parent / entry['copy']).read_bytes()
+for key in ['allowedScopeMetadata', 'privateResource']:
+    entry = pm[key]
+    raw = Path(entry['path']).read_bytes()
+    assert len(raw) == entry['bytes'] and sha(raw) == entry['sha256']
+assert (packet / 'candidate-manifest.json').read_bytes() == Path(candidate['manifest']).read_bytes()
+inventories = [json.loads((actor / 'inputs' / name).read_text())
+               for name in ['inventory-before.json', 'inventory-after.json']]
+before, after = ({v['path']: v for v in values} for values in inventories)
+assert before.keys() == after.keys()
+for name, entry in before.items():
+    assert entry == after[name] and entry['ok'] is True
+    raw = Path(name).read_bytes()
+    assert len(raw) == entry['bytes'] and sha(raw) == entry['sha256'] == entry['expected']
+input_paths = {e['copy'] for e in pm['inputs']}
+omitted_constraints = sorted(input_paths - before.keys())
+assert omitted_constraints == [str(packet / 'artifact/packages/agent-core/src/commands/create-handoff-summary.ts')]
+candidate_paths = {str(packet / 'artifact' / e['path']) for e in candidate['sourceBindings']}
+assert candidate_paths <= before.keys(), 'Required candidate source missing from critic inventory'
+rows = [json.loads(line) for line in (actor / 'logs/reads.jsonl').read_text().splitlines()]
+transforms = [json.loads(line) for line in (actor / 'logs/transforms.jsonl').read_text().splitlines()]
+for row in transforms:
+    raw = Path(row['path']).read_bytes()
+    assert len(raw) == row['sourceBytes'] and sha(raw) == row['sourceSha256']
+    if row['stage'] == 'pre':
+        assert len(raw) == row['bytes'] and sha(raw) == row['sha256']
+assert not ({r['path'] for r in rows} | {r['path'] for r in transforms}) & set(omitted_constraints)
+joined = json.loads((actor / 'checks/pid-joined-summary.json').read_text())
+joined_lines = []
+for group in joined:
+    assert group['readCount'] == len(group['reads'])
+    for row in group['reads']:
+        line = row['line']
+        assert {k: v for k, v in row.items() if k != 'line'} == rows[line - 1]
+        assert row['pid'] == group['pid']
+        joined_lines.append(line)
+    assert group['transformCount'] == sum(t['pid'] == group['pid'] for t in transforms)
+    common = {r['path'] for r in rows if r['pid'] == group['pid']} & {t['path'] for t in transforms if t['pid'] == group['pid']}
+    assert set(group['samePidReadAndTransformPaths']) == common
+assert sorted(joined_lines) == list(range(1, len(rows) + 1))
+readonly_roots = [packet.resolve(), (w / 'node_modules').resolve(),
+                  Path('/home/ricardo/.nvm/versions/node/v22.23.2')]
+readonly_reads = {}
+mutable_reads = set()
+unbound = []
+pid_counts = collections.Counter()
+for row in rows:
+    assert isinstance(row['pid'], int) and isinstance(row['path'], str)
+    pid_counts[row['pid']] += 1
+    path = Path(row['path'])
+    if not path.is_absolute():
+        continue
+    actual = path.resolve()
+    readonly = any(actual.is_relative_to(root) for root in readonly_roots)
+    if readonly and 'bytes' in row and 'sha256' in row:
+        raw = actual.read_bytes()
+        assert len(raw) == row['bytes'] and sha(raw) == row['sha256'], row
+        readonly_reads[str(path)] = {'bytes': len(raw), 'sha256': sha(raw)}
+    elif actual.is_relative_to(actor.resolve()):
+        mutable_reads.add(str(path))
+    elif str(path).startswith(('/tmp/cvg-', '/home/ricardo/')) and not readonly:
+        unbound.append(row)
+assert not unbound, unbound
+expected_fixture = str(packet / 'artifact/packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts')
+fixture_reads = [row for row in rows if row['path'] == expected_fixture and row.get('sha256') == candidate['sourceBindings'][-1]['sha256']]
+assert fixture_reads, 'No actual source bytes read witness'
+run_index = json.loads((actor / 'run/case-summary-index.json').read_text())
+runtime_pids = set()
+for case in run_index['cases']:
+    for entry in case['attempts']:
+        path = Path(entry['result'])
+        assert path.resolve().is_relative_to(actor.resolve())
+        runtime_pids.add(json.loads(path.read_text())['pid'])
+assert runtime_pids <= {r['pid'] for r in fixture_reads}, 'Runtime PID not bound to frozen fixture read'
+for name in ['lead-review-core-01.stdout.json', 'lead-review-scenarios-01.stdout.json']:
+    data = json.loads((base / name).read_text())
+    assert data['status'].startswith('PASS_')
+record = {'status': 'AUTHENTICATED_PENDING_REPORT_INTERPRETATION', 'sealManifestSHA256': seal_sha,
+          'outputs': len(entries), 'emptyOutputs': sum(e['bytes'] == 0 for e in entries),
+          'fileClassCounts': dict(collections.Counter(e['class'] for e in entries)),
+          'packetImmutableComparisons': len(comparisons), 'currentCandidateSourceBindings': len(candidate['sourceBindings']),
+          'actorPacketCopyComparisons': len(actor_copy_comparisons),
+          'actorInventories': {'before': len(before), 'after': len(after), 'matching': True,
+                               'sourceConstraintsCovered': len(input_paths & before.keys()),
+                               'sourceConstraintsProvided': len(input_paths), 'omittedConstraint': omitted_constraints},
+          'provenanceCorrection': 'Actor incorrectly classified one legitimate source filename create-handoff-summary.ts as a producer summary. Its inventories cover373/374 source/constraint inputs, not reported374/374. All80candidate and all113transformed source paths are covered; omitted unused constraint was separately authenticated by Lead, original report/exclusion retained. Scoped LOW limitation, no runtime or acceptance criterion weakened.',
+          'rawReadRecords': len(rows), 'rawReadPIDCounts': dict(pid_counts),
+          'transformRecords': len(transforms), 'transformStages': dict(collections.Counter(t['stage'] for t in transforms)),
+          'uniqueTransformedSources': len({t['path'] for t in transforms}),
+          'readonlyCurrentReads': readonly_reads, 'ownedMutableReadPaths': sorted(mutable_reads),
+          'prohibitedObservedReadonlyReads': unbound, 'fixtureReadPIDs': sorted({r['pid'] for r in fixture_reads}),
+          'runtimePIDs': sorted(runtime_pids), 'leadRecomputeEachDataset': 4249,
+          'limits': 'Selected NodeFS user-space instrumentation, no OS attestation. Mutable actor outputs excluded from current-read equality. Manual/bootstrap/tool reads governed by sealed contract and report, not proven exhaustive by Node log.',
+          'publicationEntries': []}
+destination = base / 'review-lead-verification-r1.json'
+if destination.exists():
+    prior = json.loads(destination.read_text())
+    if prior.get('sealManifestSHA256') == seal_sha:
+        for key in ['publicationEntries', 'publicationOmissions', 'reviewerDecision',
+                    'actorChecksReproduced', 'cleanup', 'actorReportedSourceCountCorrection']:
+            if key in prior:
+                record[key] = prior[key]
+        if prior.get('status') == 'AUTHENTICATED_ACCEPTED_SCOPED_WITH_LOW_INVENTORY_LIMIT':
+            record['status'] = prior['status']
+destination.write_text(json.dumps(record, indent=2) + '\n')
+print(json.dumps({k: v for k, v in record.items() if k not in ['readonlyCurrentReads', 'ownedMutableReadPaths', 'publicationEntries']}))

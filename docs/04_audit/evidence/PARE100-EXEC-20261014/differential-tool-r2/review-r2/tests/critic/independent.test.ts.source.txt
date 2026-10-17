@@ -1,0 +1,93 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import {spawnSync} from 'node:child_process'
+import {describe,it,expect,afterAll} from 'vitest'
+import {runCvgToolTurn} from '../differential/cvg-tool.ts'
+import {measureToolTurn} from '../differential/compare-tool-turn.mjs'
+import {capturePortData,createPortRequestCapture} from '../differential/capture-port-data.mjs'
+import {validateToolCase} from '../differential/tool-case.mjs'
+import {HybridOrchestrator} from '@cvg/harness-orchestrator'
+const root=process.cwd(), records:any[]=[]
+fs.mkdirSync(root+'/evidence/critic',{recursive:true})
+const original=JSON.parse(fs.readFileSync(root+'/evidence/focus-explicit-with-primary-extra/tool-turn/tool-ascii.native.json','utf8'))
+const fixture=original.fixture
+function save(name:string,body:()=>any){let value;try{value=body()}catch(e){value={threw:String(e)}}records.push({name,value});return value}
+function verdict(r:any,c:any){try{return {accepted:true,measurement:measureToolTurn(r,c,fixture)}}catch(e){return {accepted:false,error:String(e)}}}
+afterAll(()=>fs.writeFileSync(root+'/evidence/critic/probes.json',JSON.stringify(records,null,2)))
+describe('independent finite-contract probes',()=>{
+ it('genuine CVG path fresh; per-call faults retained and rejected',async()=>{
+  for(const mode of ['baseline','compensated','provider','model','extra','missing','getter'] as const){let reads=0
+   let cvg:any;try{cvg=await runCvgToolTurn(fixture,{transformProviderResult:(r,call)=>{
+    if(mode==='compensated')return {...r,inputTokens:call===1?0:2,outputTokens:call===1?0:4}
+    if(mode==='provider')return {...r,provider:'wrong'}
+    if(mode==='model')return {...r,model:'wrong'}
+    if(mode==='extra')return {...r,extension:{retained:true}}
+    if(mode==='missing'){const a:any={...r};delete a.provider;return a}
+    if(mode==='getter')return {...r,get provider(){reads++;return 'pare100-synthetic'}}
+    return r
+   }})}catch(e){records.push({name:'provider-'+mode,threw:String(e),reads});continue}
+   const result=verdict(original.reference,cvg);records.push({name:'provider-'+mode,result,reads,cvg})
+   expect(result.accepted).toBe(mode==='baseline');expect(reads).toBe(0)
+  }
+ })
+ it('observer replacement integrity negative is independent of external provider faults',async()=>{
+  const decide=HybridOrchestrator.prototype.decide;let attempts=0
+  try{HybridOrchestrator.prototype.decide=async function(i){attempts++;const gateway=(this as any).decisionModel;gateway.complete=async()=>({text:'forged'});return decide.call(this,i)}
+   const cvg=await runCvgToolTurn(fixture);const result=verdict(original.reference,cvg);records.push({name:'observer-replacement',attempts,result,cvg});expect(result.accepted).toBe(false);expect(cvg.native.modelBodies).toBe(0)
+  }finally{HybridOrchestrator.prototype.decide=decide}
+ })
+ it('strict malformed extra missing native fields; request routing schema histories binding clocks IDs',()=>{
+  const mutations:[string,(r:any,c:any)=>void][]=[
+   ['empty-tools',r=>r.native.requests[0].request.tools=[]],
+   ['schema-forged',r=>r.native.requests[0].request.tools[0].parameters.required=[]],
+   ['provider-routing',r=>r.native.requests[0].request.provider='wrong'],
+   ['model-routing',r=>r.native.requests[1].request.model='wrong'],
+   ['maxTokens',r=>r.native.requests[1].request.maxTokens=129],
+   ['toolHistory',r=>r.native.requests[1].request.toolHistory.updates.push({unexpected:true})],
+   ['request-extra',r=>r.native.requests[0].request.extension={extra:true}],
+   ['request-missing',r=>delete r.native.requests[0].request.sessionId],
+   ['bad-binding',r=>r.native.requests[1].request.messages[3].toolCallId='wrong'],
+   ['bad-tool-body',r=>r.native.toolBodies[0].output='forged'],
+   ['lost-event',r=>r.native.events.splice(9,1)],
+   ['extra-event',r=>r.native.events.push(r.native.events[0])],
+   ['clock-date-range',r=>r.native.events[0].time=8640000000000001],
+   ['clock-negative',r=>r.native.events[0].time=-1],
+   ['clock-fraction',r=>r.native.events[0].time=1.5],
+   ['clock-string',r=>r.native.events[0].time='2026-10-16'],
+   ['clock-iso-invalid',(_,c)=>c.native.events[1].timestamp='2026-02-31T00:00:00.000Z'],
+   ['id-invalid',r=>r.native.messages[0].id='bad'],
+   ['id-alias',r=>r.native.requests[1].request.messages[0].id='00000000-0000-4000-8000-000000000001'],
+   ['signal-identity',r=>r.native.requests[1].signal.identity='signal-1'],
+   ['signal-missing',r=>delete r.native.requests[1].signal],
+   ['decision-compensation',(_,c)=>{c.native.decisionTurns[0].usage.inputTokens=0;c.native.decisionTurns[1].usage.inputTokens=2}]
+  ]
+  for(const [name,mutate] of mutations){const {reference:r,cvg:c}=structuredClone(original);mutate(r,c);const v=verdict(r,c);records.push({name,result:v});expect(v.accepted,name).toBe(false)}
+ })
+ it('generic capture getter rejection, alias detachment and signal correlation',()=>{
+  let reads=0;const x={nested:{x:'before'}},c=capturePortData(x);x.nested.x='after';const a=new AbortController(),b=new AbortController(),capture=createPortRequestCapture();const first=capture({signal:a.signal}),second=capture({signal:a.signal}),third=capture({signal:b.signal});a.abort({why:'synthetic'});const fourth=capture({signal:a.signal});let reject=false;try{capturePortData({get text(){reads++;return 'forged'}})}catch{reject=true}records.push({name:'generic-data',c,first,second,third,fourth,reads,reject});expect(c.nested.x).toBe('before');expect(Object.isFrozen(c.nested)).toBe(true);expect(reject).toBe(true);expect(reads).toBe(0);expect(first.signal.identity).toBe(second.signal.identity);expect(first.signal.identity).not.toBe(third.signal.identity);expect(fourth.signal.aborted).toBe(true)
+ })
+ it('signal accessors must not execute or counterfeit native receipt',()=>{
+  const controller=new AbortController();let reads=0
+  Object.defineProperty(controller.signal,'aborted',{get(){reads++;return true}})
+  const result=save('signal-shadow-getter',()=>createPortRequestCapture()({signal:controller.signal}))
+  records.push({name:'signal-shadow-getter-count',reads,result})
+  expect(reads,'accessor must be rejected before invocation').toBe(0)
+ })
+ it('signal own data must not counterfeit native abort state',()=>{
+  const controller=new AbortController();controller.abort('actually-aborted')
+  Object.defineProperties(controller.signal,{aborted:{value:false},reason:{value:undefined}})
+  const result=save('signal-shadow-data',()=>createPortRequestCapture()({signal:controller.signal}))
+  expect(result?.threw,'counterfeit brand receipt must fail closed').toBeTruthy()
+ })
+ it('error reason getters must not execute during signal capture',()=>{
+  const controller=new AbortController();let reads=0;const reason=new Error('synthetic')
+  Object.defineProperty(reason,'message',{get(){reads++;return 'forged'}});controller.abort(reason)
+  const result=save('signal-error-reason-getter',()=>createPortRequestCapture()({signal:controller.signal}));records.push({name:'signal-error-getter-count',reads,result});expect(reads).toBe(0)
+ })
+ it('fixture strings must respect 4KiB bytes before engine execution',async()=>{
+  const big={...fixture,message:'é'.repeat(4096)}
+  const result=save('utf8-fixture-cap',()=>({accepted:validateToolCase(big),utf8Bytes:Buffer.byteLength(big.message)}))
+  const cvg=await runCvgToolTurn(big);records.push({name:'utf8-fixture-native',cvg})
+  expect(result?.threw,'8192-byte message should fail 4096-byte cap').toBeTruthy()
+ })
+})

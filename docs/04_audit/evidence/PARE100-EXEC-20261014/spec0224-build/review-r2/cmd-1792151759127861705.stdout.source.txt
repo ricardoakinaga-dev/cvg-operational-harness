@@ -1,0 +1,488 @@
+  1060	      reason,
+  1061	      auditEvents,
+  1062	      now
+  1063	    )
+  1064	  }
+  1065	}
+  1066	
+  1067	/** PostgreSQL incarnation of the neutral effect journal. */
+  1068	export class PostgresOperationalEffectJournal implements EffectJournal {
+  1069	  public constructor(
+  1070	    private readonly connection: OperationalExecutionPostgresConnection,
+  1071	    private readonly options: { fence?: ControlledPublishedDatabaseFence } = {}
+  1072	  ) {}
+  1073	
+  1074	  public reserve(input: {
+  1075	    tenantId: string
+  1076	    operationKey: string
+  1077	    proposalHash: string
+  1078	    attemptId: string
+  1079	  }): Promise<EffectJournalRecord> {
+  1080	    const tenant = TenantIdSchema.parse(input.tenantId)
+  1081	    const operationKey = text(input.operationKey, 'operationKey', 240)
+  1082	    const proposalHash = text(input.proposalHash, 'proposalHash', 160)
+  1083	    const attemptId = text(input.attemptId, 'attemptId', 240)
+  1084	    const timestamp = new Date()
+  1085	    return this.run(tenant, (client) =>
+  1086	      transaction(client, async () => {
+  1087	        const guard = await this.guardWrite(client, tenant, operationKey, false)
+  1088	        const result = await reserveOperationalEffectOnClient(
+  1089	          client,
+  1090	          { tenant, operationKey, proposalHash, attemptId, timestamp },
+  1091	          guard
+  1092	        )
+  1093	        await guard?.recheck()
+  1094	        return result
+  1095	      })
+  1096	    )
+  1097	  }
+  1098	
+  1099	  public markStarted(input: {
+  1100	    tenantId: string
+  1101	    operationKey: string
+  1102	    attemptId: string
+  1103	  }): Promise<EffectJournalRecord> {
+  1104	    return this.transition(input, 'EFFECT_STARTED')
+  1105	  }
+  1106	
+  1107	  public confirm(input: {
+  1108	    tenantId: string
+  1109	    operationKey: string
+  1110	    attemptId: string
+  1111	    result: unknown
+  1112	  }): Promise<EffectJournalRecord> {
+  1113	    return this.transition(input, 'CONFIRMED', { result: input.result })
+  1114	  }
+  1115	
+  1116	  public fail(input: {
+  1117	    tenantId: string
+  1118	    operationKey: string
+  1119	    attemptId: string
+  1120	    error: string
+  1121	  }): Promise<EffectJournalRecord> {
+  1122	    return this.transition(input, 'FAILED', {
+  1123	      error: text(input.error, 'error')
+  1124	    })
+  1125	  }
+  1126	
+  1127	  public markUncertain(input: {
+  1128	    tenantId: string
+  1129	    operationKey: string
+  1130	    attemptId: string
+  1131	    reason: string
+  1132	  }): Promise<EffectJournalRecord> {
+  1133	    return this.transition(input, 'UNCERTAIN', {
+  1134	      error: text(input.reason, 'reason')
+  1135	    })
+  1136	  }
+  1137	
+  1138	  public get(
+  1139	    tenantId: string,
+  1140	    operationKey: string
+  1141	  ): Promise<EffectJournalRecord | null> {
+  1142	    const tenant = TenantIdSchema.parse(tenantId)
+  1143	    const operation = text(operationKey, 'operationKey', 240)
+  1144	    return this.run(tenant, async (client) => {
+  1145	      const result = await client.query<EffectRow>(
+  1146	        `SELECT ${effectColumns}
+  1147	           FROM operational_effect_journal
+  1148	          WHERE tenant_id = $1 AND operation_key = $2`,
+  1149	        [tenant, operation]
+  1150	      )
+  1151	      return result.rows[0] ? mapEffect(result.rows[0]) : null
+  1152	    })
+  1153	  }
+  1154	
+  1155	  private transition(
+  1156	    input: {
+  1157	      tenantId: string
+  1158	      operationKey: string
+  1159	      attemptId: string
+  1160	    },
+  1161	    state: EffectJournalState,
+  1162	    values: { result?: unknown; error?: string } = {}
+  1163	  ): Promise<EffectJournalRecord> {
+  1164	    const tenant = TenantIdSchema.parse(input.tenantId)
+  1165	    const operation = text(input.operationKey, 'operationKey', 240)
+  1166	    const attemptId = text(input.attemptId, 'attemptId', 240)
+  1167	    const timestamp = new Date()
+  1168	    return this.run(tenant, (client) =>
+  1169	      transaction(client, async () => {
+  1170	        const guard = await this.guardWrite(
+  1171	          client,
+  1172	          tenant,
+  1173	          operation,
+  1174	          state !== 'EFFECT_STARTED'
+  1175	        )
+  1176	        const result = await transitionOperationalEffectOnClient(
+  1177	          client,
+  1178	          { tenant, operation, attemptId, timestamp, state, values },
+  1179	          guard
+  1180	        )
+  1181	        await guard?.recheck()
+  1182	        return result
+  1183	      })
+  1184	    )
+  1185	  }
+  1186	
+  1187	  private async guardWrite(
+  1188	    client: PostgresQueryable,
+  1189	    tenant: TenantId,
+  1190	    operationKey: string,
+  1191	    settlement: boolean
+  1192	  ) {
+  1193	    const executionId = await boundExecutionIdForOperation(
+  1194	      client,
+  1195	      tenant,
+  1196	      operationKey
+  1197	    )
+  1198	    if (!executionId) {
+  1199	      if (this.options.fence) publishedFenceError()
+  1200	      return null
+  1201	    }
+  1202	    if (operationKey !== `${executionId}:s2:find_available_slots`)
+  1203	      publishedFenceError()
+  1204	    return guardOptionalPublishedWrite(
+  1205	      client,
+  1206	      tenant,
+  1207	      executionId,
+  1208	      this.options.fence,
+  1209	      settlement
+  1210	    )
+  1211	  }
+  1212	
+  1213	  private async run<T>(
+  1214	    tenant: TenantId,
+  1215	    operation: (client: PostgresQueryable) => Promise<T>
+  1216	  ): Promise<T> {
+  1217	    if (isPool(this.connection)) {
+  1218	      return withTenantContext(
+  1219	        this.connection,
+  1220	        tenant,
+  1221	        (client: PostgresPoolClient) => operation(client)
+  1222	      )
+  1223	    }
+  1224	    return operation(this.connection)
+  1225	  }
+  1226	}
+  1227	
+  1228	function mapEffect(row: EffectRow): EffectJournalRecord {
+  1229	  return {
+  1230	    tenantId: row.tenant_id,
+  1231	    operationKey: row.operation_key,
+  1232	    proposalHash: row.proposal_hash,
+  1233	    state: row.state,
+  1234	    attemptId: row.attempt_id,
+  1235	    createdAt: asIso(row.created_at) as string,
+  1236	    updatedAt: asIso(row.updated_at) as string,
+  1237	    // This column is JSONB: the native driver has already decoded its value.
+  1238	    // A JSON string is the result itself, not another serialized document.
+  1239	    ...(row.result !== null ? { result: row.result } : {}),
+  1240	    ...(row.error !== null ? { error: row.error } : {})
+  1241	  }
+  1242	}
+  1243	
+  1244	function validateFailure(failure: ExecutionFailure): ExecutionFailure {
+  1245	  if (
+  1246	    failure.kind !== 'TECHNICAL_RETRYABLE' &&
+  1247	    failure.kind !== 'SEMANTIC_TERMINAL' &&
+  1248	    failure.kind !== 'POLICY_DENIED' &&
+  1249	    failure.kind !== 'UNKNOWN_EFFECT' &&
+  1250	    failure.kind !== 'CANCELLED'
+  1715	  client: PostgresQueryable,
+  1716	  tenant: TenantId,
+  1717	  id: string
+  1718	): Promise<void> {
+  1719	  const result = await client.query(
+  1720	    `SELECT id FROM operational_executions WHERE tenant_id=$1 AND id=$2
+  1721	     AND request#>>'{runtime,context,values,adapterVersion}'='controlled-published-v1'`,
+  1722	    [tenant, id]
+  1723	  )
+  1724	  if (result.rows.length)
+  1725	    throw new OperationalExecutionError(
+  1726	      'lease_lost',
+  1727	      'Bound execution requires its controlled published fence'
+  1728	    )
+  1729	}
+  1730	
+  1731	/** Transaction-free neutral journal body, also used by the bound composition. */
+  1732	export async function reserveOperationalEffectOnClient(
+  1733	  client: PostgresQueryable,
+  1734	  input: {
+  1735	    tenant: TenantId
+  1736	    operationKey: string
+  1737	    proposalHash: string
+  1738	    attemptId: string
+  1739	    timestamp: Date
+  1740	  },
+  1741	  guard?: { recheck: () => Promise<Date> } | null
+  1742	): Promise<EffectJournalRecord> {
+  1743	  const { tenant, operationKey, proposalHash, attemptId, timestamp } = input
+  1744	  await client.query(
+  1745	    `INSERT INTO operational_effect_journal
+  1746	     (tenant_id, operation_key, proposal_hash, state, attempt_id,
+  1747	      result, error, created_at, updated_at)
+  1748	   VALUES ($1, $2, $3, 'RESERVED', $4, NULL, NULL, $5, $5)
+  1749	   ON CONFLICT (tenant_id, operation_key) DO NOTHING`,
+  1750	    [tenant, operationKey, proposalHash, attemptId, timestamp]
+  1751	  )
+  1752	  const selected = await client.query<EffectRow>(
+  1753	    `SELECT ${effectColumns}
+  1754	     FROM operational_effect_journal
+  1755	    WHERE tenant_id = $1 AND operation_key = $2
+  1756	    FOR UPDATE`,
+  1757	    [tenant, operationKey]
+  1758	  )
+  1759	  await guard?.recheck()
+  1760	  const row = selected.rows[0]
+  1761	  if (!row)
+  1762	    throw new OperationalExecutionError(
+  1763	      'conflict',
+  1764	      'Effect reservation could not be read'
+  1765	    )
+  1766	  if (row.proposal_hash !== proposalHash) {
+  1767	    throw new OperationalExecutionError(
+  1768	      'conflict',
+  1769	      'Operation key is bound to a different proposal'
+  1770	    )
+  1771	  }
+  1772	  if (row.state === 'FAILED') {
+  1773	    const retried = await client.query<EffectRow>(
+  1774	      `UPDATE operational_effect_journal
+  1775	        SET state = 'RESERVED', attempt_id = $3,
+  1776	            result = NULL, error = NULL, updated_at = $4
+  1777	      WHERE tenant_id = $1 AND operation_key = $2
+  1778	      RETURNING ${effectColumns}`,
+  1779	      [tenant, operationKey, attemptId, timestamp]
+  1780	    )
+  1781	    if (retried.rows[0]) return mapEffect(retried.rows[0])
+  1782	  }
+  1783	  return mapEffect(row)
+  1784	}
+  1785	
+  1786	export async function transitionOperationalEffectOnClient(
+  1787	  client: PostgresQueryable,
+  1788	  input: {
+  1789	    tenant: TenantId
+  1790	    operation: string
+  1791	    attemptId: string
+  1792	    timestamp: Date
+  1793	    state: EffectJournalState
+  1794	    values: { result?: unknown; error?: string }
+  1795	  },
+  1796	  guard?: { recheck: () => Promise<Date> } | null
+  1797	): Promise<EffectJournalRecord> {
+  1798	  const { tenant, operation, attemptId, timestamp, state, values } = input
+  1799	  const selected = await client.query<EffectRow>(
+  1800	    `SELECT ${effectColumns}
+  1801	     FROM operational_effect_journal
+  1802	    WHERE tenant_id = $1 AND operation_key = $2
+  1803	    FOR UPDATE`,
+  1804	    [tenant, operation]
+  1805	  )
+  1806	  await guard?.recheck()
+  1807	  const row = selected.rows[0]
+  1808	  if (!row)
+  1809	    throw new OperationalExecutionError(
+  1810	      'not_found',
+  1811	      'Effect reservation is missing'
+  1812	    )
+  1813	  if (row.attempt_id !== attemptId) {
+  1814	    throw new OperationalExecutionError(
+  1815	      'lease_lost',
+  1816	      'Effect attempt is fenced'
+  1817	    )
+  1818	  }
+  1819	  if (state === 'EFFECT_STARTED' && row.state !== 'RESERVED') {
+  1820	    if (row.state === state) return mapEffect(row)
+  1821	    throw new OperationalExecutionError(
+  1822	      'invalid_action',
+  1823	      'Effect cannot start from its current state'
+  1824	    )
+  1825	  }
+  1826	  if (state !== 'EFFECT_STARTED' && row.state !== 'EFFECT_STARTED') {
+  1827	    if (row.state === state) return mapEffect(row)
+  1828	    throw new OperationalExecutionError(
+  1829	      'invalid_action',
+  1830	      'Effect outcome is not valid for its current state'
+  1831	    )
+  1832	  }
+  1833	  const updated = await client.query<EffectRow>(
+  1834	    `UPDATE operational_effect_journal
+  1835	      SET state = $3, result = $4::jsonb, error = $5,
+  1836	          updated_at = $6
+  1837	    WHERE tenant_id = $1 AND operation_key = $2
+  1838	    RETURNING ${effectColumns}`,
+  1839	    [
+  1840	      tenant,
+  1841	      operation,
+  1842	      state,
+  1843	      values.result === undefined
+  1844	        ? null
+  1845	        : jsonText(values.result, 'effect result'),
+  1846	      values.error ?? null,
+  1847	      timestamp
+  1848	    ]
+  1849	  )
+  1850	  if (!updated.rows[0])
+  1851	    throw new OperationalExecutionError('conflict', 'Effect transition lost')
+  1852	  return mapEffect(updated.rows[0])
+  1853	}
+   290	  return {
+   291	    list: () => registry.list(),
+   292	    resolve: (toolId, version) => {
+   293	      const tool = registry.resolve(toolId, version)
+   294	      if (!tool) return undefined
+   295	      return journaledTool(tool, journal, options)
+   296	    }
+   297	  }
+   298	}
+   299	
+   300	function journaledTool(
+   301	  tool: ToolDefinition,
+   302	  journal: EffectJournal,
+   303	  options: JournaledToolRegistryOptions
+   304	): ToolDefinition {
+   305	  const compositionFingerprint = options.compositionFingerprint
+   306	    ? bounded(options.compositionFingerprint, 'compositionFingerprint')
+   307	    : undefined
+   308	  return {
+   309	    ...tool,
+   310	    execute: async (
+   311	      input: unknown,
+   312	      context: ToolExecutionContext
+   313	    ): Promise<ToolResult> => {
+   314	      const operationKey = bounded(context.operationKey ?? '', 'operationKey')
+   315	      const attemptId = createEffectAttemptId(options.attemptIdFactory)
+   316	      const reservation = await journal.reserve({
+   317	        tenantId: context.tenantId,
+   318	        operationKey,
+   319	        proposalHash: proposalHash(tool, input, compositionFingerprint),
+   320	        attemptId
+   321	      })
+   322	      if (reservation.state === 'CONFIRMED') {
+   323	        return { status: 'SUCCEEDED', output: reservation.result }
+   324	      }
+   325	      if (
+   326	        reservation.state === 'UNCERTAIN' ||
+   327	        reservation.state === 'EFFECT_STARTED'
+   328	      ) {
+   329	        return {
+   330	          status: 'REJECTED',
+   331	          error:
+   332	            'unknown_effect: explicit reconciliation is required before retry'
+   333	        }
+   334	      }
+   335	      if (reservation.attemptId !== attemptId) {
+   336	        return {
+   337	          status: 'REJECTED',
+   338	          error:
+   339	            'unknown_effect: an existing reservation requires reconciliation'
+   340	        }
+   341	      }
+   342	      await journal.markStarted({
+   343	        tenantId: context.tenantId,
+   344	        operationKey,
+   345	        attemptId
+   346	      })
+   347	      try {
+   348	        const result = await tool.execute(input, context)
+   349	        if (
+   350	          options.crashAfterEffectBeforeConfirm &&
+   351	          result.status === 'SUCCEEDED'
+   352	        ) {
+   353	          await journal.markUncertain({
+   354	            tenantId: context.tenantId,
+   355	            operationKey,
+   356	            attemptId,
+   357	            reason: 'synthetic crash after effect before confirmation'
+   358	          })
+   359	          return {
+   360	            status: 'REJECTED',
+   361	            error:
+   362	              'unknown_effect: synthetic crash after effect before confirmation'
+   363	          }
+   364	        }
+   365	        if (result.status === 'SUCCEEDED') {
+   366	          await journal.confirm({
+   367	            tenantId: context.tenantId,
+   368	            operationKey,
+   369	            attemptId,
+   370	            result: result.output
+   371	          })
+   372	        } else {
+   373	          await journal.fail({
+   374	            tenantId: context.tenantId,
+   375	            operationKey,
+   376	            attemptId,
+   377	            error: result.error ?? 'tool failed'
+   378	          })
+   379	        }
+   380	        return result
+   381	      } catch (error) {
+   382	        const message =
+   383	          error instanceof Error ? error.message : 'tool execution failed'
+   384	        await journal.markUncertain({
+   385	          tenantId: context.tenantId,
+   386	          operationKey,
+   387	          attemptId,
+   388	          reason: `unknown effect after executor failure: ${message}`
+   389	        })
+   390	        return {
+   391	          status: 'REJECTED',
+   392	          error: 'unknown_effect: executor outcome is uncertain'
+   393	        }
+   394	      }
+   395	    }
+   396	  }
+   397	}
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:308:describe('SPEC0224 complete-tool-v1 orchestrator lane (synthetic ports)', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:309:  it('advertises support and returns rules-only empty receipts without qualification or aggregate usage', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:323:  it('returns existing native settled receipts from rules without another model call or usage charge', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:354:  it('prefixes reentered same-step repair receipts with all prior native settled IDs without mutating or charging them', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:519:  it('never substitutes a character estimator if the counter throws', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:530:  it('refuses counter mutation of the detached snapshot and preserves caller values', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:544:  it('retains trusted governance and profile while placing other selected content only in the user frame', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:591:  it('trims an oversized optional item before counting without slicing its contents', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:605:  it('trims optional items whole by priority, recounts the entire request, and retains every tool result', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:637:  it('does not evict an earlier delivered tool result when two required 17KiB values overflow', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:734:  it('accepts exact token/window/cost balances and defaults an absent tokenBudget to 4000', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:793:  it('preserves native decision validation and returns every settled repair receipt with no aggregate usage', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:843:  it('honors external context.decisionRepair and accepts the native receipt attempt ordinal', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:862:  it('lets native live balance veto repair after the first call has settled', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:876:  it('never calls model when durable reservation fails', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:953:  it('settles UNKNOWN on model throw and never repairs it', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:963:  it('propagates cancellation and ignores a late result after UNKNOWN', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:987:  it('does not start a model call if cancellation arrives during reserve', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:1006:  it('does not count, reserve or call a model when already cancelled', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:1021:  it('times out a counter with no reserve, and an in-flight model as UNKNOWN without late settlement', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:1043:  it('fails closed on settlement save failure or conflicting result hash', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:1061:  it('exhausts native decision validation and allowed-type repairs without converting rejection to output', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:1078:  it('preserves legacy request, rules, repair prompts and aggregate usage without new qualification', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/contracts/src/__tests__/complete-json.test.ts:7:describe('complete JSON strict value snapshot', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/contracts/src/__tests__/complete-json.test.ts:8:  it('preserves aliases, Unicode, NUL keys, numeric keys and exact JSON values', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/contracts/src/__tests__/complete-json.test.ts:48:  it('never invokes accessors or toJSON and rejects cycles', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/contracts/src/__tests__/complete-json.test.ts:70:  it('enforces exact UTF-8 bytes, root-at-one depth and value node limits', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-tool-public.test.ts:220:describe('SPEC0224 public capability factory integration', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-tool-public.test.ts:346:  it('stops before a model or tool body when the native reservation cannot fit', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-tool-public.test.ts:355:  it('fails closed without a qualified counter', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-tool-public.test.ts:364:  it('preserves confirmed synthetic effect but stops on unavailable oversized output without replay', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-tool-public.test.ts:423:  it('refuses custom context payload tampering before the next model', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-tool-public.test.ts:450:  it('does not call the model if saving its reservation fails', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-tool-public.test.ts:464:  it('refuses replay of a settled model decision lost before acceptedDecision commit', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-tool-public.test.ts:529:  it('retains already delivered A alongside B and refuses an oversized combined request', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-tool-public.test.ts:558:  it('reserves observation capacity before the 51st pure tool body and retains all 50 results', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-tool-public.test.ts:594:  it('hands off a settled tool step missing its complete saved result without reopening or replay', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:139:describe('complete checkpoint codec and memory CAS', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:140:  it('uses domain-separated logical digest, schema optional normalization and legacy digest', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:182:  it('round trips NUL keys and 4096 NULs with ASCII physical wrapper', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:201:  it('rejects malformed physical wrappers, UTF8, JSON, noncanonical JSON and tamper', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:239:  it('rejects invalid result hashes, cursor, receipts, external NUL and unsigned size', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:268:  it('has one winner for initial and same-token races; refuses simple V2 and V1 overwrite', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:333:  it('retains 50 full TOOL_RESULT observations, validates result integrity and immutable receipts across CAS', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:467:  it('rejects corrupt native receipt bindings, budget, enum, pending pointer and missing state fields', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:542:  it('enforces exact 8MiB logical bytes and total depth/node limits before decoding', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:627:  it('retains observed UNKNOWN breach usage and requires componentwise conservative budget coverage', () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:707:  it('preserves accepted decision separately from counted pendingDecision and binds all settled step receipts', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:820:  it('permits a V1 transition only without legacy results and refuses downgrade/old token replay', async () => {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/__tests__/complete-checkpoint.test.ts:887:  it('preserves legacy hashing, simple saves, step transition fences and defensive copies', async () => {

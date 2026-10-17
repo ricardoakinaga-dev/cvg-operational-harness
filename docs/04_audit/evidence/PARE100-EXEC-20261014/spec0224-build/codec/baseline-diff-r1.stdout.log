@@ -1,0 +1,229 @@
+--- /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/codec/baseline/packages/persistence/src/operational-step-postgres.ts	2026-10-16 07:52:10.202422335 -0300
++++ packages/persistence/src/operational-step-postgres.ts	2026-10-16 07:59:55.851188520 -0300
+@@ -5,13 +5,23 @@
+ import type {
+   ExecutionCheckpoint,
+   ExecutionStep,
+-  ExecutionStepStore
++  ExecutionStepStore,
++  CheckpointCompareAndSwapInput,
++  CheckpointCompareAndSwapResult
+ } from '@cvg/harness-contracts'
+ import {
+   isStepTransitionAllowed,
+   type StepStatus
+ } from '@cvg/harness-contracts'
+-import { CheckpointError, validateCheckpointIntegrity } from '@cvg/harness'
++import {
++  CheckpointError,
++  validateCheckpointIntegrity,
++  encodeCompleteCheckpointState,
++  decodeCompleteCheckpointState,
++  validateCompleteCheckpointTransition,
++  COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES,
++  COMPLETE_CHECKPOINT_DATA_MAX_CHARS
++} from '@cvg/harness'
+ import type { TenantId } from '@cvg/platform'
+ import { TenantIdSchema } from '@cvg/platform'
+ import type { QueryResultRow } from 'pg'
+@@ -74,6 +84,19 @@
+   runtime_version, orchestrator_version, step_number, state, budget_usage,
+   digest, created_at`
+ 
++// CASE suppresses oversized JSONB before node-postgres invokes its JSON parser.
++// octet_length uses expanded text size, not compressed pg_column_size.
++const boundedCheckpointColumns = checkpointColumns.replace(
++  'state, budget_usage',
++  `
++  CASE WHEN checkpoint_version <> 2 OR
++    (octet_length(state::text) <= ${COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES}
++     AND length(state->>'data') <= ${COMPLETE_CHECKPOINT_DATA_MAX_CHARS})
++    THEN state ELSE NULL END AS state,
++  CASE WHEN checkpoint_version <> 2 OR octet_length(budget_usage::text) <= 4096
++    THEN budget_usage ELSE NULL END AS budget_usage`
++)
++
+ function text(value: unknown, label: string, max = 200): string {
+   if (typeof value !== 'string' || value.trim().length === 0) {
+     throw new CheckpointError('checkpoint_binding', `${label} is required`)
+@@ -155,7 +178,10 @@
+     runtimeVersion: row.runtime_version,
+     orchestratorVersion: row.orchestrator_version,
+     stepNumber: row.step_number,
+-    state: jsonValue(row.state) as ExecutionCheckpoint['state'],
++    state:
++      row.checkpoint_version === 2
++        ? decodeCompleteCheckpointState(row.state)
++        : (jsonValue(row.state) as ExecutionCheckpoint['state']),
+     budgetUsage: jsonValue(
+       row.budget_usage
+     ) as ExecutionCheckpoint['budgetUsage'],
+@@ -229,6 +255,11 @@
+   }
+ 
+   public saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {
++    if (checkpoint.checkpointVersion === 2)
++      throw new CheckpointError(
++        'checkpoint_version',
++        'V2 checkpoints require CAS'
++      )
+     const tenant = TenantIdSchema.parse(checkpoint.tenantId)
+     validateCheckpointIntegrity(checkpoint, {
+       tenantId: checkpoint.tenantId,
+@@ -250,6 +281,109 @@
+     )
+   }
+ 
++  public compareAndSwapCheckpoint(
++    input: CheckpointCompareAndSwapInput
++  ): Promise<CheckpointCompareAndSwapResult> {
++    const tenant = TenantIdSchema.parse(input.tenantId)
++    validateCheckpointIntegrity(input.next, input)
++    if (
++      input.expected &&
++      input.expected.checkpointId === input.next.checkpointId
++    ) {
++      throw new CheckpointError(
++        'checkpoint_integrity',
++        'CAS requires a fresh checkpoint ID'
++      )
++    }
++    // Snapshot before the first await; callers cannot alter a validated write in flight.
++    const next = structuredClone(input.next)
++    const expected = input.expected ? { ...input.expected } : null
++    const state =
++      next.checkpointVersion === 2
++        ? encodeCompleteCheckpointState(next.state)
++        : next.state
++    const values = [
++      tenant,
++      next.executionId,
++      next.checkpointId,
++      next.checkpointVersion,
++      next.runtimeProfile,
++      next.runtimeVersion,
++      next.orchestratorVersion,
++      next.stepNumber,
++      jsonText(state, 'checkpoint state'),
++      jsonText(next.budgetUsage, 'checkpoint budget usage'),
++      next.digest,
++      next.createdAt
++    ]
++    return this.run(tenant, (client) =>
++      transaction(client, async () => {
++        const guard = await guardOptionalPublishedWrite(
++          client,
++          tenant,
++          next.executionId,
++          this.fence,
++          !!next.state.stopReason
++        )
++        const existing = await client.query<CheckpointRow>(
++          `SELECT ${boundedCheckpointColumns} FROM operational_execution_checkpoints
++         WHERE tenant_id = $1 AND execution_id = $2 FOR UPDATE`,
++          [tenant, next.executionId]
++        )
++        const row = existing.rows[0]
++        const current = row ? mapCheckpoint(row) : null
++        if (current)
++          validateCheckpointIntegrity(current, {
++            tenantId: tenant,
++            executionId: next.executionId
++          })
++        const currentToken = current
++          ? { checkpointId: current.checkpointId, digest: current.digest }
++          : undefined
++        if (
++          expected === null
++            ? current !== null
++            : !current ||
++              current.checkpointId !== expected.checkpointId ||
++              current.digest !== expected.digest
++        ) {
++          await guard?.recheck()
++          return {
++            status: 'CONFLICT',
++            ...(currentToken ? { currentToken } : {})
++          }
++        }
++        validateCompleteCheckpointTransition(current, next)
++        await guard?.recheck()
++        const result =
++          expected === null
++            ? await client.query(
++                `INSERT INTO operational_execution_checkpoints
++          (tenant_id,execution_id,checkpoint_id,checkpoint_version,runtime_profile,runtime_version,
++           orchestrator_version,step_number,state,budget_usage,digest,created_at)
++          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12)
++          ON CONFLICT (tenant_id,execution_id) DO NOTHING RETURNING checkpoint_id`,
++                values
++              )
++            : await client.query(
++                `UPDATE operational_execution_checkpoints SET
++          checkpoint_id=$3,checkpoint_version=$4,runtime_profile=$5,runtime_version=$6,
++          orchestrator_version=$7,step_number=$8,state=$9::jsonb,budget_usage=$10::jsonb,digest=$11,created_at=$12
++          WHERE tenant_id=$1 AND execution_id=$2 AND checkpoint_id=$13 AND digest=$14
++          RETURNING checkpoint_id`,
++                [...values, expected.checkpointId, expected.digest]
++              )
++        await guard?.recheck()
++        return result.rows.length
++          ? {
++              status: 'APPLIED',
++              token: { checkpointId: next.checkpointId, digest: next.digest }
++            }
++          : { status: 'CONFLICT' }
++      })
++    )
++  }
++
+   public loadCheckpoint(
+     tenantId: string,
+     executionId: string
+@@ -258,7 +392,7 @@
+     const id = text(executionId, 'executionId')
+     return this.run(tenant, async (client) => {
+       const result = await client.query<CheckpointRow>(
+-        `SELECT ${checkpointColumns}
++        `SELECT ${boundedCheckpointColumns}
+            FROM operational_execution_checkpoints
+           WHERE tenant_id = $1 AND execution_id = $2`,
+         [tenant, id]
+@@ -406,11 +540,16 @@
+   tenant: TenantId,
+   checkpoint: ExecutionCheckpoint
+ ): Promise<void> {
++  if (checkpoint.checkpointVersion === 2)
++    throw new CheckpointError(
++      'checkpoint_version',
++      'V2 checkpoints require CAS'
++    )
+   validateCheckpointIntegrity(checkpoint, {
+     tenantId: tenant,
+     executionId: checkpoint.executionId
+   })
+-  await client.query(
++  const result = await client.query(
+     `INSERT INTO operational_execution_checkpoints
+      (tenant_id, execution_id, checkpoint_id, checkpoint_version,
+       runtime_profile, runtime_version, orchestrator_version,
+@@ -427,7 +566,8 @@
+          state = EXCLUDED.state,
+          budget_usage = EXCLUDED.budget_usage,
+          digest = EXCLUDED.digest,
+-         created_at = EXCLUDED.created_at`,
++         created_at = EXCLUDED.created_at
++     WHERE operational_execution_checkpoints.checkpoint_version <> 2`,
+     [
+       tenant,
+       checkpoint.executionId,
+@@ -443,4 +583,9 @@
+       checkpoint.createdAt
+     ]
+   )
++  if (result.rowCount === 0)
++    throw new CheckpointError(
++      'checkpoint_version',
++      'V1 cannot overwrite a V2 checkpoint'
++    )
+ }

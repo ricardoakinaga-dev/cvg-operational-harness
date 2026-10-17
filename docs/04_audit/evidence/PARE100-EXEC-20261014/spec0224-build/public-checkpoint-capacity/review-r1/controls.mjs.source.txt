@@ -1,0 +1,57 @@
+import { readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import assert from 'node:assert/strict'
+import path from 'node:path'
+const R=path.dirname(new URL(import.meta.url).pathname)
+const hash=x=>createHash('sha256').update(x).digest('hex')
+// Independent encoder: no production serializer, checkpoint, fixture or runtime imports.
+function canon(v) {
+ if(v===null || typeof v!=='object')return JSON.stringify(v)
+ if(Array.isArray(v))return '['+v.map(canon).join(',')+']'
+ return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}'
+}
+function unsigned(c) { const {checkpointId,createdAt,digest,...v}=c;return v }
+let validated=0
+function expand(s,label) {
+ const cp=structuredClone(s.checkpointWithoutFixturePadding),r=s.paddingRecipe
+ assert.equal(r.field,'state.resolvedInputs.fixturePadding');assert.equal(r.character,'p')
+ assert.equal(Object.hasOwn(cp.state.resolvedInputs,'fixturePadding'),false)
+ assert.ok(Number.isSafeInteger(r.repeat)&&r.repeat>=0&&r.repeat<=8388608)
+ const padding=r.character.repeat(r.repeat);assert.equal(hash(padding),r.sha256)
+ if(r.present)cp.state.resolvedInputs.fixturePadding=padding
+ else assert.equal(r.repeat,0)
+ const raw=canon(unsigned(cp)),bytes=Buffer.byteLength(raw)
+ assert.equal(bytes,s.logicalUnsignedBytes,label+' bytes'); assert.equal(8388608-bytes,s.remainingBytes)
+ assert.ok(bytes<=8388608);assert.equal(hash('cvg.checkpoint.v2\n'+raw),cp.digest,label+' digest')
+ for(const o of cp.state.observations.filter(o=>o.type==='TOOL_RESULT')){
+  assert.equal(o.payload.completion,'COMPLETE');const output=canon(o.payload.output)
+  assert.equal(Buffer.byteLength(output),o.payload.outputBytes);assert.equal(hash(output),o.payload.outputSha256)
+ }
+ validated++;return cp
+}
+
+const traces=JSON.parse(readFileSync(path.join(R,'badguard.observations.json'),'utf8'))
+assert.equal(traces.length,4)
+const cases=[]
+for(const t of traces){
+ expand(t.before,'badguard before');expand(t.after,'badguard after')
+ for(const w of t.writes)expand(w.next,'badguard write')
+ const prior=t.name.endsWith('-true'),refusal=t.name.includes('80000')
+ assert.equal(t.result.stopReason,'COMPLETED');assert.equal(t.modelCalls,0)
+ assert.equal(t.bodies,prior?2:1);assert.equal(t.attemptedJournal.state,'CONFIRMED')
+ cases.push({name:t.name,frozenExpected:refusal?'INSUFFICIENT_EVIDENCE':'COMPLETED',observed:t.result.stopReason,newBodies:t.bodies-(prior?1:0),attemptedJournal:t.attemptedJournal.state,expectedTestFailure:refusal})
+}
+const valid=JSON.parse(readFileSync(path.join(R,'baseline.observations.json'),'utf8'))[0].before
+const mutations=[
+ ['padding recipe length',s=>{s.paddingRecipe.repeat++}],
+ ['checkpoint digest',s=>{s.checkpointWithoutFixturePadding.digest='0'.repeat(64)}],
+ ['checkpoint budget field',s=>{s.checkpointWithoutFixturePadding.budgetUsage.toolCalls++}]
+]
+const rejects=[]
+for(const [name,mutate] of mutations){
+ const s=structuredClone(valid);mutate(s);let rejected=false,error
+ try{expand(s,name)}catch(e){rejected=true;error=String(e).split('\n')[0]}
+ assert.ok(rejected);rejects.push({name,rejected,error})
+}
+const report={passed:true,privateTransform:'Unconditional return at entry of native preflightCompleteTool in Vite transform; real source and constants unchanged',expectedVitestExit:1,expectedTestsPassed:2,expectedTestsFailed:2,cases,validatedBadguardSnapshots:validated,independentObserverTamperingControls:rejects}
+writeFileSync(path.join(R,'control-analysis.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2))

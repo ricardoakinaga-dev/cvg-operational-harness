@@ -1,0 +1,121 @@
+import datetime, hashlib, json
+from pathlib import Path
+root = Path.cwd()
+packet = Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224/packet-r1')
+manifest_hash = 'b19c4e073c6cdc461fff4c9618727823266d98891fca0fcf899d40141f32658c'
+candidate_hash = '41d44eac3723a2aa38085626abd93aa2bc65e55c2655858bdf192d89145e9ef4'
+def write(name, value):
+    (root / name).write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+findings = [
+ {
+  'id': 'I1-001',
+  'title': 'Delivery acknowledgement does not establish that an earlier result is no longer needed',
+  'severity': 'HIGH',
+  'confidence': 0.94,
+  'affected_criteria': ['C1', 'C4', 'C5'],
+  'candidate_anchors': [
+   {'path': 'candidate.md', 'lines': [33, 34], 'relevance': 'Promises complete delivery of every result needed for the next decision, or refusal before the call.'},
+   {'path': 'candidate.md', 'lines': [157, 168], 'relevance': 'Advances deliveredThroughStep after an accepted model decision; permits complete removal from selection and retention of already delivered observations.'},
+   {'path': 'candidate.md', 'lines': [203, 208], 'relevance': 'Only results not yet delivered are mandatory.'},
+   {'path': 'candidate.md', 'lines': [254, 265], 'relevance': 'Admission can remove optional items and proceed without them.'}
+  ],
+  'current_source_anchors': [
+   {'path': 'current-source/packages/contracts/src/contracts.ts', 'lines': [267, 291], 'relevance': 'ModelGateway.complete is a request/response port with no durable model continuation or conversation-memory guarantee.'},
+   {'path': 'current-source/packages/harness/src/context-engine.ts', 'lines': [258, 287], 'relevance': 'Current descriptive state is not a lossless archive of all previous tool outputs. This is context for the proposed change, not a claim that CURRENT already implements the proposal.'}
+  ],
+  'concrete_counterexample': 'The goal requires returning the opaque strings from tools A and B together. Step 1 produces A. The next admitted, valid model decision receives A and requests independent B; persisting that decision advances the cursor through A. B then succeeds. At the following decision B is mandatory but A is optional and may even have been deleted. Choose A and B as independent 17000-byte ASCII strings: each is within the output limit and fits individually, while the combined user JSON exceeds 32000 UTF-16 units. The specified trimming may remove A and admit a request containing B only. A is still necessary to answer the goal, is absent from all other fields, and a stateless qualified synthetic model has no causal access to it. The proposal neither preserves that dependency nor requires refusal. Prior delivery alone cannot satisfy the invariant for this later request.',
+  'material_impact': 'The proposal allows admission after loss of still-required complete evidence. This is a contradiction between its universal necessary-result invariant and its cursor-based eligibility rule, rather than a demand to retain all historical data or to add a production memory service.',
+  'requested_revision': 'Define a conservative dependency/retention rule for already delivered results: keep any still-required original mandatory, or refuse before a later call if it is unavailable. Keeping all tool results mandatory until the execution ends is one bounded option. State how the runtime decides eligibility and cover the A-then-B follow-up case; do not treat receipt by an earlier stateless call as evidence that the original can safely disappear.',
+  'evidence': ['manual-checks.py', 'manual-checks.stdout'],
+  'validation_limit': 'Constructive static trace of the PROPOSED rules only; no runtime or model executed.'
+ },
+ {
+  'id': 'I1-002',
+  'title': 'The admitted JSON domain needs an explicit representation at the JSONB storage boundary',
+  'severity': 'MEDIUM',
+  'confidence': 0.98,
+  'affected_criteria': ['C1', 'C4', 'C5'],
+  'candidate_anchors': [
+   {'path': 'candidate.md', 'lines': [69, 95], 'relevance': 'Plans existing stores without SQL migration and declares limits supporting escaped control-character strings.'},
+   {'path': 'candidate.md', 'lines': [99, 114], 'relevance': 'Admits strings without lone surrogates, including U+0000, and requires preservation of value and canonical bytes.'},
+   {'path': 'candidate.md', 'lines': [147, 153], 'relevance': 'Requires one V2 codec for stores and validation.'},
+   {'path': 'candidate.md', 'lines': [351, 355], 'relevance': 'Promises shared canonical validation across memory and PostgreSQL but does not specify a reversible storage encoding.'}
+  ],
+  'current_source_anchors': [
+   {'path': 'current-source/packages/persistence/src/operational-step-postgres.ts', 'lines': [106, 120], 'relevance': 'jsonText currently uses ordinary JSON.stringify.'},
+   {'path': 'current-source/packages/persistence/src/operational-step-postgres.ts', 'lines': [414, 441], 'relevance': 'The existing writer stores checkpoint.state directly as $9::jsonb.'}
+  ],
+  'concrete_counterexample': 'A successful synthetic echo returns a string of 4096 U+0000 characters. It has no lone surrogate, is one JSON node, and its canonical JSON is 24578 UTF-8 bytes, below 32768. An illustrative user frame containing it is 24989 UTF-16 units, below 32000. PostgreSQL jsonb rejects decoded U+0000 in strings or object keys even when the JSON text spells it as \\u0000. Keeping the current direct state-to-jsonb representation therefore makes this admitted COMPLETE output deterministically unpersistable; ordinary canonical escaping alone cannot fix it.',
+  'material_impact': 'The generic save-failure stop protects settlement, so this finding does not allege duplicate effects or fabricated success. The gap is the unstated HOW connecting the declared complete JSON domain to the required real PostgreSQL checkpoint path. A future persistence test is not a substitute for that representation decision.',
+  'requested_revision': 'Specify a reversible, byte-preserving V2 storage codec for values or keys that JSONB cannot represent directly, including decode and digest validation, or explicitly constrain the admitted domain and define the resulting availability classification. Preserve the original broader program requirements as open if the first slice is narrowed. Add the U+0000 value/key case to the future memory/PostgreSQL boundary criteria.',
+  'evidence': ['manual-checks.py', 'manual-checks.stdout', 'read-pg-sql.stdout'],
+  'validation_limit': 'The byte counts and JSON round trip were checked with Python stdlib. The PostgreSQL JSONB restriction is a manual technical inference from the direct ::jsonb boundary and known JSONB semantics, not an executed database test or an independently fetched reference; no PostgreSQL or network was invoked.'
+ }
+]
+review = {
+ 'schema_version': 1,
+ 'role': 'fresh independent I1 technical specification Critic',
+ 'decision': 'REVISE',
+ 'scope': 'TECHNICAL_SPECIFICATION_REVIEW_ONLY_NO_RUNTIME_ACCEPTANCE',
+ 'submission_readiness': 'Resolve the two material specification gaps before submitting this candidate to the human T3 reviewer.',
+ 'packet': {'path': str(packet), 'manifest_sha256': manifest_hash, 'candidate_sha256': candidate_hash, 'exact_membership_entries': 19, 'pre_authenticated': True, 'post_authenticated': True},
+ 'independence': {
+  'mechanism': 'One bounded review of the sealed candidate, frozen criteria, packet constitution and relevant packet current-source files. No descendants or subagents; no application execution/imports, repository helpers, providers, models, database or network. No conversation-history retrieval, prior reviewers/scores, ledgers, Lead checks or out-of-packet source paths were inspected.',
+  'model_effort': 'Inherited session model/effort retained; no replacement agent or model requested. Exact runtime model/effort configuration was not independently introspected.',
+  'limits': ['Fresh-review independence is procedural, not proof of erased inherited session context or an independent OS process.', 'The shared filesystem was not locked; pre/post SHA256 and exact-membership authentication establish the observed input sentinels, not continuous immutability.', 'This is static proposal-quality review. All future application, model, PostgreSQL, compatibility, differential and production checks remain unexecuted.', 'Full command/stream capture has bootstrap and final-sealing exceptions, and tool-display truncation occurred; see capture-limits.json.']
+ },
+ 'criteria': {
+  'C1': {'judgement': 'REVISE', 'findings': ['I1-001', 'I1-002'], 'reason': 'Strict JSON snapshots, complete envelopes and refusal before model admission are concrete, but necessary older evidence can become optional, and the admitted JSON domain lacks a portable JSONB representation.'},
+  'C2': {'judgement': 'SATISFIED_PROPOSAL_ONLY', 'findings': [], 'candidate_lines': [[193, 267], [269, 312]], 'reason': 'Defines one final immutable request, two roles with UNTRUSTED data framing, explicit byte/unit limits, qualified synthetic counter/model pairing, output reserve, whole-item trimming and per-repair admission. Correctly disclaims real-provider token/cost evidence and gateway-route integration.'},
+  'C3': {'judgement': 'SATISFIED_PROPOSAL_ONLY', 'findings': [], 'candidate_lines': [[170, 191], [314, 339], [386, 386]], 'reason': 'Preserves native succeeded settlement separately from unavailable output; checkpoints before the next model decision; requires journal reconciliation or uncertain handoff instead of repeating a confirmed body. Storage incompatibility in I1-002 does not invalidate this stated safe failure policy.'},
+  'C4': {'judgement': 'REVISE', 'findings': ['I1-001', 'I1-002'], 'reason': 'Version compatibility, binding, reserve-before-call, settlement/idempotency, conservative UNKNOWN charging and late-result refusal are concrete enough at proposal level. Cursor retention and the complete-domain checkpoint codec still require the two documented decisions.'},
+  'C5': {'judgement': 'REVISE', 'findings': ['I1-001', 'I1-002'], 'reason': 'The bounded vertical slice, owners, limits, errors, rollout and rejectable public-path criteria are substantial. The two findings are missing or contradictory design rules, not complaints about absent future tests. No additional production features are requested.'},
+  'C6': {'judgement': 'SATISFIED_PROPOSAL_ONLY', 'findings': [], 'candidate_lines': [[5, 29], [371, 424], [426, 433]], 'reason': 'Explicit human T3 review by hash precedes BUILD. Independent approvals remain pending, the 36-card scope is retained, and neither document approval nor this review supplies runtime, parity, provider or release PASS.'}
+ },
+ 'findings': findings,
+ 'next_largest_gap': {'finding': 'I1-001', 'description': 'Separate delivery acknowledgement from the lifetime of evidence still needed by subsequent stateless decisions; make the dependency/refusal rule explicit before T3 submission.'},
+ 'program': {'cards': 36, 'phases': 8, 'doneLocal': 2, 'open': 34, 'fullParity': 'NOT_MEASURED', 'original_requirements_retained': ['P100-004', 'P100-014', 'P100-020', 'P100-021']},
+ 'runtime_result': 'NOT_RUN',
+ 'checks': ['Authentication: pinned manifest SHA256, exact membership of 19 payload entries, every byte length and SHA256, pinned candidate SHA256, pre/post unchanged.', 'Manual source/document comparison and stdlib-only byte/JSON analysis, with exact subsequent argv/exit/stdout/stderr records. No application/runtime assertion was executed.'],
+ 'artifacts': {'review': 'review.json', 'input_sentinel': 'input-sentinel.json', 'evidence_manifest': 'evidence-manifest.json', 'capture_disclosure': 'capture-limits.json'}
+}
+pre = json.loads((root / 'authentication-pre.json').read_text())
+b = (packet / 'packet-manifest.json').read_bytes()
+assert hashlib.sha256(b).hexdigest() == manifest_hash
+entries = json.loads(b)
+actual = {str(p.relative_to(packet)) for p in packet.rglob('*') if p.is_file()}
+assert len(entries) == 19 and len({e['path'] for e in entries}) == 19
+assert actual == {e['path'] for e in entries} | {'packet-manifest.json'}
+post_files = []
+for e in entries:
+    path = packet / e['path']
+    data = path.read_bytes()
+    row = {'path': e['path'], 'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data)}
+    assert not path.is_symlink() and row['sha256'] == e['sha256'] and row['bytes'] == e['bytes']
+    post_files.append(row)
+assert pre['files'] == post_files
+assert next(e['sha256'] for e in post_files if e['path'] == 'candidate.md') == candidate_hash
+sentinel = {
+ 'schema_version': 1, 'packet_path': str(packet), 'expected_manifest_sha256': manifest_hash,
+ 'expected_candidate_sha256': candidate_hash, 'entry_count': 19,
+ 'pre': {'utc': pre['utc'], 'authenticated': True, 'exact_membership': True, 'files': [{'path': 'packet-manifest.json', 'sha256': pre['manifest_sha256']}] + pre['files']},
+ 'post': {'utc': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'authenticated': True, 'exact_membership': True, 'files': [{'path': 'packet-manifest.json', 'sha256': hashlib.sha256(b).hexdigest(), 'bytes': len(b)}] + post_files},
+ 'unchanged': True,
+ 'limits': 'Observed pre/post input hashes and membership only; no continuous filesystem lock or runtime acceptance.'
+}
+write('input-sentinel.json', sentinel)
+write('review.json', review)
+limits = json.loads((root / 'capture-limits.json').read_text())
+limits.update({
+ 'tool_display_truncation': 'Batched tool responses for read-candidate and read-facts-map exceeded the outer display budget. capture.py saved their complete stdout/stderr before display. Relevant candidate sections and current-source boundaries were then read in smaller captures; the source-facts outline was also captured. No claim of perfect tool-display capture is made.',
+ 'final_sealing_capture': 'The final evidence-manifest creation and artifact-hash display command is preserved in seal-evidence.py, but its outer shell invocation/exit/streams are available only in the tool response. It runs after finalize-review capture closes so that the manifest can bind every nonempty prior output. Its hash display is not recursively included in the manifest.',
+ 'bootstrap_exit_evidence': 'Bootstrap pwd, ls, sha256sum, cat packet-manifest and inline authentication/setup all returned exit 0 in tool responses. Separate exact local command/stream records for those bootstrap actions were omitted, not reconstructed.',
+ 'check_capture_scope': 'Each *.command.json records exact subprocess argv, cwd, exit and stream file paths for the command run by capture.py. Corresponding *.stdout and *.stderr are complete local subprocess streams. File-writing shell wrappers are not independently reconstructed as command records.',
+ 'empty_streams': 'Empty stderr files are retained but excluded from evidence-manifest because the requested binding is of nonempty own outputs.'
+})
+write('capture-limits.json', limits)
+assert set(review['criteria']) == {f'C{i}' for i in range(1, 7)}
+assert review['decision'] == 'REVISE' and len(review['findings']) == 2
+print('Finalized REVISE, C1-C6 judgements and two material findings. Post-authentication: all 19 entries and pinned manifest/candidate unchanged. No runtime checks run.')
+for name in ('review.json', 'input-sentinel.json'):
+    print(hashlib.sha256((root / name).read_bytes()).hexdigest() + '  ' + name)

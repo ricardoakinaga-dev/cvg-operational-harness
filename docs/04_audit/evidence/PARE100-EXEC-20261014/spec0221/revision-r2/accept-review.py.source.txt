@@ -1,0 +1,87 @@
+import hashlib
+import json
+import shutil
+from pathlib import Path
+
+ROOT = Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+PRIVATE = Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0221-r1/revision-r2')
+WORK = PRIVATE.parent.parent / 'worktree'
+OUT = ROOT / 'docs/04_audit/evidence/PARE100-EXEC-20261014/spec0221/revision-r2'
+REVIEW = PRIVATE / 'review-r2'
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
+
+
+verdict = json.loads((REVIEW / 'verdict.json').read_text())
+assert verdict['verdict'] == 'APPROVE_SPEC_FOR_HUMAN_REVIEW' and not verdict['findings']
+assert verdict['no_build_authority'] is True
+manifest = json.loads((REVIEW / 'artifact-manifest.json').read_text())
+archives = []
+for item in manifest['artifacts']:
+    src = REVIEW / item['path']
+    assert src.resolve().is_relative_to(REVIEW.resolve())
+    assert sha(src) == item['sha256']
+    rel = Path(item['path'])
+    name = rel.name + '.source.txt' if rel.suffix in ['.md', '.html'] else rel.name
+    dest = OUT / 'review-r2' / rel.parent / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+    archives.append({'original': item['path'], 'archive': str(dest.relative_to(OUT)), 'sha256': sha(src)})
+shutil.copy2(REVIEW / 'artifact-manifest.json', OUT / 'review-r2/artifact-manifest.json')
+sources = json.loads((PRIVATE / 'review-packet/source-manifest.json').read_text())
+assert len(sources) == 32
+for item in sources:
+    assert sha(Path(item['live'])) == item['sha256']
+    assert sha(PRIVATE / 'review-packet' / item['copy']) == item['sha256']
+integrity = json.loads((REVIEW / 'source-integrity.json').read_text())
+assert integrity['all_sources_unchanged'] and integrity['all_source_pairs_match_manifest']
+assert integrity['packet_inventory_unchanged']
+assert len(integrity['packet_files']) == 33
+for item in integrity['extras']:
+    assert sha(Path(item['path'])) == item['pre'] == item['post']
+spec_sha = sha(ROOT / 'docs/02_spec/0221_pare100_public_session_persistence.md')
+assert spec_sha == manifest['subject_spec_sha256'] == '1f9490ccee25f246e57a7c9c096c41c2572818c60e2c7bae5a4d315ad8e170e4'
+lead = {
+    'verdict': 'ACCEPT_DOCUMENTARY_PROPOSAL_FOR_HUMAN_REVIEW_ONLY',
+    'spec_sha256': spec_sha, 'critic': '01a142a1-2e1c-71c3-ac58-fde470c59db8',
+    'independence': 'I1/fork_context=false/inherited-model/no-descendants',
+    'review_verdict_sha256': sha(REVIEW / 'verdict.json'),
+    'review_manifest_sha256': sha(REVIEW / 'artifact-manifest.json'),
+    'live_copy_pairs_recomputed': len(sources), 'packet_files': 33,
+    'extra_files_recomputed': len(integrity['extras']),
+    'artifact_files_recomputed': len(manifest['artifacts']), 'archives': archives,
+    'hash_ordering_limitations': [integrity['source_manifest_pre_enumeration_note'], integrity['extra_pre_read_order_limitation']],
+    'runtime_executed': False, 'SP01_SP22': 'NOT_RUN', 'build_authorized': False,
+    'human_approval': 'NOT_REQUESTED', 'original_scope_complete': False,
+    'R1_findings_preserved': True, 'no_material_findings_R2': True,
+}
+write(OUT / 'lead-acceptance.json', lead)
+packet = json.loads((OUT / 'human-review-draft.json').read_text())
+packet.update({
+    'kind': 'HASH_BOUND_HUMAN_REVIEW_PACKET', 'status': 'FROZEN_FOR_HUMAN_DECISION',
+    'technical_review': 'APPROVE_SPEC_FOR_HUMAN_REVIEW',
+    'technical_verdict_sha256': sha(REVIEW / 'verdict.json'),
+    'lead_acceptance_sha256': sha(OUT / 'lead-acceptance.json'),
+})
+write(OUT / 'decision-packet-presented.json', packet)
+status = json.loads((OUT / 'decision-status.json').read_text())
+status.update({
+    'status': 'TECHNICALLY_REVIEWED_AWAITING_HUMAN_REQUEST',
+    'revision': 'R2', 'technical_review': 'APPROVE_SPEC_FOR_HUMAN_REVIEW',
+    'decision_packet_sha256': sha(OUT / 'decision-packet-presented.json'),
+    'build_authorized': False, 'critic_closed': True,
+})
+write(OUT / 'decision-status.json', status)
+for src in OUT.rglob('*'):
+    if src.is_file():
+        dest = WORK / src.relative_to(ROOT)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+print(json.dumps({'accepted': 'DOCUMENTARY_ONLY', 'pairs': 32, 'extras': len(integrity['extras']), 'outputs': len(manifest['artifacts']), 'spec_sha256': spec_sha, 'packet_sha256': sha(OUT / 'decision-packet-presented.json')}))

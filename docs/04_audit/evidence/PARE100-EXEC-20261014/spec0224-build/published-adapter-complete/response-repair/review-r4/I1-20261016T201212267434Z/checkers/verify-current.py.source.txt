@@ -1,0 +1,53 @@
+import pathlib,json,hashlib,copy,sys
+R=pathlib.Path(__file__).parent.parent
+def canon(x):return json.dumps(x,ensure_ascii=False,sort_keys=True,separators=(',',':'))
+def sha(x):return hashlib.sha256(canon(x).encode()).hexdigest()
+def verify(samples):
+ checks=[]
+ def chk(c,name,ok,observed=None):checks.append({'case':c,'check':name,'pass':bool(ok),'observed':observed})
+ for s in samples:
+  c=s['case'];cp=s['checkpoint'];u=cp['budgetUsage'];result=s['result'];reqs=s['requests'];rs=s['modelResults'];sc=s['scenario'];legacy=sc.get('legacy',False)
+  chk(c,'one actual tool body',s['bodies']==1,s['bodies'])
+  chk(c,'native tool result saved unchanged',legacy or any(o['type']=='TOOL_RESULT'and o['payload'].get('output')==s['output']for o in cp['state']['observations']))
+  chk(c,'actual provider entries match native results',len(reqs)==len(rs))
+  chk(c,'decision receipts own ORCH only',all(r['purpose']in ['ORCHESTRATION','REPAIR']for r in cp['state'].get('toolResultContext',{}).get('decisionAdmissions',[])))
+  if not legacy:
+   for i,req in enumerate(reqs):
+    chk(c,f'request{i} bounded messages',len(req['messages'])==2 and len(req['messages'][0]['content'].encode('utf-16-le'))//2<=16000 and len(req['messages'][1]['content'].encode('utf-16-le'))//2<=32000 and len(canon(req).encode())<=131072)
+    frame=json.loads(req['messages'][1]['content']);tools=[it for it in frame['items']if it['priority']=='FRESH_TOOL_RESULTS']
+    if req['purpose']=='RESPONSE'or i>0:
+     chk(c,f'request{i} full exact JSON and digest',any(it['trust']=='UNTRUSTED'and it['value']['type']=='TOOL_RESULT'and it['value']['payload'].get('output')==s['output']and it['value']['payload'].get('outputSha256')==sha(s['output'])and it['value']['payload'].get('outputBytes')==len(canon(s['output']).encode()) for it in tools))
+    if sc.get('injection'):
+     chk(c,f'request{i} data not system',all(marker not in req['messages'][0]['content']for marker in ['UNTRUSTED_TOOL_224','UNTRUSTED_USER_224','UNTRUSTED_INTENT_224']))
+   for entry,req in zip(s['modelEntryCheckpoints'],reqs):
+    if req['purpose']=='RESPONSE':chk(c,'native pre-provider slot persisted',entry['budgetUsage']['modelCalls']==len(reqs))
+  sums={k:sum(r[k]for r in rs)for k in ['inputTokens','outputTokens','costUsd']}
+  chk(c,'returned exact observed usage',result['usage']==sums,{'expected':sums,'actual':result['usage']})
+  if sc.get('responseCheckpoint')=='after-model':
+   chk(c,'unacknowledged actual usage remains pre-call hold, not fabricated bill',u['modelCalls']==1 and all(u[k]==0 for k in sums),u)
+   chk(c,'uncertainty explicit on recreated recovery','uncertain' in s['replay']['result']['response']and 'reconciliation' in s['replay']['result']['response'])
+  else:chk(c,'checkpoint exact known observed usage',all(u[k]==sums[k]for k in sums),{'expected':sums,'actual':{k:u[k]for k in sums}})
+  if c in ['RR19','RR20']:chk(c,'held slot with no provider entry or charge',not reqs and u['modelCalls']==1 and all(u[k]==0 for k in sums))
+  if c in ['RR22','RR23']:chk(c,'missing intent ACK never enters provider',not reqs and u['modelCalls']==0)
+  if 'replay'in s:
+   replay=s['replay'];chk(c,'replay no new actual entry',len(replay['requests'])==len(reqs))
+   chk(c,'replay refuses and preserves checkpoint/journal',replay['result']['stopReason']=='STATE_CONFLICT'and replay['checkpoint']==cp and replay['journals']==s['journals'])
+  if c in ['RR03','RR06','RR07','RR10','RR14','RR15']:
+   chk(c,'native failed RESPOND aligned terminal cursor',any(st['stepType']=='RESPOND'and st['status']=='FAILED'and st['stepNumber']==2 for st in s['nativeSteps'])and cp['stepNumber']==2 and cp['state']['stepNumber']==2 and u['steps']==2 and result['stopReason']==cp['state']['stopReason']and 'acceptedDecision'not in cp['state'].get('toolResultContext',{}))
+  if c in ['RR11','RR12']:chk(c,'audit veto keeps SUCCEEDED fact with durable refusal',any(st['stepType']=='RESPOND'and st['status']=='SUCCEEDED'for st in s['nativeSteps'])and cp['state']['stopReason']==result['stopReason']=='INSUFFICIENT_EVIDENCE')
+ return {'passed':all(c['pass']for c in checks),'checks':checks,'failed':[c for c in checks if not c['pass']]}
+if __name__=='__main__':
+ p=R/'raw/current23-executed/cases.json';samples=json.loads(p.read_text());positive=verify(samples);(R/'raw/verifier-positive.json').write_text(json.dumps(positive,indent=2)+'\n')
+ muts={}
+ def m(name):a=copy.deepcopy(samples);muts[name]=a;return {s['case']:s for s in a}
+ a=m('negative-dropped-full-value');f=json.loads(a['RR02']['requests'][0]['messages'][1]['content']);next(i for i in f['items']if i['priority']=='FRESH_TOOL_RESULTS')['value']['payload']['output']={'text':'TRUNCATED'};a['RR02']['requests'][0]['messages'][1]['content']=canon(f)
+ a=m('negative-double-known-usage');a['RR10']['checkpoint']['budgetUsage']['inputTokens']*=2
+ a=m('negative-fabricated-settled-bill');a['RR16']['checkpoint']['budgetUsage']['costUsd']=0.03125
+ a=m('negative-replayed-provider');a['RR18']['replay']['requests'].append(copy.deepcopy(a['RR18']['requests'][0]))
+ a=m('negative-promoted-system');a['RR08']['requests'][0]['messages'][0]['content']+='UNTRUSTED_TOOL_224'
+ a=m('negative-provider-before-slot');a['RR02']['modelEntryCheckpoints'][0]['budgetUsage']['modelCalls']=0
+ controls=[]
+ for name,a in muts.items():
+  path=R/'controls'/(name+'-evidence.json');path.write_text(json.dumps(a,indent=2)+'\n');v=verify(a);(R/'controls'/(name+'-verdict.json')).write_text(json.dumps(v,indent=2)+'\n');controls.append({'name':name,'rejected':not v['passed'],'failed':v['failed']})
+ (R/'raw/verifier-qualification.json').write_text(json.dumps({'positivePass':positive['passed'],'negativeControls':controls},indent=2)+'\n')
+ print('positive',positive['passed'],'checks',len(positive['checks']),'failed',positive['failed']);print('known bad rejected',sum(c['rejected']for c in controls),'of',len(controls));sys.exit(0 if positive['passed']and all(c['rejected']for c in controls)else 1)

@@ -1,0 +1,42 @@
+import pathlib,json,shutil,hashlib
+O=pathlib.Path(__file__).resolve().parents[1];P=O.parent/'review-packet-r2';A=P/'artifact';m=json.loads((P/'manifest.json').read_text())
+s=(O/'variants/adversarial/public.test.ts').read_text();start=s.index('  }> = ');end=s.index('\n  for (const scenario',start)
+s=s[:start]+'  }> = '+json.dumps([{'id':'REPLAY_POS','name':'positive terminal replay denied','mode':'rules','fault':'positive'},{'id':'REPLAY_EMPTY','name':'empty response first call followed by replay','mode':'rules','fault':'empty'}])+s[end:]
+s=s.replace("fault === 'empty' ? ''", "fault === 'empty' && requests.length===1 ? ''")
+s=s.replace('outputTokens: toyTokens(text),',"outputTokens: toyTokens(fault==='empty' && requests.length===1 ? '' : text),")
+s=s.replace('      const faults: unknown[] = []', '      const logEvents: unknown[]=[]\n      const faults: unknown[] = []')
+start=s.index('        ...(scenario.resultLogFails ||');end=s.index("        defaultRuntimeProfile:",start)
+s=s[:start]+"        log: {append: async event => {logEvents.push(structuredClone(event))}},\n"+s[end:]
+s=s.replace('        case: scenario.id,','        case: scenario.id,\n        logEvents,')
+start=s.index('      expect(bodies).toBe(1)');s=s[:start]+"""      const firstRequestCount=requests.length
+      const replayResult=await harness.run(input)
+      const replayCheckpoint=await steps.loadCheckpoint(input.tenantId,input.executionId)
+      const replaySteps=await steps.listSteps(input.tenantId,input.executionId)
+      evidence.push({case:scenario.id+'_SECOND',firstRequestCount,replayResult,replayCheckpoint,replaySteps,requests:structuredClone(requests),modelResults:structuredClone(modelResults),bodies,logEvents:structuredClone(logEvents),journals:await Promise.all(operations.map(key=>journal.get(input.tenantId,key)))})
+      expect(bodies).toBe(1)
+      if(fault==='positive') {
+        expect(result.stopReason).toBe('COMPLETED');expect(checkpoint?.state.stopReason).toBe('COMPLETED')
+        expect(requests).toHaveLength(1);expect(replayResult.stopReason).toBe('STATE_CONFLICT')
+      } else {
+        // Characterization of the observed defect, not a correctness criterion.
+        expect(result.stopReason).toBe('INSUFFICIENT_EVIDENCE');expect(checkpoint?.state.stopReason).toBeUndefined()
+        expect(checkpoint?.budgetUsage.modelCalls).toBe(0);expect(result.modelCalls).toBe(1)
+        expect(requests).toHaveLength(2);expect(replayResult.stopReason).toBe('COMPLETED')
+        expect(replayCheckpoint?.budgetUsage.modelCalls).toBe(1);expect(modelResults).toHaveLength(2)
+      }
+    })
+  }
+})
+"""
+D=O/'variants/replay';D.mkdir();(D/'public.test.ts').write_text(s)
+c=(O/'config/baseline.mjs').read_text().replace(str(O/'cache/baseline'),str(O/'cache/replay')).replace('"packages/harness/src/__tests__/complete-response-path-public.test.ts"',json.dumps(str(D/'public.test.ts')));(O/'config/replay.mjs').write_text(c)
+D=O/'variants/KNOWN_BAD_drop_response_result';D.mkdir()
+for e in m['inputs']:
+ t=D/e['relative'];t.parent.mkdir(parents=True,exist_ok=True);t.write_bytes(pathlib.Path(e['copy']).read_bytes())
+(D/'node_modules').symlink_to(P/'node_modules',target_is_directory=True)
+f=D/'packages/harness/src/iterative-dispatch.ts';s=f.read_text();old='? (JSON.parse(item.content) as unknown)';new="? 'I1_NEGATIVE_DROPPED_RESULT'";assert s.count(old)==1
+before=hashlib.sha256(f.read_bytes()).hexdigest();f.write_text(s.replace(old,new));after=hashlib.sha256(f.read_bytes()).hexdigest()
+(O/'raw/negative-source-mutation.json').write_text(json.dumps({'label':'KNOWN BAD — never candidate','path':str(f),'beforeSHA256':before,'afterSHA256':after,'old':old,'new':new,'intent':'Remove mandatory complete observation from actual RESPONSE frame; baseline RR02/RR05/RR08/RR09 must detect.'},indent=2)+'\n')
+c=(O/'config/baseline.mjs').read_text().replace(str(A),str(D)).replace(str(O/'cache/baseline'),str(O/'cache/known-bad'))
+(O/'config/known-bad.mjs').write_text(c)
+print('built replay and known-bad immutable-candidate control')

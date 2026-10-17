@@ -1,0 +1,706 @@
+FILE cvg/packages/harness/src/iterative-runtime.ts
+356:  * rejected decision.
+357:  */
+358: export class IterativeGovernedRuntime {
+359:   public readonly runtimeVersion = RUNTIME_V2_VERSION
+360:   public readonly orchestratorVersion: string
+361:   private readonly contextEngine: ContextEngine
+362:   private readonly completionEvaluatorOverride: CompletionEvaluator | undefined
+363:   private readonly completionEvaluators = new Map<string, CompletionEvaluator>()
+364:   private readonly clock: () => Date
+365:   private readonly repeatThreshold: number
+366:   private readonly maxSignatures: number
+367:   private readonly maxObservationPayloadChars: number
+368:   #kernel: Promise<KernelHost> | undefined
+369:   readonly #turns = new WeakMap<
+370:     LoopRun,
+371:     { host: KernelHost; signal: AbortSignal }
+372:   >()
+373: 
+374:   public constructor(
+375:     private readonly options: IterativeGovernedRuntimeOptions
+376:   ) {
+377:     this.contextEngine = options.contextEngine ?? new DefaultContextEngine()
+378:     this.completionEvaluatorOverride = options.completionEvaluator
+379:     this.clock = options.clock ?? (() => new Date())
+380:     this.repeatThreshold = Math.max(
+381:       1,
+382:       options.loopDetection?.repeatThreshold ?? 2
+383:     )
+384:     this.maxSignatures = options.loopDetection?.maxSignatures ?? 12
+385:     this.maxObservationPayloadChars =
+386:       options.maxObservationPayloadChars ?? 4_000
+387:     this.orchestratorVersion =
+388:       options.orchestratorVersion ?? HYBRID_ORCHESTRATOR_VERSION
+389:   }
+390: 
+391:   /**
+392:    * Dependency surface handed to the extracted dispatch domain. It is built
+393:    * here, where private members are accessible, so the exported class keeps
+394:    * its exact public contract and the module never touches instance state
+395:    * directly.
+396:    */
+397:   private get dispatchContext(): IterativeDispatchContext {
+398:     return {
+399:       options: this.options,
+400:       maxObservationPayloadChars: this.maxObservationPayloadChars,
+401:       stop: (stopReason, response) => this.stop(stopReason, response),
+402:       operationKey: (run, stepNumber, toolId) =>
+403:         this.operationKey(run, stepNumber, toolId),
+404:       remainingDuration: (run) => this.remainingDuration(run),
+405:       makeObservation: (run, input) => this.makeObservation(run, input),
+406:       checkAfterUsage: (run) => this.checkAfterUsage(run),
+407:       allowedDecisionTypes: (run) => this.allowedDecisionTypes(run),
+408:       evaluatorFor: (run) => this.evaluatorFor(run),
+409:       validateClaims: (run, responseText) =>
+410:         this.validateClaims(run, responseText),
+411:       withDeadline: (operation, remainingMs) =>
+412:         this.withDeadline(operation, remainingMs),
+413:       recordObservation: (run, observation) =>
+414:         this.recordObservation(run, observation),
+415:       recordStep: (run, input) => this.recordStep(run, input),
+416:       persistCheckpoint: (run) => this.persistCheckpoint(run),
+417:       safeAudit: (run, action, extras) => this.safeAudit(run, action, extras),
+418:       composeResponse: (run, decision) => this.composeResponse(run, decision),
+419:       kernel: (run) => this.kernelFor(run),
+420:       turn: (run) => this.turnFor(run)
+421:     }
+422:   }
+423: 
+424:   /** Boots the kernel profile of the iterative mode once (SPEC 0181). */
+425:   private bootKernel(): Promise<KernelHost> {
+426:     this.#kernel ??= KernelHost.boot(
+427:       [
+428:         budgetControl(),
+429:         pauseControl(this.options.pause),
+430:         logControl(this.options.log),
+431:         effectsControl(this.options.effects),
+432:         ...(this.options.sandbox ? [sandboxControl(this.options.sandbox)] : []),
+433:         policyControl(this.options.policy),
+434:         approvalsControl(
+435:           this.options.approvals,
+436:           this.options.capabilityFingerprint
+437:             ? { capabilityFingerprint: this.options.capabilityFingerprint }
+438:             : {}
+439:         ),
+440:         auditControl(this.options.audit, { action: 'harness.iterative' }),
+441:         modelCapability(this.options.modelGateway),
+442:         toolsCapability(this.options.tools),
+443:         telemetryCapability(this.options.telemetry, {
+444:           name: 'harness.iterative'
+445:         })
+446:       ],
+447:       ITERATIVE_REQUIRED_SERVICES
+448:     )
+449:     return this.#kernel
+450:   }
+451: 
+452:   private kernelFor(run: LoopRun): KernelHost {
+456:     return entry.host
+457:   }
+458: 
+459:   /**
+460:    * Kernel view of the current run: the iterative active-duration budget and
+461:    * the caller's cancel signal drive the shared pipelines.
+462:    */
+463:   private turnFor(run: LoopRun): TurnState {
+464:     const entry = this.#turns.get(run)
+465:     /* v8 ignore next -- defensive: the loop only asks for its own bound run */
+466:     if (!entry) throw new Error('Kernel turn is not bound to this run.')
+467:     return createTurnState(
+468:       run.input,
+469:       run.startedAtMs,
+470:       {
+471:         remainingMs: () => this.remainingDuration(run),
+472:         withDeadline: async (operation, ms = this.remainingDuration(run)) => {
+473:           const outcome = await this.withDeadline(
+474:             ms <= 0 ? new Promise<never>(() => undefined) : operation(),
+475:             ms
+476:           )
+477:           return outcome === DEADLINE_EXCEEDED ? DEADLINE : outcome
+478:         },
+479:         beginModelRequest: () => {
+480:           // Single pre-model gate (PDSH-004 / I11): consume one slot.
+481:           if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
+482:             return {
+483:               kind: 'stop',
+484:               stopReason: 'MAX_MODEL_CALLS',
+485:               response:
+486:                 'Model-call budget exhausted before the call was started.'
+487:             }
+488:           }
+489:           this.accountUsage(run, {
+490:             modelCalls: 1,
+491:             inputTokens: 0,
+492:             outputTokens: 0,
+493:             costUsd: 0
+494:           })
+495:           return undefined
+496:         },
+497:         recordModelResult: (result) => {
+498:           // Single post-result accounting site (PDSH-004).
+499:           this.accountUsage(run, {
+500:             modelCalls: 0,
+501:             inputTokens: result.inputTokens,
+502:             outputTokens: result.outputTokens,
+503:             costUsd: result.costUsd
+504:           })
+505:           if (
+506:             run.usage.inputTokens + run.usage.outputTokens >
+507:             run.input.budget.maxTokens
+508:           ) {
+509:             return {
+510:               kind: 'stop',
+511:               stopReason: 'MAX_TOKENS',
+512:               response:
+513:                 'Token budget exhausted before a response could be completed.'
+514:             }
+515:           }
+516:           if (run.usage.costUsd > run.input.budget.maxCostUsd) {
+517:             return {
+518:               kind: 'stop',
+519:               stopReason: 'MAX_COST',
+520:               response:
+521:                 'Cost budget exhausted before a response could be completed.'
+522:             }
+523:           }
+524:           return undefined
+525:         }
+526:       },
+527:       entry.signal
+528:     )
+529:   }
+530: 
+531:   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
+532:     const startedAtMs = Date.now()
+533:     const executionId = input.executionId ?? `execution_${input.correlationId}`
+534: 
+535:     if (!hasValidBoundaryInput(input)) {
+536:       return this.earlyFinish(
+537:         input,
+538:         'Runtime identity or execution budget is invalid.',
+539:         'UNSAFE_REQUEST',
+540:         startedAtMs
+541:       )
+542:     }
+543:     if (
+544:       this.options.capabilityFingerprint &&
+545:       input.capabilityFingerprint !== this.options.capabilityFingerprint
+546:     ) {
+547:       return this.earlyFinish(
+548:         input,
+549:         'Capability composition fingerprint does not match the runtime.',
+550:         'STATE_CONFLICT',
+551:         startedAtMs
+552:       )
+553:     }
+554:     if (input.budget.maxSteps < 1) {
+555:       return this.earlyFinish(
+556:         input,
+557:         'Execution budget exhausted before the first step.',
+558:         'MAX_STEPS',
+559:         startedAtMs
+560:       )
+561:     }
+562:     if (input.budget.maxDurationMs < 1) {
+563:       return this.earlyFinish(
+564:         input,
+565:         'Execution duration budget is not available.',
+566:         'MAX_DURATION',
+567:         startedAtMs
+568:       )
+569:     }
+570: 
+571:     let host: KernelHost
+572:     try {
+573:       host = await this.bootKernel()
+574:     } catch (error) {
+575:       /* v8 ignore start -- defensive: the fixed plugin list always satisfies the boot contract */
+576:       return this.earlyFinish(
+577:         input,
+578:         `Kernel could not start: ${errorMessage(error)}.`,
+579:         'INTERNAL_FAILURE',
+580:         startedAtMs
+581:       )
+582:       /* v8 ignore stop */
+583:     }
+584: 
+585:     let checkpoint: ExecutionCheckpoint | null = null
+637:       lastEvaluation: null,
+638:       lastToolObservation: null,
+639:       lastSufficiency: null,
+640:       lastDecisionErrors: [],
+641:       skipEvaluationOnce: false,
+642:       countedSteps: new Set<number>(),
+643:       inFlightCounted: Boolean(
+644:         checkpoint?.state.pendingDecision && !checkpoint.state.stopReason
+645:       )
+646:     }
+647:     run.state.observations = run.observations
+648:     const controller = new AbortController()
+649:     if (input.signal?.aborted) controller.abort()
+650:     input.signal?.addEventListener('abort', () => controller.abort(), {
+651:       once: true
+652:     })
+653:     this.#turns.set(run, { host, signal: controller.signal })
+654: 
+655:     // Payloads and summaries are bounded, untrusted presentation. The step
+656:     // store owns the lossless governed outcome of the pending dispatch,
+657:     // including the exact settlement failure cause. Generic TOOL_FAILURE or
+658:     // unknown_effect records alone do not prove that this ledger failed.
+937:   private async decide(
+938:     run: LoopRun,
+939:     stepNumber: number
+940:   ): Promise<{
+941:     outcome?: Extract<DispatchOutcome, { kind: 'stop' }>
+942:     decision?: LoopDecision
+943:   }> {
+944:     const remaining = this.remainingDuration(run)
+945:     if (remaining <= 0) {
+946:       return {
+947:         outcome: this.stop(
+948:           'MAX_DURATION',
+949:           'Duration budget exhausted before the next decision.'
+950:         )
+951:       }
+952:     }
+953: 
+954:     const stateForContext: MutableState = {
+955:       ...run.state,
+956:       observations: run.observations
+957:     }
+958:     const context = await this.contextEngine.build({
+959:       runtime: {
+960:         executionId: run.executionId,
+961:         tenantId: run.input.tenantId,
+962:         conversationId: run.input.conversationId,
+963:         correlationId: run.input.correlationId,
+964:         traceId: run.input.traceId,
+965:         userMessage: run.input.userMessage,
+966:         context: run.input.context,
+967:         objective: run.input.agent.objective,
+968:         instructions: run.input.agent.instructions,
+969:         agentId: run.input.agent.id,
+970:         agentVersion: run.input.agent.version
+971:       },
+972:       profile: 'iterative',
+973:       stepNumber,
+974:       goal: run.state.goal,
+975:       state: stateForContext,
+976:       capabilities: this.availableTools(run),
+977:       knowledgeAvailable: Boolean(this.options.knowledge),
+978:       completionStrategy: run.input.agent.completionStrategy ?? 'DETERMINISTIC',
+979:       allowedDecisionTypes: this.allowedDecisionTypes(run),
+980:       budget: run.input.budget,
+981:       budgetUsage: run.usage,
+982:       ...(run.usage.decisionRepairs > 0
+983:         ? {
+984:             decisionRepair: {
+985:               attempt: run.usage.decisionRepairs,
+986:               errors: run.lastDecisionErrors
+987:             }
+988:           }
+989:         : {})
+990:     })
+991:     const decisionAbortController = new AbortController()
+992:     const decisionOrDeadline = await this.withDeadline(
+993:       this.options.orchestrator.decide({
+994:         context,
+995:         signal: decisionAbortController.signal
+996:       }),
+997:       remaining
+998:     )
+999:     if (decisionOrDeadline === DEADLINE_EXCEEDED) {
+1000:       decisionAbortController.abort()
+1001:       return {
+1002:         outcome: this.stop(
+1003:           'MAX_DURATION',
+1004:           'Duration budget exhausted while deciding the next step.'
+1005:         )
+1569:   private async finalize(
+1570:     run: LoopRun,
+1571:     outcome: Extract<DispatchOutcome, { kind: 'stop' }>,
+1572:     startedAtMs: number
+1573:   ): Promise<RuntimeResult> {
+1574:     let stopReason: StopReason = outcome.stopReason
+1575:     run.usage.activeDurationMs += Date.now() - startedAtMs
+1576:     if (!outcome.preserveCheckpoint && TERMINAL_STOPS.has(stopReason)) {
+1577:       try {
+1578:         await this.closePendingStep(run, stopReason)
+1579:       } catch {
+1580:         // The open step could not be closed: the terminal checkpoint must not
+1581:         // claim a clean stop while the step store disagrees.
+1582:         stopReason = 'INSUFFICIENT_EVIDENCE'
+1583:       }
+1584:     }
+1585:     run.state = { ...run.state, stopReason }
+1586:     let checkpointProven = true
+1587:     if (outcome.preserveCheckpoint) {
+1588:       // Intentional no-write: the durable pause must stay resumable after a
+1589:       // rejected resume binding.
+1590:     } else {
+1591:       try {
+1592:         await this.persistCheckpoint(run)
+1593:       } catch {
+1594:         checkpointProven = false
+1595:       }
+1596:     }
+1597:     const claimedReason: StopReason = checkpointProven
+1598:       ? stopReason
+1599:       : 'INSUFFICIENT_EVIDENCE'
+1600:     if (!checkpointProven) {
+1601:       run.state = { ...run.state, stopReason: claimedReason }
+1602:     }
+1603:     const result: RuntimeResult = {
+1604:       response: outcome.response,
+1605:       stopReason: claimedReason,
+1606:       ...(outcome.kind === 'stop' && outcome.approvalId
+1607:         ? { approvalId: outcome.approvalId }
+1608:         : {}),
+1609:       steps: run.usage.steps,
+1610:       modelCalls: run.usage.modelCalls,
+1611:       toolCalls: run.usage.toolCalls,
+1612:       usage: {
+1613:         inputTokens: run.usage.inputTokens,
+1614:         outputTokens: run.usage.outputTokens,
+1615:         costUsd: run.usage.costUsd
+1616:       },
+1617:       ...(run.lastToolObservation
+1618:         ? {
+1619:             toolResult: {
+1620:               /* v8 ignore next -- only a successful tool observation is stored */
+1621:               status:
+1622:                 (run.lastToolObservation.payload as { status?: string } | null)
+1623:                   ?.status === 'SUCCEEDED'
+1624:                   ? ('SUCCEEDED' as const)
+1625:                   : ('REJECTED' as const),
+1626:               output: (
+1627:                 run.lastToolObservation.payload as {
+1628:                   output?: unknown
+1629:                 } | null
+1630:               )?.output
+1631:             }
+1632:           }
+1633:         : {})
+1634:     }
+1635:     const finalResult = await this.recordAuditOutcome(
+1636:       run,
+1637:       result,
+1638:       claimedReason
+1639:     )
+1640:     this.recordTelemetry(run, finalResult, startedAtMs)
+1641:     return finalResult
+1642:   }
+1643: 
+1644:   private async recordAuditOutcome(
+1645:     run: LoopRun,
+1646:     result: RuntimeResult,
+1647:     stopReason: StopReason
+1648:   ): Promise<RuntimeResult> {
+1649:     const action =
+1650:       stopReason === 'COMPLETED'
+1651:         ? 'runtime.completed'
+1652:         : stopReason === 'NEEDS_USER_INPUT' ||
+1653:             stopReason === 'APPROVAL_REQUIRED'
+1654:           ? 'runtime.paused'
+1655:           : 'runtime.stopped'
+1656:     // Audit always gets at least a bounded grace window, so a budget stop
+1657:     // (possibly after an effect) is still recorded. If even that fails, the
+1658:     // result is degraded like any other unaudited outcome (ENG-008).
+1659:     try {
+1660:       const deadlineMs = Math.max(this.remainingDuration(run), AUDIT_GRACE_MS)
+1661:       const auditOrDeadline = await this.withDeadline(
+1662:         this.options.audit.append({
+1663:           actor: run.input.agent.id,
+1664:           agent: run.input.agent.id,
+1665:           tenant: run.input.tenantId,
+1666:           action,
+1667:           policy: null,
+1668:           approval: (result.approvalId as ApprovalId | undefined) ?? null,
+1669:           tool: run.lastToolObservation?.provenance.sourceId ?? null,
+1670:           result: stopReason,
+1671:           timestamp: this.clock().toISOString(),
+1672:           traceId: run.input.traceId,
+1673:           correlationId: run.input.correlationId
+1674:         }),
+1675:         deadlineMs
+1676:       )
+1677:       if (auditOrDeadline === DEADLINE_EXCEEDED) {
+1678:         throw new Error('audit deadline exceeded')
+1679:       }
+1680:       return result
+1681:     } catch {
+1682:       return {
+1683:         ...result,
+1684:         response:
+1685:           'Execution could not be completed because audit recording failed.',
+1686:         stopReason: 'INSUFFICIENT_EVIDENCE'
+1687:       }
+1688:     }
+1689:   }
+1690: 
+1691:   private recordTelemetry(
+1692:     run: LoopRun,
+1693:     result: RuntimeResult,
+1694:     startedAtMs: number
+1695:   ): void {
+1696:     const telemetry: TelemetryEvent = {
+1697:       name: 'harness.iterative',
+1698:       latencyMs: Date.now() - startedAtMs,
+1699:       errors: result.stopReason === 'COMPLETED' ? 0 : 1,
+1700:       costUsd: result.usage.costUsd,
+1701:       inputTokens: result.usage.inputTokens,
+1702:       outputTokens: result.usage.outputTokens,
+1703:       provider: null,
+1704:       toolDurationMs: 0,
+1705:       steps: result.steps,
+1706:       traceId: run.input.traceId,
+1707:       correlationId: run.input.correlationId,
+1708:       attributes: {
+1709:         outcome: result.stopReason,
+1710:         model_calls: result.modelCalls,
+1711:         tool_calls: result.toolCalls,
+1712:         knowledge_calls: run.usage.knowledgeCalls,
+1713:         replans: run.usage.replans,
+1714:         verification_calls: run.usage.verificationCalls
+1715:       }
+1716:     }
+1717:     try {
+1718:       this.options.telemetry.record(telemetry)
+1719:     } catch {
+1720:       // telemetry is best effort
+1721:     }
+1722:   }
+1723: 
+1724:   private async earlyFinish(
+1725:     input: RuntimeInput,
+1726:     response: string,
+1727:     stopReason: StopReason,
+1728:     startedAtMs: number
+1729:   ): Promise<RuntimeResult> {
+1730:     void startedAtMs
+1731:     const result: RuntimeResult = {
+1732:       response,
+1733:       stopReason,
+1734:       steps: 0,
+1735:       modelCalls: 0,
+1736:       toolCalls: 0,
+1737:       usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+1738:     }
+1739:     try {
+1740:       await this.options.audit.append({
+1741:         actor: input.agent.id,
+1742:         agent: input.agent.id,
+1743:         tenant: input.tenantId,
+1744:         action: 'runtime.stopped',
+1745:         policy: null,
+1746:         approval: null,
+1747:         tool: null,
+1748:         result: stopReason,
+1749:         timestamp: this.clock().toISOString(),
+1750:         traceId: input.traceId,
+1751:         correlationId: input.correlationId
+1752:       })
+1753:     } catch {
+1754:       return {
+1755:         ...result,
+1756:         response:
+1757:           'Execution could not be completed because audit recording failed.',
+1758:         stopReason: 'INSUFFICIENT_EVIDENCE'
+1759:       }
+1760:     }
+1761:     return result
+1762:   }
+1763: 
+1764:   private async withDeadline<T>(
+1765:     operation: Promise<T>,
+1766:     remainingMs: number
+1767:   ): Promise<T | typeof DEADLINE_EXCEEDED> {
+1768:     if (remainingMs <= 0) return DEADLINE_EXCEEDED
+1769:     let timer!: ReturnType<typeof setTimeout>
+1770:     const deadline = new Promise<typeof DEADLINE_EXCEEDED>((resolve) => {
+1771:       timer = setTimeout(() => resolve(DEADLINE_EXCEEDED), remainingMs)
+1772:     })
+1773:     try {
+1774:       return await Promise.race([operation, deadline])
+1775:     } finally {
+1776:       clearTimeout(timer)
+1777:     }
+1778:   }
+1779: }
+1780: 
+FILE cvg/packages/harness/src/kernel/controls.ts
+690: export function auditControl(
+691:   audit: AuditSink,
+692:   options: AuditControlOptions = {}
+693: ): KernelPlugin {
+694:   const action = options.action ?? 'harness.kernel'
+695:   return {
+696:     name: 'control.audit',
+697:     kind: 'control',
+698:     provides: ['audit'],
+699:     requires: ['budget'],
+700:     apply(ctx) {
+701:       ctx.provide('audit', audit)
+702:       ctx.on('turn/end', async (turn, result) => {
+703:         try {
+704:           const window = Math.max(turn.budget.remainingMs(), AUDIT_GRACE_MS)
+705:           const recorded = await turn.budget.withDeadline(
+706:             () =>
+707:               audit.append({
+708:                 actor: turn.input.agent.id,
+709:                 agent: turn.input.agent.id,
+710:                 tenant: turn.input.tenantId,
+711:                 action,
+712:                 policy: turn.metadata.policy,
+713:                 approval: turn.metadata.approval,
+714:                 tool: turn.metadata.tool,
+715:                 result: result.stopReason,
+716:                 timestamp: new Date().toISOString(),
+717:                 traceId: turn.input.traceId,
+718:                 correlationId: turn.input.correlationId
+719:               }),
+720:             window
+721:           )
+722:           if (recorded === DEADLINE) throw new Error('audit deadline exceeded')
+723:           return result
+724:         } catch {
+725:           return {
+726:             ...result,
+727:             response:
+728:               'Execution could not be completed because audit recording failed.',
+729:             stopReason: 'INSUFFICIENT_EVIDENCE'
+730:           }
+731:         }
+732:       })
+733:     }
+734:   }
+735: }
+736: 
+737: // ---------------------------------------------------------- capabilities
+738: 
+739: export function plannerCapability(planner: Orchestrator): KernelPlugin {
+740:   return {
+741:     name: 'capability.planner',
+742:     kind: 'capability',
+743:     provides: ['planner'],
+744:     apply: (ctx) => void ctx.provide('planner', planner)
+745:   }
+746: }
+747: 
+748: export function modelCapability(model: ModelGateway): KernelPlugin {
+749:   return {
+750:     name: 'capability.model',
+751:     kind: 'capability',
+752:     provides: ['model'],
+753:     apply: (ctx) => void ctx.provide('model', model)
+754:   }
+755: }
+756: 
+757: export function toolsCapability(tools: ToolRegistry): KernelPlugin {
+758:   return {
+759:     name: 'capability.tools',
+760:     kind: 'capability',
+761:     provides: ['tools'],
+762:     apply: (ctx) => void ctx.provide('tools', tools)
+763:   }
+764: }
+765: 
+766: export interface TelemetryCapabilityOptions {
+767:   readonly name?: string
+768: }
+769: 
+770: /** Observability never turns a governed result into an error. */
+771: export function telemetryCapability(
+772:   telemetry: TelemetrySink,
+773:   options: TelemetryCapabilityOptions = {}
+774: ): KernelPlugin {
+775:   const name = options.name ?? 'harness.kernel'
+776:   return {
+777:     name: 'capability.telemetry',
+778:     kind: 'capability',
+779:     provides: ['telemetry'],
+780:     apply(ctx) {
+781:       ctx.provide('telemetry', telemetry)
+782:       ctx.on('turn/end', async (turn, result) => {
+783:         const event: TelemetryEvent = {
+784:           name,
+785:           latencyMs: Date.now() - turn.startedAt,
+786:           errors: result.stopReason === 'COMPLETED' ? 0 : 1,
+787:           costUsd: result.usage.costUsd,
+788:           inputTokens: result.usage.inputTokens,
+789:           outputTokens: result.usage.outputTokens,
+790:           provider: turn.metadata.provider,
+791:           toolDurationMs: turn.metadata.toolDurationMs,
+792:           steps: result.steps,
+793:           traceId: turn.input.traceId,
+794:           correlationId: turn.input.correlationId
+795:         }
+796:         try {
+797:           telemetry.record(event)
+798:         } catch {
+799:           // Observability must not turn a governed result into an error.
+800:         }
+801:         return result
+802:       })
+803:     }
+804:   }
+805: }
+806: 
+807: export { PROCEED }
+FILE cvg/packages/harness/src/runtime.ts
+1: import type {
+2:   ApprovalEngine,
+3:   AuditSink,
+4:   HarnessRuntime,
+5:   ModelGateway,
+6:   Orchestrator,
+7:   PolicyEngine,
+8:   RuntimeInput,
+9:   RuntimeResult,
+10:   SandboxGate,
+11:   TelemetrySink,
+12:   ToolRegistry
+13: } from '@cvg/harness-contracts'
+14: import { createKernelRuntime } from './kernel/profile.ts'
+15: import type { KernelRuntime } from './kernel/kernel-runtime.ts'
+16: import type { EffectLedger, KernelLog, PauseSwitch } from './kernel/types.ts'
+17: 
+18: export { ALL_AGENT_TOOLS, agentExposesTool } from './kernel/kernel-runtime.ts'
+19: 
+20: export interface HarnessRuntimeOptions {
+21:   readonly orchestrator: Orchestrator
+22:   readonly modelGateway: ModelGateway
+23:   readonly policy: PolicyEngine
+24:   readonly approvals: ApprovalEngine
+25:   readonly tools: ToolRegistry
+26:   readonly capabilityFingerprint?: string
+27:   readonly audit: AuditSink
+28:   readonly telemetry: TelemetrySink
+29:   /** Kernel controls; in-memory defaults when omitted. */
+30:   readonly pause?: PauseSwitch
+31:   readonly log?: KernelLog
+32:   readonly effects?: EffectLedger
+33:   /** Optional containment gate; absent means fail-closed for contained tools. */
+34:   readonly sandbox?: SandboxGate
+35: }
+36: 
+37: /**
+38:  * Single-pass profile, now a thin facade over the plugin kernel (SPEC 0181,
+39:  * decision D-0181-3). Governance runs as kernel control plugins; this class
+40:  * only keeps the public name and constructor while consumers migrate.
+41:  */
+42: export class SinglePassGovernedRuntime implements HarnessRuntime {
+43:   readonly #kernel: KernelRuntime
+44: 
+45:   public constructor(options: HarnessRuntimeOptions) {
+46:     this.#kernel = createKernelRuntime({
+47:       ...options,
+48:       eventName: 'harness.single_pass'
+49:     })
+50:   }
+51: 
+52:   public execute(input: RuntimeInput): Promise<RuntimeResult> {
+53:     return this.#kernel.execute(input)
+54:   }
+55: }

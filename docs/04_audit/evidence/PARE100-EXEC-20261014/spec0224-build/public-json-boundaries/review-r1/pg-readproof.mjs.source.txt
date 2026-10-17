@@ -1,0 +1,26 @@
+import fs from 'node:fs/promises';
+import {createRequire} from 'node:module';
+const own='/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-json-boundaries/review-r1';
+const require=createRequire('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/package.json');
+const {Client}=require('pg');
+const r=JSON.parse(await fs.readFile(own+'/actual-resource-private.json','utf8'));
+const client=new Client({connectionString:r.test_database_url});
+const q=[];const query=async(sql,parameters=[])=>{const result=await client.query(sql,parameters);q.push({sql,parameters,rows:result.rows});return result.rows};
+await client.connect();
+try{
+await query('BEGIN READ ONLY');
+await query('SELECT version(),current_database(),inet_server_addr(),inet_server_port()');
+await query('SELECT rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls,(SELECT count(*)::int FROM pg_auth_members m WHERE m.member=r.oid) AS memberships FROM pg_roles r WHERE rolname=$1',[r.roleName]);
+await query('SELECT nspname,pg_get_userbyid(nspowner) AS owner,nspacl::text FROM pg_namespace WHERE nspname=$1',[r.schemaName]);
+await query('SELECT c.relname,pg_get_userbyid(c.relowner) AS owner,c.relrowsecurity,c.relforcerowsecurity,c.relacl::text FROM pg_class c WHERE c.relnamespace=$1::regnamespace ORDER BY c.relname',[r.schemaName]);
+await query('SELECT * FROM information_schema.role_table_grants WHERE grantee=$1 AND table_schema=$2 ORDER BY table_name,privilege_type',[r.roleName,r.schemaName]);
+await query('SELECT * FROM pg_policies WHERE schemaname=$1 ORDER BY tablename,policyname',[r.schemaName]);
+const schema=r.schemaName;if(schema!=='pare224_json_i1_r1')throw Error('wrong schema');
+const summary=JSON.parse(await fs.readFile(own+'/postgres-run/matrix-summary.json','utf8'));
+for(const c of summary){
+await query(`SELECT tenant_id,execution_id,checkpoint_id,checkpoint_version,context_version,state::text AS physical_state_text,octet_length(state::text) AS physical_state_text_bytes,budget_usage::text AS physical_budget_text,digest FROM ${schema}.operational_execution_checkpoints WHERE execution_id=$1`,[c.executionId]);
+await query(`SELECT tenant_id,operation_key,state,result::text AS physical_result_text,jsonb_typeof(result) AS result_jsonb_type,octet_length(result::text) AS physical_result_text_bytes FROM ${schema}.operational_effect_journal WHERE operation_key LIKE $1`,[c.executionId+':%']);
+}
+await query('COMMIT');
+}catch(e){await fs.writeFile(own+'/independent-pg-proof-error.json',JSON.stringify({name:e.name,message:e.message,code:e.code},null,2));process.exitCode=1;}
+finally{await client.end();await fs.writeFile(own+'/independent-pg-readproof.json',JSON.stringify({at:new Date().toISOString(),queries:q},null,2)+'\n',{flag:'wx'});}

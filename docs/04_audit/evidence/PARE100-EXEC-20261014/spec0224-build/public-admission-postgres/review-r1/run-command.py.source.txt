@@ -1,0 +1,15 @@
+import os,sys,json,pathlib,subprocess,datetime,hashlib
+R=pathlib.Path(__file__).parent
+m=json.loads((R/'manifest-snapshot.json').read_text())
+name=sys.argv[1];args=sys.argv[2:]
+env=os.environ.copy();env.update(TMPDIR=str(R/'tmp'),TMP=str(R/'tmp'),TEMP=str(R/'tmp'),XDG_CACHE_HOME=str(R/'homecache'),HOME=str(R/'homecache'),NODE_DISABLE_COMPILE_CACHE='1',NODE_COMPILE_CACHE=str(R/'nodecache'),I1_REVIEW=str(R),I1_READ_LOG=str(R/'reads.jsonl'),I1_SCOPE_PACKAGE=m['allowedScopeMetadata']['path'],I1_PACKET_DEPS=m['allowedDependencyMirror'],SPEC0224_ADMISSION_PG_ASSIGNED_ROOT=str(R),SPEC0224_ADMISSION_PG_RESOURCE=str(R/'resource-private.json'),SPEC0224_ADMISSION_PG_EVIDENCE=str(R/'runs/r1'),SPEC0224_ADMISSION_PG_RUN_ID='r1')
+meta={'argv':args,'cwd':m['artifactRoot'],'env_names':sorted(env),'review_env':{k:v for k,v in env.items() if k.startswith(('I1_','SPEC0224_','NODE_')) or k in ['HOME','TMP','TEMP','TMPDIR','XDG_CACHE_HOME']},'startedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+p=R/'commands'/name;p.mkdir()
+with (p/'meta.json').open('x') as f:json.dump(meta,f,indent=2)
+with (p/'stdout').open('xb') as out,(p/'stderr').open('xb') as err:
+ c=subprocess.run(args,cwd=m['artifactRoot'],env=env,stdout=out,stderr=err)
+with (p/'exit.json').open('x') as f:json.dump(dict(exit=c.returncode,endedAt=datetime.datetime.now(datetime.timezone.utc).isoformat()),f)
+print('COMMAND',name,'EXIT',c.returncode)
+for stream in ['stdout','stderr']:
+ b=(p/stream).read_bytes();print(stream, 'bytes',len(b),'sha256',hashlib.sha256(b).hexdigest());print(b.decode(errors='replace'))
+sys.exit(c.returncode)

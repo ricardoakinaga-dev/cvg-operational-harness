@@ -35,10 +35,9 @@ import type { PlatformEventBus, PlatformEventName } from './event-bus.ts'
 import { composePrompt } from './prompt-composer.ts'
 import { createPromptProfileSnapshot } from './prompt-profile.ts'
 import { evaluatePlatformPolicy } from './policy-evaluator.ts'
-import {
-  CONTROLLED_SAFE_OUTPUTS,
-  enforceControlledOutput
-} from './output-policy.ts'
+import { CONTROLLED_SAFE_OUTPUTS } from './output-policy.ts'
+import { executeControlledKernel } from './controlled-kernel-execution.ts'
+import { CONTROLLED_STOP_PROJECTION } from './controlled-execution-plan.ts'
 
 export interface TestLabInput {
   store: ControlPlaneStore
@@ -321,73 +320,43 @@ export async function executeConfiguredAgent(
   const promptWithHistory = history.length
     ? `${prompt.text}\n\nConversation history:\n${history.join('\n')}`
     : prompt.text
-  await emitPlatformEvent(executionInput, 'model.before', {
-    provider: modelProvider.name,
-    model: config.model.model,
-    promptLength: promptWithHistory.length
+  const kernel = await executeControlledKernel({
+    input: executionInput,
+    version,
+    config,
+    intent: intent.name,
+    policy,
+    risk,
+    response,
+    promptWithHistory,
+    provider: modelProvider,
+    timing,
+    sourceIds:
+      knowledge.trace.status === 'answered' && knowledge.trace.source
+        ? [knowledge.trace.source]
+        : [],
+    emit: (name, payload) => emitPlatformEvent(executionInput, name, payload)
   })
-  let rawCompletion: unknown
-  try {
-    rawCompletion = await timing.measureAsync('model', () =>
-      modelProvider.complete({
-        prompt: promptWithHistory,
-        fallbackText: response.text
-      })
-    )
-  } catch (error) {
-    await emitPlatformEvent(executionInput, 'model.error', {
-      provider: modelProvider.name,
-      model: config.model.model,
-      reason: 'model_execution_failed'
-    })
-    throw error
-  }
-  const completionText = readCompletionText(rawCompletion)
-  await emitPlatformEvent(executionInput, 'model.after', {
-    provider: modelProvider.name,
-    model: config.model.model,
-    externalCall: false,
-    responseLength:
-      typeof completionText === 'string' ? completionText.length : 0
-  })
-  await emitPlatformEvent(executionInput, 'policy.output.before', {
-    mode: response.mode,
-    riskLevel: risk.level,
-    responseLength:
-      typeof completionText === 'string' ? completionText.length : 0
-  })
-  const output = timing.measure('response', () =>
-    enforceControlledOutput({
-      text: completionText,
-      mode: response.mode,
-      riskLevel: risk.level
-    })
-  )
-  await emitPlatformEvent(executionInput, 'policy.output.after', {
-    decision: output.decision,
-    reason: output.reason,
-    mode: output.mode,
-    redacted: output.redacted,
-    responseLength: output.text.length
-  })
-  const completedResponse = {
-    ...response,
-    mode: output.mode,
-    text: output.text
-  }
+  const output = kernel.output
+  const completedResponse = kernel.response
+  const projection = CONTROLLED_STOP_PROJECTION[kernel.stop]
   const handoff = timing.measure('handoff', () => {
     const outputCausedHandoff =
       !handoffRequested && completedResponse.mode === 'handoff'
-    const finalHandoffRequested = handoffRequested || outputCausedHandoff
+    const finalHandoffRequested =
+      kernel.stop !== 'COMPLETED' || handoffRequested || outputCausedHandoff
     const outputRejectedHandoff =
-      output.decision === 'rewritten' && completedResponse.mode === 'handoff'
-    const finalHandoffReason = outputRejectedHandoff
-      ? output.reason
-      : handoffRequested
-        ? handoffReason
-        : outputCausedHandoff
-          ? output.reason
-          : null
+      output?.decision === 'rewritten' && completedResponse.mode === 'handoff'
+    const finalHandoffReason =
+      kernel.stop !== 'COMPLETED'
+        ? projection.reason
+        : outputRejectedHandoff
+          ? output!.reason
+          : handoffRequested
+            ? handoffReason
+            : outputCausedHandoff
+              ? output!.reason
+              : null
     const finalHandoffDestination = finalHandoffRequested
       ? config.handoff.lowConfidenceDestination
       : undefined
@@ -419,26 +388,16 @@ export async function executeConfiguredAgent(
       priority: finalHandoffPriority
     })
   }
-  const tools = await timing.measureAsync('tool', () =>
-    output.decision === 'rewritten' ||
-    risk.level === 'high' ||
-    risk.level === 'critical'
-      ? []
-      : executePlannedTools({
-          input: executionInput,
-          config,
-          intent: intent.name,
-          policy,
-          traceId
-        })
-  )
+  const tools = kernel.tools
   await emitPlatformEvent(executionInput, 'response.after', {
     mode: completedResponse.mode,
     responseLength: completedResponse.text.length
   })
   const completedAt = new Date()
-  const promptTokens = estimateTokenCount(promptWithHistory)
-  const completionTokens = estimateTokenCount(completedResponse.text)
+  const promptTokens = kernel.providerInvoked
+    ? estimateTokenCount(redactTestMessage(promptWithHistory))
+    : 0
+  const completionTokens = output ? estimateTokenCount(output.text) : 0
   const trace: TestRunTrace = {
     traceId,
     tenantId: input.tenantId,
@@ -465,12 +424,19 @@ export async function executeConfiguredAgent(
       ...(finalHandoffPriority ? { priority: finalHandoffPriority } : {})
     },
     response: completedResponse,
-    outputPolicy: {
-      decision: output.decision,
-      reason: output.reason,
-      mode: output.mode,
-      redacted: output.redacted
-    },
+    ...(output &&
+    (kernel.stop === 'COMPLETED' ||
+      (output.mode === completedResponse.mode &&
+        output.text === completedResponse.text))
+      ? {
+          outputPolicy: {
+            decision: output.decision,
+            reason: output.reason,
+            mode: output.mode,
+            redacted: output.redacted
+          }
+        }
+      : {}),
     provider: {
       provider: modelProvider.name,
       model: config.model.model,
@@ -484,7 +450,10 @@ export async function executeConfiguredAgent(
     },
     configVersion: `${version.id}:v${version.version}`,
     executionMode: input.executionMode,
-    status: policy.decision === 'blocked' ? 'blocked' : 'completed',
+    status:
+      kernel.stop === 'COMPLETED' && policy.decision === 'blocked'
+        ? 'blocked'
+        : projection.status,
     startedAt,
     completedAt,
     latencyMs: Math.max(0, completedAt.getTime() - startedAt.getTime()),
@@ -554,17 +523,6 @@ function validateHistoryItem(rawItem: string): string {
     throw new DomainError('validation_failed', 'Test history item is invalid')
   }
   return rawItem
-}
-
-function readCompletionText(completion: unknown): unknown {
-  if (
-    typeof completion !== 'object' ||
-    completion === null ||
-    Array.isArray(completion)
-  ) {
-    return undefined
-  }
-  return (completion as { text?: unknown }).text
 }
 
 function validateApprovedKnowledge(
@@ -824,78 +782,6 @@ function fitTraceDurations(
   const scale = latencyMs / totalDurationMs
   return Object.fromEntries(
     names.map((name) => [name, (durations[name] ?? 0) * scale])
-  )
-}
-
-async function executePlannedTools(input: {
-  input: ControlledAgentExecutionInput
-  config: AgentConfig
-  intent: string
-  policy: ReturnType<typeof evaluatePlatformPolicy>
-  traceId: TraceId
-}): Promise<TestRunTrace['tools']> {
-  const toolNames = input.input.capabilityGateway
-    ? input.input.capabilityGateway
-        .planTools(input.config, input.intent)
-        .map((tool) => tool.toolName)
-    : []
-  if (toolNames.length === 0) return []
-
-  return Promise.all(
-    toolNames.map(async (toolName) => {
-      await emitPlatformEvent(input.input, 'tool.before', {
-        toolName,
-        dryRun: input.input.executionMode === 'TEST_LAB'
-      })
-      if (!input.input.capabilityGateway || !input.input.actor) {
-        const blocked = { name: toolName, status: 'blocked' as const }
-        await emitPlatformEvent(input.input, 'tool.after', blocked)
-        return blocked
-      }
-      const toolInput = { message: redactTestMessage(input.input.message) }
-      try {
-        let approval = input.input.capabilityApproval
-        if (!approval && input.input.resolveCapabilityApproval) {
-          approval =
-            (await input.input.resolveCapabilityApproval({
-              tenantId: input.input.tenantId,
-              agentId: input.input.agentId,
-              versionId: input.input.versionId,
-              toolName,
-              input: toolInput,
-              actor: input.input.actor!
-            })) ?? undefined
-        }
-        const result = await input.input.capabilityGateway.execute({
-          tenantId: input.input.tenantId,
-          agentId: input.input.agentId,
-          versionId: input.input.versionId,
-          config: input.config,
-          toolName,
-          input: toolInput,
-          actor: input.input.actor,
-          policy: input.policy,
-          dryRun: input.input.executionMode === 'TEST_LAB',
-          traceId: input.traceId,
-          ...(approval ? { approval } : {}),
-          ...(input.input.requireCapabilityApproval
-            ? { requireApproval: true }
-            : {}),
-          ...(input.input.onToolAudit
-            ? { onAudit: input.input.onToolAudit }
-            : {})
-        })
-        const completed = { name: toolName, status: result.status }
-        await emitPlatformEvent(input.input, 'tool.after', completed)
-        return completed
-      } catch (error) {
-        await emitPlatformEvent(input.input, 'tool.error', {
-          toolName,
-          reason: 'tool_execution_failed'
-        })
-        throw error
-      }
-    })
   )
 }
 

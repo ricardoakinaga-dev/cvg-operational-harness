@@ -1,0 +1,14 @@
+import pathlib
+O=pathlib.Path(__file__).resolve().parents[1]
+s=(O/'config/trace-reads.cjs').read_text()
+s=s.replace('const record=(p)=>', "const allowFiles=new Set(JSON.parse(read(review+'/input-index.json','utf8')).inputs.map(e=>e.copy));\nconst record=(p)=>")
+needle="p=String(p).replace(/^file:\\/\\//,'');"
+assert needle in s
+s=s.replace(needle,needle+"\n if(!allowFiles.has(p) && p!==scopePackage && !(packetDeps&&p.startsWith(packetDeps+'/')) && !p.startsWith(review+'/') && !p.startsWith(deps+'/') && !p.startsWith('/home/ricardo/.nvm/versions/node/v22.23.2/')) {const error='I1 strict denied unenumerated NodeFS read '+p;append(dest,JSON.stringify({pid:process.pid,path:p,denied:true,error})+'\\n');throw new Error(error)}\n")
+s+="\nconst cp=require('node:child_process');for(const method of ['exec','execSync','execFile','execFileSync','spawn','spawnSync','fork']){cp[method]=function(...args){const error='I1 strict denied child process '+method;append(dest,JSON.stringify({pid:process.pid,denied:true,childProcess:method,error})+'\\n');throw new Error(error)}}syncBuiltinESMExports();\n"
+(O/'config/trace-reads-strict.cjs').write_text(s)
+r=(O/'checkers/run.py').read_text().replace("NODE_OPTIONS='--require='+str(O/'config/trace-reads.cjs')", "NODE_OPTIONS='--require='+str(O/'config'/('trace-reads-strict.cjs' if name.endswith('-strict') else 'trace-reads.cjs'))")
+(O/'checkers/run-strict.py').write_text(r)
+for name in ['baseline','adversarial','replay','codec','known-bad','known-bad-alias']:
+ c=(O/'config'/(name+'.mjs')).read_text().replace(str(O/'cache'/name),str(O/'cache'/(name+'-strict')))
+ (O/'config'/(name+'-strict.mjs')).write_text(c)

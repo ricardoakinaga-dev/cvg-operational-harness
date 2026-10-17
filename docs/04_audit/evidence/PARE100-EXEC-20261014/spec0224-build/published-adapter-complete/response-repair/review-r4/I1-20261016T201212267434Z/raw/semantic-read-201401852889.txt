@@ -1,0 +1,663 @@
+
+packages/harness/src/iterative-runtime.ts:470:610
+470:   /** Boots the kernel profile of the iterative mode once (SPEC 0181). */
+471:   private bootKernel(): Promise<KernelHost> {
+472:     this.#kernel ??= KernelHost.boot(
+473:       [
+474:         budgetControl(),
+475:         pauseControl(this.options.pause),
+476:         logControl(this.options.log),
+477:         effectsControl(this.options.effects),
+478:         ...(this.options.sandbox ? [sandboxControl(this.options.sandbox)] : []),
+479:         policyControl(this.options.policy),
+480:         approvalsControl(
+481:           this.options.approvals,
+482:           this.options.capabilityFingerprint
+483:             ? { capabilityFingerprint: this.options.capabilityFingerprint }
+484:             : {}
+485:         ),
+486:         auditControl(this.options.audit, { action: 'harness.iterative' }),
+487:         ...(this.options.toolResultContext
+488:           ? [this.responseCheckpointControl()]
+489:           : []),
+490:         modelCapability(this.options.modelGateway),
+491:         toolsCapability(this.options.tools),
+492:         telemetryCapability(this.options.telemetry, {
+493:           name: 'harness.iterative'
+494:         })
+495:       ],
+496:       ITERATIVE_REQUIRED_SERVICES
+497:     )
+498:     return this.#kernel
+499:   }
+500: 
+501:   private kernelFor(run: LoopRun): KernelHost {
+502:     const entry = this.#turns.get(run)
+503:     /* v8 ignore next -- defensive: the loop only asks for its own bound run */
+504:     if (!entry) throw new Error('Kernel turn is not bound to this run.')
+505:     return entry.host
+506:   }
+507: 
+508:   private responseCheckpointControl(): KernelPlugin {
+509:     return {
+510:       name: 'control.iterative-response-checkpoint',
+511:       kind: 'control',
+512:       apply: (ctx) => {
+513:         ctx.on('model/before-call', async ({ turn, request }, next) => {
+514:           if (request.purpose === 'RESPONSE') {
+515:             const run = this.#responseRuns.get(turn)
+516:             if (!run)
+517:               throw new Error('Response turn has no native run binding.')
+518:             // beginModelRequest already owns and charged the native slot.
+519:             // Only its committed checkpoint may precede model entry.
+520:             await this.persistCheckpoint(run)
+521:           }
+522:           return next()
+523:         })
+524:       }
+525:     }
+526:   }
+527: 
+528:   /**
+529:    * Kernel view of the current run: the iterative active-duration budget and
+530:    * the caller's cancel signal drive the shared pipelines.
+531:    */
+532:   private turnFor(run: LoopRun): TurnState {
+533:     const entry = this.#turns.get(run)
+534:     /* v8 ignore next -- defensive: the loop only asks for its own bound run */
+535:     if (!entry) throw new Error('Kernel turn is not bound to this run.')
+536:     const turn = createTurnState(
+537:       run.input,
+538:       run.startedAtMs,
+539:       {
+540:         remainingMs: () => this.remainingDuration(run),
+541:         withDeadline: async (operation, ms = this.remainingDuration(run)) => {
+542:           const outcome = await this.withDeadline(
+543:             ms <= 0 ? new Promise<never>(() => undefined) : operation(),
+544:             ms
+545:           )
+546:           return outcome === DEADLINE_EXCEEDED ? DEADLINE : outcome
+547:         },
+548:         beginModelRequest: () => {
+549:           // Single pre-model gate (PDSH-004 / I11): consume one slot.
+550:           if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
+551:             return {
+552:               kind: 'stop',
+553:               stopReason: 'MAX_MODEL_CALLS',
+554:               response:
+555:                 'Model-call budget exhausted before the call was started.'
+556:             }
+557:           }
+558:           this.accountUsage(run, {
+559:             modelCalls: 1,
+560:             inputTokens: 0,
+561:             outputTokens: 0,
+562:             costUsd: 0
+563:           })
+564:           return undefined
+565:         },
+566:         recordModelResult: (result) => {
+567:           // Single post-result accounting site (PDSH-004).
+568:           this.accountUsage(run, {
+569:             modelCalls: 0,
+570:             inputTokens: result.inputTokens,
+571:             outputTokens: result.outputTokens,
+572:             costUsd: result.costUsd
+573:           })
+574:           if (
+575:             run.usage.inputTokens + run.usage.outputTokens >
+576:             run.input.budget.maxTokens
+577:           ) {
+578:             return {
+579:               kind: 'stop',
+580:               stopReason: 'MAX_TOKENS',
+581:               response:
+582:                 'Token budget exhausted before a response could be completed.'
+583:             }
+584:           }
+585:           if (run.usage.costUsd > run.input.budget.maxCostUsd) {
+586:             return {
+587:               kind: 'stop',
+588:               stopReason: 'MAX_COST',
+589:               response:
+590:                 'Cost budget exhausted before a response could be completed.'
+591:             }
+592:           }
+593:           return undefined
+594:         }
+595:       },
+596:       entry.signal
+597:     )
+598:     if (this.options.toolResultContext) this.#responseRuns.set(turn, run)
+599:     return turn
+600:   }
+601: 
+602:   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
+603:     const startedAtMs = Date.now()
+604:     const executionId = input.executionId ?? `execution_${input.correlationId}`
+605: 
+606:     if (!hasValidBoundaryInput(input)) {
+607:       return this.earlyFinish(
+608:         input,
+609:         'Runtime identity or execution budget is invalid.',
+610:         'UNSAFE_REQUEST',
+
+packages/harness/src/iterative-runtime.ts:630:760
+630:         startedAtMs
+631:       )
+632:     }
+633:     if (input.budget.maxDurationMs < 1) {
+634:       return this.earlyFinish(
+635:         input,
+636:         'Execution duration budget is not available.',
+637:         'MAX_DURATION',
+638:         startedAtMs
+639:       )
+640:     }
+641: 
+642:     let host: KernelHost
+643:     try {
+644:       host = await this.bootKernel()
+645:     } catch (error) {
+646:       /* v8 ignore start -- defensive: the fixed plugin list always satisfies the boot contract */
+647:       return this.earlyFinish(
+648:         input,
+649:         `Kernel could not start: ${errorMessage(error)}.`,
+650:         'INTERNAL_FAILURE',
+651:         startedAtMs
+652:       )
+653:       /* v8 ignore stop */
+654:     }
+655: 
+656:     let checkpoint: ExecutionCheckpoint | null = null
+657:     try {
+658:       checkpoint = await this.options.stepStore.loadCheckpoint(
+659:         input.tenantId,
+660:         executionId
+661:       )
+662:     } catch (error) {
+663:       return this.earlyFinish(
+664:         input,
+665:         `Execution checkpoint could not be trusted: ${errorMessage(error)}.`,
+666:         'STATE_CONFLICT',
+667:         startedAtMs
+668:       )
+669:     }
+670: 
+671:     if (checkpoint) {
+672:       if (
+673:         this.options.toolResultContext &&
+674:         checkpoint.checkpointVersion === 1 &&
+675:         checkpoint.state.observations.some(
+676:           (value) => value.type === 'TOOL_RESULT'
+677:         )
+678:       ) {
+679:         return this.earlyFinish(
+680:           input,
+681:           'LEGACY_RESULT_UNKNOWN: old tool results cannot be promoted to complete.',
+682:           'INSUFFICIENT_EVIDENCE',
+683:           startedAtMs
+684:         )
+685:       }
+686:       const rejection = this.rejectCheckpoint(checkpoint, input)
+687:       if (rejection) {
+688:         return this.earlyFinish(input, rejection, 'STATE_CONFLICT', startedAtMs)
+689:       }
+690:     }
+691: 
+692:     if (this.options.toolResultContext) {
+693:       let steps: readonly ExecutionStep[]
+694:       try {
+695:         steps = await this.options.stepStore.listSteps(
+696:           input.tenantId,
+697:           executionId
+698:         )
+699:       } catch {
+700:         return this.earlyFinish(
+701:           input,
+702:           'Native response attempt history is unavailable; reconciliation is required.',
+703:           'STATE_CONFLICT',
+704:           startedAtMs
+705:         )
+706:       }
+707:       if (
+708:         steps.some(
+709:           (step) =>
+710:             step.tenantId === input.tenantId &&
+711:             step.executionId === executionId &&
+712:             step.stepType === 'RESPOND' &&
+713:             step.stepNumber > (checkpoint?.state.stepNumber ?? 0)
+714:         )
+715:       ) {
+716:         // A durable attempt ahead of the checkpoint is not permission to
+717:         // replay it. Historical usage may be uncertain; preserve both facts.
+718:         return this.earlyFinish(
+719:           input,
+720:           'Native response attempt is ahead of its checkpoint; usage is uncertain and reconciliation is required. No new model call was made.',
+721:           'STATE_CONFLICT',
+722:           startedAtMs
+723:         )
+724:       }
+725:     }
+726: 
+727:     const run: LoopRun = {
+728:       checkpointToken: checkpoint
+729:         ? { checkpointId: checkpoint.checkpointId, digest: checkpoint.digest }
+730:         : null,
+731:       input,
+732:       executionId,
+733:       startedAtMs,
+734:       stepNumber: checkpoint?.state.stepNumber ?? 0,
+735:       state: checkpoint
+736:         ? {
+737:             ...checkpoint.state,
+738:             observations: [...checkpoint.state.observations],
+739:             openQuestions: [...checkpoint.state.openQuestions],
+740:             resolvedInputs: { ...checkpoint.state.resolvedInputs },
+741:             loopSignatures: [...checkpoint.state.loopSignatures]
+742:           }
+743:         : {
+744:             goal: input.agent.objective,
+745:             ...(this.options.capabilityFingerprint
+746:               ? { capabilityFingerprint: this.options.capabilityFingerprint }
+747:               : {}),
+748:             stepNumber: 0,
+749:             observations: [],
+750:             openQuestions: [],
+751:             resolvedInputs: {},
+752:             loopSignatures: []
+753:           },
+754:       usage: checkpoint
+755:         ? { ...checkpoint.budgetUsage }
+756:         : { ...EMPTY_BUDGET_USAGE },
+757:       observations: checkpoint ? [...checkpoint.state.observations] : [],
+758:       responseText: null,
+759:       lastDecision: null,
+760:       lastEvaluation: null,
+
+packages/harness/src/iterative-runtime.ts:1380:1445
+1380:       stepNumber,
+1381:       goal: run.state.goal,
+1382:       state: stateForContext,
+1383:       capabilities: this.availableTools(run),
+1384:       knowledgeAvailable: Boolean(this.options.knowledge),
+1385:       completionStrategy: run.input.agent.completionStrategy ?? 'DETERMINISTIC',
+1386:       allowedDecisionTypes: this.allowedDecisionTypes(run),
+1387:       budget: run.input.budget,
+1388:       budgetUsage: run.usage,
+1389:       ...((
+1390:         this.options.toolResultContext
+1391:           ? run.lastDecisionErrors.length > 0
+1392:           : run.usage.decisionRepairs > 0
+1393:       )
+1394:         ? {
+1395:             decisionRepair: {
+1396:               attempt: this.options.toolResultContext
+1397:                 ? run.usage.decisionRepairs + 1
+1398:                 : run.usage.decisionRepairs,
+1399:               errors: run.lastDecisionErrors
+1400:             }
+1401:           }
+1402:         : {})
+1403:     }
+1404:     const complete = Boolean(this.options.toolResultContext)
+1405:     const nativeInput = complete ? structuredClone(buildInput) : buildInput
+1406:     const building = this.contextEngine.build(
+1407:       complete ? structuredClone(nativeInput) : nativeInput
+1408:     )
+1409:     const built = complete
+1410:       ? await this.withDeadline(building, this.remainingDuration(run))
+1411:       : await building
+1412:     if (built === DEADLINE_EXCEEDED) {
+1413:       return {
+1414:         outcome: this.stop(
+1415:           'MAX_DURATION',
+1416:           'Context assembly exceeded the execution deadline.'
+1417:         )
+1418:       }
+1419:     }
+1420:     // A custom engine may retain and reuse its returned objects. Validate and
+1421:     // render the same detached value across the following async boundaries.
+1422:     const context = complete ? structuredClone(built) : built
+1423:     if (complete) {
+1424:       const native = await new DefaultContextEngine({
+1425:         tokenBudget: context.tokenBudget
+1426:       }).build(nativeInput)
+1427:       validateCompleteStepContext(context, native)
+1428:       for (const observation of run.observations) {
+1429:         if (observation.type === 'TOOL_RESULT') {
+1430:           assertCompleteToolObservation(observation)
+1431:           if (
+1432:             (observation.payload as { completion: string }).completion ===
+1433:             'UNAVAILABLE'
+1434:           ) {
+1435:             throw new ToolResultContextError(
+1436:               'RESULT_UNAVAILABLE',
+1437:               'A complete tool result is unavailable.'
+1438:             )
+1439:           }
+1440:         }
+1441:       }
+1442:     }
+1443:     return { context }
+1444:   }
+1445: 
+
+packages/harness/src/iterative-runtime.ts:1840:1870
+1840:   ): Promise<DispatchOutcome> {
+1841:     return dispatchRespond(this.dispatchContext, run, decision, stepNumber)
+1842:   }
+1843: 
+1844:   private async composeResponse(
+1845:     run: LoopRun,
+1846:     decision: LoopDecision
+1847:   ): Promise<
+1848:     { response: string } | { stopReason: StopReason; response: string }
+1849:   > {
+1850:     if (this.options.toolResultContext) {
+1851:       const assembled = await this.buildStepContext(run, run.state.stepNumber)
+1852:       if ('outcome' in assembled) {
+1853:         return {
+1854:           stopReason: assembled.outcome.stopReason,
+1855:           response: assembled.outcome.response
+1856:         }
+1857:       }
+1858:       return composeResponse(
+1859:         this.dispatchContext,
+1860:         run,
+1861:         decision,
+1862:         assembled.context
+1863:       )
+1864:     }
+1865:     return composeResponse(this.dispatchContext, run, decision)
+1866:   }
+1867: 
+1868:   private evaluatorFor(run: LoopRun): CompletionEvaluator {
+1869:     if (this.completionEvaluatorOverride) {
+1870:       return this.completionEvaluatorOverride
+
+packages/harness/src/iterative-runtime.ts:2010:2150
+2010:       ? retainCompleteObservations([...run.observations, observation])
+2011:       : [...run.observations, observation].slice(-MAX_CHECKPOINT_OBSERVATIONS)
+2012:     run.state = { ...run.state, observations: run.observations }
+2013:     await this.safeAudit(run, 'observation.recorded', {
+2014:       result: `${observation.source}:${observation.type}`
+2015:     })
+2016:   }
+2017: 
+2018:   private async recordStep(
+2019:     run: LoopRun,
+2020:     input: {
+2021:       stepNumber: number
+2022:       stepType: ExecutionStep['stepType']
+2023:       status: ExecutionStep['status']
+2024:       sideEffecting: boolean
+2025:       decisionType?: ExecutionStep['decisionType']
+2026:       reasonCode?: ExecutionStep['reasonCode']
+2027:       errorCode?: string
+2028:       observationRefs?: readonly string[]
+2029:     }
+2030:   ): Promise<void> {
+2031:     const stepId = `step_${run.executionId}_${input.stepNumber}_${input.stepType.toLowerCase()}`
+2032:     const terminal = input.status === 'SUCCEEDED' || input.status === 'FAILED'
+2033:     const decisionType =
+2034:       input.decisionType ?? run.lastDecision?.decisionType ?? undefined
+2035:     await this.options.stepStore.recordStep({
+2036:       stepId,
+2037:       executionId: run.executionId,
+2038:       tenantId: run.input.tenantId,
+2039:       stepNumber: input.stepNumber,
+2040:       stepType: input.stepType,
+2041:       status: input.status,
+2042:       attempt: 1,
+2043:       sideEffecting: input.sideEffecting,
+2044:       startedAt: this.clock().toISOString(),
+2045:       ...(terminal ? { completedAt: this.clock().toISOString() } : {}),
+2046:       ...(decisionType ? { decisionType } : {}),
+2047:       ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+2048:       observationRefs: input.observationRefs ?? [],
+2049:       ...(input.errorCode ? { errorCode: input.errorCode } : {})
+2050:     })
+2051:     if (
+2052:       (terminal || input.status === 'WAITING') &&
+2053:       !run.countedSteps.has(input.stepNumber)
+2054:     ) {
+2055:       run.countedSteps.add(input.stepNumber)
+2056:       run.usage.steps += 1
+2057:     }
+2058:     await this.safeAudit(
+2059:       run,
+2060:       input.status === 'RUNNING' ? 'step.started' : 'step.completed',
+2061:       { result: `${input.stepType}:${input.status}`, tool: null }
+2062:     )
+2063:   }
+2064: 
+2065:   private checkpointFor(
+2066:     run: LoopRun,
+2067:     state: LoopRun['state'] = run.state,
+2068:     usage: LoopRun['usage'] = run.usage
+2069:   ): UnsignedCheckpoint {
+2070:     return {
+2071:       executionId: run.executionId,
+2072:       tenantId: run.input.tenantId,
+2073:       checkpointVersion: this.options.toolResultContext ? 2 : 1,
+2074:       runtimeProfile: 'iterative',
+2075:       runtimeVersion: RUNTIME_V2_VERSION,
+2076:       orchestratorVersion: this.orchestratorVersion,
+2077:       stepNumber: state.stepNumber,
+2078:       state: {
+2079:         ...state,
+2080:         observations: this.options.toolResultContext
+2081:           ? retainCompleteObservations(run.observations)
+2082:           : run.observations.slice(-MAX_CHECKPOINT_OBSERVATIONS)
+2083:       },
+2084:       budgetUsage: { ...usage }
+2085:     }
+2086:   }
+2087: 
+2088:   private preflightDecisionReceipt(
+2089:     run: LoopRun,
+2090:     state: CompleteToolContextState,
+2091:     usage: LoopRun['usage']
+2092:   ): void {
+2093:     try {
+2094:       checkpointDigest(
+2095:         this.checkpointFor(
+2096:           run,
+2097:           { ...run.state, toolResultContext: state },
+2098:           usage
+2099:         )
+2100:       )
+2101:     } catch (error) {
+2102:       if (
+2103:         (error instanceof CheckpointError &&
+2104:           error.message === 'Checkpoint byte limit') ||
+2105:         (error instanceof CompleteJsonError &&
+2106:           error.code === 'RESULT_TOO_LARGE')
+2107:       ) {
+2108:         throw new ToolResultContextError(
+2109:           'CONTEXT_OVERFLOW',
+2110:           'No checkpoint space for the decision receipt.'
+2111:         )
+2112:       }
+2113:       throw error
+2114:     }
+2115:   }
+2116: 
+2117:   private async persistCheckpoint(run: LoopRun): Promise<void> {
+2118:     const checkpoint = sealCheckpoint(this.checkpointFor(run))
+2119:     if (this.options.toolResultContext) {
+2120:       const result = await this.options.stepStore.compareAndSwapCheckpoint!({
+2121:         tenantId: run.input.tenantId,
+2122:         executionId: run.executionId,
+2123:         expected: run.checkpointToken ?? null,
+2124:         next: checkpoint
+2125:       })
+2126:       if (
+2127:         result.status !== 'APPLIED' ||
+2128:         result.token.checkpointId !== checkpoint.checkpointId ||
+2129:         result.token.digest !== checkpoint.digest
+2130:       ) {
+2131:         run.checkpointConflict = true
+2132:         throw new ToolResultContextError(
+2133:           'STATE_CONFLICT',
+2134:           'Checkpoint compare-and-swap did not commit this writer.',
+2135:           'STATE_CONFLICT'
+2136:         )
+2137:       }
+2138:       run.checkpointToken = result.token
+2139:     } else {
+2140:       await this.options.stepStore.saveCheckpoint(checkpoint)
+2141:     }
+2142:   }
+2143: 
+2144:   private preflightCompleteTool(
+2145:     run: LoopRun,
+2146:     decision: LoopDecision,
+2147:     stepNumber: number
+2148:   ): void {
+2149:     if (!this.options.toolResultContext) return
+2150:     const tool = this.options.tools.resolve(
+
+packages/harness/src/iterative-runtime.ts:2300:2440
+2300:   private async finalize(
+2301:     run: LoopRun,
+2302:     outcome: Extract<DispatchOutcome, { kind: 'stop' }>,
+2303:     startedAtMs: number
+2304:   ): Promise<RuntimeResult> {
+2305:     let stopReason: StopReason = outcome.stopReason
+2306:     run.usage.activeDurationMs += Date.now() - startedAtMs
+2307:     if (!outcome.preserveCheckpoint && TERMINAL_STOPS.has(stopReason)) {
+2308:       try {
+2309:         await this.closePendingStep(run, stopReason)
+2310:       } catch {
+2311:         // The open step could not be closed: the terminal checkpoint must not
+2312:         // claim a clean stop while the step store disagrees.
+2313:         stopReason = 'INSUFFICIENT_EVIDENCE'
+2314:       }
+2315:     }
+2316:     run.state = { ...run.state, stopReason }
+2317:     let checkpointProven = true
+2318:     if (outcome.preserveCheckpoint) {
+2319:       // Intentional no-write: the durable pause must stay resumable after a
+2320:       // rejected resume binding.
+2321:     } else {
+2322:       try {
+2323:         await this.persistCheckpoint(run)
+2324:       } catch {
+2325:         checkpointProven = false
+2326:       }
+2327:     }
+2328:     const claimedReason: StopReason = checkpointProven
+2329:       ? stopReason
+2330:       : 'INSUFFICIENT_EVIDENCE'
+2331:     if (!checkpointProven) {
+2332:       run.state = { ...run.state, stopReason: claimedReason }
+2333:     }
+2334:     const result: RuntimeResult = {
+2335:       response: outcome.response,
+2336:       stopReason: claimedReason,
+2337:       ...(outcome.kind === 'stop' && outcome.approvalId
+2338:         ? { approvalId: outcome.approvalId }
+2339:         : {}),
+2340:       steps: run.usage.steps,
+2341:       modelCalls: run.usage.modelCalls,
+2342:       toolCalls: run.usage.toolCalls,
+2343:       usage: {
+2344:         inputTokens: run.usage.inputTokens,
+2345:         outputTokens: run.usage.outputTokens,
+2346:         costUsd: run.usage.costUsd
+2347:       },
+2348:       ...(run.lastToolObservation
+2349:         ? {
+2350:             toolResult: {
+2351:               /* v8 ignore next -- only a successful tool observation is stored */
+2352:               status:
+2353:                 (run.lastToolObservation.payload as { status?: string } | null)
+2354:                   ?.status === 'SUCCEEDED'
+2355:                   ? ('SUCCEEDED' as const)
+2356:                   : ('REJECTED' as const),
+2357:               output: (
+2358:                 run.lastToolObservation.payload as {
+2359:                   output?: unknown
+2360:                 } | null
+2361:               )?.output
+2362:             }
+2363:           }
+2364:         : {})
+2365:     }
+2366:     const finalResult = await this.recordAuditOutcome(
+2367:       run,
+2368:       result,
+2369:       claimedReason
+2370:     )
+2371:     this.recordTelemetry(run, finalResult, startedAtMs)
+2372:     return finalResult
+2373:   }
+2374: 
+2375:   private async recordAuditOutcome(
+2376:     run: LoopRun,
+2377:     result: RuntimeResult,
+2378:     stopReason: StopReason
+2379:   ): Promise<RuntimeResult> {
+2380:     const action =
+2381:       stopReason === 'COMPLETED'
+2382:         ? 'runtime.completed'
+2383:         : stopReason === 'NEEDS_USER_INPUT' ||
+2384:             stopReason === 'APPROVAL_REQUIRED'
+2385:           ? 'runtime.paused'
+2386:           : 'runtime.stopped'
+2387:     // Audit always gets at least a bounded grace window, so a budget stop
+2388:     // (possibly after an effect) is still recorded. If even that fails, the
+2389:     // result is degraded like any other unaudited outcome (ENG-008).
+2390:     try {
+2391:       const deadlineMs = Math.max(this.remainingDuration(run), AUDIT_GRACE_MS)
+2392:       const auditOrDeadline = await this.withDeadline(
+2393:         this.options.audit.append({
+2394:           actor: run.input.agent.id,
+2395:           agent: run.input.agent.id,
+2396:           tenant: run.input.tenantId,
+2397:           action,
+2398:           policy: null,
+2399:           approval: (result.approvalId as ApprovalId | undefined) ?? null,
+2400:           tool: run.lastToolObservation?.provenance.sourceId ?? null,
+2401:           result: stopReason,
+2402:           timestamp: this.clock().toISOString(),
+2403:           traceId: run.input.traceId,
+2404:           correlationId: run.input.correlationId
+2405:         }),
+2406:         deadlineMs
+2407:       )
+2408:       if (auditOrDeadline === DEADLINE_EXCEEDED) {
+2409:         throw new Error('audit deadline exceeded')
+2410:       }
+2411:       return result
+2412:     } catch {
+2413:       if (this.options.toolResultContext) {
+2414:         // A required audit veto cannot leave a healthy writer advertising a
+2415:         // successful terminal checkpoint. Keep all acknowledged usage/effects.
+2416:         run.state = { ...run.state, stopReason: 'INSUFFICIENT_EVIDENCE' }
+2417:         try {
+2418:           await this.persistCheckpoint(run)
+2419:         } catch {
+2420:           // Writer/lease uncertainty still returns the conservative outcome;
+2421:           // no successful correction or rollback is claimed without its ACK.
+2422:         }
+2423:       }
+2424:       return {
+2425:         ...result,
+2426:         response:
+2427:           'Execution could not be completed because audit recording failed.',
+2428:         stopReason: 'INSUFFICIENT_EVIDENCE'
+2429:       }
+2430:     }
+2431:   }
+2432: 
+2433:   private recordTelemetry(
+2434:     run: LoopRun,
+2435:     result: RuntimeResult,
+2436:     startedAtMs: number
+2437:   ): void {
+2438:     const telemetry: TelemetryEvent = {
+2439:       name: 'harness.iterative',
+2440:       latencyMs: Date.now() - startedAtMs,

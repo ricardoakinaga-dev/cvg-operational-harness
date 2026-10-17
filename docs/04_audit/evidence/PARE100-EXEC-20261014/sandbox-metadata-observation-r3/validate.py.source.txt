@@ -1,0 +1,181 @@
+from pathlib import Path
+import argparse
+import copy
+import hashlib
+import json
+import re
+from datetime import datetime
+from common import CAP, P, authority, digest, env_for, equal, integer, load, require, strict_load
+from seal import FILES
+
+UNDEFINED = {'$type': 'undefined'}
+FUNCTION = {'$type': 'function'}
+ECHO = {'text': 'synthetic echo only'}
+CASE_IDS = ['direct-WORKSPACE', 'capability-WORKSPACE', 'capability-NONE']
+CASE_KEYS = set('caseId route mode input beforeDescriptor registeredDescriptors submittedDescriptor capabilityFingerprint nativeResult gateCalls bodyCalls modelCalls decisions policyEvaluations approvalRequests auditEvents telemetryEvents kernelLogEvents journalRecord'.split())
+
+def timestamp(value):
+    require(isinstance(value, str) and re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z', value), 'timestamp shape')
+    return datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+def fingerprint(descriptor):
+    serialized = json.dumps({'schemaVersion': 'capability-composition-v1', 'descriptors': [descriptor]}, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(serialized.encode()).hexdigest()
+
+def evaluate(data, fixture):
+    require(set(data) == {'schema', 'boundary', 'syntheticPorts', 'cases'}, 'observation schema')
+    equal(data['schema'], 'cvg-sandbox-metadata-observation-v1', 'schema')
+    equal(data['boundary'], 'public source factory, single_pass only', 'boundary')
+    equal(data['syntheticPorts'], ['orchestrator', 'model', 'policy', 'approval', 'audit', 'telemetry', 'sandbox-deny'], 'synthetic ports')
+    equal([case['caseId'] for case in data['cases']], CASE_IDS, 'case identities')
+    results = []
+    for case in data['cases']:
+        require(set(case) == CASE_KEYS, 'case schema')
+        case_id = case['caseId']
+        route, mode = case_id.split('-', 1)
+        equal(case['route'], route, 'route')
+        equal(case['mode'], mode, 'mode')
+        original = fixture['cases'][case_id]
+        inp = original['input']
+        before = original['descriptor']
+        equal(case['input'], inp, 'fixed input')
+        equal(case['beforeDescriptor'], before, 'fixed descriptor')
+        submitted = copy.deepcopy(case['submittedDescriptor'])
+        if route == 'direct':
+            equal(submitted, {**before, 'execute': FUNCTION}, 'direct tool')
+            normalized = before
+            equal(case['registeredDescriptors'], UNDEFINED, 'no direct registry')
+            equal(case['capabilityFingerprint'], UNDEFINED, 'no direct fingerprint')
+        else:
+            normalized = case['registeredDescriptors'][0]
+            require(len(case['registeredDescriptors']) == 1, 'registry count')
+            without_mode = {key: value for key, value in before.items() if key != 'sandbox'}
+            # This observation can report preservation or loss, without changing the engine.
+            require(normalized == before or normalized == without_mode, 'unexpected normalization')
+            equal(normalized, before if 'sandbox' in normalized else without_mode, 'normalized descriptor types')
+            equal(submitted, normalized, 'submitted registry descriptor')
+            equal(case['capabilityFingerprint'], fingerprint(normalized), 'recomputed capability fingerprint')
+        runtime = copy.deepcopy(inp)
+        if route == 'capability':
+            runtime['capabilityFingerprint'] = fingerprint(normalized)
+        invocation = inp['requestedTool']
+        tool = {**normalized, 'execute': FUNCTION}
+        equal(case['decisions'], [{'input': {'runtime': runtime, 'availableTools': [normalized], 'step': 1},
+                                   'decision': {'action': 'CALL_TOOL', 'toolInvocation': invocation}}], 'decision causal payload')
+        context = {'tenantId': inp['tenantId'], 'agentId': inp['agent']['id'],
+                   'correlationId': inp['correlationId'], 'traceId': inp['traceId'],
+                   'operationKey': invocation['operationKey']}
+        equal(case['policyEvaluations'], [{'tenantId': inp['tenantId'], 'agentId': inp['agent']['id'],
+              'action': 'tool.execute', 'tool': tool, 'invocation': invocation,
+              'correlationId': inp['correlationId']}], 'policy causal payload')
+        contained = normalized.get('sandbox', 'NONE') != 'NONE'
+        equal(case['gateCalls'], [{'descriptor': tool, 'context': context,
+              'policy': {'requiredMode': 'WORKSPACE', 'workspaceScoped': True,
+                         'networkAllowed': False, 'subprocessAllowed': False}}] if contained else [], 'gate causal payload')
+        equal(case['bodyCalls'], [] if contained else [{'input': ECHO, 'context': {**context,
+              'signal': {'$type': 'AbortSignal', 'aborted': False, 'reason': UNDEFINED}}}], 'body causal payload')
+        equal(case['modelCalls'], [], 'no model')
+        equal(case['approvalRequests'], [], 'no approval')
+        reason = 'UNSAFE_REQUEST' if contained else 'COMPLETED'
+        expected_result = {'response': f'Sandbox denied tool "{before["id"]}": synthetic deny, no native backend.' if contained else json.dumps(ECHO, separators=(',', ':')),
+                           'stopReason': reason, 'steps': 1, 'modelCalls': 0, 'toolCalls': 0 if contained else 1,
+                           'usage': {'inputTokens': 0, 'outputTokens': 0, 'costUsd': 0}}
+        if not contained:
+            expected_result['toolResult'] = {'status': 'SUCCEEDED', 'output': ECHO}
+        equal(case['nativeResult'], expected_result, 'native result')
+        base_log = {'correlationId': inp['correlationId']}
+        equal(case['kernelLogEvents'], [
+            {'type': 'turn/start', **base_log},
+            {'type': 'tool/call', **base_log, 'toolId': before['id'], 'operationKey': invocation['operationKey'], 'input': ECHO},
+            {'type': 'tool/result', **base_log, 'toolId': before['id'], 'outcome': 'not_started' if contained else 'succeeded'},
+            {'type': 'turn/end', **base_log, 'stopReason': reason}
+        ], 'complete kernel log')
+        require(len(case['auditEvents']) == 1, 'audit count')
+        audit_time = case['auditEvents'][0]['timestamp']
+        timestamp(audit_time)
+        equal(case['auditEvents'], [{'actor': inp['agent']['id'], 'agent': inp['agent']['id'], 'tenant': inp['tenantId'],
+              'action': 'harness.single_pass', 'policy': 'ALLOW', 'approval': None, 'tool': before['id'],
+              'result': reason, 'timestamp': audit_time, 'traceId': inp['traceId'], 'correlationId': inp['correlationId']}], 'complete audit payload')
+        require(len(case['telemetryEvents']) == 1, 'telemetry count')
+        event = case['telemetryEvents'][0]
+        require(integer(event['latencyMs']) and integer(event['toolDurationMs']), 'telemetry timing types/range')
+        if contained:
+            equal(event['toolDurationMs'], 0, 'blocked tool was never dispatched')
+        equal(case['telemetryEvents'], [{'name': 'harness.single_pass', 'latencyMs': event['latencyMs'],
+              'errors': 1 if contained else 0, 'costUsd': 0, 'inputTokens': 0, 'outputTokens': 0,
+              'provider': None, 'toolDurationMs': event['toolDurationMs'], 'steps': 1,
+              'traceId': inp['traceId'], 'correlationId': inp['correlationId']}], 'complete telemetry payload')
+        journal = case['journalRecord']
+        if contained:
+            equal(journal, None, 'blocked journal')
+        else:
+            require(set(journal) == {'tenantId', 'operationKey', 'proposalHash', 'state', 'attemptId', 'createdAt', 'updatedAt', 'result'}, 'journal schema')
+            require(re.fullmatch(r'attempt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', journal['attemptId']), 'attempt UUID')
+            require(timestamp(journal['createdAt']) <= timestamp(journal['updatedAt']), 'journal clock order')
+            require(timestamp(journal['updatedAt']) <= timestamp(audit_time), 'journal confirmation precedes turn-end audit; clock anomaly is invalid/inconclusive')
+            proposal = {'schemaVersion': 'effect-proposal-v2', 'compositionFingerprint': fingerprint(normalized),
+                        'tool': {key: normalized[key] for key in ['id', 'version', 'sideEffect', 'idempotent', 'providerId', 'providerVersion']}, 'input': ECHO}
+            expected_proposal = hashlib.sha256(json.dumps(proposal, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+            equal(journal['proposalHash'], expected_proposal, 'recomputed journal proposal hash')
+            equal(journal, {**journal, 'tenantId': inp['tenantId'], 'operationKey': invocation['operationKey'],
+                           'state': 'CONFIRMED', 'result': ECHO}, 'journal causal payload')
+        results.append({'case': case_id, 'gateCalls': len(case['gateCalls']), 'bodyCalls': len(case['bodyCalls']), 'stopReason': reason, 'sandbox': normalized.get('sandbox', 'ABSENT')})
+    require(results[0]['gateCalls'] == 1 and results[2]['bodyCalls'] == 1, 'control cases')
+    return {'controls': 'PASS', 'invariant': 'FAIL' if results[1]['bodyCalls'] else 'PASS_SCOPED',
+            'cases': results, 'sameFingerprints': data['cases'][1]['capabilityFingerprint'] == data['cases'][2]['capabilityFingerprint'],
+            'fullParity': 'NOT_MEASURED', 'nativeContainment': 'NOT_TESTED', 'ML29': 'NOT_TESTED'}
+
+def validate_run(folder, trusted, expected_authority_sha, receipt_path, expected_receipt_sha):
+    require(digest(receipt_path) == expected_receipt_sha, 'untrusted capture receipt')
+    receipt = load(receipt_path)
+    require(set(receipt) == {'schema', 'run', 'files'} and receipt['schema'] == 'sandbox-observer-receipt-v2', 'receipt schema')
+    equal(receipt['run'], str(folder.resolve()), 'receipt run identity')
+    require(set(receipt['files']) == FILES, 'receipt membership')
+    require({f.name for f in folder.iterdir() if f.is_file()} == FILES, 'run file membership')
+    for name in FILES:
+        file = folder / name
+        require(file.is_file() and not file.is_symlink(), 'capture file must be regular')
+        equal(receipt['files'][name], {'sha256': digest(file), 'bytes': file.stat().st_size}, 'trusted capture file ' + name)
+    equal(load(folder / 'sources-before.json'), trusted['sources'], 'source before authority')
+    equal(load(folder / 'sources-after.json'), trusted['sources'], 'source after authority')
+    process = load(folder / 'process.json')
+    require(set(process) == {'schema', 'authoritySHA256', 'capture', 'snapshotErrors', 'sourceCount', 'sourcesUnchanged'}, 'process schema')
+    equal({k: v for k, v in process.items() if k != 'capture'}, {
+        'schema': 'sandbox-observer-process-v2', 'authoritySHA256': expected_authority_sha,
+        'snapshotErrors': [], 'sourceCount': len(trusted['sources']), 'sourcesUnchanged': True}, 'process identity')
+    c = process['capture']
+    require(set(c) == set('argv cwd env pid processGroup spawned exitCode joined remainingProcessGroup subreaper executionElapsedNs cleanupElapsedNs totalElapsedNs deadlineMs outputLimit discardedBytes eof errors descendantsReaped retainedBytes'.split()), 'capture schema')
+    equal(c['argv'], trusted['argv'], 'process argv')
+    equal(c['cwd'], trusted['cwd'], 'process cwd')
+    equal(c['env'], env_for(folder), 'process environment')
+    require(integer(c['pid'], 1, 2**31) and type(c['processGroup']) is int and c['pid'] == c['processGroup'], 'process/group identity')
+    for name, expected in {'spawned': True, 'exitCode': 0, 'joined': True, 'remainingProcessGroup': False,
+                           'subreaper': True, 'deadlineMs': 5000, 'outputLimit': CAP, 'discardedBytes': 0,
+                           'eof': {'stdout': True, 'stderr': True}, 'errors': []}.items():
+        equal(c[name], expected, 'capture.' + name)
+    require(integer(c['executionElapsedNs'], 1, 5000000000), 'absolute execution deadline')
+    require(integer(c['cleanupElapsedNs'], 0, 2200000000), 'cleanup deadline')
+    equal(c['totalElapsedNs'], c['executionElapsedNs'] + c['cleanupElapsedNs'], 'elapsed accounting')
+    require(isinstance(c['descendantsReaped'], list), 'descendants shape')
+    pids = []
+    for item in c['descendantsReaped']:
+        require(set(item) == {'pid', 'waitStatus'} and integer(item['pid'], 1, 2**31) and integer(item['waitStatus'], 0, 65535), 'reaped descendant')
+        pids.append(item['pid'])
+    require(len(set(pids)) == len(pids) and c['pid'] not in pids, 'reaped identity')
+    raw = (folder / 'stdout.txt').read_bytes()
+    equal((folder / 'stderr.txt').read_bytes(), b'', 'actual stderr empty')
+    require(0 < len(raw) <= CAP, 'stdout bound')
+    equal(c['retainedBytes'], len(raw), 'captured byte accounting')
+    return evaluate(strict_load(raw), load(P / 'fixture.json'))
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--run', required=True, type=Path)
+    parser.add_argument('--authority', required=True, type=Path)
+    parser.add_argument('--authority-sha', required=True)
+    parser.add_argument('--receipt', required=True, type=Path)
+    parser.add_argument('--receipt-sha', required=True)
+    args = parser.parse_args()
+    trusted = authority(args.authority, args.authority_sha)
+    result = validate_run(args.run.resolve(), trusted, args.authority_sha, args.receipt, args.receipt_sha)
+    print(json.dumps(result))

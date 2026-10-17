@@ -1,0 +1,37 @@
+import pathlib,json,hashlib
+R=pathlib.Path(__file__).resolve().parents[1]
+def sha(b):return hashlib.sha256(b).hexdigest()
+def classify(p):
+ if 'nodecache' in p or p.startswith('cache/'):return 'cache-private'
+ if p.startswith('controls/'):return 'bad-source-control-private'
+ if p.startswith('logs/transformed-bytes/'):return 'exact-observed-source-or-transform-private'
+ if p.startswith('logs/'):return 'commands-observations-and-errors-private'
+ if p.startswith('reports/'):return 'report-derived-private'
+ if p.endswith(('.json','.jsonl')):return 'raw-or-delivery-private'
+ return 'review-code-or-configuration-private'
+assert json.loads((R/'delivery-private.json').read_text())['verdict']=='REVISE'
+assert len(json.loads((R/'logs/inventory-post.json').read_text()))==384
+assert all(x['ok'] for x in json.loads((R/'logs/inventory-post.json').read_text()))
+assert len(json.loads((R/'logs/candidate-bindings.json').read_text()))==81
+assert all(x['ok'] for x in json.loads((R/'logs/candidate-bindings.json').read_text()))
+commands=json.loads((R/'logs/commands.json').read_text());assert any(x['metadataPath']=='logs/frozen-command.json' and x['exit']==0 for x in commands)
+assert all(all(k in x for k in ['pid','path','bytes','sha256']) for x in map(json.loads,(R/'logs/reads-flat-complete.jsonl').read_text().splitlines()))
+# Validate the bytes preserved by the transform logger, without changing artifacts.
+for x in map(json.loads,(R/'logs/transform.jsonl').read_text().splitlines()):
+ b=(R/'logs/transformed-bytes'/x['sha256']).read_bytes();assert len(b)==x['bytes'] and sha(b)==x['sha256']
+analysis=json.loads((R/'reports/evidence-analysis-private.json').read_text());assert all(not x['failures'] for x in analysis['balances'])
+assert [x['case'] for x in analysis['frozen'] if x['failures']]==['RR03','RR07']
+assert all(all(v for k,v in x.items() if k!='case') for x in json.loads((R/'reports/producer-comparison-private.json').read_text()))
+exclusions=['seal-manifest.json','seal-manifest.sha256'];files=[];dirs=[]
+for p in sorted(R.rglob('*')):
+ rel=str(p.relative_to(R));assert not p.is_symlink(),f'unexpected owned symlink {p}'
+ if p.is_dir():dirs.append({'path':rel,'empty':not any(p.iterdir())});continue
+ if rel in exclusions:continue
+ b=p.read_bytes();files.append(dict(path=rel,bytes=len(b),sha256=sha(b),**{'class':classify(rel)},private=True,empty=not b))
+seal={'visibility':'PRIVATE until Lead curation','verdict':'REVISE','scope':'I1 frozen complete-mode RESPONSE/native-terminal local synthetic review','inputManifestSha256':'6eb8fc60fac53190d4acbbdec0a285300c44e02c724904accdb8931623779ad5','candidateManifestSha256':'585d27ba3947ff06b6fbfeb0054e62b4ad26c6e9582fe49a32b22bb8795fdebd','files':files,'directories':dirs,'excludedOnlyForSelfHashCycle':exclusions,'reproduction':'Any further write invalidates seal; use a newly authorized owned output tree for reproduction.'}
+b=(json.dumps(seal,indent=2)+'\n').encode();(R/'seal-manifest.json').write_bytes(b);digest=sha(b);(R/'seal-manifest.sha256').write_text(digest+'  seal-manifest.json\n')
+actual={str(p.relative_to(R)) for p in R.rglob('*') if p.is_file() and str(p.relative_to(R)) not in exclusions}
+assert actual=={x['path'] for x in files}
+for x in files:
+ b=(R/x['path']).read_bytes();assert len(b)==x['bytes'] and sha(b)==x['sha256']
+print(json.dumps({'verdict':'REVISE','files':len(files),'bytes':sum(x['bytes'] for x in files),'emptyFiles':sum(x['empty'] for x in files),'emptyDirectories':sum(x['empty'] for x in dirs),'sealSHA256':digest,'verification':'all owned file entries, exact transform blobs and delivered claims verified; no writes after seal','report':str(R/'reports/report-private.md'),'delivery':str(R/'delivery-private.json')},indent=2))

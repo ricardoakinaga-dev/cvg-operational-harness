@@ -1,0 +1,51 @@
+import {afterAll, expect, it} from 'vitest'
+import {writeFileSync} from 'node:fs'
+import {canonicalizeCompleteJson, EMPTY_BUDGET_USAGE} from '@cvg/harness-contracts'
+import {HybridOrchestrator} from '@cvg/harness-orchestrator'
+import {createOperationalHarness, createCapabilityRegistry, InMemoryEffectJournal, InMemoryExecutionStepStore} from './packages/harness/src/index.ts'
+import {CompleteDecisionAdmission} from './packages/harness/src/complete-decision-admission.ts'
+import {phase3RuntimeInput, phase3AgentProfile, InMemoryApprovalEngine, RecordingAuditSink, RecordingTelemetrySink, ScriptedPolicyEngine} from './packages/harness/src/__tests__/fixtures/phase3-fixtures.ts'
+const evidence:any[]=[]
+afterAll(()=>writeFileSync('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r1/repro-r2.observations.json',JSON.stringify(evidence,null,2)+'\n'))
+const json=(v:unknown)=>canonicalizeCompleteJson(v,{maxBytes:1000000,maxDepth:64,maxNodes:1000000})
+function lane(output:unknown, interrupt=false, rules?:any[]) {
+ let bodies=0, calls=0, blocked=false
+ const requests:any[]=[];const checkpoints:any[]=[]
+ const capabilities=createCapabilityRegistry([{descriptor:{id:'synthetic.i1',version:'1',description:'Synthetic local I1 value',inputSchema:{type:'object'},outputSchema:{},risk:'LOW',sideEffect:'NONE',idempotent:true,requiresApproval:false,origin:'core',providerId:'synthetic.i1',providerVersion:'1'},implementation:{validateInput:()=>true,validateOutput:()=>true,execute:async()=>{bodies++;return {status:'SUCCEEDED',output}}}}])
+ const store=new InMemoryExecutionStepStore();const cas=store.compareAndSwapCheckpoint.bind(store)
+ store.compareAndSwapCheckpoint=async (input)=>{
+  if(interrupt&&input.next.state.observations.some(o=>o.type==='TOOL_RESULT')&&(input.next.state.stepNumber>=1||input.next.state.stopReason)){blocked=true;throw Error('I1 simulated process boundary: deny every later checkpoint')}
+  const r=await cas(input);if(r.status==='APPLIED')checkpoints.push(structuredClone(input.next));return r
+ }
+ const journal=new InMemoryEffectJournal()
+ const model={complete:async({signal,...request}:any)=>{calls++;requests.push(structuredClone(request));const f=JSON.parse(request.messages[1].content);const observed=f.items.find((x:any)=>x.value?.type==='TOOL_RESULT');const d=observed?{decisionType:'RESPOND',reasonCode:'GOAL_SATISFIED',responseText:json(observed.value.payload.output)}:{decisionType:'CALL_TOOL',reasonCode:'TOOL_REQUIRED',toolId:'synthetic.i1',toolVersion:'1',toolInput:{}};return {text:JSON.stringify(d),provider:'synthetic.i1',model:'i1',inputTokens:100,outputTokens:10,costUsd:0}}}
+ const compose=()=>createOperationalHarness({toolResultContext:{version:1},capabilities,effectJournal:journal,stepStore:store,iterativeOrchestrator:new HybridOrchestrator({...(rules?{rules}:{}),decisionModel:model,decisionInputCounter:{measure:()=>({counterId:'i1',counterVersion:'1',provider:'synthetic.i1',model:'i1',formattingVersion:'1',inputUpperBoundTokens:100,contextWindowTokens:10000,costUpperBoundUsd:0})},decisionModelSupportsMaxOutputTokens:true}),modelGateway:model,policy:new ScriptedPolicyEngine(),approvals:new InMemoryApprovalEngine(),audit:new RecordingAuditSink(),telemetry:new RecordingTelemetrySink()})
+ const base=phase3RuntimeInput();const input={...base,agent:phase3AgentProfile({tools:['synthetic.i1']}),capabilityFingerprint:capabilities.compositionFingerprint()}
+ return {compose,input,store,requests,checkpoints,counts:()=>({bodies,calls,blocked}),unblock:()=>{interrupt=false}}
+}
+it('positive controls preserve every JSON value and canonical bytes on the public factory',async()=>{
+ const shared={a:1};const values=[null,false,true,0,1.25,'',[],{},[null,false,'x'],{'10':2,'2':1,'nul\u0000':'\u0000'.repeat(4096),unicode:'é🙂',alias:[shared,shared]}]
+ const cases=[]
+ for(const output of values){const l=lane(output);const result=await l.compose().run(l.input);const checkpoint=await l.store.loadCheckpoint(l.input.tenantId,l.input.executionId!);const payload:any=checkpoint!.state.observations.find(o=>o.type==='TOOL_RESULT')!.payload;cases.push({output,result,checkpoint,requests:l.requests,counts:l.counts()});expect(result.stopReason).toBe('COMPLETED');expect(json(payload.output)).toBe(json(output));expect(l.counts().bodies).toBe(1)}
+ evidence.push({case:'public-all-json-positive',cases})
+})
+it('TR02 root depth 1: rejects a 33-level result before the next model',async()=>{
+ let output:any=null;for(let i=0;i<32;i++)output=[output]
+ const l=lane(output);const result=await l.compose().run(l.input);const checkpoint=await l.store.loadCheckpoint(l.input.tenantId,l.input.executionId!);evidence.push({case:'root-depth33',expected:'UNAVAILABLE RESULT_COMPLEXITY, one model call',result,checkpoint,requests:l.requests,counts:l.counts()});expect(result.stopReason).toBe('INSUFFICIENT_EVIDENCE');expect(l.counts().calls).toBe(1)
+})
+it('TR06 resumes a durably saved full result after recreating the public runtime',async()=>{
+ const l=lane('FULL-RESULT-'+ 'x'.repeat(4096),true);const first=await l.compose().run(l.input);const before=await l.store.loadCheckpoint(l.input.tenantId,l.input.executionId!);const stepsBefore=await l.store.listSteps(l.input.tenantId,l.input.executionId!);l.unblock();const resumed=await l.compose().run(l.input);const after=await l.store.loadCheckpoint(l.input.tenantId,l.input.executionId!);evidence.push({case:'public-saved-result-resume',first,before,stepsBefore,resumed,after,requests:l.requests,counts:l.counts()});expect(before!.state.observations.some(o=>o.type==='TOOL_RESULT')).toBe(true);expect(l.counts().bodies).toBe(1);expect(resumed.stopReason).toBe('COMPLETED')
+})
+it('TR05 same-step settlement is idempotent but another step must reject the binding',async()=>{
+ const run:any={input:{tenantId:'tenant_i1',correlationId:'corr_i1',budget:{maxModelCalls:10,maxTokens:10000,maxCostUsd:1,maxDecisionRepairs:1}},executionId:'exec_i1',usage:{...EMPTY_BUDGET_USAGE},state:{toolResultContext:{version:1,deliveredThroughStep:0,pendingDecisionAdmission:null,decisionAdmissions:[]}}}
+ const make=(stepNumber:number)=>new CompleteDecisionAdmission({run,stepNumber,tokenBudget:4000,signal:new AbortController().signal,remainingMs:()=>10000,persist:async()=>{},audit:async()=>{}})
+ const a=make(1);const receipt=await a.reserve({request:{messages:[{role:'system',content:'trusted'},{role:'user',content:'synthetic'}],context:{values:{},sourceIds:[],capturedAt:'2026-10-16T00:00:00.000Z'},budget:run.input.budget,correlationId:'corr_i1',purpose:'ORCHESTRATION',maxOutputTokens:512},measurement:{counterId:'i1',counterVersion:'1',provider:'synthetic.i1',model:'i1',formattingVersion:'1',inputUpperBoundTokens:100,contextWindowTokens:10000,costUpperBoundUsd:0},attempt:0})
+ const settlement:any={kind:'RESULT',admissionId:receipt.admissionId,requestSha256:receipt.requestSha256,result:{text:'{}',provider:'synthetic.i1',model:'i1',inputTokens:10,outputTokens:1,costUsd:0}}
+ await a.settle(settlement);const same=await a.settle(settlement);const next=make(2);let outcome:any;try{outcome={accepted:await next.settle(settlement)}}catch(e:any){outcome={rejected:e.code}}
+ evidence.push({case:'cross-step-settle',same,outcome,run});expect(outcome).toEqual({rejected:'STATE_CONFLICT'})
+})
+
+it('TR08 user resume preserves all 50 mandatory tool observations',async()=>{
+ const l=lane('retained synthetic result',false,[(context:any)=>context.stepNumber<=50?{decisionType:'CALL_TOOL',reasonCode:'TOOL_REQUIRED',toolId:'synthetic.i1',toolVersion:'1',toolInput:{round:context.stepNumber}}:context.pendingQuestion||!context.observations.some((o:any)=>o.type==='USER_MESSAGE')?{decisionType:'ASK_USER',reasonCode:'MISSING_INFORMATION',requestedInput:{questionType:'CLARIFICATION',missingFields:['answer'],promptIntent:'Synthetic answer required'}}:{decisionType:'RESPOND',reasonCode:'GOAL_SATISFIED',responseText:'Synthetic answer received'}]);
+ const input={...l.input,budget:{...l.input.budget,maxSteps:100,maxToolCalls:100}};const first=await l.compose().run(input);const before=await l.store.loadCheckpoint(input.tenantId,input.executionId!);const resumed=await l.compose().run({...input,resume:{kind:'user_input',message:'Synthetic answer'}} as any);const after=await l.store.loadCheckpoint(input.tenantId,input.executionId!);evidence.push({case:'capacity50-user-resume',first,before,resumed,after,counts:l.counts()});expect(first.stopReason).toBe('NEEDS_USER_INPUT');expect(before!.state.observations.filter(o=>o.type==='TOOL_RESULT')).toHaveLength(50);expect(resumed.stopReason).toBe('COMPLETED')
+})

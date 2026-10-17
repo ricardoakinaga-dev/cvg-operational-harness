@@ -1,0 +1,27 @@
+import os,json,pathlib,hashlib,re,collections
+r=pathlib.Path.cwd();p=r.parent/'review-packet';h=lambda x:hashlib.sha256(pathlib.Path(x).read_bytes()).hexdigest()
+pre=json.loads((r/'outputs/integrity-pre.json').read_text());a=json.loads((p/'packet-manifest.json').read_text());b=json.loads((p/'source-manifest.json').read_text())
+post={'packet_manifest_sha256':h(p/'packet-manifest.json'),'source_manifest_sha256':h(p/'source-manifest.json'),'packet':[dict(x,actual=h(p/x['path'])) for x in a],'source':[dict(x,packet_actual=h(p/x['copy']),live_actual=h(x['live']),private_actual=h(r/x['copy'][4:]) if x['copy'].startswith('cvg/') and (r/x['copy'][4:]).is_file() else None) for x in b]}
+packet_paths=sorted(str(x.relative_to(p)) for x in p.rglob('*') if x.is_file()); expected=sorted([x['path'] for x in a]+['packet-manifest.json']);assert packet_paths==expected
+mismatches={'packet':[x['path'] for x in post['packet'] if x['actual']!=x['sha256']],'source':[x['copy'] for x in post['source'] if x['packet_actual']!=x['sha256'] or x['live_actual']!=x['sha256']],'private':[x['copy'] for x in post['source'] if x['private_actual'] is not None and x['private_actual']!=x['sha256']]}
+assert pre==post and not any(mismatches.values())
+summary={'pre':pre,'post':post,'frozenSourceMembershipPre':[x['live'] for x in pre['source']],'frozenSourceMembershipPost':[x['live'] for x in post['source']],'packetMembership':packet_paths,'packetFileCount':len(packet_paths),'packetManifestEntries':len(a),'sourcePairs':len(b),'allUnchanged':pre==post,'mismatches':mismatches,'scope':'Manifest-defined 149 primary file pairs, not repository-wide membership or transitive dependency closure.'}
+(r/'source-integrity.json').write_text(json.dumps(summary,indent=2)+'\n')
+traces=[]
+for name in ['independent-strace.log','boundary-strace.log']:
+ lines=(r/'outputs'/name).read_text().splitlines();outside=[];sinks=collections.Counter();mutations=0;relative=[]
+ for line in lines:
+  if not (any(x in line for x in ['O_WRONLY','O_RDWR','O_CREAT','unlink(','unlinkat(','mkdir(','mkdirat(','rename(','renameat(','symlink(','symlinkat(','truncate(','pwrite64(','ftruncate(']) or re.search(r'\b(write|writev)\(',line)):continue
+  mutations+=1
+  for dest in re.findall(r'"(/[^"\\]*)"',line)+['/'+v for v in re.findall(r'\d+</([^>]+)>',line)]:
+   dest=dest.split('<char ')[0]
+   if dest.startswith(str(r)+'/') or dest==str(r):continue
+   if dest=='/dev/null':sinks[dest]+=1;continue
+   if dest.startswith('/dev/pts/'):sinks[dest]+=1;continue
+   outside.append({'path':dest,'line':line[:1500]})
+  if 'openat(' in line and re.search(r'"(?!/)[^"]+", O_(?:WRONLY|RDWR)',line):relative.append(line[:1500])
+ traces.append({'trace':name,'lines':len(lines),'mutationOrWriteLines':mutations,'outsideFileDestinations':outside,'nonpersistentSinks':dict(sinks),'relativeWriteOpenLines':relative})
+assert not any(x['outsideFileDestinations'] for x in traces)
+containment={'allowedWriteRoot':str(r),'observedOutsidePersistentWrites':[],'traces':traces,'nodeModules':{'rootSymlink':(r/'node_modules').is_symlink(),'entryLinks':'Preserved, link-text hashes in artifact manifest; targets not transitively snapshotted.'},'proceduralDeviation':'Initial read-only pwd/rg inventory command used the enclosing differential-tool-r3 cwd, not review-r3. It wrote no artifact and read only review-packet paths. All subsequent commands and all executions used private review-r3 or owned child HOME.','limits':'strace covers independently authored probes, not every bootstrap read or focused/fault-runner invocation; no OS sandbox claim.'}
+(r/'outputs/containment.json').write_text(json.dumps(containment,indent=2)+'\n')
+print(json.dumps({'allUnchanged':summary['allUnchanged'],'packetFileCount':len(packet_paths),'sourcePairs':len(b),'outsideWrites':len(containment['observedOutsidePersistentWrites']),'traceLines':sum(x['lines'] for x in traces),'relativeWrites':sum(len(x['relativeWriteOpenLines']) for x in traces)},indent=2))

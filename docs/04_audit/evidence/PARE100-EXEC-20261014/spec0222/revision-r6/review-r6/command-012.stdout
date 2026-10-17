@@ -1,0 +1,566 @@
+FILE cvg/packages/harness/src/effect-journal.ts
+109:   public async reserve(input: {
+110:     tenantId: string
+111:     operationKey: string
+112:     proposalHash: string
+113:     attemptId: string
+114:   }): Promise<EffectJournalRecord> {
+115:     const tenantId = bounded(input.tenantId, 'tenantId')
+116:     const operationKey = bounded(input.operationKey, 'operationKey')
+117:     const proposalHash = bounded(input.proposalHash, 'proposalHash')
+118:     const attemptId = bounded(input.attemptId, 'attemptId')
+119:     const identity = key(tenantId, operationKey)
+120:     const existing = this.records.get(identity)
+121:     if (existing) {
+122:       if (existing.proposalHash !== proposalHash) {
+123:         throw new EffectJournalError(
+124:           'Operation key is bound to a different proposal'
+125:         )
+126:       }
+127:       if (existing.state === 'FAILED') {
+128:         const timestamp = now()
+129:         const retried: EffectJournalRecord = {
+130:           tenantId: existing.tenantId,
+131:           operationKey: existing.operationKey,
+132:           proposalHash: existing.proposalHash,
+133:           state: 'RESERVED',
+134:           attemptId,
+135:           createdAt: existing.createdAt,
+136:           updatedAt: timestamp
+137:         }
+138:         this.records.set(identity, retried)
+139:         return clone(retried)
+140:       }
+141:       return clone(existing)
+142:     }
+143:     const timestamp = now()
+144:     const record: EffectJournalRecord = {
+145:       tenantId,
+146:       operationKey,
+147:       proposalHash,
+148:       state: 'RESERVED',
+149:       attemptId,
+150:       createdAt: timestamp,
+151:       updatedAt: timestamp
+152:     }
+153:     this.records.set(identity, record)
+154:     return clone(record)
+155:   }
+156: 
+246:   readonly compositionFingerprint?: string
+247:   /** Deterministic seam for synthetic tests; defaults to node:crypto UUIDs. */
+248:   readonly attemptIdFactory?: EffectAttemptIdFactory
+249: }
+250: 
+251: function proposalHash(
+252:   tool: ToolDefinition,
+253:   input: unknown,
+254:   compositionFingerprint: string | undefined
+255: ): string {
+256:   return createHash('sha256')
+257:     .update(
+258:       JSON.stringify({
+259:         schemaVersion: 'effect-proposal-v2',
+260:         compositionFingerprint: compositionFingerprint ?? null,
+261:         tool: {
+262:           id: tool.id,
+263:           version: tool.version,
+264:           sideEffect: tool.sideEffect,
+265:           idempotent: tool.idempotent,
+266:           providerId:
+267:             'providerId' in tool
+268:               ? (tool as { providerId?: unknown }).providerId
+269:               : undefined,
+270:           providerVersion:
+271:             'providerVersion' in tool
+272:               ? (tool as { providerVersion?: unknown }).providerVersion
+273:               : undefined
+274:         },
+275:         input
+276:       })
+277:     )
+278:     .digest('hex')
+279: }
+280: 
+281: /**
+282:  * Wraps only the executor side of a registry. Descriptors remain unchanged,
+283:  * policy and approval still run in the harness before this wrapper is called.
+284:  */
+285: export function createJournaledToolRegistry(
+286:   registry: ToolRegistry,
+287:   journal: EffectJournal,
+288:   options: JournaledToolRegistryOptions = {}
+289: ): ToolRegistry {
+290:   return {
+291:     list: () => registry.list(),
+292:     resolve: (toolId, version) => {
+293:       const tool = registry.resolve(toolId, version)
+294:       if (!tool) return undefined
+295:       return journaledTool(tool, journal, options)
+296:     }
+297:   }
+298: }
+299: 
+300: function journaledTool(
+301:   tool: ToolDefinition,
+302:   journal: EffectJournal,
+303:   options: JournaledToolRegistryOptions
+304: ): ToolDefinition {
+305:   const compositionFingerprint = options.compositionFingerprint
+306:     ? bounded(options.compositionFingerprint, 'compositionFingerprint')
+307:     : undefined
+308:   return {
+309:     ...tool,
+310:     execute: async (
+311:       input: unknown,
+312:       context: ToolExecutionContext
+313:     ): Promise<ToolResult> => {
+314:       const operationKey = bounded(context.operationKey ?? '', 'operationKey')
+315:       const attemptId = createEffectAttemptId(options.attemptIdFactory)
+316:       const reservation = await journal.reserve({
+317:         tenantId: context.tenantId,
+318:         operationKey,
+319:         proposalHash: proposalHash(tool, input, compositionFingerprint),
+320:         attemptId
+321:       })
+322:       if (reservation.state === 'CONFIRMED') {
+323:         return { status: 'SUCCEEDED', output: reservation.result }
+324:       }
+325:       if (
+326:         reservation.state === 'UNCERTAIN' ||
+327:         reservation.state === 'EFFECT_STARTED'
+328:       ) {
+329:         return {
+330:           status: 'REJECTED',
+331:           error:
+332:             'unknown_effect: explicit reconciliation is required before retry'
+333:         }
+334:       }
+335:       if (reservation.attemptId !== attemptId) {
+336:         return {
+337:           status: 'REJECTED',
+338:           error:
+339:             'unknown_effect: an existing reservation requires reconciliation'
+340:         }
+341:       }
+342:       await journal.markStarted({
+343:         tenantId: context.tenantId,
+344:         operationKey,
+345:         attemptId
+346:       })
+347:       try {
+348:         const result = await tool.execute(input, context)
+349:         if (
+350:           options.crashAfterEffectBeforeConfirm &&
+351:           result.status === 'SUCCEEDED'
+352:         ) {
+353:           await journal.markUncertain({
+354:             tenantId: context.tenantId,
+355:             operationKey,
+356:             attemptId,
+357:             reason: 'synthetic crash after effect before confirmation'
+358:           })
+359:           return {
+360:             status: 'REJECTED',
+361:             error:
+362:               'unknown_effect: synthetic crash after effect before confirmation'
+363:           }
+364:         }
+365:         if (result.status === 'SUCCEEDED') {
+366:           await journal.confirm({
+367:             tenantId: context.tenantId,
+368:             operationKey,
+369:             attemptId,
+370:             result: result.output
+371:           })
+372:         } else {
+373:           await journal.fail({
+374:             tenantId: context.tenantId,
+375:             operationKey,
+376:             attemptId,
+377:             error: result.error ?? 'tool failed'
+378:           })
+379:         }
+380:         return result
+381:       } catch (error) {
+382:         const message =
+383:           error instanceof Error ? error.message : 'tool execution failed'
+384:         await journal.markUncertain({
+385:           tenantId: context.tenantId,
+386:           operationKey,
+387:           attemptId,
+388:           reason: `unknown effect after executor failure: ${message}`
+389:         })
+390:         return {
+391:           status: 'REJECTED',
+392:           error: 'unknown_effect: executor outcome is uncertain'
+393:         }
+394:       }
+395:     }
+396:   }
+397: }
+FILE cvg/packages/harness/src/capability-boundary.ts
+165: export interface CapabilityComposition {
+166:   readonly registry: CapabilityRegistry
+167:   readonly fingerprint: string
+168: }
+169: 
+170: export function composeCapabilities(
+171:   registrations: readonly CapabilityRegistration[] = []
+172: ): CapabilityComposition {
+173:   const registry = createCapabilityRegistry(registrations)
+174:   return {
+175:     registry,
+176:     fingerprint: registry.compositionFingerprint()
+177:   }
+178: }
+179: 
+180: /**
+181:  * Internal executable bridge for the public harness composition root. This is
+182:  * deliberately not re-exported from the package entrypoint.
+183:  */
+184: export function createCapabilityToolRegistry(
+185:   registry: CapabilityRegistryPort
+186: ): ToolRegistry {
+187:   const snapshot = sorted(getRegistrations(registry))
+188:   return {
+189:     list: () => snapshot.map((registration) => toTool(registration)),
+190:     resolve: (capabilityId, version) => {
+191:       if (
+192:         !isBoundedIdentifier(capabilityId, MAX_ID_LENGTH) ||
+193:         !isBoundedVersion(version)
+194:       ) {
+195:         return undefined
+196:       }
+197:       const registration = snapshot.find(
+198:         (candidate) =>
+199:           candidate.descriptor.id === capabilityId &&
+200:           candidate.descriptor.version === version
+201:       )
+202:       return registration ? toTool(registration) : undefined
+203:     }
+204:   }
+205: }
+206: 
+207: function normalizeDescriptor(value: unknown): CapabilityDescriptor {
+208:   if (!isPlainRecord(value)) {
+209:     throw new CapabilityRegistryError(
+210:       'invalid_descriptor',
+211:       'Capability descriptor must be a plain object'
+212:     )
+213:   }
+214: 
+215:   const descriptor = value as Record<string, unknown>
+216:   if (!isBoundedIdentifier(descriptor.id, MAX_ID_LENGTH)) {
+217:     throw invalidDescriptor('Capability id is invalid')
+218:   }
+219:   if (!isBoundedVersion(descriptor.version)) {
+220:     throw invalidDescriptor('Capability version must be exact and bounded')
+221:   }
+222:   if (
+223:     typeof descriptor.description !== 'string' ||
+224:     descriptor.description.trim().length === 0 ||
+225:     descriptor.description.length > MAX_DESCRIPTION_LENGTH
+226:   ) {
+227:     throw invalidDescriptor('Capability description is invalid')
+228:   }
+229:   if (!ORIGINS.includes(descriptor.origin as CapabilityOrigin)) {
+230:     throw invalidDescriptor('Capability origin is invalid')
+231:   }
+232:   if (!isBoundedIdentifier(descriptor.providerId, MAX_ID_LENGTH)) {
+233:     throw invalidDescriptor('Capability provider id is invalid')
+234:   }
+235:   if (!isBoundedVersion(descriptor.providerVersion)) {
+236:     throw invalidDescriptor('Capability provider version is invalid')
+237:   }
+238:   if (
+239:     !isRisk(descriptor.risk) ||
+240:     !isSideEffect(descriptor.sideEffect) ||
+241:     typeof descriptor.idempotent !== 'boolean' ||
+242:     typeof descriptor.requiresApproval !== 'boolean'
+243:   ) {
+244:     throw invalidDescriptor('Capability governance metadata is invalid')
+245:   }
+246: 
+247:   const inputSchema = cloneJsonValue(descriptor.inputSchema)
+248:   const outputSchema = cloneJsonValue(descriptor.outputSchema)
+249:   return deepFreeze({
+250:     id: descriptor.id,
+251:     version: descriptor.version,
+252:     description: descriptor.description.trim(),
+253:     inputSchema,
+254:     outputSchema,
+255:     risk: descriptor.risk,
+256:     sideEffect: descriptor.sideEffect,
+257:     idempotent: descriptor.idempotent,
+258:     requiresApproval: descriptor.requiresApproval,
+259:     origin: descriptor.origin,
+260:     providerId: descriptor.providerId,
+261:     providerVersion: descriptor.providerVersion
+262:   }) as CapabilityDescriptor
+263: }
+264: 
+265: function normalizeRegistration(value: unknown): StoredRegistration {
+266:   try {
+267:     if (!isPlainRecord(value)) {
+268:       throw new CapabilityRegistryError(
+269:         'invalid_descriptor',
+270:         'Capability registration must be a plain object'
+271:       )
+272:     }
+273:     const registration = value as Record<string, unknown>
+274:     return {
+275:       descriptor: normalizeDescriptor(registration.descriptor),
+276:       implementation: normalizeImplementation(registration.implementation)
+277:     }
+278:   } catch (error) {
+279:     if (error instanceof CapabilityRegistryError) throw error
+280:     throw new CapabilityRegistryError(
+FILE cvg/docs/architecture/adrs/ADR-011-kernel-de-plugins-com-controles-obrigatorios.md
+1: # ADR-011 — Kernel de plugins com controles obrigatórios
+2: 
+3: - Data: 06/10/2026.
+4: - Direção: **confirmada pelo usuário em 06/10/2026**. Ele pediu para seguir a
+5:   linha do DeepSeek Harness, com plugins como forma de controle do agente, e
+6:   para executar o roteiro 1–6 na ordem.
+7: - Implementação: **não autorizada por esta ADR.** O contrato de plugins (SPEC,
+8:   T3) passa pela revisão do usuário antes do BUILD do kernel (passo 3 do
+9:   [0372](../../03_build/0372_kernel_plugins_roadmap.md)).
+10: - Fontes: [auditoria 0596](../../04_audit/0596_auditoria_motor_direcao_plugins_2026-10-06.md),
+11:   [ADR-002](ADR-002-runtime-separated-orchestrator.md),
+12:   [ADR-004](ADR-004-model-gateway-mandatory.md),
+13:   [ADR-005](ADR-005-policy-governs-effects.md),
+14:   [ADR-010](ADR-010-harness-product-isolation.md) e
+15:   [backlog do motor 0371](../../03_build/0371_engine_production_backlog.md).
+16: - Referência externa: DeepSeek Harness (MIT), cópia local em
+17:   `~/deepseek-harness`, commit `280156b0a9`.
+18: 
+19: ## Contexto
+20: 
+21: O Operational Harness é o produto. O Assistente de Plantão e os futuros agentes
+22: hospitalares são camadas acima, que o consomem por interfaces públicas
+23: (ADR-010). O motor é usado para tudo da área hospitalar, menos diagnóstico e
+24: prescrição.
+25: 
+26: O pipeline de governança está escrito à mão em três runtimes:
+27: `SinglePassGovernedRuntime`, o iterativo do `packages/harness` e o
+28: `GovernedAgentRuntime`. Há ainda dois pacotes de política e 19 pacotes no total.
+29: Cada defeito precisa ser corrigido mais de uma vez, e não existe um ponto único
+30: onde um controle novo possa entrar com garantia de que nada passa por fora dele.
+31: 
+32: ## Decisão
+33: 
+34: 1. **Kernel mínimo.** O kernel contém só o loop do agente (turno → passo →
+35:    chamada ao modelo → chamadas de ferramenta), o host de plugins e os pontos de
+36:    interceptação. Não contém política, provedor, canal ou domínio.
+37: 2. **Tudo o mais é plugin**, registrado por chave de serviço, com dependências
+38:    declaradas e registro reversível (descarregar desfaz; o dispose espera a
+39:    quiescência).
+40: 3. **Duas classes de plugin.**
+41:    - **Capacidade**, livremente trocável: adapter de modelo, ferramentas,
+42:      canais, transcrição, armazenamento.
+43:    - **Controle**, obrigatória: política, aprovação, orçamento, auditoria,
+44:      journal de efeitos, pausa e, depois, guarda de saída.
+45: 4. **Pontos de interceptação**, com modo de despacho declarado:
+46: 
+47:    | Ponto                        | Uso típico                                                             |
+48:    | ---------------------------- | ---------------------------------------------------------------------- |
+49:    | antes do passo               | aceitar ou rejeitar a entrada; pausa                                   |
+50:    | antes de chamar o modelo     | orçamento; redação de dados pessoais                                   |
+51:    | antes de chamar a ferramenta | política: permitir, negar ou pedir aprovação                           |
+52:    | guardas finais               | controles que só podem negar                                           |
+53:    | em volta da execução         | timeout, retry, métricas                                               |
+54:    | depois da ferramenta         | journal de efeitos; auditoria                                          |
+55:    | saída ao usuário             | guarda de saída (bloqueio de diagnóstico e prescrição, fase posterior) |
+56: 
+57: 5. **Invariantes de controle**, todas fail-closed:
+58:    - O kernel **não inicia** sem os controles obrigatórios do perfil.
+59:    - Controles não podem ser descarregados nem reordenados pelo agente, por
+60:      plugin de capacidade ou por configuração em runtime.
+61:    - **Guardas monotônicas** retornam "negar" ou "abster-se", nunca "permitir".
+62:      Nenhum plugin posterior desfaz uma negação.
+63:    - Aprovação ausente, sem canal ou sem resposta vira negação. Aprovação
+64:      concedida é de uso único e vinculada a tenant, ação, recurso, agente e
+65:      classificação.
+66:    - Toda chamada de ferramenta é registrada antes de executar. O resultado
+67:      final é imutável e registrado uma vez.
+68:    - Toda requisição ao modelo é reconstruível pelo log.
+69:    - Exceção em plugin vira erro normalizado e não derruba o loop.
+70:    - O cancelamento (`signal`) é obrigatório em todo o pipeline.
+71: 6. **Um só pipeline.** Single-pass, iterativo e o kernel durável do worker
+72:    passam a ser modos do mesmo loop, cumprindo o ENG-007.
+73: 7. **Preservar o que já é mais forte que a referência:** journal de efeitos e
+74:    aprovação duráveis em PostgreSQL, RLS por tenant e auditoria encadeada por
+75:    hash. Esses componentes viram plugins de controle sem perder comportamento.
+76: 
+77: ## O que se copia do DeepSeek Harness, e o que não
+78: 
+79: | Copia-se (o padrão)                                                                       | Não se copia                                                                                                        |
+80: | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+81: | Serviços por chave, dependência declarada e registro reversível (Cordis)                  | O código: é release candidate, avisa de quebras incompatíveis e o `SAFETY.md` diz que não está pronto para produção |
+82: | Eventos com modo de despacho declarado (`waterfall`, `serial`, `bail`, `emit`)            | Presets com shell, sistema de arquivos e rede livre                                                                 |
+83: | Pipeline pre-execute → guardas monotônicas → execute → post-execute → resultado congelado | Loop trocável por configuração: aqui o loop é do kernel                                                             |
+84: | "Model-visible means logged" e `tool/call` antes da execução                              | Skills e plugins de registro público instalados em runtime                                                          |
+85: | Padrões defensivos (`docs/defensive-patterns.md`)                                         | Sessão em JSONL local como fonte de verdade: aqui ela fica em PostgreSQL com RLS                                    |
+86: 
+87: ## Consequências
+88: 
+89: - Os perfis de agente declaram plugins de capacidade. Os controles vêm do perfil
+90:   do kernel e não são opcionais.
+91: - O Assistente de Plantão passa a ser um conjunto de plugins (canal WhatsApp,
+92:   transcrição, organizador) e usa aprovação, journal e auditoria do núcleo. Esta
+93:   ADR emenda a ADR-009 no ponto da missão: o assistente é o consumidor de
+94:   validação do harness. D1–D4, SPEC 0177 e barra 0368 continuam valendo para o
+95:   produto.
+96: - Antes do kernel, uma suíte de conformidade derivada das invariantes acima roda
+97:   contra o motor atual (caracterização). Ela continua verde durante toda a
+98:   migração.
+99: - `packages/policy` e `packages/policy-engine`, assim como `agent-core`, são
+100:   consolidados ou removidos na unificação (passo 4), conforme a SPEC.
+101: 
+102: ## Fora do escopo
+103: 
+104: Dado real, provider externo em execução, release, push, deploy, mudança das
+105: regras clínicas do `AGENTS.md` (agendamento automático depende de ADR própria)
+106: e a lista de agentes hospitalares.
+FILE cvg/packages/shared/src/lifecycle.ts
+1: export type ShutdownSignal = 'SIGTERM' | 'SIGINT'
+2: 
+3: export interface SignalSource {
+4:   once(event: string, listener: () => void): unknown
+5: }
+6: 
+7: export interface ShutdownEvent {
+8:   type:
+9:     | 'shutdown.started'
+10:     | 'shutdown.completed'
+11:     | 'shutdown.failed'
+12:     | 'shutdown.timeout'
+13:     | 'shutdown.ignored'
+14:   signal?: ShutdownSignal
+15:   code?: number
+16:   error?: string
+17: }
+18: 
+19: export interface ShutdownControllerOptions {
+20:   close: () => Promise<void> | void
+21:   flush?: () => Promise<void> | void
+22:   exit: (code: number) => void
+23:   log?: (event: ShutdownEvent) => void
+24:   timeoutMs?: number
+25:   signals?: ShutdownSignal[]
+26: }
+27: 
+28: export interface ShutdownController {
+29:   shutdown(signal?: ShutdownSignal, code?: number): Promise<void>
+30:   install(source: SignalSource): void
+31:   isShuttingDown(): boolean
+32: }
+33: 
+34: /**
+35:  * Graceful shutdown: stop accepting work (caller closes the server/pool),
+36:  * flush telemetry, then exit. Repeated signals are ignored; a hung close is
+37:  * bounded by a timeout that still exits non-zero.
+38:  */
+39: export function createShutdownController(
+40:   options: ShutdownControllerOptions
+41: ): ShutdownController {
+42:   const timeoutMs = options.timeoutMs ?? 15_000
+43:   const signals = options.signals ?? ['SIGTERM', 'SIGINT']
+44:   let shuttingDown = false
+45: 
+46:   const emit = (event: ShutdownEvent): void => {
+47:     options.log?.(event)
+48:   }
+49: 
+50:   const shutdown = async (
+51:     signal: ShutdownSignal = 'SIGTERM',
+52:     code = 0
+53:   ): Promise<void> => {
+54:     if (shuttingDown) {
+55:       emit({ type: 'shutdown.ignored', signal })
+56:       return
+57:     }
+58:     shuttingDown = true
+59:     emit({ type: 'shutdown.started', signal })
+60:     let settled = false
+61:     const timer = setTimeout(() => {
+62:       if (settled) return
+63:       settled = true
+64:       emit({ type: 'shutdown.timeout', signal })
+65:       options.exit(1)
+66:     }, timeoutMs)
+67:     timer.unref?.()
+68:     try {
+69:       await options.close()
+70:       await options.flush?.()
+71:       if (settled) return
+72:       settled = true
+73:       clearTimeout(timer)
+74:       emit({ type: 'shutdown.completed', signal, code })
+75:       options.exit(code)
+76:     } catch (error) {
+77:       if (settled) return
+78:       settled = true
+79:       clearTimeout(timer)
+80:       emit({
+81:         type: 'shutdown.failed',
+82:         signal,
+83:         error: error instanceof Error ? error.message : 'unknown_error'
+84:       })
+85:       options.exit(1)
+86:     }
+87:   }
+88: 
+89:   const install = (source: SignalSource): void => {
+90:     for (const signal of signals) {
+91:       source.once(signal, () => {
+92:         void shutdown(signal)
+93:       })
+94:     }
+95:   }
+96: 
+97:   return {
+98:     shutdown,
+99:     install,
+100:     isShuttingDown: () => shuttingDown
+101:   }
+102: }
+ORIGINAL BINDINGS FIRST TWO RECORDS
+[
+  {
+    "id": "contract:00275a5c10c0abb707ded3cc1eefda7408e5f0dbc48469bdbed35c10af100e67",
+    "contract_sha256": "d77a2931ff208e8e48c1783ba04d6b8d06a8b76d32bc02c92977e2ee0defa238",
+    "source": "packages/boot/plugin-manager/src/index.ts",
+    "source_sha256": "e835c6ecd02aa5d423906a3d1bb7f497242660e8c11d06af09facd17919cc69c",
+    "owner_task": "P100-040",
+    "scope": "CONTRACT",
+    "extraction_status": "STATIC",
+    "parity_status": "NOT_VERIFIED",
+    "procedure": null,
+    "procedure_status": "PENDING_BEHAVIORAL_CONTRACT",
+    "evidence": []
+  },
+  {
+    "id": "contract:01ff161ddc4ba63015148f2f4f36e60100fbc18a6d124aec7403dd2ff2061e24",
+    "contract_sha256": "18640b99c85aef4bf61b4adbdf506c7e4234058d8878f871787cf2691e4f2f01",
+    "source": "packages/host/plugin-inventory/src/types.ts",
+    "source_sha256": "4e2e2f79e7605f8b2f36c104d9c295df8035a931710ea2dcdbfc99d6fe4980f8",
+    "owner_task": "P100-040",
+    "scope": "CONTRACT",
+    "extraction_status": "STATIC",
+    "parity_status": "NOT_VERIFIED",
+    "procedure": null,
+    "procedure_status": "PENDING_BEHAVIORAL_CONTRACT",
+    "evidence": []
+  }
+]
+ORIGINAL BINDINGS KEY VALUE COUNTS
+extraction_status {'STATIC': 242, 'UNKNOWN': 29}
+owner_task {'P100-040': 199, 'P100-012': 72}
+parity_status {'NOT_VERIFIED': 271}
+procedure {None: 271}
+procedure_status {'PENDING_BEHAVIORAL_CONTRACT': 271}
+scope {'CONTRACT': 271}
+source {'packages/boot/plugin-manager/src/index.ts': 45, 'packages/host/plugin-inventory/src/types.ts': 27, 'packages/boot/hmr/src/index.ts': 25, 'packages/preset/agent-preset-registry/src/index.ts': 49, 'packages/boot/plugin-manager/src/types.ts': 90, 'packages/host/plugin-inventory/src/index.ts': 9, 'packages/preset/agent-preset-registry/src/invariant.ts': 4, 'packages/preset/agent-preset-registry/src/mount.ts': 19, 'packages/boot/plugin-manager/src/tools.ts': 3}
+source_sha256 {'e835c6ecd02aa5d423906a3d1bb7f497242660e8c11d06af09facd17919cc69c': 45, '4e2e2f79e7605f8b2f36c104d9c295df8035a931710ea2dcdbfc99d6fe4980f8': 27, '77e5fcb81d6e535c083986364821b908490256aef0462561537df4fb7355dc8a': 25, 'a60f6e59d86faacb2d697a30cd4b4b7e7f28f0242800b1e7cbc012ee056e03aa': 49, '1b301da79111c3711cb27082d69b3a005d961cf83edb67179282b40f00d50740': 90, 'bc1dafdb2e6303b7219762fd4df42f6097d61843c282c9f51591462d75ae6c87': 9, 'c870491c058657ce2103e8a060d363351130a8e7dd7038a39992634c3b1067e8': 4, '1aaf723bfc3b6be5d4d158422969182ea9dbda539104123bc01a087ccbb97d1c': 19, '2ce755d1b09eaaed96c00b039aa82c305bf208d55e2b3ac03cc92af63ba5aaad': 3}

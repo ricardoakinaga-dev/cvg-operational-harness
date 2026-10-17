@@ -1,3 +1,8 @@
+# PARE100 — BUILD local0224 aprovado pelo usuário — 16/10/2026
+
+- Usuário aprovou explicitamente [SPEC0224](../02_spec/0224_pare100_complete_tool_result_context.md), SHA`f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea`, pela resposta “Aprovar BUILD local da SPEC0224” ao item `call_8ac9d0eba9354176bbec02230b5b045d/0`. [Autoridade](../04_audit/evidence/PARE100-EXEC-20261014/spec0224-build/authority.json) SHA017124bc; somente worktree isolado/dados e modelos sintéticos/TR01–TR10.0220/0221/0222 continuam PENDING; nenhuma nova confirmação desse BUILD é necessária.
+- Task TOOL-RESULT-BUILD-001 registrada antes de código, `status: IN_PROGRESS`; `last_completed_action`: SPEC/critério/autoridade exatos validados e DAG codec/CAS, orquestrador e integração definido. `active_action_id` e `next_action`: `PARE100-EXEC:BUILD-TOOL-RESULT-0224`, implementar fatia pública opt-in conforme contrato aprovado e produzir evidência executável. Gates globais/paridade NOT_MEASURED,36critérios/2DONE_LOCAL/34abertos preservados; fonte/pins antigos que mudarem no BUILD serão STALE/requalificação pendente, sem reescrever gates para verde. Sem integração no runtime root ou release.
+
 # 0190 — SPEC Validation
 
 ## PR-301-WEBHOOK-CLOCK-GUARD — SPEC 0162 aceita por crítica independente; T3 humano pendente — 28/09/2026

@@ -1,0 +1,390 @@
+import { createHash, randomUUID } from 'node:crypto'
+import type {
+  DecisionAdmissionPort,
+  DecisionAdmissionRecord,
+  DecisionAdmissionReserveInput,
+  DecisionAdmissionSettlement,
+  ModelResult,
+  ModelUsage
+} from '@cvg/harness-contracts'
+import {
+  canonicalizeCompleteJson,
+  COMPLETE_DECISION_OUTPUT_TOKENS,
+  COMPLETE_DECISION_REQUEST_MAX_BYTES,
+  ToolResultContextError
+} from '@cvg/harness-contracts'
+import type { LoopRun } from './iterative-runtime.ts'
+
+interface AdmissionOptions {
+  readonly run: LoopRun
+  readonly stepNumber: number
+  readonly tokenBudget: number
+  readonly signal: AbortSignal
+  readonly remainingMs: () => number
+  readonly persist: () => Promise<void>
+  readonly audit: (action: string, result: string) => Promise<void>
+}
+
+function digest(value: unknown): string {
+  return createHash('sha256')
+    .update(
+      canonicalizeCompleteJson(value, {
+        maxBytes: COMPLETE_DECISION_REQUEST_MAX_BYTES,
+        maxDepth: 64,
+        maxNodes: 20_000
+      })
+    )
+    .digest('hex')
+}
+
+function finiteUsage(result: ModelResult): ModelUsage | null {
+  if (
+    !result ||
+    typeof result.text !== 'string' ||
+    typeof result.provider !== 'string' ||
+    typeof result.model !== 'string' ||
+    !Number.isSafeInteger(result.inputTokens) ||
+    result.inputTokens < 0 ||
+    !Number.isSafeInteger(result.outputTokens) ||
+    result.outputTokens < 0 ||
+    !Number.isFinite(result.costUsd) ||
+    result.costUsd < 0
+  )
+    return null
+  return {
+    modelCalls: 1,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    costUsd: result.costUsd
+  }
+}
+
+/** Native, checkpoint-backed decision accounting. The model cannot issue receipts. */
+export class CompleteDecisionAdmission implements DecisionAdmissionPort {
+  private queue: Promise<unknown> = Promise.resolve()
+  private closed = false
+
+  public constructor(private readonly options: AdmissionOptions) {}
+
+  private serial<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(operation)
+    this.queue = next.catch(() => undefined)
+    return next
+  }
+
+  public reserve(
+    input: DecisionAdmissionReserveInput
+  ): Promise<DecisionAdmissionRecord> {
+    return this.serial(() => this.reserveNow(input))
+  }
+
+  public settle(
+    input: DecisionAdmissionSettlement
+  ): Promise<DecisionAdmissionRecord> {
+    return this.serial(() => this.settleNow(input))
+  }
+
+  /** Close synchronously, then persist uncertainty before accepting a late result. */
+  public close(reason = 'decision_closed'): Promise<void> {
+    this.closed = true
+    return this.serial(async () => {
+      const state = this.state()
+      if (state.pendingDecisionAdmission) {
+        const record = state.decisionAdmissions.find(
+          (value) => value.admissionId === state.pendingDecisionAdmission
+        )
+        if (!record || record.status !== 'RESERVED') throw this.conflict()
+        await this.unknown(record, reason)
+      }
+    })
+  }
+
+  private state() {
+    const state = this.options.run.state.toolResultContext
+    if (!state || state.version !== 1) throw this.conflict()
+    return state
+  }
+
+  private conflict(): ToolResultContextError {
+    return new ToolResultContextError(
+      'STATE_CONFLICT',
+      'Decision admission identity or state conflicts.',
+      'STATE_CONFLICT'
+    )
+  }
+
+  private async reserveNow(
+    input: DecisionAdmissionReserveInput
+  ): Promise<DecisionAdmissionRecord> {
+    const { run, stepNumber, signal } = this.options
+    if (this.closed || signal.aborted) {
+      throw new ToolResultContextError(
+        'DECISION_USAGE_UNKNOWN',
+        'Decision admission is closed.',
+        'CANCELLED'
+      )
+    }
+    if (this.options.remainingMs() <= 0) {
+      throw new ToolResultContextError(
+        'DECISION_USAGE_UNKNOWN',
+        'Decision deadline elapsed.',
+        'MAX_DURATION'
+      )
+    }
+    const state = this.state()
+    if (
+      state.pendingDecisionAdmission ||
+      state.decisionAdmissions.some((value) => value.status === 'UNKNOWN')
+    )
+      throw this.conflict()
+    const { request, measurement } = input
+    const purpose = request.purpose
+    if (
+      (purpose !== 'ORCHESTRATION' && purpose !== 'REPAIR') ||
+      request.correlationId !== run.input.correlationId ||
+      request.maxOutputTokens !== COMPLETE_DECISION_OUTPUT_TOKENS ||
+      !Number.isSafeInteger(input.attempt) ||
+      input.attempt < 0 ||
+      !Number.isSafeInteger(measurement.inputUpperBoundTokens) ||
+      measurement.inputUpperBoundTokens < 0 ||
+      !Number.isSafeInteger(measurement.contextWindowTokens) ||
+      measurement.contextWindowTokens < 1 ||
+      !Number.isFinite(measurement.costUpperBoundUsd) ||
+      measurement.costUpperBoundUsd < 0 ||
+      [
+        measurement.counterId,
+        measurement.counterVersion,
+        measurement.provider,
+        measurement.model,
+        measurement.formattingVersion
+      ].some(
+        (value) =>
+          typeof value !== 'string' ||
+          !value ||
+          value.length > 512 ||
+          value.includes('\0')
+      )
+    )
+      throw new ToolResultContextError(
+        'ADMISSION_UNAVAILABLE',
+        'Invalid qualified decision measurement.'
+      )
+    const requestSha256 = digest(request)
+    const inputTokens = measurement.inputUpperBoundTokens
+    if (
+      inputTokens > this.options.tokenBudget ||
+      inputTokens + COMPLETE_DECISION_OUTPUT_TOKENS >
+        measurement.contextWindowTokens
+    ) {
+      throw new ToolResultContextError(
+        'CONTEXT_OVERFLOW',
+        'The complete decision input does not fit its qualified context.'
+      )
+    }
+    if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
+      throw new ToolResultContextError(
+        'CONTEXT_OVERFLOW',
+        'No decision model-call slot remains.',
+        'MAX_MODEL_CALLS'
+      )
+    }
+    if (
+      run.usage.inputTokens +
+        run.usage.outputTokens +
+        inputTokens +
+        COMPLETE_DECISION_OUTPUT_TOKENS >
+      run.input.budget.maxTokens
+    ) {
+      throw new ToolResultContextError(
+        'CONTEXT_OVERFLOW',
+        'Insufficient decision token reserve.',
+        'MAX_TOKENS'
+      )
+    }
+    if (
+      run.usage.costUsd + measurement.costUpperBoundUsd >
+      run.input.budget.maxCostUsd
+    ) {
+      throw new ToolResultContextError(
+        'CONTEXT_OVERFLOW',
+        'Insufficient decision cost reserve.',
+        'MAX_COST'
+      )
+    }
+    if (
+      purpose === 'REPAIR' &&
+      run.usage.decisionRepairs + 1 > (run.input.budget.maxDecisionRepairs ?? 1)
+    ) {
+      throw new ToolResultContextError(
+        'ADMISSION_UNAVAILABLE',
+        'Decision repair limit exhausted.',
+        'MODEL_FAILURE'
+      )
+    }
+    const record: DecisionAdmissionRecord = {
+      admissionId: `admission_${randomUUID()}`,
+      tenantId: run.input.tenantId,
+      executionId: run.executionId,
+      stepNumber,
+      attempt: state.decisionAdmissions.filter(
+        (value) => value.stepNumber === stepNumber
+      ).length,
+      purpose,
+      requestSha256,
+      measurement: structuredClone(measurement),
+      reserved: {
+        modelCalls: 1,
+        inputTokens,
+        outputTokens: COMPLETE_DECISION_OUTPUT_TOKENS,
+        costUsd: measurement.costUpperBoundUsd
+      },
+      status: 'RESERVED'
+    }
+    run.usage.modelCalls += 1
+    run.usage.inputTokens += record.reserved.inputTokens
+    run.usage.outputTokens += record.reserved.outputTokens
+    run.usage.costUsd += record.reserved.costUsd
+    if (purpose === 'REPAIR') run.usage.decisionRepairs += 1
+    run.state.toolResultContext = {
+      ...state,
+      pendingDecisionAdmission: record.admissionId,
+      decisionAdmissions: [...state.decisionAdmissions, record]
+    }
+    await this.options.persist()
+    await this.options.audit('decision.admission.reserved', requestSha256)
+    // The receipt is returned only after the checkpoint commit and audit.
+    return structuredClone(record)
+  }
+
+  private async replace(record: DecisionAdmissionRecord): Promise<void> {
+    const state = this.state()
+    this.options.run.state.toolResultContext = {
+      ...state,
+      pendingDecisionAdmission:
+        record.status === 'RESERVED' ? record.admissionId : null,
+      decisionAdmissions: state.decisionAdmissions.map((value) =>
+        value.admissionId === record.admissionId ? record : value
+      )
+    }
+    try {
+      await this.options.persist()
+    } catch (error) {
+      this.options.run.state.toolResultContext = state
+      throw error
+    }
+  }
+
+  private async unknown(
+    record: DecisionAdmissionRecord,
+    reason: string,
+    actual?: ModelUsage
+  ): Promise<DecisionAdmissionRecord> {
+    const next: DecisionAdmissionRecord = {
+      ...record,
+      status: 'UNKNOWN',
+      unknownReason: /^[a-zA-Z0-9_:-]{1,128}$/.test(reason)
+        ? reason
+        : 'decision_model_failed',
+      ...(actual ? { actual } : {})
+    }
+    if (actual) {
+      const usage = this.options.run.usage
+      usage.inputTokens +=
+        Math.max(record.reserved.inputTokens, actual.inputTokens) -
+        record.reserved.inputTokens
+      usage.outputTokens +=
+        Math.max(record.reserved.outputTokens, actual.outputTokens) -
+        record.reserved.outputTokens
+      usage.costUsd +=
+        Math.max(record.reserved.costUsd, actual.costUsd) -
+        record.reserved.costUsd
+    }
+    await this.replace(next)
+    return structuredClone(next)
+  }
+
+  private async settleNow(
+    input: DecisionAdmissionSettlement
+  ): Promise<DecisionAdmissionRecord> {
+    const { run } = this.options
+    const record = this.state().decisionAdmissions.find(
+      (value) => value.admissionId === input.admissionId
+    )
+    if (
+      !record ||
+      record.tenantId !== run.input.tenantId ||
+      record.executionId !== run.executionId ||
+      record.requestSha256 !== input.requestSha256
+    )
+      throw this.conflict()
+    if (record.status === 'SETTLED') {
+      if (
+        input.kind !== 'RESULT' ||
+        digest(input.result) !== record.resultSha256
+      )
+        throw this.conflict()
+      return structuredClone(record)
+    }
+    if (
+      record.status !== 'RESERVED' ||
+      this.state().pendingDecisionAdmission !== record.admissionId
+    )
+      throw this.conflict()
+    if (input.kind === 'UNKNOWN') return this.unknown(record, input.reason)
+    if (
+      this.closed ||
+      this.options.signal.aborted ||
+      this.options.remainingMs() <= 0
+    ) {
+      await this.unknown(record, 'decision_closed')
+      throw new ToolResultContextError(
+        'DECISION_USAGE_UNKNOWN',
+        'A late decision result cannot be accepted.'
+      )
+    }
+    const actual = finiteUsage(input.result)
+    if (
+      !actual ||
+      input.result.provider !== record.measurement.provider ||
+      input.result.model !== record.measurement.model ||
+      actual.inputTokens > record.reserved.inputTokens ||
+      actual.outputTokens > record.reserved.outputTokens ||
+      actual.costUsd > record.reserved.costUsd
+    ) {
+      await this.unknown(record, 'ADMISSION_BREACH', actual ?? undefined)
+      await this.options.audit(
+        'decision.admission.breach',
+        record.requestSha256
+      )
+      throw new ToolResultContextError(
+        'ADMISSION_BREACH',
+        'The model violated its qualified decision bounds.'
+      )
+    }
+    const resultSha256 = digest(input.result)
+    const usage = run.usage
+    const previous = {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      costUsd: usage.costUsd
+    }
+    usage.inputTokens += actual.inputTokens - record.reserved.inputTokens
+    usage.outputTokens += actual.outputTokens - record.reserved.outputTokens
+    usage.costUsd += actual.costUsd - record.reserved.costUsd
+    const settled: DecisionAdmissionRecord = {
+      ...record,
+      status: 'SETTLED',
+      actual,
+      resultSha256
+    }
+    try {
+      await this.replace(settled)
+    } catch (error) {
+      // No acknowledged settlement: retain the pre-call conservative charge.
+      Object.assign(usage, previous)
+      throw error
+    }
+    await this.options.audit('decision.admission.settled', record.requestSha256)
+    return structuredClone(settled)
+  }
+}

@@ -1,0 +1,15 @@
+import os,sys,json,time,subprocess,signal,hashlib
+from pathlib import Path
+O=Path(__file__).resolve().parent
+mode=sys.argv[1]
+env={'PATH':'/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin','HOME':str(O/'home'),'TMPDIR':str(O/'tmp'),'TMP':str(O/'tmp'),'TEMP':str(O/'tmp'),'XDG_CACHE_HOME':str(O/'xdg-cache'),'XDG_CONFIG_HOME':str(O/'xdg-config'),'XDG_DATA_HOME':str(O/'xdg-data'),'XDG_STATE_HOME':str(O/'xdg-state'),'CI':'true','CVG_TEST_SCOPE':'core','LANG':'C.UTF-8'}
+if mode.startswith('explicit'):env['CVG_DIFFERENTIAL_EVIDENCE_DIR']=str(O/'explicit-evidence')
+argv=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',str(O/'candidate/node_modules/vitest/vitest.mjs'),'run','tests/differential/tool-turn-differential.test.ts','tests/differential/reply-differential.test.ts','tests/differential/model-failure-differential.test.ts','tests/differential/evidence-lifecycle.test.js','--config',str(O/'private.config.mts'),'--maxWorkers=1']
+start=time.time(); log=O/'raw'/f'{mode}.log'
+with log.open('wb') as f:
+ p=subprocess.Popen(argv,cwd=O/'candidate',env=env,stdout=f,stderr=subprocess.STDOUT,start_new_session=True)
+ try:code=p.wait(timeout=90); expired=False
+ except subprocess.TimeoutExpired:
+  os.killpg(p.pid,signal.SIGKILL); code=p.wait(timeout=3);expired=True
+r={'argv':argv,'cwd':str(O/'candidate'),'environment':env,'pid':p.pid,'start':start,'end':time.time(),'deadlineSeconds':90,'exit':code,'timeout':expired,'logSHA256':hashlib.sha256(log.read_bytes()).hexdigest(),'tmpRemaining':sorted(x.name for x in (O/'tmp').iterdir())}
+(O/'raw'/f'{mode}.command.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r,indent=2)); print(log.read_text()[-4000:])

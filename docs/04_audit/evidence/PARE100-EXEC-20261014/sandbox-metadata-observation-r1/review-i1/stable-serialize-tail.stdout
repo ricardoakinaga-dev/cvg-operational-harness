@@ -1,0 +1,45 @@
+559:   try {
+560:     if (Array.isArray(value)) {
+561:       if (value.length > MAX_JSON_ARRAY_LENGTH) {
+562:         throw new Error('JSON array budget exceeded')
+563:       }
+564:       const items: string[] = []
+565:       for (let index = 0; index < value.length; index += 1) {
+566:         if (!Object.prototype.hasOwnProperty.call(value, index)) {
+567:           throw new Error('Sparse arrays are not supported')
+568:         }
+569:         items.push(stableSerialize(value[index], state, depth + 1))
+570:       }
+571:       return boundedSerialized(`[${items.join(',')}]`)
+572:     }
+573:     if (!isPlainRecord(value)) throw new Error('Value is not a plain object')
+574:     const keys = Object.keys(value)
+575:     if (
+576:       keys.length > MAX_JSON_KEYS ||
+577:       Object.getOwnPropertySymbols(value).length > 0 ||
+578:       Object.getOwnPropertyNames(value).length !== keys.length
+579:     ) {
+580:       throw new Error('JSON object budget or shape exceeded')
+581:     }
+582:     const parts: string[] = []
+583:     for (const key of keys.sort()) {
+584:       if (key.length > MAX_JSON_KEY_LENGTH || UNSAFE_JSON_KEYS.has(key)) {
+585:         throw new Error('Unsafe JSON object key')
+586:       }
+587:       const property = Object.getOwnPropertyDescriptor(value, key)
+588:       if (!property || !('value' in property)) {
+589:         throw new Error('Accessor properties are not supported')
+590:       }
+591:       parts.push(
+592:         `${JSON.stringify(key)}:${stableSerialize(property.value, state, depth + 1)}`
+593:       )
+594:     }
+595:     return boundedSerialized(`{${parts.join(',')}}`)
+596:   } finally {
+597:     state.seen.delete(value)
+598:   }
+599: }
+600: 
+601: function boundedSerialized(value: string): string {
+602:   if (value.length > MAX_JSON_BYTES) {
+603:     throw new Error('JSON byte budget exceeded')

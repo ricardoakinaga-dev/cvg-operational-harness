@@ -1,0 +1,63 @@
+import pathlib,json,hashlib,os,stat,shutil
+R=pathlib.Path(__file__).parent;m=json.loads((R/'manifest-snapshot.json').read_text());A=pathlib.Path(m['artifactRoot']);dep=pathlib.Path(m['allowedDependencyMirror']);realdep=dep.resolve()
+H=lambda b:hashlib.sha256(b).hexdigest()
+def save(n,v):
+ with (R/n).open('x') as f:json.dump(v,f,indent=2)
+before=json.loads((R/'inputs-before.json').read_text());after=[]
+for x in before:
+ p=pathlib.Path(x['path']);s=p.stat();b=p.read_bytes();after.append(dict(path=str(p),bytes=len(b),sha256=H(b),mode=oct(stat.S_IMODE(s.st_mode)),mtime_ns=s.st_mtime_ns,unchanged=len(b)==x['bytes'] and H(b)==x['sha256'] and s.st_mtime_ns==x['mtime_ns']))
+assert all(x['unchanged'] for x in after);save('inputs-after.json',after)
+trans=[json.loads(x) for x in (R/'transforms.jsonl').read_text().splitlines()];declared={x['copy']:x['sha256'] for x in m['inputs']}
+for t in trans:assert t['id'] in declared and t['sha256']==declared[t['id']]
+save('transform-binding.json',dict(count=len(trans),allDeclared=True,allSha256Match=True,fixtureSha256=declared[str(A/'packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts')],transforms=trans))
+reads=[json.loads(x) for x in (R/'reads.jsonl').read_text().splitlines()];readchecks=[];seeds=set()
+for x in reads:
+ p=pathlib.Path(x['path']);d=dict(x)
+ if 'sha256' in x and p.is_file():
+  b=p.read_bytes();d.update(afterBytes=len(b),afterSha256=H(b),matchesFirstObserved=H(b)==x['sha256'])
+  # Review-owned streams may grow; immutable inputs must not.
+  if not str(p).startswith(str(R)+'/'): assert d['matchesFirstObserved'],str(p)
+ else:d['status']='unavailable/not-file or not hashed at interception'
+ if str(p).startswith(str(realdep)+'/'):
+  rel=p.relative_to(realdep);parts=rel.parts;name='/'.join(parts[:2]) if parts[0].startswith('@') else parts[0];seeds.add(realdep/name)
+ readchecks.append(d)
+save('observed-read-inputs.json',readchecks)
+# Supplement intercepted reads with complete local runtime dependency package trees.
+# This is a post-run inventory, not evidence that every inventoried file was executed.
+for name in ['vitest','vite','pg','zod','drizzle-orm']:seeds.add(realdep/name)
+packages=[];files=[];missing=[];queue=list(seeds);seen=set()
+def allowed(p):return str(p.resolve()).startswith(str(realdep)+'/')
+def resolve_dependency(base,name):
+ # Node package lookup only inside the explicitly permitted dependency tree.
+ cur=base
+ while cur==realdep or str(cur).startswith(str(realdep)+'/'):
+  cand=(cur/'node_modules'/name) if cur!=realdep else realdep/name
+  if cand.is_dir() and allowed(cand) and (cand/'package.json').is_file():return cand
+  if cur==realdep:break
+  cur=cur.parent
+ return None
+while queue:
+ p=queue.pop();key=str(p.resolve())
+ if key in seen:continue
+ seen.add(key)
+ if not allowed(p):missing.append(dict(path=str(p),reason='outside explicitly allowed dependency tree; not read'));continue
+ if not (p/'package.json').is_file():continue
+ obj=json.loads((p/'package.json').read_text());packages.append(dict(path=str(p),name=obj.get('name'),version=obj.get('version')))
+ for name in set(obj.get('dependencies',{}))|set(obj.get('optionalDependencies',{})):
+  q=resolve_dependency(p,name)
+  if q is not None:queue.append(q)
+  else:missing.append(dict(package=obj.get('name'),dependency=name,reason='not locally present or outside allowed dependency tree; no install/read'))
+ for root,dirs,names in os.walk(p,followlinks=False):
+  dirs[:]=[d for d in dirs if d not in ['node_modules','.git','.vite','.vite-temp'] and not (pathlib.Path(root)/d).is_symlink()]
+  for name in names:
+   q=pathlib.Path(root)/name
+   if q.is_symlink() and not allowed(q):continue
+   if q.is_file():
+    s=q.stat();b=q.read_bytes();files.append(dict(path=str(q),bytes=len(b),sha256=H(b),mtime_ns=s.st_mtime_ns))
+save('dependency-input-inventory.json',dict(scope='Supplemental post-run static closure of observed/runtime package dependencies plus optional dependencies available locally. Not a claim each file loaded; interception remains user-space and cannot attest internal/native loader or OS reads.',packages=packages,files=files,unavailableOptionalOrDependency=missing))
+binaries=[]
+for p in [pathlib.Path(m['node']),pathlib.Path(shutil.which('docker')),pathlib.Path(shutil.which('python3'))]:
+ b=p.read_bytes();binaries.append(dict(path=str(p),resolved=str(p.resolve()),bytes=len(b),sha256=H(b)))
+save('runtime-binaries.json',binaries)
+save('environment-after.json',dict(cwd=str(A),env_names=sorted(os.environ),node=m['node'],all402CopiedInputEntriesUnchanged=True,transformedSourceFiles=len(trans),observedReadRecords=len(reads),dependencyFilesInventoried=len(files),dependencyPackages=len(packages),outsideReviewWrites='No intended writes; all configured temp/cache/output paths confined to REVIEW. No kernel or during-execution filesystem attestation.'))
+print(json.dumps(dict(inputEntries=len(after),allUnchanged=True,transforms=len(trans),allTransformHashesMatch=True,observedReadRecords=len(reads),dependencyPackages=len(packages),dependencyFiles=len(files),inventoryBytes=sum(x['bytes'] for x in files))))

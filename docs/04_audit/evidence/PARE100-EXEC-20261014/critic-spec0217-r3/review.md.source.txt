@@ -1,0 +1,78 @@
+# Bounded I1 DESIGN recheck — SPEC0217 R3
+
+**ACCEPT_SPEC.** N1 is resolved at DESIGN level. The supported10s outer/inner leases with actual proposed2s fenced renewal make positive S1 recovery reachable within the unchanged60s example deadline. The renewal, claim-reference, shared lifecycle and shutdown HOW is sufficiently concrete and consistent with the supplied current source to proceed to Lead integration and the separate T3 user review. No additional material authority, liveness or implementation-HOW contradiction was established in this bounded recheck.
+
+This is acceptance of the proposed specification only. It is **not** runtime acceptance, evidence that anything is implemented, user approval, BUILD/schema authorization, parity/P100-010 completion, or release permission. All implementation and acceptance tests remain NOT_RUN. The four original findings retain their previously resolved-at-DESIGN disposition; no newly observed contradiction reopens them. Earlier REVISE results remain preserved and were neither read nor modified.
+
+## Candidate, inputs and limits
+
+Authoritative formatted candidate: `docs/02_spec/0217_pare100_durable_kernel_composition.md`, SHA-256 `1e5df50255e1634c06e09b46e2fc40da3a51a6e15be10ae4856e092bf910a905`. The archived designer hash is not the reviewed candidate.
+
+Included acceptance plan SHA-256: `eeea91052e435f81060aa40acf94ce9c8055180a628729ee33c88e176e9b38f5`. Sentinel SHA-256: `ab23f1cef585766653e74dd23fa7d89010f33c1862513a8eb7947856f99924be`. Preflight matched all121/121 packet files with no extras; full postflight is in integrity-post.json.
+
+Only the R3 packet, its adjacent sentinel, this new result directory and known conversation context were used. Static causal reads covered the revised SPEC/acceptance plan, actual worker roots, controlled/continuous callers, job/ACK boundary, tenant transaction runner, outbox claim/requeue and attempt-row schema. No live W/ROOT/C/D/reference, old review files, Builder reports, network, DB, application/test execution, implementation or descendants were accessed. Read/hash/report commands were the only operations. Source-origin/recon provenance supplied by the task is not an independent inspection of W. No further causal supplement is required for this bounded verdict.
+
+References below are relative to the sealed packet. SPEC means the candidate above; acceptance means its included `spec0217/acceptance-plan.md`.
+
+## N1: real profile now admits the required positive restart
+
+The original causal obstruction was ordinary outer claim waiting180s while the kernel absolute deadline was at most120s. SPEC80,88 and150–165 replace that profile, rather than merely changing a fixture:
+
+- Served outer and inner TTLs are10000ms; one renewal tick is2000ms in both worker routes. The60s model budget is an already permitted agent configuration; expiresAt remains write-once and includes downtime.
+- Renewal stops with a SIGKILL. The latest paired renewal leaves both leases expiring about10s later. Ordinary DB-clock claim can then deliver the same inbound to B while roughly48s remain in the illustrative60s budget.
+- B must obtain a new outer claim and inner attempt, use the persisted S1 plan/output, and complete before the original expiresAt. No test SQL anticipates expiry, no independent fixture clock changes the relationship, and no TTL override or deadline reset supplies liveness.
+- SPEC163 explicitly declines a universal success promise for small budgets or exhausted downtime. The expired-deadline path remains failed/handoff with no new model/plan/consume/body.
+
+The acceptance contract is rejectable: acceptance103–108 requires both controlled and continuous through their actual roots and real ACK, observing DB times and natural expiry. Acceptance112 requires25s live renewal over more than two TTLs while S1/seal/attempts/expiresAt remain unchanged;113 pairs it with a genuine>60s exhausted-deadline case. The runner timeout is now120000ms (SPEC165; acceptance145), so the negative case is not structurally forced into a60s test timeout. These are proposed oracles, not measurements or PASS results.
+
+## Authority and current-port fit
+
+The new ports are explicitly NEW, with the affected source files listed in HOW407–422. They do not rely on an existing heartbeatClaim implementation or a guessed public kernel hook.
+
+| Boundary | Source and causal assessment |
+| --- | --- |
+| Fenced outer ref | SPEC101–105 defines FencedOuterClaimRef and FencedClaimedEvent with owner, expectedOuterAttempt and expectedAttemptRowId. Migration0010:85–93 actually has outbox_attempts.id as bigint identity. Current postgres-outbox.ts619–643 resets attempts on requeue and inserts history; therefore the extra returned attempt-row identity is a meaningful ABA defense, not a token inferred from an envelope. Positive decimal-string validation avoids lossy bigint casts. |
+| Claim/renew/ACK/fail | SPEC109–119 preserves ordinary claim eligibility and the two-transaction ACK, adding explicit private fenced modes and root methods. DB clock is read after locks, each active attempt row must match the exact ref, and expired/final/stale refs cannot renew. Process nonce is additional protection, not the only fence. Processed replay must match historical attempt and marker; suppression also receives the fenced ref. |
+| Paired leases | SPEC112,117 and251 put execution, binding, inner queue and outer lease in one tenant/client transaction with a consistent execution→binding→queue→outer→attempt-row prefix. Failure rolls back the pair; public inner heartbeat is not nested. Inner TTL is clamped by expiresAt, which renewal never extends. Heartbeat metadata leaves phases/seals/usage untouched and cannot make recovered OPEN safe. |
+| Guard continuity | SPEC119,265–274 keeps exact outerRef/innerFence and DB deadlines at consumption, journal/checkpoint/callback/permit boundaries. A successful last tick is not cached permission for a later write or body. The real0002 consume/audit/receipt transaction remains execution-fenced, separate from renewal. |
+
+Current `persistence/outbox.ts:124–142` has claim/ack/fail but no renewal port; `tenant-scoped-postgres.ts:234–243` only forwards those current operations. Current controlled-worker.ts50–80 goes through processOutboxEvent, while continuous-worker.ts430–472 starts its separate legacy heartbeat around completeClaimedOutboxEvent. R3 correctly treats those as sites requiring changes, not evidence of existing support. No data, provider or additional tool authority follows from a lease ref.
+
+Acceptance118–121 covers real lock-wait expiry, wrong tenant/owner/attempt, historic attempt-row ABA after requeue, atomic paired rollback, ambiguous ACK and final guards between ticks. A renewal after expiry must fail without UPDATE; a new owner must use a new claim. These directly reject resurrection and stale-writer implementations.
+
+## Shared lifecycle is connected and implementable
+
+SPEC123–137 specifies one registry per process and one slot reserved before awaiting claim. This closes the claim-in-acquisition shutdown interval. It names the actual future binding: new claimExecutions options in both workers and job inputs, root construction in openPostgresControlledConnection, trusted buildEffect(claimContext), real createPostgresControlledHandlers and real createControlledDispatch. The event remains OutboxEffect(event) inside the real ACK boundary; the registry does not introduce another runtime executor.
+
+That wiring matches the supplied current sites:
+
+- postgres-controlled.ts97–162 creates the shared pool/repositories and controlled worker;171–215 constructs the continuous worker from the same connection root. These are the concrete places to build/pass the new registry and expose it to main.
+- controlled-worker.ts50–84 and continuous-worker.ts569–575 currently acquire claims differently. The new shared claimNextForExecution is specified for both, returning the corresponding slot; completeClaimedOutboxEvent rejects absent/foreign slots in the opt-in branch. It does not claim a second time.
+- jobs/process-outbox-event.ts133–169 currently owns ACK and catch/fail. R3 keeps job ownership of those decisions, uses ackClaim/failClaim, and places beforeFinalAck outside DB locks. Calling handle.stopAndJoin there waits only its renewal, avoiding registry.stopAndDrain self-wait.
+- continuous-worker.ts323–383 currently has setInterval and a synchronous timer-only stop;430–460 installs it per job. SPEC137 explicitly bypasses that path in the new branch. The compositor does not add another inner timer.
+
+The handle transitions through STARTING/OUTER_ACTIVE/PAIRED_ACTIVE/STOPPING/STOPPED, cannot restart, and serializes attachInner with any outer-only tick. First paired renewal is required before factory/dispatch. S3/already-completed/marker replay uses only transport and never attaches/renews a closed inner execution. At most one real inFlight renewal promise belongs to a handle, through checkout, statement, commit/rollback and cleanup.
+
+## Stop/join, clocks and pool
+
+The proposed runner is a concrete required refactor, not claimed current functionality. `tenant-scoped-postgres.ts:157–215` currently performs operation→tenant cleanup→COMMIT; it has no stop guard there. SPEC142–144 identifies that exact gap and proposes withTenantTransactionInternal/runFencedRenewalTransaction plus queryRenewal checks after awaits and immediately before COMMIT, including after tenant cleanup. Existing public withTenantTransaction stays unbound-compatible. It does not invent AbortSignal support in the current query signature.
+
+The timeout contract separates immediate local admission abort from actual SQL completion: lock500ms, statement1000ms, connection1000ms and local1500ms watchdog do not authorize detaching inFlight work. stopAndJoin tracks the real promise through rollback/cleanup/release; a late checkout must release/destroy without starting renewal SQL. Cleanup failure destroys the client. Ambiguous commit/real SQL or ownership failure remains a veto even when healthy shutdown races it. A timeout/unknown join cannot be reported as a healthy stop or ACK.
+
+SPEC145–148 makes the first terminal wrapper close local entry and requestStop synchronously, then join before terminal IO/close PG. It retains immutable settlement/ACK refs but permanently detaches both renewal targets; there is no outer renewal loop after close. Remaining lease is checked at close/completion/ACK; insufficient time yields safe failure/redelivery instead of post-close renewal. This preserves S3 replay without claiming all finalization delays fit10s.
+
+Current main.ts360–365 only waits controlled drain before pool.end; current continuous-worker.ts733–741 may fail active handlers in its shutdown release loop. SPEC147/HOW413,421 explicitly replace these behaviors only in the opt-in route: close slots, abort handles, join renewals and drain the unique jobs before pool.end, with no parallel legacy fail. Unconfirmed drain is an error, not STOPPED success. Pool4/concurrency1 accommodates the retained outer ACK client, foreground inner transaction, single renewal transaction and one operation/cleanup client; no inner transaction may checkout through another pool-backed wrapper while holding those locks.
+
+Acceptance125–130 names the corresponding counterexamples: missing/dual timer, claim during shutdown, blocked checkout/query/commit, late ACK, failure-versus-expected-cancel race, dirty client, self-wait and legacy parallel fail. It requires real inFlight join rather than a Promise.race that only stops waiting. These are material BUILD checks already included in the candidate, not additional design gaps or completed verification.
+
+## Prior resolutions and scope remain intact
+
+Original R1–R4 remain resolved at DESIGN level: shared-client fenced0002 consumption (SPEC261–276), deterministic plan before S1 without resumed parse/planning (297–312), durable phase/seal distinctions and honest attempt-local noACK exception (314–346), and actual outer ACK causal source with explicit proposed fenced deltas (60–119). Renewal metadata cannot consume/reset a seal or promote pending/CONFIRMED/consumed facts into public success. Required public masking and terminal ordering remain normative.
+
+K01–K12 plus N1-P/L/E/R/C remain PLANNED/NOT_RUN and are implementation acceptance obligations. No source supplement, runtime action or permission question is needed to finish this static review.
+
+Acceptance applies only to this sealed candidate and the one pure tool/published durable inbound slice, default off with production refusal. No real data/provider/network/channel, clinical/financial/appointment action, new RAG authority or release permission is granted. Full P100-010/parity and legacy removal remain open.0029 is still PROPOSED, subject to future coordination/claim and explicit user T3 review; this lane neither reserves nor applies it. The next authorized step is Lead integration of this design result and submission of the concrete candidate for user review before BUILD.
+
+## Integrity
+
+See integrity-pre.json and integrity-post.json for all file hashes and the sentinel comparison. This result is valid only with postflight all_unchanged=true; result.json records that final observation. No old result directory was accessed or modified.

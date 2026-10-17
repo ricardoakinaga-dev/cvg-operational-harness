@@ -1,0 +1,673 @@
+FILE cvg/packages/harness/src/kernel/kernel-runtime.ts
+156:  * Behavior matches `SinglePassGovernedRuntime` and closes the conformance gaps
+157:  * I5 (call logged before dispatch), I6 (model request logged), I7 (listener
+158:  * failures normalized) and I8 (cancellation by `RuntimeInput.signal`).
+159:  */
+160: export class KernelRuntime implements HarnessRuntime {
+161:   #host: Promise<KernelHost> | undefined
+162: 
+163:   private constructor(
+164:     private readonly plugins: readonly KernelPlugin[],
+165:     host: KernelHost | undefined,
+166:     private readonly options: KernelRuntimeOptions = {}
+167:   ) {
+168:     if (host) this.#host = Promise.resolve(host)
+169:   }
+170: 
+171:   /** Boots eagerly and fails loudly when the profile is incomplete. */
+172:   public static async boot(
+173:     plugins: readonly KernelPlugin[],
+174:     options: KernelRuntimeOptions = {}
+175:   ): Promise<KernelRuntime> {
+176:     const host = await KernelHost.boot(plugins, REQUIRED_SERVICES)
+177:     return new KernelRuntime(plugins, host, options)
+178:   }
+179: 
+180:   /** Boots on first use; a boot failure becomes a fail-closed result. */
+181:   public static lazy(
+182:     plugins: readonly KernelPlugin[],
+183:     options: KernelRuntimeOptions = {}
+184:   ): KernelRuntime {
+185:     return new KernelRuntime(plugins, undefined, options)
+186:   }
+187: 
+188:   public async dispose(): Promise<void> {
+189:     if (!this.#host) return
+190:     const host = await this.#host.catch(() => undefined)
+191:     await host?.dispose()
+192:   }
+193: 
+194:   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
+195:     let host: KernelHost
+196:     try {
+197:       this.#host ??= KernelHost.boot(this.plugins, REQUIRED_SERVICES)
+198:       host = await this.#host
+199:     } catch (error) {
+200:       return result({
+201:         response:
+202:           this.options.bootFailureResponse ??
+203:           `Kernel could not start: ${errorMessage(error)}.`,
+204:         stopReason: 'INTERNAL_FAILURE',
+205:         modelCalls: 0,
+206:         toolCalls: 0
+207:       })
+208:     }
+209:     return new Turn(host, input).run()
+210:   }
+211: }
+212: 
+213: /** One execution of the loop over a booted, sealed host. */
+214: class Turn {
+215:   readonly #host: KernelHost
+216:   readonly #controller = new AbortController()
+217:   readonly #state: TurnState
+218: 
+219:   public constructor(host: KernelHost, input: RuntimeInput) {
+220:     this.#host = host
+221:     const startedAt = Date.now()
+222:     if (input.signal?.aborted) this.#controller.abort()
+223:     input.signal?.addEventListener('abort', () => this.#controller.abort(), {
+224:       once: true
+225:     })
+226:     this.#state = createTurnState(
+227:       input,
+228:       startedAt,
+229:       host.get('budget').begin(input, startedAt),
+230:       this.#controller.signal
+231:     )
+232:   }
+233: 
+234:   public async run(): Promise<RuntimeResult> {
+235:     const input = this.#state.input
+236:     if (!hasValidBoundaryInput(input)) {
+237:       return this.#finish(
+238:         result({
+239:           response: 'Runtime identity or execution budget is invalid.',
+240:           stopReason: 'UNSAFE_REQUEST',
+241:           modelCalls: 0,
+242:           toolCalls: 0
+243:         })
+244:       )
+245:     }
+246:     if (input.budget.maxSteps < 1) {
+247:       return this.#finish(
+248:         fromStop(
+249:           stop('MAX_STEPS', 'Execution budget exhausted before the first step.')
+250:         )
+251:       )
+252:     }
+253:     if (input.budget.maxDurationMs < 1) {
+254:       return this.#finish(
+255:         fromStop(
+256:           stop('MAX_DURATION', 'Execution duration budget is not available.')
+257:         )
+258:       )
+259:     }
+260: 
+261:     const logged = await appendLog(this.#host, {
+262:       type: 'turn/start',
+263:       correlationId: input.correlationId
+264:     })
+265:     if (logged) return this.#finish(fromStop(logged))
+266: 
+267:     const gate = await runGate(this.#host, 'turn/before-step', this.#state)
+268:     if (gate.kind === 'stop') return this.#finish(fromStop(gate))
+269: 
+270:     try {
+271:       if (this.#state.signal.aborted) {
+272:         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+273:       }
+274:       if (this.#state.budget.remainingMs() <= 0) {
+275:         return this.#finish(
+276:           fromStop(
+277:             stop('MAX_DURATION', 'Duration budget exhausted before planning.')
+278:           )
+279:         )
+280:       }
+281:       const decision = await race(this.#state, () =>
+282:         this.#host.get('planner').decideNextStep({
+283:           runtime: input,
+284:           availableTools: this.#availableTools(),
+285:           step: 1
+286:         })
+287:       )
+288:       if (decision === CANCELLED) {
+289:         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+290:       }
+291:       if (decision === DEADLINE) {
+292:         return this.#finish(
+293:           fromStop(
+294:             stop('MAX_DURATION', 'Duration budget exhausted while planning.')
+295:           )
+296:         )
+297:       }
+298:       switch (decision.action) {
+299:         case 'RESPOND':
+300:           return await this.#respond(decision.response)
+301:         case 'CALL_TOOL':
+302:           return await this.#callTool(decision.toolInvocation)
+303:         case 'ASK_USER':
+628:     return this.#host
+629:       .get('tools')
+630:       .list()
+631:       .filter((tool) => exposes(allowed, tool.id))
+632:       .map(describe)
+633:   }
+634: 
+635:   async #finish(initial: RuntimeResult): Promise<RuntimeResult> {
+636:     let current = initial
+637:     for (const entry of this.#host.listeners('turn/end')) {
+638:       try {
+639:         current = await entry.fn(this.#state, current)
+640:       } catch (error) {
+641:         if (entry.kind === 'control') {
+642:           current = {
+643:             ...current,
+644:             response: `Execution could not be completed because ${entry.plugin} failed: ${errorMessage(error)}.`,
+645:             stopReason: 'INSUFFICIENT_EVIDENCE'
+646:           }
+647:         }
+648:       }
+649:     }
+650:     const unrecorded = await appendLog(this.#host, {
+651:       type: 'turn/end',
+652:       correlationId: this.#state.input.correlationId,
+653:       stopReason: current.stopReason
+654:     })
+655:     if (unrecorded) {
+656:       // F04: a turn whose closing record failed is never reported as done.
+657:       // A turn that had already stopped keeps why it stopped (AUD-0600 F01).
+658:       return {
+659:         ...current,
+660:         response:
+661:           current.stopReason === 'COMPLETED'
+662:             ? unrecorded.response
+663:             : current.response.startsWith(unrecorded.response)
+664:               ? current.response
+665:               : `${unrecorded.response} The turn had already stopped (${current.stopReason}): ${current.response}`,
+666:         stopReason: 'INSUFFICIENT_EVIDENCE'
+667:       }
+668:     }
+669:     return current
+670:   }
+671: }
+FILE cvg/packages/harness/src/kernel/pipeline.ts
+1: import { isAbsolute } from 'node:path'
+2: import type {
+3:   ModelRequest,
+4:   ModelResult,
+5:   RuntimeInput,
+6:   SandboxGateOutcome,
+7:   SandboxMode,
+8:   ToolDescriptor
+9: } from '@cvg/harness-contracts'
+10: import type { KernelHost } from './host.ts'
+11: import {
+12:   DEADLINE,
+13:   PROCEED,
+14:   stop,
+15:   type GuardVerdict,
+16:   type KernelGate,
+17:   type KernelLogEvent,
+18:   type KernelStop,
+19:   type ToolCallState,
+20:   type ToolOutcome,
+21:   type TurnBudget,
+22:   type TurnState
+23: } from './types.ts'
+24: 
+25: /**
+26:  * The governed pipelines every loop mode runs through (SPEC 0181 §4). The
+27:  * single-turn loop and the iterative loop both call these functions, so policy,
+28:  * approval, guards, pause, cancellation, the log and the effect ledger live in
+29:  * one implementation.
+30:  */
+31: 
+32: export const CANCELLED = Symbol('kernel-cancelled')
+33: export const CANCELLED_RESPONSE = 'Execution was cancelled by the caller.'
+34: 
+35: export type GatePoint =
+36:   | 'turn/before-step'
+37:   | 'model/before-call'
+38:   | 'tool/pre-execute'
+39: 
+40: /** A fresh turn: identity, budget view and the linked cancel signal. */
+41: export function createTurnState(
+42:   input: RuntimeInput,
+43:   startedAt: number,
+44:   budget: TurnBudget,
+45:   signal: AbortSignal
+46: ): TurnState {
+47:   return {
+48:     input,
+49:     startedAt,
+50:     signal,
+51:     budget,
+52:     metadata: {
+53:       policy: null,
+54:       approval: null,
+55:       tool: null,
+56:       provider: null,
+57:       inputTokens: 0,
+58:       outputTokens: 0,
+59:       costUsd: 0,
+60:       toolDurationMs: 0
+61:     }
+62:   }
+63: }
+64: 
+65: /** Detached copy for the log, so later mutation cannot rewrite history. */
+66: function snapshot<T>(value: T): T {
+67:   try {
+68:     return structuredClone(value)
+69:   } catch {
+70:     return value
+71:   }
+72: }
+73: 
+74: function errorMessage(error: unknown): string {
+75:   return error instanceof Error ? error.message : 'unknown failure'
+76: }
+77: 
+78: /** Waterfall over a gate point; a throwing listener becomes a stop (I7). */
+79: export function runGate<S>(
+80:   host: KernelHost,
+81:   point: GatePoint,
+82:   state: S
+83: ): Promise<KernelGate> {
+84:   const listeners = host.listeners(point) as unknown as readonly {
+85:     readonly plugin: string
+86:     readonly fn: (
+87:       state: S,
+88:       next: () => Promise<KernelGate>
+89:     ) => Promise<KernelGate>
+90:   }[]
+91:   const run = (index: number): Promise<KernelGate> => {
+92:     const entry = listeners[index]
+93:     if (!entry) return Promise.resolve(PROCEED)
+94:     return entry
+95:       .fn(state, () => run(index + 1))
+96:       .catch((error: unknown) =>
+97:         stop(
+98:           'INSUFFICIENT_EVIDENCE',
+99:           `${entry.plugin} failed at ${point}: ${errorMessage(error)}.`
+100:         )
+101:       )
+102:   }
+103:   return run(0)
+104: }
+105: 
+106: /** Appends to the kernel log; a failing log stops the turn (fail-closed). */
+107: export async function appendLog(
+108:   host: KernelHost,
+139: export async function race<T>(
+140:   turn: TurnState,
+141:   operation: () => Promise<T>
+142: ): Promise<T | typeof DEADLINE | typeof CANCELLED> {
+143:   const signal = turn.signal
+144:   if (signal.aborted) return CANCELLED
+145:   let onAbort!: () => void
+146:   const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+147:     onAbort = () => resolve(CANCELLED)
+148:     signal.addEventListener('abort', onAbort, { once: true })
+149:   })
+150:   try {
+151:     return await Promise.race([turn.budget.withDeadline(operation), cancelled])
+152:   } finally {
+153:     signal.removeEventListener('abort', onAbort)
+154:   }
+155: }
+156: 
+157: /**
+158:  * Like `race`, but always starts the operation first: used once the kernel has
+159:  * committed to dispatch, so the cancel signal is passed to the body instead of
+160:  * skipping it.
+161:  */
+162: async function raceInvoked<T>(
+163:   turn: TurnState,
+164:   operation: () => Promise<T>
+165: ): Promise<T | typeof DEADLINE | typeof CANCELLED> {
+166:   const running = operation()
+167:   // The operation may start and then find an exhausted deadline at race time;
+168:   // its later rejection must never surface as an unhandled rejection.
+169:   void running.catch(() => undefined)
+170:   const signal = turn.signal
+171:   let onAbort!: () => void
+172:   const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+173:     if (signal.aborted) resolve(CANCELLED)
+174:     onAbort = () => resolve(CANCELLED)
+175:     signal.addEventListener('abort', onAbort, { once: true })
+176:   })
+177:   try {
+178:     return await Promise.race([
+179:       turn.budget.withDeadline(() => running),
+180:       cancelled
+181:     ])
+182:   } finally {
+183:     signal.removeEventListener('abort', onAbort)
+184:   }
+185: }
+186: 
+187: /** Monotonic guards: the first denial wins; a throwing guard denies. */
+265: export async function runToolCall(
+266:   host: KernelHost,
+267:   call: ToolCallState,
+268:   hooks: ToolPipelineHooks = {}
+269: ): Promise<ToolPipelineResult> {
+270:   const { turn, tool, invocation } = call
+271:   const correlationId = turn.input.correlationId
+272:   // I5: the call is on the log before any policy runs or the body starts.
+273:   const logged = await appendLog(host, {
+274:     type: 'tool/call',
+275:     correlationId,
+276:     toolId: tool.id,
+277:     operationKey: invocation.operationKey,
+278:     input: invocation.input
+279:   })
+280:   if (logged) return { kind: 'stopped', gate: logged }
+281: 
+282:   // Every call that was logged is closed exactly once (I5, AUD-0597 F06).
+283:   const closeNotStarted = async (
+284:     blocked: KernelStop
+285:   ): Promise<ToolPipelineResult> => {
+286:     const unrecorded = await appendLog(host, {
+287:       type: 'tool/result',
+288:       correlationId,
+289:       toolId: tool.id,
+290:       outcome: 'not_started'
+291:     })
+292:     // A lost closing record is not hidden behind the denial (AUD-0598 R04):
+293:     // the call stays blocked, and the turn reports the missing evidence.
+294:     return unrecorded
+295:       ? { kind: 'stopped', gate: unrecordedBlock(unrecorded, blocked), blocked }
+296:       : { kind: 'stopped', gate: blocked }
+297:   }
+298: 
+299:   const gate = await runGate(host, 'tool/pre-execute', call)
+300:   if (gate.kind === 'stop') return closeNotStarted(gate)
+301: 
+302:   const denial = await revalidate(host, call)
+303:   if (denial) return closeNotStarted(denial)
+304: 
+305:   const sandbox = await enforceSandbox(host, call)
+306:   if (sandbox) return closeNotStarted(sandbox)
+307: 
+308:   let hooked: KernelStop | undefined
+309:   try {
+310:     hooked = await hooks.beforeDispatch?.(call)
+311:   } catch (error) {
+312:     // The loop's own checkpoint failed: the logged call is still closed once
+313:     // and the original failure reaches the loop unchanged (AUD-0598 R03).
+314:     await appendLog(host, {
+315:       type: 'tool/result',
+316:       correlationId,
+317:       toolId: tool.id,
+318:       outcome: 'not_started'
+319:     })
+320:     throw error
+321:   }
+322:   if (hooked) return closeNotStarted(hooked)
+323: 
+324:   // The hook may have taken time (checkpoint): re-check before reserving.
+325:   const late = await revalidate(host, call)
+326:   if (late) return closeNotStarted(late)
+327: 
+328:   const settled = await postExecute(host, call, await dispatch(host, call))
+329:   const logFailure = await appendLog(host, {
+330:     type: 'tool/result',
+331:     correlationId,
+332:     toolId: tool.id,
+333:     outcome: settled.kind
+334:   })
+335:   return logFailure
+336:     ? { kind: 'settled', outcome: settled, logFailure }
+337:     : { kind: 'settled', outcome: settled }
+338: }
+339: 
+340: /**
+341:  * Derives the containment a tool needs from its descriptor (SPEC 0195 §2/§5).
+342:  * EXTERNAL effects require an EGRESS gate; WRITE effects require WORKSPACE;
+343:  * READ effects require at least IN_PROCESS. A mode-`NONE` capability is pure
+344:  * in-memory and never reaches the sandbox gate.
+345:  */
+346: /**
+347:  * The mode is declared on the descriptor (SPEC 0195 §5). Absent or `'NONE'`
+348:  * means no gate; the harness never infers containment from `sideEffect`, so
+349:  * legacy side-effecting tools keep running until they opt in.
+350:  */
+351: export function requiredSandboxMode(descriptor: ToolDescriptor): SandboxMode {
+352:   return descriptor.sandbox ?? 'NONE'
+353: }
+354: 
+355: /**
+356:  * Enforcement point between every control decision and the capability body
+357:  * (SPEC 0195 §3/§4). Fails closed: a missing gate, an `unavailable` outcome
+358:  * or a thrown gate stops the call as `UNSAFE_REQUEST` and never downgrades
+359:  * to in-process execution. Pure (`NONE`) tools skip the gate entirely.
+360:  */
+361: async function enforceSandbox(
+362:   host: KernelHost,
+363:   call: ToolCallState
+364: ): Promise<KernelStop | undefined> {
+365:   const requiredMode = requiredSandboxMode(call.tool)
+366:   if (requiredMode === 'NONE') return undefined
+367:   if (!host.has('sandbox')) {
+368:     return stop(
+369:       'UNSAFE_REQUEST',
+370:       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+371:     )
+372:   }
+373:   const gate = host.get('sandbox')
+374:   if (!gate) {
+375:     // host.has was checked; a missing entry here is a host-integrity fault,
+376:     // so fail closed the same way as an unconfigured gate.
+377:     return stop(
+378:       'UNSAFE_REQUEST',
+379:       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+380:     )
+381:   }
+382:   try {
+383:     const outcome: SandboxGateOutcome = await gate.evaluate({
+384:       descriptor: call.tool,
+385:       context: {
+386:         tenantId: call.turn.input.tenantId,
+387:         agentId: call.turn.input.agent.id,
+388:         correlationId: call.turn.input.correlationId,
+389:         traceId: call.turn.input.traceId,
+390:         operationKey: call.invocation.operationKey
+391:       },
+392:       policy: {
+393:         requiredMode,
+394:         workspaceScoped: requiredMode === 'WORKSPACE',
+395:         networkAllowed: requiredMode === 'EGRESS',
+396:         subprocessAllowed: requiredMode === 'PROCESS'
+397:       }
+398:     })
+399:     if (outcome.kind === 'denied') {
+400:       return stop(
+401:         'UNSAFE_REQUEST',
+402:         `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
+403:       )
+404:     }
+405:     if (outcome.kind === 'unavailable') {
+406:       return stop(
+407:         'UNSAFE_REQUEST',
+408:         `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
+409:       )
+410:     }
+411:     const granted = outcome.kind === 'allowed' ? outcome.handle : undefined
+412:     const handle = granted && {
+413:       mode: granted.mode,
+414:       allowNetwork: granted.allowNetwork,
+415:       allowSubprocess: granted.allowSubprocess,
+416:       workspaceRoot: granted.workspaceRoot,
+417:       deadlineMs: granted.deadlineMs
+418:     }
+419:     if (
+420:       outcome.kind !== 'allowed' ||
+421:       outcome.mode !== requiredMode ||
+422:       !handle ||
+423:       handle.mode !== requiredMode ||
+424:       typeof handle.allowNetwork !== 'boolean' ||
+425:       typeof handle.allowSubprocess !== 'boolean' ||
+426:       (handle.deadlineMs !== undefined &&
+427:         (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0)) ||
+428:       (requiredMode === 'WORKSPACE' && handle.workspaceRoot === undefined) ||
+429:       (handle.workspaceRoot !== undefined &&
+430:         (typeof handle.workspaceRoot !== 'string' ||
+431:           !isAbsolute(handle.workspaceRoot) ||
+432:           handle.workspaceRoot.includes('\0')))
+433:     ) {
+434:       return stop(
+435:         'UNSAFE_REQUEST',
+436:         `Sandbox gate returned an invalid handle for tool "${call.tool.id}".`
+437:       )
+438:     }
+439:     // Copy only validated grants. Neither a later gate mutation nor model
+440:     // JSON can rewrite the authority passed to the capability body.
+441:     call.sandboxHandle = Object.freeze({
+442:       mode: handle.mode,
+443:       allowNetwork: handle.allowNetwork,
+444:       allowSubprocess: handle.allowSubprocess,
+445:       ...(handle.workspaceRoot !== undefined
+446:         ? { workspaceRoot: handle.workspaceRoot }
+447:         : {}),
+448:       ...(handle.deadlineMs !== undefined
+449:         ? { deadlineMs: handle.deadlineMs }
+450:         : {})
+451:     })
+452:     return undefined
+453:   } catch (error) {
+454:     return stop(
+455:       'UNSAFE_REQUEST',
+456:       `Sandbox gate failed for tool "${call.tool.id}": ${errorMessage(error)}.`
+457:     )
+458:   }
+459: }
+460: 
+461: async function dispatch(
+462:   host: KernelHost,
+463:   call: ToolCallState
+464: ): Promise<ToolOutcome> {
+465:   const { turn } = call
+466:   const ref = {
+467:     tenantId: turn.input.tenantId,
+468:     correlationId: turn.input.correlationId,
+469:     toolId: call.tool.id,
+470:     operationKey: call.invocation.operationKey
+471:   }
+472:   let started = false
+473:   const terminal = async (): Promise<ToolOutcome> => {
+474:     if (turn.budget.remainingMs() <= 0) {
+475:       return {
+476:         kind: 'not_started',
+477:         gate: stop(
+478:           'MAX_DURATION',
+479:           'Duration budget exhausted before tool execution.'
+480:         )
+481:       }
+482:     }
+483:     // Last decision point: after every wrapper (the approval reservation),
+484:     // a pause or a cancellation still prevents the effect (F01/F02).
+485:     const blocked = await revalidate(host, call)
+486:     if (blocked) return { kind: 'not_started', gate: blocked }
+487:     try {
+488:       await host.get('effects').started(ref)
+489:     } catch (error) {
+490:       return {
+491:         kind: 'not_started',
+492:         gate: stop(
+493:           'INSUFFICIENT_EVIDENCE',
+494:           `Effect ledger could not record the start: ${errorMessage(error)}.`
+495:         )
+496:       }
+497:     }
+498:     started = true
+499:     const startedAt = Date.now()
+500:     const toolController = new AbortController()
+501:     try {
+502:       // Past the decision point the body is always invoked, so a recorded
+503:       // start never pairs with a body that did not run.
+504:       const value = await raceInvoked(turn, () =>
+505:         call.tool.execute(call.invocation.input, {
+506:           tenantId: turn.input.tenantId,
+507:           agentId: turn.input.agent.id,
+508:           correlationId: turn.input.correlationId,
+509:           traceId: turn.input.traceId,
+510:           operationKey: call.invocation.operationKey,
+511:           ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
+512:           signal: AbortSignal.any([toolController.signal, turn.signal])
+513:         })
+514:       )
+515:       const durationMs = Date.now() - startedAt
+516:       if (value === DEADLINE || value === CANCELLED) {
+517:         toolController.abort()
+518:         return {
+519:           kind: value === DEADLINE ? 'deadline' : 'cancelled',
+520:           durationMs
+521:         }
+522:       }
+523:       return value.status === 'SUCCEEDED'
+524:         ? { kind: 'succeeded', result: value, durationMs }
+525:         : { kind: 'failed', result: value, durationMs }
+526:     } catch (error) {
+527:       return {
+528:         kind: 'threw',
+529:         error: errorMessage(error),
+530:         durationMs: Date.now() - startedAt
+531:       }
+532:     }
+533:   }
+534:   const listeners = host.listeners('tool/execute')
+535:   const run = (index: number): Promise<ToolOutcome> => {
+615: export async function runModelCall(
+616:   host: KernelHost,
+617:   turn: TurnState,
+618:   request: Omit<ModelRequest, 'signal'>
+619: ): Promise<ModelPipelineResult> {
+620:   const controller = new AbortController()
+621:   const full: ModelRequest = {
+622:     ...request,
+623:     signal: AbortSignal.any([controller.signal, turn.signal])
+624:   }
+625:   const preGate = turn.budget.beginModelRequest()
+626:   if (preGate) return { kind: 'stopped', gate: preGate }
+627:   const gate = await runGate(host, 'model/before-call', { turn, request: full })
+628:   if (gate.kind === 'stop') return { kind: 'stopped', gate }
+629:   if (turn.signal.aborted) return { kind: 'cancelled' }
+630:   // I6: log the request as it will be sent, after every control adjusted it.
+631:   const { signal: _signal, ...effective } = full
+632:   void _signal
+633:   const logged = await appendLog(host, {
+634:     type: 'model/request',
+635:     correlationId: turn.input.correlationId,
+636:     request: snapshot(effective)
+637:   })
+638:   if (logged) return { kind: 'stopped', gate: logged }
+639:   try {
+640:     const outcome = await race(turn, () => host.get('model').complete(full))
+641:     if (outcome === DEADLINE || outcome === CANCELLED) {
+642:       controller.abort()
+643:       return { kind: outcome === DEADLINE ? 'deadline' : 'cancelled' }
+644:     }
+645:     const unrecorded = await appendLog(host, {
+646:       type: 'model/result',
+647:       correlationId: turn.input.correlationId,
+648:       provider: outcome.provider,
+649:       inputTokens: outcome.inputTokens,
+650:       outputTokens: outcome.outputTokens
+651:     })
+652:     if (unrecorded) {
+653:       return { kind: 'unrecorded', result: outcome, gate: unrecorded }
+654:     }
+655:     const accounted = turn.budget.recordModelResult({
+656:       inputTokens: outcome.inputTokens,
+657:       outputTokens: outcome.outputTokens,
+658:       costUsd: outcome.costUsd
+659:     })
+660:     if (accounted) return { kind: 'stopped', gate: accounted }
+661:     return { kind: 'completed', result: outcome }
+662:   } catch (error) {
+663:     return { kind: 'failed', error: errorMessage(error) }
+664:   }
+665: }

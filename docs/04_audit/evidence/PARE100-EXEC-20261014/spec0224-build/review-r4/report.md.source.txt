@@ -1,0 +1,79 @@
+# I1 focused recovery review — REJECT
+
+The public complete-mode recovery still permits a second body when its native journal has no prior settlement record. The ordinary unjournaled guard, initial custom invocation, retained native uncertainty, and retained native confirmation controls work. This is a bounded TR06/TR09 rejection, not an overall SPEC/TR, 36-card, storage, or release verdict.
+
+## Largest material finding: I1-R4-F01 (HIGH; confidence HIGH)
+
+A fresh native wrapper is treated as sufficient authority to reopen an already in-flight dispatch. At `packages/harness/src/iterative-runtime.ts:785`, the guard skips handoff when `hasNativeEffectJournal` is true. That predicate establishes wrapper provenance, not historical settlement. At `effect-journal.ts:143`, an absent operation becomes a fresh reservation; `effect-journal.ts:330` then admits that reservation and reaches `tool.execute` at line 362. The public compatibility-tools composition permits this wrapper at `createOperationalHarness.ts:252`.
+
+Reproduction uses the real public factory, complete mode, real memory checkpoint/step store, real native journal wrapper, HybridOrchestrator rules, and an instrumented pure memory counter. The first body increments once and suspends. Capture the acknowledged pending checkpoint and every durable pre-body step, abort the old runtime for cleanup, and recreate those exact durable records. No checkpoint corruption or omitted step is involved. Recreate the harness with a fresh empty native journal, so `get(tenant, operationKey)` is null. This is tested both after an initially unjournaled custom invocation and after an invocation whose original native journal history is absent from the recreated journal.
+
+Both cases enter the body **twice**, with the **same operationKey**, return output `{"ordinal":2,"origin":"body"}`, finish `COMPLETED`, and report only **one** tool call. The new journal ends `CONFIRMED` for the second invocation; it proves nothing about the first unresolved body. This violates approved SPEC0224 section 3.2 (lines 199–204): missing settlement proof/recoverable data requires uncertainty/handoff and cannot authorize replay.
+
+Evidence: [repro](authority-gap.test.ts), [raw observations](authority-gap-observed.json), [exact command](focused-authority-gap.command.json), [stdout](focused-authority-gap.stdout.log), [stderr](focused-authority-gap.stderr.log), [source anchors](source-anchors.txt). Command exit **1**, two assertions `expected 2 to be 1`. Candidate source was unchanged.
+
+The necessary boundary is existing native reconciliation/settlement evidence for an in-flight recovery, rather than wrapper presence alone. Preserve initial dispatch and recovery of confirmed recoverable output. No future journal schema redesign is proposed. The reproduction requires absent journal history or adding a fresh journal on recreation; it does not claim duplication with the same retained native journal.
+
+## Bounded results
+
+| Criterion | Result |
+| --- | --- |
+| No journal, original composition, RUNNING/FAILED, repeated recovery | PASS: handoff, one body; checkpoint unchanged |
+| Initial custom tools, NONE/READ/WRITE/EXTERNAL | PASS: one body and completion |
+| Native uncertainty through factory and prewrapped registry | PASS: no second body; EFFECT_STARTED remains authoritative |
+| Confirmed native recovery through preparation, both compositions | PASS: exact journal-origin object including Unicode/U+0000; one body; journal unchanged |
+| Checkpoint/accounting | PASS with retained authority; FAIL with empty journal: two bodies counted as one |
+| Caller text, idempotence and descriptor flags/lookalike symbols | PASS: no authority gained |
+| Policy DENY and required approval on confirmed recovery | PASS in both compositions; native vetoes remain effective |
+| Public journal exports | PASS bounded check: four callable value exports and five type exports preserved; predicate private |
+| No native settlement record on recreation | **FAIL: I1-R4-F01** |
+
+Final evidence comprises **7 provided passing tests**, **15 independent passing controls**, and **2 failing adversarial cases**. Independent handoff checks compare the exact checkpoint and tool/model/token/cost accounting; confirmed recovery checks compare the exact output, stored envelope, and immutable journal record. Rule-only paths make zero model calls and zero token/cost usage. A repeat after terminal completion is correctly rejected without rewriting its checkpoint.
+
+The first independent observer draft had four incorrect expectations: terminal execution was expected to complete again, and approval wait used the wrong stop-reason label. Source inspection established `STATE_CONFLICT` and `APPROVAL_REQUIRED`. The original test, raw observations, stdout/stderr, and exit 1 remain preserved in `independent-v1.test.ts`, `independent-observed-v1.json`, and `focused-independent.*`; corrected controls pass. These draft failures are not candidate findings. The separate two settlement-gap failures remain unresolved and determine the verdict.
+
+## Integrity and source coverage
+
+Before semantic inspection and after all tests, the full packet manifest matched SHA256 `9033fbe8c33caa96cb020f568bfdfd0d9128c0e7b10f52bd55224620cd2afd11` (28138 bytes). Every one of **68 live + 68 copy + 19 proof** SHA256/byte bindings matched on both passes. The approved SPEC matched `f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea`. There were zero mismatches and no source drift.
+
+`integrity-before.json` and `integrity-after.json` contain all per-path measurements. A conservative 95-file current source/config sentinel covers the local transitive source reads, and verified snapshots are under `current-source/`, mapped in `current-source-bindings.json`. This does not attest the whole installed dependency graph. `index.ts:15` retains createEffectAttemptId, createJournaledToolRegistry, EffectJournalError, and InMemoryEffectJournal. Lines 21–27 retain EffectAttemptIdFactory, EffectJournal, EffectJournalRecord, EffectJournalState, and JournaledToolRegistryOptions. No typecheck was run.
+
+## Execution and exact commands
+
+All commands ran with cwd `/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree`. Node is v22.23.2. The private Vitest config uses root W, node environment, one worker, no file parallelism, explicit three @cvg aliases, SSR/test dependency inlining, native config loading, and all temp/cache variables under this review directory. No global gates were rerun. Every command record includes argv, cwd, environment, exit, and complete separate stdout/stderr streams. `report.json` also embeds full streams and final raw observations.
+
+- `/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs run --config /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/vitest.config.mjs --configLoader native /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/__tests__/complete-tool-unjournaled-recovery.test.ts`
+
+  Exit `0`; stdout `focused-existing.stdout.log`, stderr `focused-existing.stderr.log`.
+
+- `/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs run --config /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/vitest.config.mjs --configLoader native /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/independent.test.ts`
+
+  Exit `1`; stdout `focused-independent.stdout.log`, stderr `focused-independent.stderr.log`.
+
+- `/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs run --config /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/vitest.config.mjs --configLoader native /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/independent.test.ts`
+
+  Exit `0`; stdout `focused-independent-v2.stdout.log`, stderr `focused-independent-v2.stderr.log`.
+
+- `/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs run --config /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/vitest.config.mjs --configLoader native /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/authority-gap.test.ts`
+
+  Exit `1`; stdout `focused-authority-gap.stdout.log`, stderr `focused-authority-gap.stderr.log`.
+
+- `/home/ricardo/.nvm/versions/node/v22.23.2/bin/node --version`
+
+  Exit `0`; stdout `node-version.stdout.log`, stderr `node-version.stderr.log`.
+
+- `python3 /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/capture-sources.py`
+
+  Exit `0`; stdout `source-capture.stdout.log`, stderr `source-capture.stderr.log`.
+
+- `python3 /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/integrity.py after`
+
+  Exit `0`; stdout `integrity-after.stdout.log`, stderr `integrity-after.stderr.log`.
+
+The initial seal check was `python3 /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/integrity.py before`, exit 0, before semantics; its full per-binding output is `integrity-before.json`. The supplied original raw witness was inspected but not executed, so its hardcoded output location was never used. Packet proof reports/logs were hashed, not used as semantic authority.
+
+## Independence and limitations
+
+This current context performed the I1 review directly and spawned **no children**, with **no model/effort override**. Host model/effort and launch fork metadata are not exposed to reviewer tools. The caller requested **fork_context=false**; this report records that request without claiming an unavailable independent launcher attestation. No prior review/build reports or rationale, repository ledgers/history, coordination files, or hidden agent folders were read. All writes were under `review-r4/**`; there were no git mutations or source changes.
+
+These are synthetic in-memory crash reconstructions, not an OS-process restart, PostgreSQL test, persistent-storage qualification, or real external effect. No provider, key, network, service, real data, clinical/financial/appointment action, E2E, global/typecheck/certify/SBOM/license/install/lock/checker operation was used. Full TR06/TR09, nonzero model usage receipts, all other TRs, all 36 cards, engine equivalence, and release remain unassessed. No hostile in-process plugin isolation is claimed. The bounded question is answered; no further audit or journal schema work is proposed.

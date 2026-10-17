@@ -1,0 +1,32 @@
+import pathlib,subprocess,os,json,datetime,hashlib,urllib.parse,sys
+O=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-json-boundaries/review-r1');W=O.parents[2]/'worktree';CID='0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c'
+commands=[]
+def command(label,argv,timeout=60):
+ start=datetime.datetime.now(datetime.timezone.utc).isoformat();r=subprocess.run(argv,cwd='/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree',capture_output=True,timeout=timeout)
+ (O/(label+'.stdout.log')).write_bytes(r.stdout);(O/(label+'.stderr.log')).write_bytes(r.stderr)
+ rec={'label':label,'argv':argv,'cwd':'/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree','envPolicy':'inherited control environment; no credential arguments','start':start,'end':datetime.datetime.now(datetime.timezone.utc).isoformat(),'exit':r.returncode};commands.append(rec);(O/'controller-commands.json').write_text(json.dumps(commands,indent=2)+'\n');assert r.returncode==0,label+' failed';return r.stdout
+fmt='{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"imageId":{{json .Image}},"state":{{json .State}},"ports":{{json .NetworkSettings.Ports}}}'
+started=False
+try:
+ identity=json.loads(command('container-before',['docker','inspect','--format',fmt,CID]))
+ assert identity['id']==CID and identity['name']=='/cvg-pare100-224-pg' and identity['image']=='postgres:16.4-alpine' and identity['state']['Running']==False, 'resource identity/state mismatch'
+ command('container-start',['docker','start',CID]);started=True
+ current=json.loads(command('container-running',['docker','inspect','--format',fmt,CID]));assert current['id']==CID and current['image']==identity['image'] and current['imageId']==identity['imageId'] and current['state']['Running']
+ ports=current['ports']['5432/tcp'];assert len(ports)==1 and ports[0]['HostIp']=='127.0.0.1'
+ pp=O.parent/'assigned-i1-resource-prototype-private.json';b=pp.read_bytes();assert hashlib.sha256(b).hexdigest()=='d935a363c2bb8868b51edd3f8356deb2c6b98707b84e8dd04bc3603a5d349f61'
+ prototype=json.loads(b);actual=json.loads(b);u=urllib.parse.urlsplit(actual['test_database_url']);assert u.hostname=='127.0.0.1' and u.scheme=='postgresql' and u.username=='pare224' and u.path=='/pare224_synthetic'
+ assert actual['schemaName']=='pare224_json_i1_r1' and actual['roleName']=='pare224_json_i1_r1_service' and actual['synthetic'] is True and actual['containerId']==CID
+ actual['test_database_url']=urllib.parse.urlunsplit((u.scheme,u.netloc.rsplit(':',1)[0]+':'+ports[0]['HostPort'],u.path,u.query,u.fragment));actual['hostPort']=ports[0]
+ private=O/'actual-resource-private.json';private.write_text(json.dumps(actual,indent=2)+'\n');private.chmod(0o600)
+ proof={k:v for k,v in actual.items() if k!='test_database_url'};proof.update(protocol='postgresql:',host='127.0.0.1',adminUser='pare224',database='pare224_synthetic',actualResourceSha256=hashlib.sha256(private.read_bytes()).hexdigest(),actualResourceBytes=private.stat().st_size,prototypeSha256=hashlib.sha256(b).hexdigest(),changedKeys=[k for k in actual if actual[k]!=prototype[k]])
+ assert set(proof['changedKeys'])<=set(['test_database_url','hostPort']);(O/'actual-resource-identity.json').write_text(json.dumps(proof,indent=2)+'\n')
+ command('postgres-runner',['/usr/bin/python3',str(O/'run.py'),'postgres'],timeout=260)
+ record=json.loads((O/'postgres-command.json').read_text())
+ if record['exit']==0 and (O/'postgres-run/serving-identity-rls.json').exists():
+  node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+  command('independent-pg-proof',[node,str(O/'pg-readproof.mjs')],timeout=30)
+finally:
+ if started:
+  try:command('container-stop',['docker','stop','--time','10',CID],timeout=30)
+  finally:
+   stopped=json.loads(command('container-stopped',['docker','inspect','--format',fmt,CID]));(O/'container-stop-proof.json').write_text(json.dumps({'exactId':CID,'stopped':not stopped['state']['Running'],'preserved':True,'inspect':stopped,'at':datetime.datetime.now(datetime.timezone.utc).isoformat()},indent=2)+'\n');assert not stopped['state']['Running']

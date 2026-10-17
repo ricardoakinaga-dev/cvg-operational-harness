@@ -1,0 +1,153 @@
+from pathlib import Path
+import ctypes
+import hashlib
+import json
+import os
+import selectors
+import signal
+import subprocess
+import sys
+import time
+
+P = Path(__file__).resolve().parent
+W = P.parent / 'worktree'
+NODE = Path('/home/ricardo/.nvm/versions/node/v22.23.2/bin/node')
+OUT = P / 'runs' / sys.argv[1]
+OUT.mkdir(parents=True, exist_ok=False)
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def put(name, value):
+    (OUT / name).write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n')
+
+tsx = W / 'node_modules/tsx'
+tsx_package = json.loads((tsx / 'package.json').read_text())
+loader = (tsx / tsx_package['exports']['.']).resolve()
+assert loader.is_relative_to(tsx.resolve()) and loader.is_file()
+paths = set()
+for tree in ['packages', 'apps', 'legacy/packages', 'products']:
+    for src in (W / tree).glob('*/src'):
+        paths.update(f for f in src.rglob('*') if f.is_file())
+paths.update([W / 'tsconfig.base.json', W / 'package.json', W / 'package-lock.json',
+              P / 'observe.mts', P / 'run.py', NODE])
+paths.update(f for f in tsx.rglob('*') if f.is_file())
+frozen = json.loads((P.parent / 'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json').read_text())
+pins = frozen['newGroups'][0]['pins']
+assert len(pins) == 465
+assert all(digest(W / name) == sha for name, sha in pins.items())
+paths.update(W / name for name in pins)
+before = {str(f): digest(f) for f in sorted(paths)}
+put('sources-before.json', before)
+env = {
+    'PATH': f'{NODE.parent}:/usr/bin:/bin',
+    'HOME': str(P / 'home'),
+    'TMPDIR': str(P / 'tmp'),
+    'TMP': str(P / 'tmp'),
+    'TEMP': str(P / 'tmp'),
+    'XDG_CACHE_HOME': str(P / 'xdg-cache'),
+    'XDG_CONFIG_HOME': str(P / 'xdg-config'),
+    'XDG_DATA_HOME': str(P / 'xdg-data'),
+    'TSX_DISABLE_CACHE': '1',
+    'TSX_TSCONFIG_PATH': str(W / 'tsconfig.base.json'),
+    'LANG': 'C.UTF-8',
+    'TZ': 'UTC',
+    'NO_COLOR': '1'
+}
+argv = [str(NODE), '--import', str(loader), str(P / 'observe.mts')]
+started = time.monotonic()
+# Adopt and reap loader descendants so process-group cleanup is observable.
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(36, 1, 0, 0, 0) != 0:  # Linux PR_SET_CHILD_SUBREAPER
+    raise OSError(ctypes.get_errno(), 'PR_SET_CHILD_SUBREAPER failed')
+child = subprocess.Popen(argv, cwd=P, env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         start_new_session=True)
+selector = selectors.DefaultSelector()
+selector.register(child.stdout, selectors.EVENT_READ, 'stdout')
+selector.register(child.stderr, selectors.EVENT_READ, 'stderr')
+streams = {'stdout': bytearray(), 'stderr': bytearray()}
+violation = None
+while selector.get_map():
+    if time.monotonic() - started > 5:
+        violation = 'deadline_5s'
+        break
+    for key, _ in selector.select(0.02):
+        data = os.read(key.fileobj.fileno(), 65536)
+        if not data:
+            selector.unregister(key.fileobj)
+            key.fileobj.close()
+            continue
+        streams[key.data].extend(data)
+        if sum(map(len, streams.values())) > 1048576:
+            violation = 'output_cap_1MiB'
+            break
+    if violation:
+        break
+if violation:
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+try:
+    exit_code = child.wait(timeout=2)
+except subprocess.TimeoutExpired:
+    violation = violation or 'join_timeout_2s'
+    os.killpg(child.pid, signal.SIGKILL)
+    exit_code = child.wait(timeout=2)
+selector.close()
+descendants_reaped = []
+group_seen_after_parent = False
+cleanup_deadline = time.monotonic() + 2
+while True:
+    try:
+        os.killpg(child.pid, 0)
+        group_seen_after_parent = True
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        break
+    while True:
+        try:
+            pid, status = os.waitpid(-child.pid, os.WNOHANG)
+            if pid == 0:
+                break
+            descendants_reaped.append({'pid': pid, 'waitStatus': status})
+        except ChildProcessError:
+            break
+    if time.monotonic() >= cleanup_deadline:
+        violation = violation or 'descendant_join_timeout_2s'
+        break
+    time.sleep(0.01)
+try:
+    os.killpg(child.pid, 0)
+    remaining_group = True
+except ProcessLookupError:
+    remaining_group = False
+records = {}
+for name, data in streams.items():
+    if data:
+        file = OUT / (name + '.txt')
+        file.write_bytes(data)
+        records[name] = {'path': str(file), 'bytes': len(data), 'sha256': digest(file)}
+    else:
+        records[name] = {'bytes': 0, 'status': 'expected_empty', 'file_omitted': True}
+after = {str(f): digest(f) for f in sorted(paths)}
+put('sources-after.json', after)
+new_source_paths = {f for tree in ['packages', 'apps', 'legacy/packages', 'products']
+                    for src in (W / tree).glob('*/src') for f in src.rglob('*') if f.is_file()} - paths
+metadata = {
+    'argv': argv, 'cwd': str(P), 'env': env, 'pid': child.pid,
+    'dedicatedProcessGroup': child.pid, 'exitCode': exit_code,
+    'durationMs': round((time.monotonic() - started) * 1000),
+    'limits': {'deadlineMs': 5000, 'combinedOutputBytes': 1048576},
+    'violation': violation, 'joined': True, 'remainingProcessGroup': remaining_group,
+    'subreaper': True, 'groupSeenAfterParent': group_seen_after_parent,
+    'descendantsReaped': descendants_reaped,
+    'sourceFiles': len(before), 'sourcesUnchanged': before == after,
+    'newSourcePaths': sorted(map(str, new_source_paths)),
+    'pins': len(pins), 'streams': records,
+    'observationOnly': True, 'sandboxInvariantStatus': 'NOT_EVALUATED_BY_LAUNCHER'
+}
+put('process.json', metadata)
+print(json.dumps(metadata))
+sys.exit(0 if exit_code == 0 and not violation and not remaining_group and before == after and not new_source_paths else 1)

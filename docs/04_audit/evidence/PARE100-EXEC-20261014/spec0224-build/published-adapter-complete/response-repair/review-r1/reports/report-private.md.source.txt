@@ -1,0 +1,60 @@
+# PRIVATE — I1 scoped critic: REVISE
+
+Frozen opt-in complete-mode RESPONSE context and native terminal response behavior only. Lead owns acceptance/integration. This review grants no gate, default adoption, provider qualification, deployment or global closure.
+
+## Findings
+
+1. **P1 / I1-F01 — terminal RESPOND is lost on assembly exceptions.** Exact frozen RR03 and RR07 both stop before model entry, retain the full tool output and confirmed journal, but save cursor/steps **1**, retain accepted RESPOND **2**, and have no native failed RESPOND step. The producer raw proofs show the same gap. Three independent probes reproduce it, including a changed provenance selector. `iterative-dispatch.ts:894` awaits composition before its returned-stop handler; size exceptions at `:1058` and selector validation from `iterative-runtime.ts:1787` escape to the catch at `:982`, bypassing the dispatch-stop state advance at `:1200`. These stores did not fail. This violates the requested truthful terminal response handling; the frozen test only checks the failed-step/cursor invariant for RR06.
+2. **P2 / I1-F02 — result-log failure charges two calls for one invocation.** Independent `response-result-log-fails` invokes the public factory's model once. Returned and durable calls are **2**, tokens **73/2**, receipts **0**. The native slot is charged by `kernel/pipeline.ts:625` through `iterative-runtime.ts:523`; `iterative-dispatch.ts:1133` charges another call in its unrecorded branch. Refusal is conservative and native RESPOND2 FAILED exists, but accounting is inaccurate.
+3. **P2 / I1-F03 — audit veto and durable terminal truth diverge.** Independent `response-terminal-audit-fails` rejects only `runtime.completed`: returned **INSUFFICIENT_EVIDENCE**, durable **COMPLETED**. The checkpoint save at `iterative-runtime.ts:2259` precedes the audit veto at `:2348`, which changes only the result. Rejecting only RESPOND step audit also leaves native step2 SUCCEEDED/result.steps2 against checkpoint cursor1/accepted RESPOND2. Both use healthy native memory stores. See `findings-private.json` for exact source references, triggers and evidence.
+
+## Frozen RR01–RR08 evidence
+
+All eight exact pinned tests independently ran with Node22, Vitest `--configLoader native`, public factory, native memory stores and synthetic model; **8/8 passed, exit0**. Semantic review is **REVISE**, because assertion success omits the terminal invariants for RR03/RR07.
+
+| Case | Actual calls | Decision receipts | Returned/durable input/output tokens | Semantic result |
+|---|---:|---:|---:|---|
+| RR01 | 2 ORCHESTRATION | 2 SETTLED | 223/6 | Complete output, reservation/settlement hashes and entry checkpoints match |
+| RR02 | 1 RESPONSE | 0 | 138/2 | Actual request carries complete output/provenance; native charge once |
+| RR03 | 0 | 0 | 0/0 | Framing overflow blocks model; terminal RESPOND missing (F01) |
+| RR04 | 1 RESPONSE | 0 | 12/1 | Legacy raw user request and checkpointV1 preserved |
+| RR05 | 2 ORCHESTRATION + 1 RESPONSE | 2 SETTLED | 361/8 | Prior decision charges 223/6 plus native response 138/2; no duplicate |
+| RR06 | 2 ORCHESTRATION | 2 SETTLED | 223/6 | MAX_MODEL_CALLS refusal; RESPOND2 FAILED and cursor/steps2 |
+| RR07 | 0 | 0 | 0/0 | Required selector omission blocks model; terminal RESPOND missing (F01) |
+| RR08 | 1 RESPONSE | 0 | 140/2 | Complete user/tool/intent stay out of system; structured trust preserved |
+
+Actual frozen RR02 request: **8772 canonical UTF-8 bytes**, system/user **916/7141 UTF-16 units**, request SHA256 `86060077c0ac49a3d79a0ad4d87cf706db8648156fdca853c1be43502cd723e8`. RR05 response has the same byte/unit capacities. RR08 is 8898 bytes, 916/7267 units. Limits checked are 131072 bytes and 16000/32000 units. Full request hashes, output bytes/hashes, provenance, model results, model-entry checkpoints, receipts, journal states, native steps and returned-vs-durable usage are in `evidence-analysis-private.json` and the raw case files. Refused pre-model cases have no actual request/model result to hash; none is invented.
+
+Legacy RR04 actual request is 744 bytes and hash `cb09132c1544ad4e77fb117dfc92389a5700a5759fe4855e3208a2e8ad886438` in both producer and critic runs. Whole requests for complete mode legitimately have varying native UUIDs/timestamps; comparisons use stable semantics and preserve each actual hash separately.
+
+## Independent probes and controls
+
+`probes/independent.test.ts`: **12 passed / 5 failed (17), exit1**. Successful checks cover null/false/zero/empty string, Unicode and escaped/control JSON, dropping optional history as a whole, hostile syntax in user/tool/response intent, response context deadline, model rejection, caller cancellation and conservative store/audit-step failure stops. The five assertion failures are the three assembly-terminal probes (F01), duplicate call (F02), and terminal audit divergence (F03). Two failure-stop tests pass narrowly; their raw state is still inspected and not claimed fully consistent. Injected RESPOND store failure leaves an unresolved accepted response and INTERNAL_FAILURE; no durable store success is claimed under an unavailable writer.
+
+`probes/shared-balances.test.ts`: **3/3 passed, exit0**. Mixed model decisions settle two receipts at nonzero native cost, then RESPONSE accounts once, total cost about **0.06** (native floating tolerance 1e-12). MC02 proves native MAX_COST after prior 0.04 and RESPONSE 0.02, with no delivered answer. MC03 uses maxTokens1000 and a declared synthetic RESPONSE output charge700: decision229 + response838 = **1067**, native MAX_TOKENS, full charge retained, RESPOND2 FAILED. No new response counter/receipt/budget gate was introduced.
+
+Two explicitly bad dispatch **owned copies**, separate from frozen candidate: omit-response-data (SHA256 `c25440e5ba7361ba0b4d50db1277353a36493355ce1ca135734964103044ce1f`) is rejected by RR02/RR03/RR05/RR08 (**4 failed/4 passed**); lose-terminal-refusal (`7d96245a6061f0d4e1226b7a0516b22b59f1186555d719000a302fd757ebf47a`) is rejected by RR06 (**1 failed/7 passed**). Each has its own resolver/config/cache/temp/nodecache, command exit, raw traces and pre/post transformed hashes. Controls establish test sensitivity for those errors and do not repair or qualify the candidate.
+
+## Input identity and observation limits
+
+Manifest SHA256 `6eb8fc60fac53190d4acbbdec0a285300c44e02c724904accdb8931623779ad5`; candidate manifest `585d27ba3947ff06b6fbfeb0054e62b4ad26c6e9582fe49a32b22bb8795fdebd`. **All 375 declared inputs inventoried pre/post, no exclusions:** 77 source, 295 constraints, 3 configuration addons. All **81 candidate bindings** match copied bytes. All four proofs, two environment templates, scope package metadata and manifests also match; each inventory has **384 entries**. No source comparisons read originals.
+
+| Critical copy | Bytes | SHA256 pre = post = observed pre-transform |
+|---|---:|---|
+| iterative-runtime.ts | 79917 | 8b2ccdbc68f5e6e9c1e094bbd6e96d31a02d2b7ea6f0b48e510851270e2c3934 |
+| iterative-dispatch.ts | 41430 | d9130727f180031c589b5d96bf0f21d37df3cb7e8468eeca3eb34f6aaa5c9e6c |
+| complete-response-path-public.test.ts | 15494 | 355079b39e12a557e2c1bda7c37ef860b3e7d5b608e14663f1f017acd364ef14 |
+
+Selected NodeFS observations: **1433 complete records**; **48** declared paths observed; **47** declared paths transformed. Counts include critic/checker/control runs and do not mean every static input executed. PID/path/stage/pre/post bytes and hashes, plus exact source/transformed byte blobs, are retained. Joins use actual paths and hashes, with no invented empty metadata. There are **112** metadata-incomplete wrapper attempts (including virtual import identifiers, absent metadata files and write-open blobs); these remain in a separate file, never presented as complete reads. `reads-flat-complete.jsonl` additionally distinguishes inventory and manual inspection observations.
+
+The provided trace hook was enabled using NODE_OPTIONS and packet scope/dependency variables, with artifact cwd; a deliberate forbidden sentinel throws **I1 prohibited read** before the real read. This is selected user-space FS/loader instrumentation, **not an OS sandbox or filesystem attestation**. Python/bootstrap reads are not covered by that Node wrapper; copied input inventory and manual logs retain their byte identities. No observed original source reads; dependency mirror is readonly. The trace hook covers selected read/open APIs, not every Node internal or OS syscall. Static inventory, transformed source and observed execution are explicitly different evidence sets.
+
+Preserved review errors: first manifest output truncation, one bounded-inspection IndexError, one Python regex SyntaxWarning, three checker runtime errors, a raw-string-vs-JSON hash bug and a floating cost equality bug. Failed checker sources and logs remain sealed; final corrected checker exits0. The final checker flags F01 in both producer and critic traces, F02/F03 in independent traces, and no semantic failure in the three balance probes. Its exit0 means analysis completed, **not candidate acceptance**. See `logs/errors-and-corrections.json`.
+
+All source/constraint/proof inputs stayed readonly. No fixes, reformat, repository/AGENTS/ledger/history reads, descendants, commit, push or deployment. No live services were started. No Docker, PG, database, provider/network operations, real data or real actions. Synthetic framing and Toy64 checks do not establish real LLM semantic prompt-injection isolation, tokenizer/window or billing guarantees. No published217 integration, real provider, default adoption, full TR01–TR10/all36/global/program/release closure.
+
+## Reproduction and delivery
+
+Owned runnable scripts: `run/driver.py` (sentinel + exact frozen tests), `run/controls.py`, `run/shared-balances.py`; independent config/test and final `run/check-evidence.mjs` are supplied. Node commands, cwd, environment, stdout/stderr and exits are in `logs/commands.json` and per-run logs. All test runs configure TMPDIR/TMP/TEMP, NODE_COMPILE_CACHE and Vite cache under this review before launch; frozen evidence is `run/cases-private.json`. The checker reads owned proof copies. Initial bootstrap/read-only shell inspection snippets are described by bootstrap/error/static logs; this is not a complete shell execution attestation.
+
+**Do not rerun these scripts in the sealed directory.** They write evidence, caches and logs and would invalidate this seal. Reproduce only in a new authorized owned output tree after rebinding all output/config/cache paths; never point evidence at producer outputs. Verify detached SHA256 and every `seal-manifest.json` file entry first. All owned files, including caches, private raw data and empty files, are sealed; only seal-manifest.json and its detached self-hash are excluded from the recursive file list. Empty directories are listed separately.

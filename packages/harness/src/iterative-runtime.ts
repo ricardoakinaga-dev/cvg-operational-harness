@@ -17,6 +17,7 @@ import type {
   Observation,
   RuntimeInput,
   RuntimeResult,
+  SandboxGate,
   StopReason,
   SufficiencyEvaluator
 } from '@cvg/harness-contracts'
@@ -59,6 +60,7 @@ import {
   modelCapability,
   pauseControl,
   policyControl,
+  sandboxControl,
   telemetryCapability,
   toolsCapability
 } from './kernel/controls.ts'
@@ -111,6 +113,7 @@ export interface IterativeGovernedRuntimeOptions {
   readonly pause?: PauseSwitch
   readonly log?: KernelLog
   readonly effects?: EffectLedger
+  readonly sandbox?: SandboxGate
 }
 
 /** Services the iterative mode needs from the kernel (no single-pass planner). */
@@ -426,6 +429,7 @@ export class IterativeGovernedRuntime {
         pauseControl(this.options.pause),
         logControl(this.options.log),
         effectsControl(this.options.effects),
+        ...(this.options.sandbox ? [sandboxControl(this.options.sandbox)] : []),
         policyControl(this.options.policy),
         approvalsControl(
           this.options.approvals,
@@ -647,6 +651,58 @@ export class IterativeGovernedRuntime {
       once: true
     })
     this.#turns.set(run, { host, signal: controller.signal })
+
+    // Payloads and summaries are bounded, untrusted presentation. The step
+    // store owns the lossless governed outcome of the pending dispatch,
+    // including the exact settlement failure cause. Generic TOOL_FAILURE or
+    // unknown_effect records alone do not prove that this ledger failed.
+    if (
+      checkpoint?.state.pendingStepNumber &&
+      (checkpoint.state.pendingDecision?.decisionType === 'CALL_TOOL' ||
+        checkpoint.state.pendingDecision?.decisionType === 'REQUEST_APPROVAL')
+    ) {
+      let steps: readonly ExecutionStep[]
+      try {
+        steps = await this.options.stepStore.listSteps(
+          input.tenantId,
+          executionId
+        )
+      } catch {
+        return this.finalize(
+          run,
+          {
+            kind: 'stop',
+            stopReason: 'INSUFFICIENT_EVIDENCE',
+            response:
+              'Pending tool outcome could not be read; reconciliation is required.',
+            preserveCheckpoint: true
+          },
+          startedAtMs
+        )
+      }
+      if (
+        steps.some(
+          (step) =>
+            step.tenantId === input.tenantId &&
+            step.executionId === executionId &&
+            step.stepNumber === checkpoint.state.pendingStepNumber &&
+            step.stepType === 'TOOL' &&
+            step.status === 'FAILED' &&
+            step.errorCode === 'unknown_effect: effect_settlement_failed'
+        )
+      ) {
+        return this.finalize(
+          run,
+          {
+            kind: 'stop',
+            stopReason: 'TOOL_FAILURE',
+            response: 'unknown_effect: effect_settlement_failed',
+            preserveCheckpoint: true
+          },
+          startedAtMs
+        )
+      }
+    }
 
     const resumeOutcome = this.applyResume(run, checkpoint)
     if (resumeOutcome) {

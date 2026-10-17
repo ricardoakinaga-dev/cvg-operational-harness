@@ -1,0 +1,32 @@
+import pathlib,json,hashlib,datetime,shlex
+R=pathlib.Path(__file__).parent
+commands=[]
+for p in sorted(R.glob('*.command.json')):
+ j=json.loads(p.read_text());name=p.name[:-len('.command.json')];j.update({'id':name,'reproduce_argv_shell':shlex.join(['python3',str(R/'run.py'),name,*j['argv']]),'stdout':name+'.stdout.log','stderr':name+'.stderr.log'});commands.append(j)
+(R/'command-index.json').write_text(json.dumps(commands,indent=2)+'\n')
+cache={'tmp','cache','config','data','npm-cache','vite-cache','attachments'}
+# Report/test/sentinel completeness is checked before generating the final index.
+report=json.loads((R/'report.json').read_text());assert report['verdict']=='APPROVE_SCOPED_RECOVERY'
+assert report['current_executed_tests']['passed']==45
+for name,n in [('owned-results.json',14),('adversarial-corrected-results.json',30),('approval-wait-results.json',1)]:
+ j=json.loads((R/name).read_text());assert j['numPassedTests']==n and j['numFailedTests']==0 and j['numPendingTests']==0
+summary=json.loads((R/'sentinel-summary.json').read_text());assert summary['allBytesAndHashesMatchBeforeAfter']
+required=['report.md','report.json','sentinel-before.json','sentinel-after.json','transitive-before.json','transitive-after.json','read-index.jsonl','command-index.json','manifest-input.json','adversarial.test.ts.initial','adversarial.corrected.test.ts','adversarial-corrected-observations.json','approval-wait-observations.json','test-fixture-corrections.json']
+for f in required:assert (R/f).stat().st_size>0,f
+entries=[];excluded=[{'path':'artifact-manifest.json','reason':'self excluded to avoid recursive hash'}]
+for p in sorted(R.rglob('*')):
+ if not p.is_file():continue
+ rel=p.relative_to(R).as_posix()
+ if rel=='artifact-manifest.json':continue
+ if any(part in cache or part=='__pycache__' for part in p.relative_to(R).parts):
+  excluded.append({'path':rel,'reason':'private runtime cache/temp/attachment; not primary evidence','bytes':p.stat().st_size});continue
+ b=p.read_bytes()
+ if not b:
+  excluded.append({'path':rel,'reason':'empty stream/artifact','bytes':0});continue
+ entries.append({'path':rel,'sha256':hashlib.sha256(b).hexdigest(),'bytes':len(b)})
+manifest={'scope':'I1 review-r5 bounded SPEC0224 recovery evidence','createdAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'root':str(R),'entries':entries,'excluded':excluded,'excludedDirectoryClasses':sorted(cache|{'__pycache__'}),'notes':['Every nonempty non-cache artifact under this review root is included.','Original failed controls/stdout/stderr/config snapshot retained; no source mutations.','Initial supplied input manifest copied verbatim; packet raw proofs verified by sentinel, originals remain read-only outside this root.']}
+(R/'artifact-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+for e in entries:
+ b=(R/e['path']).read_bytes();assert len(b)==e['bytes'] and hashlib.sha256(b).hexdigest()==e['sha256'],e
+assert all(e['bytes']>0 for e in entries)
+print(json.dumps({'status':'PASS','verdict':report['verdict'],'primaryArtifacts':len(entries),'excludedItems':len(excluded),'allHashesRecomputed':True,'currentTestsPassed':45}))

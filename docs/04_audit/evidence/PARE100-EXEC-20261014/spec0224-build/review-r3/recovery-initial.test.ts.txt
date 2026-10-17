@@ -1,0 +1,34 @@
+import {it,expect} from 'vitest';
+import {writeFileSync} from 'node:fs';
+import {createOperationalHarness,InMemoryExecutionStepStore} from '@cvg/harness';
+import {HybridOrchestrator} from '@cvg/harness-orchestrator';
+import {phase3RuntimeInput,phase3AgentProfile,ScriptedPolicyEngine,InMemoryApprovalEngine,RecordingAuditSink,RecordingTelemetrySink} from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/__tests__/fixtures/phase3-fixtures.ts';
+const own='/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r3';
+it('repro: a complete-mode compatibility tool without journal replays an unresolved durable dispatch',async()=>{
+ const id='synthetic.recovery.write';let bodies=0;const operationKeys:string[]=[];
+ const firstStore=new InMemoryExecutionStepStore();let captured:any;let capturedSteps:any;
+ let ready!:()=>void;const entered=new Promise<void>(r=>ready=r);
+ const controller=new AbortController();
+ const base=phase3RuntimeInput();
+ const input={...base,agent:phase3AgentProfile({tools:[id]}),userMessage:'Perform one synthetic in-memory operation.',budget:{...base.budget,maxDurationMs:5000},signal:controller.signal};
+ function factory(store:InMemoryExecutionStepStore,first:boolean){
+ const tool={id,version:'1',description:'Synthetic in-memory counter only',risk:'LOW',sideEffect:'WRITE',idempotent:false,requiresApproval:false,execute:async(_input:any,ctx:any)=>{
+  bodies++;operationKeys.push(ctx.operationKey);
+  if(first){captured=await firstStore.loadCheckpoint(input.tenantId,input.executionId!);capturedSteps=await firstStore.listSteps(input.tenantId,input.executionId!);ready();await new Promise<void>(()=>{});}
+  return {status:'SUCCEEDED',output:'synthetic operation done'};
+ }} as any;
+ return createOperationalHarness({toolResultContext:{version:1},tools:{list:()=>[tool],resolve:(x:string)=>x===id?tool:undefined},stepStore:store,iterativeOrchestrator:new HybridOrchestrator({rules:[ctx=>ctx.stepNumber===1?{decisionType:'CALL_TOOL',reasonCode:'TOOL_REQUIRED',toolId:id,toolVersion:'1',toolInput:{}}:{decisionType:'RESPOND',reasonCode:'GOAL_SATISFIED',responseText:'Synthetic operation done.'}]}),modelGateway:{complete:async()=>{throw Error('must never call model')}},policy:new ScriptedPolicyEngine(),approvals:new InMemoryApprovalEngine(),audit:new RecordingAuditSink(),telemetry:new RecordingTelemetrySink()});
+ }
+ const firstPromise=factory(firstStore,true).run(input);
+ await entered;
+ // Capture only state that was durable before body completion. Abort the old
+ // runtime for cleanup; its later writes are not copied into the restored store.
+ controller.abort();const firstResult=await firstPromise;
+ const restored=new InMemoryExecutionStepStore();
+ await restored.compareAndSwapCheckpoint({tenantId:input.tenantId,executionId:input.executionId!,expected:null,next:captured});
+ for(const step of capturedSteps)await restored.recordStep(step);
+ const resumed=await factory(restored,false).run({...input,signal:undefined});
+ writeFileSync(own+'/recovery-observed.json',JSON.stringify({firstResult,captured,capturedSteps,resumed,bodies,operationKeys,simulation:'pure-memory reconstruction of pre-completion durable state; no actual process crash or external effect'},null,2)+'\n');
+ expect(bodies).toBe(1);
+ expect(resumed.stopReason).not.toBe('COMPLETED');
+},10000);

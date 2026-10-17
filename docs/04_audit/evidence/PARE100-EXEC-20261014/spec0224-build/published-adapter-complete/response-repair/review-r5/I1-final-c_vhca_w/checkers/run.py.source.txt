@@ -1,0 +1,10 @@
+import os,json,subprocess,time,pathlib,sys
+r=pathlib.Path(__file__).resolve().parent.parent;m=json.load(open(r/'input-index.json'));name=sys.argv[1];config=sys.argv[2] if len(sys.argv)>2 else name
+env=os.environ.copy();env.update(I1_REVIEW=str(r),I1_READ_LOG=str(r/f'observed/{name}-reads.jsonl'),I1_SCOPE_PACKAGE=m['allowedScopeMetadata']['path'],I1_PACKET_DEPS=m['allowedDependencyMirror'],TMPDIR=str(r/'temp'/name),NODE_COMPILE_CACHE=str(r/'nodecache'/name),SPEC0224_RESPONSE_EVIDENCE=str(r/f'raw/{name}-focused-cases.json'),I1_CASES=str(r/f'raw/{name}-cases.json'),NODE_OPTIONS='--require='+str(r/'configs/trace-reads.cjs'))
+pathlib.Path(env['TMPDIR']).mkdir();pathlib.Path(env['NODE_COMPILE_CACHE']).mkdir()
+argv=[m['node'],m['allowedDependencyMirror']+'/vitest/vitest.mjs','run','--config',str(r/f'configs/{config}.mjs'),'--configLoader','native']+sys.argv[3:]
+meta=dict(argv=argv,cwd=m['artifactRoot'],env={k:v for k,v in env.items() if k.startswith('I1_') or k in ['TMPDIR','NODE_COMPILE_CACHE','SPEC0224_RESPONSE_EVIDENCE','NODE_OPTIONS']},start=time.time())
+with open(r/f'raw/{name}-stdout.log','x') as o,open(r/f'raw/{name}-stderr.log','x') as e:
+ p=subprocess.Popen(argv,cwd=m['artifactRoot'],env=env,stdout=o,stderr=e);meta['pid']=p.pid;meta['exit']=p.wait()
+meta['end']=time.time();json.dump(meta,open(r/f'raw/{name}-command.json','x'),indent=2)
+print(json.dumps(meta));print((r/f'raw/{name}-stdout.log').read_text());print((r/f'raw/{name}-stderr.log').read_text())

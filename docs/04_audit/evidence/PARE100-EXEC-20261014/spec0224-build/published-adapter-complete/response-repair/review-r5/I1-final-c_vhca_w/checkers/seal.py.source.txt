@@ -1,0 +1,51 @@
+import pathlib,json,os,hashlib,datetime,collections,stat
+r=pathlib.Path(__file__).resolve().parent.parent
+excluded={'final-seal.json','final-seal.sha256'}
+def sha(b):return hashlib.sha256(b).hexdigest()
+def encoded(x):return (json.dumps(x,ensure_ascii=False,indent=2)+'\n').encode()
+def role(p):
+ parts=p.split('/')
+ if parts[0] in ['cache','nodecache']:return 'cache'
+ if parts[0]=='temp':return 'temp'
+ if parts[0]=='configs':return 'config'
+ if parts[0]=='controls':return 'control'
+ if parts[0]=='derived':return 'derived'
+ if parts[0]=='observed':return 'observed-original' if 'original-bytes' in parts else 'observed'
+ if parts[0]=='raw':return 'raw'
+ if parts[0]=='checkers':return 'checker'
+ return 'report/metadata'
+def collect():
+ records=[]
+ for d,ds,fs in os.walk(r,followlinks=False):
+  p=pathlib.Path(d);rel=p.relative_to(r).as_posix();names=[]
+  for n in sorted(ds+fs):
+   q=p/n;relative=q.relative_to(r).as_posix()
+   if relative in excluded:continue
+   kind='symlink' if q.is_symlink() else 'directory' if q.is_dir() else 'file'
+   names.append({'name':n,'type':kind})
+  b=encoded(names);records.append({'path':rel,'type':'directory','role':role(rel),'bytes':len(b),'sha256':sha(b),'empty':not names,'entries':names,'byteDefinition':'UTF8 JSON sorted immediate entry name/type listing'})
+  for n in sorted(ds+fs):
+   q=p/n;rel=q.relative_to(r).as_posix()
+   if rel in excluded:continue
+   if q.is_symlink():
+    target=os.readlink(q);b=os.fsencode(target);records.append({'path':rel,'type':'symlink','role':role(rel),'bytes':len(b),'sha256':sha(b),'target':target,'byteDefinition':'link target bytes, no dereference'})
+   elif q.is_file():
+    b=q.read_bytes();records.append({'path':rel,'type':'file','role':role(rel),'bytes':len(b),'sha256':sha(b),'empty':not b})
+ return sorted(records,key=lambda x:(x['type'],x['path']))
+for p in ['inventory.json','final-seal.json','final-seal.sha256']:
+ with open(r/p,'x') as f:pass
+records=collect();selfentry=next(x for x in records if x['path']=='inventory.json');selfentry['sha256']={'detachedBinding':'final-seal.json.inventory.sha256','reason':'self hash is in detached seal, which also contains full entries'}
+inv={'ownedRoot':str(r),'excludedOnly':sorted(excluded),'byteSemantics':'Files=actual bytes; symlinks=target bytes; directories=sorted immediate-entry name/type JSON including newline. Empty classification is explicit. Inventory self-hash is detached, not omitted.','files':[x for x in records if x['type']=='file'],'directories':[x for x in records if x['type']=='directory'],'symlinks':[x for x in records if x['type']=='symlink']}
+while True:
+ b=encoded(inv)
+ if selfentry['bytes']==len(b):break
+ selfentry['bytes']=len(b)
+(r/'inventory.json').write_bytes(b)
+actual=collect();actualself=next(x for x in actual if x['path']=='inventory.json')
+seal={'identity':'fresh FINAL independent Critic I1, inherited model, no descendants','verdict':'REJECT','createdAtUtc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'ownedRoot':str(r),'excludesOnly':sorted(excluded),'inventory':actualself,'allEntries':actual,'allEntriesSha256':sha(encoded(actual)),'entryCounts':dict(collections.Counter(x['type'] for x in actual)),'roles':dict(collections.Counter(x['role'] for x in actual)),'emptyFiles':[x['path'] for x in actual if x['type']=='file' and x.get('empty')],'emptyDirectories':[x['path'] for x in actual if x['type']=='directory' and x.get('empty')],'immutableCheck':{'path':'derived/immutable-check.json','bytes':(r/'derived/immutable-check.json').stat().st_size,'sha256':sha((r/'derived/immutable-check.json').read_bytes())},'limits':'Detached user-space content seal, not a cryptographic signature, OS filesystem attestation or immutable storage.'}
+sealbytes=encoded(seal);(r/'final-seal.json').write_bytes(sealbytes);(r/'final-seal.sha256').write_text(sha(sealbytes)+'  final-seal.json\n')
+# Read-only final verification; no further artifacts are written.
+assert collect()==actual
+assert (r/'final-seal.sha256').read_text().split()[0]==sha((r/'final-seal.json').read_bytes())
+assert actualself['sha256']==sha((r/'inventory.json').read_bytes())
+print(json.dumps({'sealed':True,'verdict':'REJECT','ownedRoot':str(r),'entryCounts':seal['entryCounts'],'roles':seal['roles'],'inventoryBytes':len(b),'inventorySha256':actualself['sha256'],'sealBytes':len(sealbytes),'sealSha256':sha(sealbytes),'emptyFiles':len(seal['emptyFiles']),'emptyDirectories':len(seal['emptyDirectories']),'postSealReadOnlyVerification':'PASS'},indent=2))

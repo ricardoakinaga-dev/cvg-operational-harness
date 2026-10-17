@@ -1,0 +1,29 @@
+from driver import *
+s=(A/'packages/harness/src/__tests__/complete-response-path-public.test.ts').read_text()
+s=s.replace("from '../index.ts'","from '@cvg/harness'").replace("from './fixtures/phase3-fixtures.ts'","from '"+str(A/'packages/harness/src/__tests__/fixtures/phase3-fixtures.ts')+"'")
+s=s.replace("const scenarios: Array<{","const scenarios: Array<{\n    costStop?: boolean\n    tokenStop?: boolean")
+a=s.index('> = [');b=s.index('\n  for (const scenario',a)
+s=s[:a]+"> = [\n{id:'MC01',name:'shared nonzero cost settles decisions once and accounts native response once',mode:'mixed'},\n{id:'MC02',name:'response native post-result cost gate includes prior decision charges',mode:'mixed',costStop:true},\n{id:'MC03',name:'response native post-result token gate includes prior decision charges',mode:'mixed',tokenStop:true}\n  ]"+s[b:]
+s=s.replace('outputTokens: toyTokens(text),','outputTokens: request.purpose === \'RESPONSE\' && scenario.tokenStop ? 700 : toyTokens(text),').replace('costUsd: 0','costUsd: 0.02').replace('costUpperBoundUsd: 0','costUpperBoundUsd: 0.03')
+s=s.replace('maxTokens: 10000,','maxTokens: scenario.tokenStop ? 1000 : 10000,\n          maxCostUsd: scenario.costStop ? 0.05 : 0.2,')
+a=s.index('      if (scenario.overflow || scenario.invalidSelector || scenario.exhausted)')
+s=s[:a]+'''      const totalCost=modelResults.reduce((n,x)=>n+x.costUsd,0)
+      const totalTokens=modelResults.reduce((n,x)=>n+x.inputTokens+x.outputTokens,0)
+      expect(result.modelCalls).toBe(3)
+      expect(result.usage.costUsd).toBeCloseTo(totalCost)
+      expect(checkpoint?.budgetUsage.costUsd).toBeCloseTo(totalCost)
+      expect(result.usage.inputTokens+result.usage.outputTokens).toBe(totalTokens)
+      expect(checkpoint?.budgetUsage.inputTokens!+checkpoint?.budgetUsage.outputTokens!).toBe(totalTokens)
+      expect(modelEntryCheckpoints[2]?.budgetUsage.costUsd).toBeCloseTo(0.04)
+      expect(checkpoint?.state.toolResultContext?.decisionAdmissions.map(x=>x.purpose)).toEqual(['ORCHESTRATION','ORCHESTRATION'])
+      if(scenario.costStop||scenario.tokenStop){
+        expect(result.stopReason).toBe(scenario.costStop?'MAX_COST':'MAX_TOKENS')
+        expect(checkpoint?.state.stopReason).toBe(result.stopReason)
+        expect(checkpoint?.stepNumber).toBe(2)
+        expect(await steps.listSteps(input.tenantId,input.executionId)).toContainEqual(expect.objectContaining({stepNumber:2,stepType:'RESPOND',status:'FAILED'}))
+        return
+      }
+'''+s[a:]
+f=R/'probes/shared-balances.test.ts';f.write_text(s)
+config=(R/'run/independent.config.mjs').read_text().replace(str(R/'probes/independent.test.ts'),str(f)).replace('/cache/independent','/cache/shared-balances');cfg=R/'run/shared-balances.config.mjs';cfg.write_text(config)
+run('shared-balances',[N,str(P/'node_modules/vitest/vitest.mjs'),'run','--config',str(cfg),'--configLoader','native'],dict(SPEC0224_RESPONSE_EVIDENCE=str(R/'run/shared-balances-private.json')))

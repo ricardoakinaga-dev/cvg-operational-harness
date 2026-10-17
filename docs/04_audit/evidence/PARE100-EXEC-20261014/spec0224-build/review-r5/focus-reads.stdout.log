@@ -1,0 +1,1427 @@
+
+FILE packages/harness/src/effect-journal.ts
+1: import { createHash, randomUUID } from 'node:crypto'
+2: import type {
+3:   ToolDefinition,
+4:   ToolExecutionContext,
+5:   ToolRegistry,
+6:   ToolResult
+7: } from '@cvg/harness-contracts'
+8: 
+9: export type EffectJournalState =
+10:   | 'RESERVED'
+11:   | 'EFFECT_STARTED'
+12:   | 'CONFIRMED'
+13:   | 'FAILED'
+14:   | 'UNCERTAIN'
+15: 
+16: export interface EffectJournalRecord {
+17:   readonly tenantId: string
+18:   readonly operationKey: string
+19:   readonly proposalHash: string
+20:   readonly state: EffectJournalState
+21:   readonly attemptId: string
+22:   readonly result?: unknown
+23:   readonly error?: string
+24:   readonly createdAt: string
+25:   readonly updatedAt: string
+26: }
+27: 
+28: export interface EffectJournal {
+29:   reserve(input: {
+30:     tenantId: string
+31:     operationKey: string
+32:     proposalHash: string
+33:     attemptId: string
+34:   }): Promise<EffectJournalRecord>
+35:   markStarted(input: {
+36:     tenantId: string
+37:     operationKey: string
+38:     attemptId: string
+39:   }): Promise<EffectJournalRecord>
+40:   confirm(input: {
+41:     tenantId: string
+42:     operationKey: string
+43:     attemptId: string
+44:     result: unknown
+45:   }): Promise<EffectJournalRecord>
+46:   fail(input: {
+47:     tenantId: string
+48:     operationKey: string
+49:     attemptId: string
+50:     error: string
+51:   }): Promise<EffectJournalRecord>
+52:   markUncertain(input: {
+53:     tenantId: string
+54:     operationKey: string
+55:     attemptId: string
+56:     reason: string
+57:   }): Promise<EffectJournalRecord>
+58:   get(
+59:     tenantId: string,
+60:     operationKey: string
+61:   ): Promise<EffectJournalRecord | null>
+62: }
+63: 
+64: export class EffectJournalError extends Error {
+65:   public constructor(message: string) {
+66:     super(message)
+67:     this.name = 'EffectJournalError'
+68:   }
+69: }
+70: 
+71: function key(tenantId: string, operationKey: string): string {
+72:   return `${tenantId}\u0000${operationKey}`
+73: }
+74: 
+75: function now(): string {
+76:   return new Date().toISOString()
+77: }
+78: 
+79: function bounded(value: string, label: string): string {
+80:   if (typeof value !== 'string' || value.trim().length === 0) {
+81:     throw new EffectJournalError(`${label} is required`)
+82:   }
+83:   if (value.length > 500) throw new EffectJournalError(`${label} is too long`)
+84:   return value.trim()
+85: }
+86: 
+87: export type EffectAttemptIdFactory = () => string
+88: 
+89: /**
+90:  * Generates the fencing identity for one effect attempt. The factory seam is
+91:  * intentionally explicit so synthetic tests can be deterministic; production
+92:  * callers use the node:crypto default and never a weak fallback.
+93:  */
+94: export function createEffectAttemptId(
+95:   factory: EffectAttemptIdFactory = randomUUID
+96: ): string {
+97:   const token = bounded(factory(), 'attemptId token')
+98:   return bounded(`attempt_${token}`, 'attemptId')
+99: }
+100: 
+101: function clone<T>(value: T): T {
+102:   return structuredClone(value)
+103: }
+104: 
+105: /** Process-local journal for synthetic crash/replay proofs. */
+106: export class InMemoryEffectJournal implements EffectJournal {
+107:   private readonly records = new Map<string, EffectJournalRecord>()
+108: 
+109:   public async reserve(input: {
+110:     tenantId: string
+111:     operationKey: string
+112:     proposalHash: string
+113:     attemptId: string
+114:   }): Promise<EffectJournalRecord> {
+115:     const tenantId = bounded(input.tenantId, 'tenantId')
+116:     const operationKey = bounded(input.operationKey, 'operationKey')
+117:     const proposalHash = bounded(input.proposalHash, 'proposalHash')
+118:     const attemptId = bounded(input.attemptId, 'attemptId')
+119:     const identity = key(tenantId, operationKey)
+120:     const existing = this.records.get(identity)
+121:     if (existing) {
+122:       if (existing.proposalHash !== proposalHash) {
+123:         throw new EffectJournalError(
+124:           'Operation key is bound to a different proposal'
+125:         )
+126:       }
+127:       if (existing.state === 'FAILED') {
+128:         const timestamp = now()
+129:         const retried: EffectJournalRecord = {
+130:           tenantId: existing.tenantId,
+131:           operationKey: existing.operationKey,
+132:           proposalHash: existing.proposalHash,
+133:           state: 'RESERVED',
+134:           attemptId,
+135:           createdAt: existing.createdAt,
+136:           updatedAt: timestamp
+137:         }
+138:         this.records.set(identity, retried)
+139:         return clone(retried)
+140:       }
+141:       return clone(existing)
+142:     }
+143:     const timestamp = now()
+144:     const record: EffectJournalRecord = {
+145:       tenantId,
+146:       operationKey,
+147:       proposalHash,
+148:       state: 'RESERVED',
+149:       attemptId,
+150:       createdAt: timestamp,
+151:       updatedAt: timestamp
+152:     }
+153:     this.records.set(identity, record)
+154:     return clone(record)
+155:   }
+156: 
+157:   public markStarted(input: {
+158:     tenantId: string
+159:     operationKey: string
+160:     attemptId: string
+161:   }): Promise<EffectJournalRecord> {
+162:     return this.transition(input, 'EFFECT_STARTED')
+163:   }
+164: 
+165:   public confirm(input: {
+166:     tenantId: string
+167:     operationKey: string
+168:     attemptId: string
+169:     result: unknown
+170:   }): Promise<EffectJournalRecord> {
+171:     return this.transition(input, 'CONFIRMED', { result: clone(input.result) })
+172:   }
+173: 
+174:   public fail(input: {
+175:     tenantId: string
+176:     operationKey: string
+177:     attemptId: string
+178:     error: string
+179:   }): Promise<EffectJournalRecord> {
+180:     return this.transition(input, 'FAILED', {
+181:       error: bounded(input.error, 'error')
+182:     })
+183:   }
+184: 
+185:   public markUncertain(input: {
+186:     tenantId: string
+187:     operationKey: string
+188:     attemptId: string
+189:     reason: string
+190:   }): Promise<EffectJournalRecord> {
+191:     return this.transition(input, 'UNCERTAIN', {
+192:       error: bounded(input.reason, 'reason')
+193:     })
+194:   }
+195: 
+196:   public async get(
+197:     tenantId: string,
+198:     operationKey: string
+199:   ): Promise<EffectJournalRecord | null> {
+200:     const record = this.records.get(key(tenantId, operationKey))
+201:     return record ? clone(record) : null
+202:   }
+203: 
+204:   private async transition(
+205:     input: {
+206:       tenantId: string
+207:       operationKey: string
+208:       attemptId: string
+209:     },
+210:     state: EffectJournalState,
+211:     values: { result?: unknown; error?: string } = {}
+212:   ): Promise<EffectJournalRecord> {
+213:     const identity = key(input.tenantId, input.operationKey)
+214:     const current = this.records.get(identity)
+215:     if (!current) throw new EffectJournalError('Effect reservation is missing')
+216:     if (current.attemptId !== input.attemptId) {
+217:       throw new EffectJournalError('Effect attempt is fenced')
+218:     }
+219:     if (state === 'EFFECT_STARTED' && current.state !== 'RESERVED') {
+220:       throw new EffectJournalError('Effect cannot start from its current state')
+221:     }
+222:     if (
+223:       (state === 'CONFIRMED' || state === 'FAILED' || state === 'UNCERTAIN') &&
+224:       current.state !== 'EFFECT_STARTED'
+225:     ) {
+226:       if (current.state === state) return clone(current)
+227:       throw new EffectJournalError(
+228:         'Effect outcome is not valid for its current state'
+229:       )
+230:     }
+231:     const next: EffectJournalRecord = {
+232:       ...current,
+233:       state,
+234:       ...(values.result !== undefined ? { result: values.result } : {}),
+235:       ...(values.error !== undefined ? { error: values.error } : {}),
+236:       updatedAt: now()
+237:     }
+238:     this.records.set(identity, next)
+239:     return clone(next)
+240:   }
+241: }
+242: 
+243: export interface JournaledToolRegistryOptions {
+244:   readonly crashAfterEffectBeforeConfirm?: boolean
+245:   /** Binds effect replay to the exact capability composition. */
+246:   readonly compositionFingerprint?: string
+247:   /** Deterministic seam for synthetic tests; defaults to node:crypto UUIDs. */
+248:   readonly attemptIdFactory?: EffectAttemptIdFactory
+249: }
+250: 
+251: // Private executor provenance survives the native descriptor copies used by
+252: // complete-result preparation. Caller-provided descriptor fields cannot opt in.
+253: const NATIVE_EFFECT_JOURNAL = Symbol('native-effect-journal')
+254: 
+255: export async function hasNativeEffectReservation(
+256:   tool: ToolDefinition | undefined,
+257:   tenantId: string,
+258:   operationKey: string
+259: ): Promise<boolean> {
+260:   const journal = tool
+261:     ? (Object.getOwnPropertyDescriptor(tool, NATIVE_EFFECT_JOURNAL)?.value as
+262:         | EffectJournal
+263:         | undefined)
+264:     : undefined
+265:   if (!journal) return false
+266:   const record = await journal.get(tenantId, operationKey)
+267:   return (
+268:     record !== null &&
+269:     record.tenantId === tenantId &&
+270:     record.operationKey === operationKey
+271:   )
+272: }
+273: 
+274: function proposalHash(
+275:   tool: ToolDefinition,
+276:   input: unknown,
+277:   compositionFingerprint: string | undefined
+278: ): string {
+279:   return createHash('sha256')
+280:     .update(
+281:       JSON.stringify({
+282:         schemaVersion: 'effect-proposal-v2',
+283:         compositionFingerprint: compositionFingerprint ?? null,
+284:         tool: {
+285:           id: tool.id,
+286:           version: tool.version,
+287:           sideEffect: tool.sideEffect,
+288:           idempotent: tool.idempotent,
+289:           providerId:
+290:             'providerId' in tool
+291:               ? (tool as { providerId?: unknown }).providerId
+292:               : undefined,
+293:           providerVersion:
+294:             'providerVersion' in tool
+295:               ? (tool as { providerVersion?: unknown }).providerVersion
+296:               : undefined
+297:         },
+298:         input
+299:       })
+300:     )
+301:     .digest('hex')
+302: }
+303: 
+304: /**
+305:  * Wraps only the executor side of a registry. Descriptors remain unchanged,
+306:  * policy and approval still run in the harness before this wrapper is called.
+307:  */
+308: export function createJournaledToolRegistry(
+309:   registry: ToolRegistry,
+310:   journal: EffectJournal,
+311:   options: JournaledToolRegistryOptions = {}
+312: ): ToolRegistry {
+313:   return {
+314:     list: () => registry.list(),
+315:     resolve: (toolId, version) => {
+316:       const tool = registry.resolve(toolId, version)
+317:       if (!tool) return undefined
+318:       return journaledTool(tool, journal, options)
+319:     }
+320:   }
+321: }
+322: 
+323: function journaledTool(
+324:   tool: ToolDefinition,
+325:   journal: EffectJournal,
+326:   options: JournaledToolRegistryOptions
+327: ): ToolDefinition {
+328:   const compositionFingerprint = options.compositionFingerprint
+329:     ? bounded(options.compositionFingerprint, 'compositionFingerprint')
+330:     : undefined
+331:   const wrapped = {
+332:     ...tool,
+333:     [NATIVE_EFFECT_JOURNAL]: journal,
+334:     execute: async (
+335:       input: unknown,
+336:       context: ToolExecutionContext
+337:     ): Promise<ToolResult> => {
+338:       const operationKey = bounded(context.operationKey ?? '', 'operationKey')
+339:       const attemptId = createEffectAttemptId(options.attemptIdFactory)
+340:       const reservation = await journal.reserve({
+341:         tenantId: context.tenantId,
+342:         operationKey,
+343:         proposalHash: proposalHash(tool, input, compositionFingerprint),
+344:         attemptId
+345:       })
+346:       if (reservation.state === 'CONFIRMED') {
+347:         return { status: 'SUCCEEDED', output: reservation.result }
+348:       }
+349:       if (
+350:         reservation.state === 'UNCERTAIN' ||
+351:         reservation.state === 'EFFECT_STARTED'
+352:       ) {
+353:         return {
+354:           status: 'REJECTED',
+355:           error:
+356:             'unknown_effect: explicit reconciliation is required before retry'
+357:         }
+358:       }
+359:       if (reservation.attemptId !== attemptId) {
+360:         return {
+361:           status: 'REJECTED',
+362:           error:
+363:             'unknown_effect: an existing reservation requires reconciliation'
+364:         }
+365:       }
+366:       await journal.markStarted({
+367:         tenantId: context.tenantId,
+368:         operationKey,
+369:         attemptId
+370:       })
+371:       try {
+372:         const result = await tool.execute(input, context)
+373:         if (
+374:           options.crashAfterEffectBeforeConfirm &&
+375:           result.status === 'SUCCEEDED'
+376:         ) {
+377:           await journal.markUncertain({
+378:             tenantId: context.tenantId,
+379:             operationKey,
+380:             attemptId,
+381:             reason: 'synthetic crash after effect before confirmation'
+382:           })
+383:           return {
+384:             status: 'REJECTED',
+385:             error:
+386:               'unknown_effect: synthetic crash after effect before confirmation'
+387:           }
+388:         }
+389:         if (result.status === 'SUCCEEDED') {
+390:           await journal.confirm({
+391:             tenantId: context.tenantId,
+392:             operationKey,
+393:             attemptId,
+394:             result: result.output
+395:           })
+396:         } else {
+397:           await journal.fail({
+398:             tenantId: context.tenantId,
+399:             operationKey,
+400:             attemptId,
+401:             error: result.error ?? 'tool failed'
+402:           })
+403:         }
+404:         return result
+405:       } catch (error) {
+406:         const message =
+407:           error instanceof Error ? error.message : 'tool execution failed'
+408:         await journal.markUncertain({
+409:           tenantId: context.tenantId,
+410:           operationKey,
+411:           attemptId,
+412:           reason: `unknown effect after executor failure: ${message}`
+413:         })
+414:         return {
+415:           status: 'REJECTED',
+416:           error: 'unknown_effect: executor outcome is uncertain'
+417:         }
+418:       }
+419:     }
+420:   }
+421:   return wrapped
+422: }
+
+FILE packages/harness/src/complete-tool-results.ts
+1: import { createHash } from 'node:crypto'
+2: import type {
+3:   CompleteToolObservationPayload,
+4:   CompleteJsonValue,
+5:   ContextItem,
+6:   Observation,
+7:   SideEffect,
+8:   StepContext,
+9:   ToolResult,
+10:   ToolRegistry
+11: } from '@cvg/harness-contracts'
+12: import {
+13:   canonicalizeCompleteJson,
+14:   COMPLETE_CHECKPOINT_MAX_BYTES,
+15:   CompleteJsonError,
+16:   MAX_CHECKPOINT_OBSERVATIONS,
+17:   ToolResultContextError
+18: } from '@cvg/harness-contracts'
+19: 
+20: const LARGE_LIMITS = {
+21:   maxBytes: COMPLETE_CHECKPOINT_MAX_BYTES,
+22:   maxDepth: 64,
+23:   maxNodes: 1_000_000
+24: }
+25: 
+26: /** Before legacy serialization/validators can coerce or invoke output data. */
+27: export function prepareCompleteToolResult(raw: unknown): ToolResult {
+28:   let safe: Record<string, unknown>
+29:   try {
+30:     const text = canonicalizeCompleteJson(raw, LARGE_LIMITS)
+31:     safe = JSON.parse(text) as Record<string, unknown>
+32:     if (
+33:       !safe ||
+34:       Array.isArray(safe) ||
+35:       !['SUCCEEDED', 'FAILED', 'REJECTED'].includes(safe.status as string)
+36:     )
+37:       throw new Error('shape')
+38:     if (
+39:       safe.error !== undefined &&
+40:       (typeof safe.error !== 'string' || safe.error.length > 512)
+41:     )
+42:       throw new Error('error')
+43:   } catch {
+44:     // The body may already have acted; do not turn capture failure into safe replay.
+45:     throw new Error('unknown_effect: complete_result_not_representable')
+46:   }
+47:   return {
+48:     status: safe.status as ToolResult['status'],
+49:     ...(Object.hasOwn(safe, 'output') ? { output: safe.output } : {}),
+50:     ...(typeof safe.error === 'string' ? { error: safe.error } : {})
+51:   }
+52: }
+53: 
+54: export function prepareCompleteToolRegistry(
+55:   registry: ToolRegistry
+56: ): ToolRegistry {
+57:   const prepare = (tool: ReturnType<ToolRegistry['resolve']>) =>
+58:     tool
+59:       ? {
+60:           ...tool,
+61:           execute: async (...args: Parameters<typeof tool.execute>) =>
+62:             prepareCompleteToolResult(await tool.execute(...args))
+63:         }
+64:       : undefined
+65:   return {
+66:     list: () => registry.list().map((tool) => prepare(tool)!),
+67:     resolve: (id, version) => prepare(registry.resolve(id, version))
+68:   }
+69: }
+70: 
+71: export function completeSnapshot(value: unknown): string {
+72:   return canonicalizeCompleteJson(value, LARGE_LIMITS)
+73: }
+74: 
+75: export function completeToolPayload(
+76:   output: unknown,
+77:   sideEffect: SideEffect
+78: ): CompleteToolObservationPayload {
+79:   try {
+80:     const serialized = canonicalizeCompleteJson(output)
+81:     return {
+82:       schemaVersion: 1,
+83:       status: 'SUCCEEDED',
+84:       sideEffect,
+85:       completion: 'COMPLETE',
+86:       resultAvailability: 'AVAILABLE',
+87:       output: JSON.parse(serialized) as CompleteJsonValue,
+88:       outputBytes: Buffer.byteLength(serialized, 'utf8'),
+89:       outputSha256: createHash('sha256').update(serialized).digest('hex')
+90:     }
+91:   } catch (error) {
+92:     if (!(error instanceof CompleteJsonError)) throw error
+93:     return {
+94:       schemaVersion: 1,
+95:       status: 'SUCCEEDED',
+96:       sideEffect,
+97:       completion: 'UNAVAILABLE',
+98:       resultAvailability: 'UNAVAILABLE',
+99:       reason: error.code
+100:     }
+101:   }
+102: }
+103: 
+104: export function assertCompleteToolObservation(observation: Observation): void {
+105:   if (observation.type !== 'TOOL_RESULT') return
+106:   const raw = observation.payload
+107:   // Validate plain JSON before reading individual fields; never invoke accessors.
+108:   completeSnapshot(raw)
+109:   const payload = raw as CompleteToolObservationPayload
+110:   if (
+111:     !payload ||
+112:     payload.schemaVersion !== 1 ||
+113:     observation.source !== 'TOOL' ||
+114:     observation.trust !== 'UNTRUSTED' ||
+115:     !['NONE', 'READ', 'WRITE', 'EXTERNAL'].includes(payload.sideEffect)
+116:   ) {
+117:     throw new ToolResultContextError(
+118:       'STATE_CONFLICT',
+119:       'Invalid complete tool envelope.',
+120:       'STATE_CONFLICT'
+121:     )
+122:   }
+123:   if (payload.status === 'SUCCEEDED' && payload.completion === 'COMPLETE') {
+124:     const value = canonicalizeCompleteJson(payload.output)
+125:     if (
+126:       payload.resultAvailability !== 'AVAILABLE' ||
+127:       payload.outputBytes !== Buffer.byteLength(value, 'utf8') ||
+128:       payload.outputSha256 !==
+129:         createHash('sha256').update(value).digest('hex') ||
+130:       Object.keys(payload).sort().join(',') !==
+131:         'completion,output,outputBytes,outputSha256,resultAvailability,schemaVersion,sideEffect,status'
+132:     ) {
+133:       throw new ToolResultContextError(
+134:         'STATE_CONFLICT',
+135:         'Tool result integrity mismatch.',
+136:         'STATE_CONFLICT'
+137:       )
+138:     }
+139:   } else if (
+140:     payload.status === 'SUCCEEDED' &&
+141:     payload.completion === 'UNAVAILABLE'
+142:   ) {
+143:     if (
+144:       payload.resultAvailability !== 'UNAVAILABLE' ||
+145:       !['INVALID_JSON', 'RESULT_TOO_LARGE', 'RESULT_COMPLEXITY'].includes(
+146:         payload.reason
+147:       ) ||
+148:       Object.keys(payload).sort().join(',') !==
+149:         'completion,reason,resultAvailability,schemaVersion,sideEffect,status'
+150:     ) {
+151:       throw new ToolResultContextError(
+152:         'STATE_CONFLICT',
+153:         'Invalid unavailable result.',
+154:         'STATE_CONFLICT'
+155:       )
+156:     }
+157:   } else if (
+158:     (payload.status !== 'FAILED' && payload.status !== 'REJECTED') ||
+159:     payload.completion !== 'NOT_APPLICABLE' ||
+160:     payload.resultAvailability !== 'UNAVAILABLE' ||
+161:     typeof payload.error !== 'string' ||
+162:     payload.error.length > 512 ||
+163:     Object.keys(payload).sort().join(',') !==
+164:       'completion,error,resultAvailability,schemaVersion,sideEffect,status'
+165:   ) {
+166:     throw new ToolResultContextError(
+167:       'STATE_CONFLICT',
+168:       'Invalid failed tool result.',
+169:       'STATE_CONFLICT'
+170:     )
+171:   }
+172: 
+173:   const identifiers = [
+174:     observation.observationId,
+175:     observation.executionId,
+176:     observation.stepId,
+177:     observation.provenance.sourceId,
+178:     observation.provenance.sourceVersion,
+179:     observation.provenance.operationKey,
+180:     observation.provenance.effectRef
+181:   ]
+182:   if (
+183:     identifiers.some(
+184:       (value) =>
+185:         value !== undefined &&
+186:         (typeof value !== 'string' ||
+187:           value.length > 512 ||
+188:           value.includes('\0'))
+189:     )
+190:   ) {
+191:     throw new ToolResultContextError(
+192:       'STATE_CONFLICT',
+193:       'Invalid tool result metadata.',
+194:       'STATE_CONFLICT'
+195:     )
+196:   }
+197:   const encoded = completeSnapshot(observation)
+198:   const outputBytes =
+199:     payload.completion === 'COMPLETE' ? payload.outputBytes : 0
+200:   if (Buffer.byteLength(encoded, 'utf8') - outputBytes > 4_096) {
+201:     throw new ToolResultContextError(
+202:       'CONTEXT_OVERFLOW',
+203:       'Tool result metadata exceeds its envelope limit.'
+204:     )
+205:   }
+206: }
+207: 
+208: export function completeToolItem(observation: Observation): ContextItem {
+209:   assertCompleteToolObservation(observation)
+210:   return {
+211:     contextId: `tool.${observation.observationId}`,
+212:     priority: 'FRESH_TOOL_RESULTS',
+213:     trust: 'UNTRUSTED',
+214:     source: observation.provenance.sourceId,
+215:     content: completeSnapshot(observation),
+216:     // Informational only. Qualified whole-request admission owns the real bound.
+217:     tokenEstimate: 0,
+218:     evidenceRefs: [observation.observationId]
+219:   }
+220: }
+221: 
+222: export function retainCompleteObservations(
+223:   observations: readonly Observation[]
+224: ): Observation[] {
+225:   const retained = [...observations]
+226:   while (retained.length > MAX_CHECKPOINT_OBSERVATIONS) {
+227:     const optional = retained.findIndex((value) => value.type !== 'TOOL_RESULT')
+228:     if (optional < 0) {
+229:       throw new ToolResultContextError(
+230:         'CONTEXT_OVERFLOW',
+231:         'No checkpoint slot for another complete tool result.'
+232:       )
+233:     }
+234:     retained.splice(optional, 1)
+235:   }
+236:   return retained
+237: }
+238: 
+239: /** Validate a custom selector against native items and immutable runtime facts. */
+240: export function validateCompleteStepContext(
+241:   actual: StepContext,
+242:   native: StepContext
+243: ): void {
+244:   completeSnapshot(actual)
+245:   for (const key of [
+246:     'executionId',
+247:     'tenantId',
+248:     'conversationId',
+249:     'stepNumber',
+250:     'runtimeProfile',
+251:     'agentId',
+252:     'agentVersion',
+253:     'objective',
+254:     'instructions',
+255:     'goal',
+256:     'userMessage',
+257:     'stateSummary',
+258:     'observations',
+259:     'capabilities',
+260:     'knowledgeAvailable',
+261:     'completionStrategy',
+262:     'allowedDecisionTypes',
+263:     'budget',
+264:     'budgetUsage',
+265:     'pendingApprovalId',
+266:     'pendingQuestion',
+267:     'lastEvaluation',
+268:     'correlationId',
+269:     'traceId',
+270:     'decisionRepair',
+271:     'toolResultContext'
+272:   ] as const) {
+273:     if (
+274:       completeSnapshot(actual[key] ?? null) !==
+275:       completeSnapshot(native[key] ?? null)
+276:     ) {
+277:       throw new ToolResultContextError(
+278:         'STATE_CONFLICT',
+279:         `Context changed native field ${key}.`,
+280:         'STATE_CONFLICT'
+281:       )
+282:     }
+283:   }
+284:   if (!Number.isSafeInteger(actual.tokenBudget) || actual.tokenBudget < 1) {
+285:     throw new ToolResultContextError(
+286:       'ADMISSION_UNAVAILABLE',
+287:       'Invalid context token bound.'
+288:     )
+289:   }
+290:   const nativeItems = new Map(
+291:     native.contextItems.map((value) => [value.contextId, value])
+292:   )
+293:   const actualIds = new Set<string>()
+294:   for (const item of actual.contextItems) {
+295:     const expected = nativeItems.get(item.contextId)
+296:     if (
+297:       actualIds.has(item.contextId) ||
+298:       !expected ||
+299:       completeSnapshot(item) !== completeSnapshot(expected)
+300:     ) {
+301:       throw new ToolResultContextError(
+302:         'STATE_CONFLICT',
+303:         'Context item changed or duplicated native data.',
+304:         'STATE_CONFLICT'
+305:       )
+306:     }
+307:     actualIds.add(item.contextId)
+308:   }
+309:   for (const item of native.contextItems) {
+310:     if (
+311:       [
+312:         'SYSTEM',
+313:         'AGENT_PROFILE',
+314:         'CURRENT_GOAL',
+315:         'CURRENT_STATE',
+316:         'FRESH_TOOL_RESULTS'
+317:       ].includes(item.priority) &&
+318:       !actualIds.has(item.contextId)
+319:     ) {
+320:       throw new ToolResultContextError(
+321:         'CONTEXT_OVERFLOW',
+322:         'A mandatory context item was omitted.'
+323:       )
+324:     }
+325:   }
+326: }
+
+FILE packages/harness/src/createOperationalHarness.ts
+1: import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
+2: import type {
+3:   AgenticKnowledgeProvider,
+4:   Claim,
+5:   CompletionEvaluator,
+6:   CompleteToolContextConfiguration,
+7:   ContextEngine,
+8:   ExecutionStepStore,
+9:   IterativeOrchestrator,
+10:   RuntimeInput,
+11:   RuntimeProfile,
+12:   RuntimeResult,
+13:   SandboxGate,
+14:   SufficiencyEvaluator,
+15:   CapabilityRegistry,
+16:   ToolRegistry
+17: } from '@cvg/harness-contracts'
+18: import { createCapabilityToolRegistry } from './capability-boundary.ts'
+19: import {
+20:   createJournaledToolRegistry,
+21:   type EffectJournal,
+22:   type JournaledToolRegistryOptions
+23: } from './effect-journal.ts'
+24: import {
+25:   SinglePassGovernedRuntime,
+26:   type HarnessRuntimeOptions
+27: } from './runtime.ts'
+28: import { IterativeGovernedRuntime } from './iterative-runtime.ts'
+29: import {
+30:   prepareCompleteToolRegistry,
+31:   prepareCompleteToolResult
+32: } from './complete-tool-results.ts'
+33: 
+34: export interface OperationalHarnessOptions extends Omit<
+35:   HarnessRuntimeOptions,
+36:   'orchestrator' | 'tools' | 'capabilityFingerprint'
+37: > {
+38:   readonly toolResultContext?: CompleteToolContextConfiguration
+39:   readonly orchestrator?: HarnessRuntimeOptions['orchestrator']
+40:   /**
+41:    * Explicit capability composition. Its adapter is the only runtime-facing
+42:    * registry for this path; callers cannot provide both registries.
+43:    */
+44:   readonly capabilities?: CapabilityRegistry
+45:   /** Compatibility port retained for existing Phase 2/3 consumers. */
+46:   readonly tools?: ToolRegistry
+47:   /** Required for capability composition and optional for compatibility tools. */
+48:   readonly effectJournal?: EffectJournal
+49:   readonly effectJournalOptions?: JournaledToolRegistryOptions
+50:   /**
+51:    * Required to run the iterative profile. The runtime registry resolves the
+52:    * requested profile here; the worker never selects a runtime class.
+53:    */
+54:   readonly iterativeOrchestrator?: IterativeOrchestrator
+55:   readonly stepStore?: ExecutionStepStore
+56:   readonly contextEngine?: ContextEngine
+57:   readonly knowledge?: AgenticKnowledgeProvider
+58:   readonly sufficiencyEvaluator?: SufficiencyEvaluator
+59:   readonly completionEvaluator?: CompletionEvaluator
+60:   readonly claimExtractor?: (response: string) => readonly Claim[]
+61:   readonly defaultRuntimeProfile?: RuntimeProfile
+62:   readonly clock?: () => Date
+63:   /** Optional containment gate; absent means fail-closed for contained tools. */
+64:   readonly sandbox?: SandboxGate
+65: }
+66: 
+67: export interface OperationalHarness {
+68:   readonly run: (input: RuntimeInput) => Promise<RuntimeResult>
+69:   readonly execute: (input: RuntimeInput) => Promise<RuntimeResult>
+70:   readonly resolveProfile: (input: RuntimeInput) => RuntimeProfile
+71:   readonly capabilityFingerprint?: string
+72: }
+73: 
+74: /**
+75:  * Canonical public composition root for the neutral harness packages. Product
+76:  * adapters provide the ports; this function only wires them together and
+77:  * resolves the runtime profile through a registry-like selection.
+78:  */
+79: export function createOperationalHarness(
+80:   options: OperationalHarnessOptions
+81: ): OperationalHarness {
+82:   if (
+83:     options.toolResultContext &&
+84:     (!options.iterativeOrchestrator || !options.stepStore)
+85:   ) {
+86:     throw new Error(
+87:       'complete-tool-v1 requires iterative orchestration and a checkpoint store.'
+88:     )
+89:   }
+90:   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
+91:   if (options.capabilities && !options.effectJournal) {
+92:     throw new Error(
+93:       'Capability composition requires an explicit effect journal'
+94:     )
+95:   }
+96:   const tools = resolveTools(options, capabilityFingerprint)
+97:   const singlePass = new SinglePassGovernedRuntime({
+98:     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+99:     modelGateway: options.modelGateway,
+100:     policy: options.policy,
+101:     approvals: options.approvals,
+102:     tools,
+103:     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+104:     audit: options.audit,
+105:     telemetry: options.telemetry,
+106:     ...(options.pause ? { pause: options.pause } : {}),
+107:     ...(options.effects ? { effects: options.effects } : {}),
+108:     ...(options.log ? { log: options.log } : {}),
+109:     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+110:   })
+111: 
+112:   const iterative =
+113:     options.iterativeOrchestrator && options.stepStore
+114:       ? new IterativeGovernedRuntime({
+115:           orchestrator: options.iterativeOrchestrator,
+116:           modelGateway: options.modelGateway,
+117:           policy: options.policy,
+118:           approvals: options.approvals,
+119:           tools,
+120:           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+121:           audit: options.audit,
+122:           telemetry: options.telemetry,
+123:           ...(options.pause ? { pause: options.pause } : {}),
+124:           ...(options.effects ? { effects: options.effects } : {}),
+125:           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+126:           ...(options.log ? { log: options.log } : {}),
+127:           stepStore: options.stepStore,
+128:           ...(options.toolResultContext
+129:             ? { toolResultContext: options.toolResultContext }
+130:             : {}),
+131:           ...(options.contextEngine
+132:             ? { contextEngine: options.contextEngine }
+133:             : {}),
+134:           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+135:           ...(options.sufficiencyEvaluator
+136:             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+137:             : {}),
+138:           ...(options.completionEvaluator
+139:             ? { completionEvaluator: options.completionEvaluator }
+140:             : {}),
+141:           ...(options.claimExtractor
+142:             ? { claimExtractor: options.claimExtractor }
+143:             : {}),
+144:           ...(options.clock ? { clock: options.clock } : {})
+145:         })
+146:       : undefined
+147: 
+148:   const resolveProfile = (input: RuntimeInput): RuntimeProfile => {
+149:     const profile =
+150:       input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+151:     if (options.toolResultContext && profile !== 'iterative') {
+152:       throw new Error(
+153:         'complete-tool-v1 is only supported by the iterative profile.'
+154:       )
+155:     }
+156:     return profile
+157:   }
+158: 
+159:   const execute = async (input: RuntimeInput): Promise<RuntimeResult> => {
+160:     const governedInput = capabilityFingerprint
+161:       ? { ...input, capabilityFingerprint }
+162:       : input
+163:     if (
+164:       capabilityFingerprint &&
+165:       input.executionId &&
+166:       input.capabilityFingerprint === undefined
+167:     ) {
+168:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+169:       return {
+170:         response:
+171:           'Capability composition fingerprint is required for durable execution.',
+172:         stopReason: 'STATE_CONFLICT',
+173:         steps: 0,
+174:         modelCalls: 0,
+175:         toolCalls: 0,
+176:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+177:       }
+178:     }
+179:     if (
+180:       capabilityFingerprint &&
+181:       input.capabilityFingerprint !== undefined &&
+182:       input.capabilityFingerprint !== capabilityFingerprint
+183:     ) {
+184:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+185:       return {
+186:         response:
+187:           'Capability composition fingerprint does not match the runtime.',
+188:         stopReason: 'STATE_CONFLICT',
+189:         steps: 0,
+190:         modelCalls: 0,
+191:         toolCalls: 0,
+192:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+193:       }
+194:     }
+195:     const profile = resolveProfile(governedInput)
+196:     if (profile === 'iterative') {
+197:       if (!iterative) {
+198:         await safeAudit(
+199:           options,
+200:           governedInput,
+201:           'runtime.stopped',
+202:           'STATE_CONFLICT'
+203:         )
+204:         return {
+205:           response:
+206:             'The iterative runtime profile is not configured in this composition.',
+207:           stopReason: 'STATE_CONFLICT',
+208:           steps: 0,
+209:           modelCalls: 0,
+210:           toolCalls: 0,
+211:           usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+212:         }
+213:       }
+214:       return iterative.execute(governedInput)
+215:     }
+216:     return singlePass.execute(governedInput)
+217:   }
+218: 
+219:   return {
+220:     run: (input) => execute(input),
+221:     execute,
+222:     resolveProfile,
+223:     ...(options.capabilities
+224:       ? { capabilityFingerprint: options.capabilities.compositionFingerprint() }
+225:       : {})
+226:   }
+227: }
+228: 
+229: function resolveTools(
+230:   options: OperationalHarnessOptions,
+231:   capabilityFingerprint: string | undefined
+232: ): ToolRegistry {
+233:   if (options.capabilities && options.tools) {
+234:     throw new Error(
+235:       'Operational harness composition accepts capabilities or tools, not both'
+236:     )
+237:   }
+238:   const baseRegistry = options.capabilities
+239:     ? createCapabilityToolRegistry(
+240:         options.capabilities,
+241:         options.toolResultContext ? prepareCompleteToolResult : undefined
+242:       )
+243:     : options.tools
+244:   if (!baseRegistry) {
+245:     throw new Error(
+246:       'Operational harness composition requires an explicit capability or tool registry'
+247:     )
+248:   }
+249:   const registry = options.toolResultContext
+250:     ? prepareCompleteToolRegistry(baseRegistry)
+251:     : baseRegistry
+252:   if (!options.effectJournal) return registry
+253:   return createJournaledToolRegistry(registry, options.effectJournal, {
+254:     ...options.effectJournalOptions,
+255:     ...(capabilityFingerprint
+256:       ? { compositionFingerprint: capabilityFingerprint }
+257:       : {})
+258:   })
+259: }
+260: 
+261: async function safeAudit(
+262:   options: OperationalHarnessOptions,
+263:   input: RuntimeInput,
+264:   action: string,
+265:   result: string
+266: ): Promise<void> {
+267:   try {
+268:     await options.audit.append({
+269:       actor: input.agent.id,
+270:       agent: input.agent.id,
+271:       tenant: input.tenantId,
+272:       action,
+273:       policy: null,
+274:       approval: null,
+275:       tool: null,
+276:       result,
+277:       timestamp: new Date().toISOString(),
+278:       traceId: input.traceId,
+279:       correlationId: input.correlationId
+280:     })
+281:   } catch {
+282:     // misconfiguration must still fail closed without an unhandled error
+283:   }
+284: }
+
+FILE packages/harness/src/index.ts
+1: export * from './createOperationalHarness.ts'
+2: export * from './complete-checkpoint.ts'
+3: export * from './compaction.ts'
+4: export * from './session/index.ts'
+5: export {
+6:   CapabilityRegistry,
+7:   CapabilityRegistryError,
+8:   composeCapabilities,
+9:   createCapabilityRegistry
+10: } from './capability-boundary.ts'
+11: export type {
+12:   CapabilityComposition,
+13:   CapabilityRegistryErrorCode
+14: } from './capability-boundary.ts'
+15: export {
+16:   createEffectAttemptId,
+17:   createJournaledToolRegistry,
+18:   EffectJournalError,
+19:   InMemoryEffectJournal
+20: } from './effect-journal.ts'
+21: export type {
+22:   EffectAttemptIdFactory,
+23:   EffectJournal,
+24:   EffectJournalRecord,
+25:   EffectJournalState,
+26:   JournaledToolRegistryOptions
+27: } from './effect-journal.ts'
+28: export * from './execution-spine.ts'
+29: export * from './runtime.ts'
+30: export {
+31:   CANCELLED,
+32:   CANCELLED_RESPONSE,
+33:   DEADLINE,
+34:   InMemoryEffectLedger,
+35:   InMemoryKernelLog,
+36:   InMemoryPauseSwitch,
+37:   KernelBootError,
+38:   KernelHost,
+39:   KernelRuntime,
+40:   PAUSED_RESPONSE,
+41:   PROCEED,
+42:   REQUIRED_SERVICES,
+43:   appendLog,
+44:   approvalsControl,
+45:   auditControl,
+46:   budgetControl,
+47:   createKernelRuntime,
+48:   createTurnState,
+49:   effectsControl,
+50:   logControl,
+51:   modelCapability,
+52:   pauseControl,
+53:   plannerCapability,
+54:   policyControl,
+55:   race,
+56:   runGate,
+57:   runGuards,
+58:   runModelCall,
+59:   runToolCall,
+60:   standardKernelPlugins,
+61:   stop,
+62:   telemetryCapability,
+63:   toolsCapability,
+64:   unrecordedBlock
+65: } from './kernel/index.ts'
+66: export type {
+67:   BudgetService,
+68:   EffectLedger,
+69:   EffectRef,
+70:   GuardVerdict,
+71:   HookMap,
+72:   HookPoint,
+73:   KernelContext,
+74:   KernelGate,
+75:   KernelLog,
+76:   KernelLogEvent,
+77:   KernelPlugin,
+78:   KernelProceed,
+79:   KernelStop,
+80:   ModelCallState,
+81:   ModelPipelineResult,
+82:   PauseSwitch,
+83:   PluginKind,
+84:   ServiceKey,
+85:   Services,
+86:   StandardKernelOptions,
+87:   StopCause,
+88:   ToolCallState,
+89:   ToolGuard,
+90:   ToolOutcome,
+91:   ToolPipelineHooks,
+92:   ToolPipelineResult,
+93:   TurnBudget,
+94:   TurnState
+95: } from './kernel/index.ts'
+96: export * from './context-engine.ts'
+97: export * from './completion.ts'
+98: export * from './step-store.ts'
+99: export * from './iterative-runtime.ts'
+100: export * from './trajectory.ts'
+101: export * from './skills/index.ts'
+102: 
+103: export type { ExecutionStepStore } from '@cvg/harness-contracts'
+
+FILE packages/harness/src/__tests__/complete-tool-unjournaled-recovery.test.ts
+1: import { describe, expect, it } from 'vitest'
+2: import type {
+3:   ExecutionCheckpoint,
+4:   ExecutionStep,
+5:   ToolDefinition,
+6:   ToolRegistry
+7: } from '@cvg/harness-contracts'
+8: import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+9: import {
+10:   createJournaledToolRegistry,
+11:   createOperationalHarness,
+12:   InMemoryEffectJournal,
+13:   InMemoryExecutionStepStore,
+14:   type EffectJournal
+15: } from '../index.ts'
+16: import {
+17:   phase3AgentProfile,
+18:   phase3RuntimeInput,
+19:   InMemoryApprovalEngine,
+20:   RecordingAuditSink,
+21:   RecordingTelemetrySink,
+22:   ScriptedPolicyEngine
+23: } from './fixtures/phase3-fixtures.ts'
+24: 
+25: const toolId = 'synthetic.recovery.write'
+26: type JournalMode = 'none' | 'factory' | 'prewrapped'
+27: 
+28: function fixture(mode: JournalMode) {
+29:   const journal = new InMemoryEffectJournal()
+30:   const initialStore = new InMemoryExecutionStepStore()
+31:   const base = phase3RuntimeInput()
+32:   const input = {
+33:     ...base,
+34:     agent: phase3AgentProfile({ tools: [toolId] }),
+35:     userMessage: 'Perform one synthetic in-memory operation.',
+36:     budget: { ...base.budget, maxDurationMs: 5000 }
+37:   }
+38:   const operationKeys: string[] = []
+39:   let bodies = 0
+40:   let captured: ExecutionCheckpoint
+41:   let capturedSteps: readonly ExecutionStep[]
+42:   let entered!: () => void
+43:   const bodyEntered = new Promise<void>((resolve) => {
+44:     entered = resolve
+45:   })
+46:   const factory = (
+47:     store: InMemoryExecutionStepStore,
+48:     suspend: boolean,
+49:     recovery?: { mode?: JournalMode; journal?: EffectJournal }
+50:   ) => {
+51:     const selectedMode = recovery?.mode ?? mode
+52:     const authority = recovery?.journal ?? journal
+53:     const tool: ToolDefinition = {
+54:       id: toolId,
+55:       version: '1',
+56:       description: 'Synthetic in-memory counter only',
+57:       inputSchema: { type: 'object' },
+58:       outputSchema: { type: 'string' },
+59:       risk: 'LOW',
+60:       sideEffect: 'WRITE',
+61:       idempotent: false,
+62:       requiresApproval: false,
+63:       execute: async (_input, context) => {
+64:         bodies++
+65:         operationKeys.push(context.operationKey!)
+66:         if (suspend) {
+67:           captured = (await initialStore.loadCheckpoint(
+68:             input.tenantId,
+69:             input.executionId!
+70:           ))!
+71:           capturedSteps = await initialStore.listSteps(
+72:             input.tenantId,
+73:             input.executionId!
+74:           )
+75:           entered()
+76:           await new Promise<void>(() => {})
+77:         }
+78:         return { status: 'SUCCEEDED', output: 'synthetic operation done' }
+79:       }
+80:     }
+81:     const raw: ToolRegistry = {
+82:       list: () => [tool],
+83:       resolve: (id) => (id === toolId ? tool : undefined)
+84:     }
+85:     return createOperationalHarness({
+86:       toolResultContext: { version: 1 },
+87:       ...(selectedMode === 'factory' ? { effectJournal: authority } : {}),
+88:       tools:
+89:         selectedMode === 'prewrapped'
+90:           ? createJournaledToolRegistry(raw, authority)
+91:           : raw,
+92:       stepStore: store,
+93:       iterativeOrchestrator: new HybridOrchestrator({
+94:         rules: [
+95:           (context) =>
+96:             context.stepNumber === 1
+97:               ? {
+98:                   decisionType: 'CALL_TOOL',
+99:                   reasonCode: 'TOOL_REQUIRED',
+100:                   toolId,
+101:                   toolVersion: '1',
+102:                   toolInput: {}
+103:                 }
+104:               : {
+105:                   decisionType: 'RESPOND',
+106:                   reasonCode: 'GOAL_SATISFIED',
+107:                   responseText: 'Synthetic operation done.'
+108:                 }
+109:         ]
+110:       }),
+111:       modelGateway: {
+112:         complete: async () => {
+113:           throw new Error('Must never call a model')
+114:         }
+115:       },
+116:       policy: new ScriptedPolicyEngine(),
+117:       approvals: new InMemoryApprovalEngine(),
+118:       audit: new RecordingAuditSink(),
+119:       telemetry: new RecordingTelemetrySink()
+120:     })
+121:   }
+122:   const interrupt = async (failed = false) => {
+123:     const controller = new AbortController()
+124:     const running = factory(initialStore, true).run({
+125:       ...input,
+126:       signal: controller.signal
+127:     })
+128:     await bodyEntered
+129:     controller.abort()
+130:     await running
+131:     // Recreate only state durable before the body completed. This is a memory
+132:     // crash reconstruction; the interrupted process's later writes are absent.
+133:     const restored = new InMemoryExecutionStepStore()
+134:     await restored.compareAndSwapCheckpoint({
+135:       tenantId: input.tenantId,
+136:       executionId: input.executionId!,
+137:       expected: null,
+138:       next: captured
+139:     })
+140:     for (const step of capturedSteps)
+141:       await restored.recordStep(
+142:         failed && step.stepType === 'TOOL'
+143:           ? { ...step, status: 'FAILED', errorCode: 'unknown_effect' }
+144:           : step
+145:       )
+146:     return restored
+147:   }
+148:   return {
+149:     input,
+150:     factory,
+151:     initialStore,
+152:     interrupt,
+153:     journal,
+154:     operationKeys,
+155:     bodyCount: () => bodies,
+156:     checkpoint: () => captured
+157:   }
+158: }
+159: 
+160: describe('SPEC0224 unresolved dispatch recovery authority', () => {
+161:   it.each([false, true])(
+162:     'hands off an unjournaled in-flight dispatch without replay (failed=%s)',
+163:     async (failed) => {
+164:       const lane = fixture('none')
+165:       const restored = await lane.interrupt(failed)
+166:       const result = await lane.factory(restored, false).run(lane.input)
+167:       expect(result.stopReason).toBe('TOOL_FAILURE')
+168:       expect(result.response).toContain('explicit reconciliation is required')
+169:       expect(lane.bodyCount()).toBe(1)
+170:       expect(result.toolCalls).toBe(1)
+171:       expect(result.modelCalls).toBe(0)
+172:       expect(
+173:         await restored.loadCheckpoint(
+174:           lane.input.tenantId,
+175:           lane.input.executionId!
+176:         )
+177:       ).toEqual(lane.checkpoint())
+178:     }
+179:   )
+180: 
+181:   it.each(['factory', 'prewrapped'] as const)(
+182:     'keeps native journal uncertainty authoritative through %s composition',
+183:     async (mode) => {
+184:       const lane = fixture(mode)
+185:       const restored = await lane.interrupt()
+186:       const result = await lane.factory(restored, false).run(lane.input)
+187:       expect(result.stopReason).toBe('TOOL_FAILURE')
+188:       expect(result.response).toContain('explicit reconciliation is required')
+189:       expect(lane.bodyCount()).toBe(1)
+190:       expect(lane.operationKeys).toHaveLength(1)
+191:     }
+192:   )
+193: 
+194:   it.each(['factory', 'prewrapped'] as const)(
+195:     'recovers a confirmed journal result without a second body through %s',
+196:     async (mode) => {
+197:       const lane = fixture(mode)
+198:       const restored = await lane.interrupt()
+199:       const operationKey = lane.operationKeys[0]!
+200:       const record = await lane.journal.get(lane.input.tenantId, operationKey)
+201:       expect(record?.state).toBe('EFFECT_STARTED')
+202:       // Simulate the durable native confirmation arriving before recreation.
+203:       await lane.journal.confirm({
+204:         tenantId: lane.input.tenantId,
+205:         operationKey,
+206:         attemptId: record!.attemptId,
+207:         result: 'synthetic operation done'
+208:       })
+209:       const result = await lane.factory(restored, false).run(lane.input)
+210:       expect(result.stopReason).toBe('COMPLETED')
+211:       expect(lane.bodyCount()).toBe(1)
+212:       expect(result.toolCalls).toBe(1)
+213:       expect(result.modelCalls).toBe(0)
+214:     }
+215:   )
+216: 
+217:   it('preserves the initial custom-tools invocation without a journal', async () => {
+218:     const lane = fixture('none')
+219:     const result = await lane.factory(lane.initialStore, false).run(lane.input)
+220:     expect(result.stopReason).toBe('COMPLETED')
+221:     expect(lane.bodyCount()).toBe(1)
+222:     expect(result.toolCalls).toBe(1)
+223:   })
+224: 
+225:   it.each(['none', 'factory', 'prewrapped'] as const)(
+226:     'does not gain recovery authority from a fresh empty journal after %s',
+227:     async (mode) => {
+228:       const lane = fixture(mode)
+229:       const restored = await lane.interrupt()
+230:       const empty = new InMemoryEffectJournal()
+231:       const result = await lane
+232:         .factory(restored, false, { mode: 'factory', journal: empty })
+233:         .run(lane.input)
+234:       expect(result.stopReason).toBe('TOOL_FAILURE')
+235:       expect(lane.bodyCount()).toBe(1)
+236:       expect(result.toolCalls).toBe(1)
+237:       expect(
+238:         await empty.get(lane.input.tenantId, lane.operationKeys[0]!)
+239:       ).toBeNull()
+240:       expect(
+241:         await restored.loadCheckpoint(
+242:           lane.input.tenantId,
+243:           lane.input.executionId!
+244:         )
+245:       ).toEqual(lane.checkpoint())
+246:     }
+247:   )
+248: 
+249:   it.each(['throw', 'wrong-tenant', 'wrong-operation', 'never'] as const)(
+250:     'hands off when the native journal proof is %s',
+251:     async (fault) => {
+252:       const lane = fixture('factory')
+253:       const restored = await lane.interrupt()
+254:       const originalGet = lane.journal.get.bind(lane.journal)
+255:       lane.journal.get = async (tenantId, operationKey) => {
+256:         if (fault === 'throw') throw new Error('Synthetic proof read failure')
+257:         if (fault === 'never') return new Promise(() => {})
+258:         const record = await originalGet(tenantId, operationKey)
+259:         return {
+260:           ...record!,
+261:           ...(fault === 'wrong-tenant'
+262:             ? { tenantId: 'synthetic-other-tenant' }
+263:             : { operationKey: 'synthetic-other-operation' })
+264:         }
+265:       }
+266:       const result = await lane.factory(restored, false).run({
+267:         ...lane.input,
+268:         ...(fault === 'never'
+269:           ? { budget: { ...lane.input.budget, maxDurationMs: 50 } }
+270:           : {})
+271:       })
+272:       expect(result.stopReason).toBe('TOOL_FAILURE')
+273:       expect(lane.bodyCount()).toBe(1)
+274:       expect(
+275:         await restored.loadCheckpoint(
+276:           lane.input.tenantId,
+277:           lane.input.executionId!
+278:         )
+279:       ).toEqual(lane.checkpoint())
+280:     }
+281:   )
+282: })

@@ -1,0 +1,278 @@
+{
+  "method": "Read source bytes and AST only; never imported/executed reference",
+  "path": "/home/ricardo/deepseek-harness-session-fixes/python/sdk/src/deepseek_harness/client.py",
+  "sha256": "78193d6b88d49b87dc0057ec92cbc512426e7712f75c3e700f0fc7e0046d28fc",
+  "pin": "768fb1f3d3dcf9a16659ee354e927d05475f22dd",
+  "excerpts": [
+    {
+      "start": 492,
+      "end": 504,
+      "lines": [
+        {
+          "line": 492,
+          "text": "    def _record_session_relationship_locked(self, notification: Notification) -> None:"
+        },
+        {
+          "line": 493,
+          "text": "        if notification.method != \"subagent.started\":"
+        },
+        {
+          "line": 494,
+          "text": "            return"
+        },
+        {
+          "line": 495,
+          "text": "        parent_id = notification.payload.get(\"parentSessionId\")"
+        },
+        {
+          "line": 496,
+          "text": "        child_id = notification.payload.get(\"childSessionId\")"
+        },
+        {
+          "line": 497,
+          "text": "        if ("
+        },
+        {
+          "line": 498,
+          "text": "            isinstance(parent_id, str)"
+        },
+        {
+          "line": 499,
+          "text": "            and parent_id"
+        },
+        {
+          "line": 500,
+          "text": "            and isinstance(child_id, str)"
+        },
+        {
+          "line": 501,
+          "text": "            and child_id"
+        },
+        {
+          "line": 502,
+          "text": "            and parent_id != child_id"
+        },
+        {
+          "line": 503,
+          "text": "        ):"
+        },
+        {
+          "line": 504,
+          "text": "            self._session_parents[child_id] = parent_id"
+        }
+      ]
+    },
+    {
+      "start": 506,
+      "end": 536,
+      "lines": [
+        {
+          "line": 506,
+          "text": "    def _notification_belongs_to_session_tree(self, session_id: str) -> NotificationFilter:"
+        },
+        {
+          "line": 507,
+          "text": "        def belongs(notification: Notification) -> bool:"
+        },
+        {
+          "line": 508,
+          "text": "            payload = notification.payload"
+        },
+        {
+          "line": 509,
+          "text": "            if notification.method in {\"subagent.started\", \"subagent.finished\"}:"
+        },
+        {
+          "line": 510,
+          "text": "                parent_id = payload.get(\"parentSessionId\")"
+        },
+        {
+          "line": 511,
+          "text": "                if ("
+        },
+        {
+          "line": 512,
+          "text": "                    isinstance(parent_id, str)"
+        },
+        {
+          "line": 513,
+          "text": "                    and self._session_is_descendant_of(parent_id, session_id)"
+        },
+        {
+          "line": 514,
+          "text": "                ):"
+        },
+        {
+          "line": 515,
+          "text": "                    return True"
+        },
+        {
+          "line": 516,
+          "text": "                return payload.get(\"childSessionId\") == session_id"
+        },
+        {
+          "line": 517,
+          "text": "            related_id = payload.get(\"sessionId\")"
+        },
+        {
+          "line": 518,
+          "text": "            return ("
+        },
+        {
+          "line": 519,
+          "text": "                isinstance(related_id, str)"
+        },
+        {
+          "line": 520,
+          "text": "                and self._session_is_descendant_of(related_id, session_id)"
+        },
+        {
+          "line": 521,
+          "text": "            )"
+        },
+        {
+          "line": 522,
+          "text": ""
+        },
+        {
+          "line": 523,
+          "text": "        return belongs"
+        },
+        {
+          "line": 524,
+          "text": ""
+        },
+        {
+          "line": 525,
+          "text": "    def _session_is_descendant_of(self, session_id: str, root_session_id: str) -> bool:"
+        },
+        {
+          "line": 526,
+          "text": "        current = session_id"
+        },
+        {
+          "line": 527,
+          "text": "        visited: set[str] = set()"
+        },
+        {
+          "line": 528,
+          "text": "        while current not in visited:"
+        },
+        {
+          "line": 529,
+          "text": "            if current == root_session_id:"
+        },
+        {
+          "line": 530,
+          "text": "                return True"
+        },
+        {
+          "line": 531,
+          "text": "            visited.add(current)"
+        },
+        {
+          "line": 532,
+          "text": "            parent = self._session_parents.get(current)"
+        },
+        {
+          "line": 533,
+          "text": "            if parent is None:"
+        },
+        {
+          "line": 534,
+          "text": "                return False"
+        },
+        {
+          "line": 535,
+          "text": "            current = parent"
+        },
+        {
+          "line": 536,
+          "text": "        return False"
+        }
+      ]
+    },
+    {
+      "start": 397,
+      "end": 415,
+      "lines": [
+        {
+          "line": 397,
+          "text": "        if isinstance(method, str):"
+        },
+        {
+          "line": 398,
+          "text": "            params = message.get(\"params\")"
+        },
+        {
+          "line": 399,
+          "text": "            notification = Notification(method=method, payload=params if isinstance(params, dict) else {})"
+        },
+        {
+          "line": 400,
+          "text": "            with self._lock:"
+        },
+        {
+          "line": 401,
+          "text": "                self._record_session_relationship_locked(notification)"
+        },
+        {
+          "line": 402,
+          "text": "                subscribers = list(self._notification_subscribers.items())"
+        },
+        {
+          "line": 403,
+          "text": "            delivered = False"
+        },
+        {
+          "line": 404,
+          "text": "            for subscription_id, (subscriber, predicate) in subscribers:"
+        },
+        {
+          "line": 405,
+          "text": "                try:"
+        },
+        {
+          "line": 406,
+          "text": "                    matches = predicate is None or predicate(notification)"
+        },
+        {
+          "line": 407,
+          "text": "                except BaseException as exc:"
+        },
+        {
+          "line": 408,
+          "text": "                    with self._lock:"
+        },
+        {
+          "line": 409,
+          "text": "                        current = self._notification_subscribers.get(subscription_id)"
+        },
+        {
+          "line": 410,
+          "text": "                        if current is not None and current[0] is subscriber:"
+        },
+        {
+          "line": 411,
+          "text": "                            self._notification_subscribers.pop(subscription_id, None)"
+        },
+        {
+          "line": 412,
+          "text": "                    subscriber.put(exc)"
+        },
+        {
+          "line": 413,
+          "text": "                    continue"
+        },
+        {
+          "line": 414,
+          "text": "                if matches:"
+        },
+        {
+          "line": 415,
+          "text": "                    subscriber.put(notification)"
+        }
+      ]
+    }
+  ]
+}

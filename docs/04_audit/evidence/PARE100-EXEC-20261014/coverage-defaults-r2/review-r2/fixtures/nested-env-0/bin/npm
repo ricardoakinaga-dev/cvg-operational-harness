@@ -1,0 +1,18 @@
+#!/home/ricardo/.nvm/versions/node/v22.23.2/bin/node
+import fs from 'node:fs'
+import path from 'node:path'
+const root = process.cwd(), mode = process.env.SYNTHETIC_REPORT
+fs.writeFileSync('observed.json', JSON.stringify({ pid:process.pid, env:process.env, argv: process.argv.slice(2), perFile: process.env.CVG_COVERAGE_PER_FILE ?? null, scope: process.env.CVG_TEST_SCOPE }))
+if (mode === 'exit7') process.exit(7)
+if (mode === 'missing') process.exit(0)
+const dimensions = ['statements', 'branches', 'functions', 'lines']
+const metric = (total, covered) => ({ total, covered, skipped: 0, pct: total === 0 ? 100 : Math.floor(10000 * covered / total) / 100 })
+const core = Object.fromEntries(dimensions.map(key => [key, metric(20, 20)]))
+const other = Object.fromEntries(dimensions.map(key => [key, metric(80, key === 'branches' ? 65 : 70)]))
+if (mode.startsWith('below-')) { const key = mode.slice(6); other[key] = metric(80, other[key].covered - 1) }
+const total = Object.fromEntries(dimensions.map(key => [key, metric(100, core[key].covered + other[key].covered)]))
+const summary = { total, [path.join(root, 'packages/contracts/src/synthetic.ts')]: core, [path.join(root, mode === 'product' ? 'products/shift/src/synthetic.ts' : 'packages/other/src/synthetic.ts')]: other }
+if (mode === 'inconsistent') summary.total.statements = metric(100, 99)
+fs.mkdirSync('coverage', { recursive: true })
+fs.writeFileSync('coverage/coverage-summary.json', mode === 'malformed' ? '{' : JSON.stringify(mode === 'empty' ? { total } : summary))
+console.log('synthetic coverage producer; no application tests executed')

@@ -1,0 +1,8 @@
+from pathlib import Path
+import subprocess,json,datetime,os,sys
+p=Path(__file__).parent;w=p.parent/'worktree';node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node';label=sys.argv[1];args=sys.argv[2:]
+for d in ['home','tmp','xdg-cache','xdg-config','xdg-data','xdg-state','npm-cache']: (p/'private'/d).mkdir(parents=True,exist_ok=True)
+for f in ['npm-userconfig','npm-globalconfig']:(p/'private'/f).touch(exist_ok=True)
+env={'PATH':str(Path(node).parent)+':/usr/bin:/bin','HOME':str(p/'private/home'),'TMPDIR':str(p/'private/tmp'),'TMP':str(p/'private/tmp'),'TEMP':str(p/'private/tmp'),'XDG_CACHE_HOME':str(p/'private/xdg-cache'),'XDG_CONFIG_HOME':str(p/'private/xdg-config'),'XDG_DATA_HOME':str(p/'private/xdg-data'),'XDG_STATE_HOME':str(p/'private/xdg-state'),'NPM_CONFIG_USERCONFIG':str(p/'private/npm-userconfig'),'NPM_CONFIG_GLOBALCONFIG':str(p/'private/npm-globalconfig'),'NPM_CONFIG_CACHE':str(p/'private/npm-cache'),'CVG_TEST_SCOPE':'core','CVG_DIFFERENTIAL_EVIDENCE_DIR':str(p/'observed'/label),'CI':'true','LANG':'C.UTF-8'}
+if label.startswith('default-'): env.pop('CVG_DIFFERENTIAL_EVIDENCE_DIR',None)
+cmd=[node,*args];start=datetime.datetime.now(datetime.timezone.utc).isoformat();r=subprocess.run(cmd,cwd=w,env=env,text=True,capture_output=True,timeout=90);log=r.stdout+r.stderr;assert len(log.encode())<2*1024*1024;(p/(label+'.log')).write_text(log);(p/(label+'-command.json')).write_text(json.dumps({'argv':cmd,'cwd':str(w),'environment':env,'startedAt':start,'finishedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'timeoutSeconds':90,'outputLimitBytes':2097152,'exit':r.returncode},indent=2)+'\n');print(label,'exit',r.returncode,log[-550:]);sys.exit(r.returncode)

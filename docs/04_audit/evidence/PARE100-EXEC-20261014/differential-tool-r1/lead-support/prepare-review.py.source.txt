@@ -1,0 +1,88 @@
+import hashlib
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+PARENT = Path('/tmp/cvg-pare100-exec-20261014-6az3hlay')
+WORK = PARENT / 'worktree'
+PRIVATE = PARENT / 'differential-tool-r1'
+PACKET = PRIVATE / 'review-packet'
+REF = Path('/home/ricardo/deepseek-harness-session-fixes')
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n')
+
+
+assert not PACKET.exists()
+PACKET.mkdir()
+sources = []
+
+
+def copy(src, rel):
+    dst = PACKET / rel
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    sources.append({'live': str(src), 'copy': rel, 'sha256': sha(src)})
+
+
+for src in (WORK / 'tests/differential').iterdir():
+    if src.is_file():
+        copy(src, str(Path('cvg/tests/differential') / src.name))
+for pkg in ['contracts', 'harness', 'orchestrator', 'policy', 'approval-engine', 'shared']:
+    directory = WORK / 'packages' / pkg
+    if not directory.exists():
+        # Resolve the actual public package folder; no silent omission.
+        for candidate in (WORK / 'packages').iterdir():
+            manifest = candidate / 'package.json'
+            if manifest.is_file() and json.loads(manifest.read_text()).get('name') == '@cvg/' + pkg:
+                directory = candidate
+                break
+    assert directory.exists(), pkg
+    for src in (directory / 'src').rglob('*'):
+        if src.is_file() and '__tests__' not in src.parts:
+            copy(src, 'cvg/' + str(src.relative_to(WORK)))
+    for name in ['package.json', 'tsconfig.json']:
+        copy(directory / name, 'cvg/' + str((directory / name).relative_to(WORK)))
+for rel in ['packages/sdk/src/server.ts', 'packages/sdk/src/client.ts', 'package.json', 'package-lock.json', 'vitest.config.mts', 'tsconfig.base.json', 'tsconfig.typecheck.json']:
+    copy(WORK / rel, 'cvg/' + rel)
+ref_sources = [
+    'package.json', 'packages/test-support/agent-loop-testkit/src/index.ts',
+    'packages/core/agent-loop/src/agent.ts', 'packages/core/agent-loop/src/index.ts',
+    'packages/core/agent-loop/src/tool-calls.ts', 'packages/core/tools/src/index.ts',
+    'packages/core/tools/src/schema.ts', 'packages/llm/llm/src/types.ts',
+    'packages/llm/llm/src/message.ts', 'packages/llm/llm/src/assembler.ts',
+]
+for rel in ref_sources:
+    copy(REF / rel, 'reference/' + rel)
+node = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+cmd = [node, '--input-type=module', '-e', "import {readReferenceInventory} from './tests/differential/reference-inventory.mjs';process.stdout.write(JSON.stringify(readReferenceInventory()))"]
+inventory = json.loads(subprocess.run(cmd, cwd=WORK, capture_output=True, check=True).stdout)
+for i, item in enumerate(inventory):
+    copy(Path(item['file']), f'executed-reference-exports/{i:02}.mjs.source.txt')
+write(PACKET / 'executed-reference-inventory.json', inventory)
+spec = (WORK / 'docs/02_spec/0213_pare100_keyless_differential.md').read_text()
+requirements = spec.split('## F-DIF-ERR-001 —')[0]
+(PACKET / 'requirements.md').write_text(requirements)
+write(PACKET / 'source-manifest.json', sources)
+write(PRIVATE / 'sentinel-pre.json', sources)
+proof = PACKET / 'raw-current'
+proof.mkdir()
+for label in ['focused-r1', 'types-final-r1', 'lint-final-r1']:
+    for suffix in ['.log', '-command.json']:
+        src = PRIVATE / (label + suffix)
+        if src.is_file() and src.stat().st_size:
+            shutil.copy2(src, proof / src.name)
+for src in (PRIVATE / 'observed/focused-r1').rglob('*'):
+    if src.is_file() and src.stat().st_size:
+        dst = proof / 'observed' / src.relative_to(PRIVATE / 'observed/focused-r1')
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+write(PACKET / 'packet-manifest.json', [{'path': str(src.relative_to(PACKET)), 'sha256': sha(src)} for src in PACKET.rglob('*') if src.is_file()])
+print(json.dumps({'packet': str(PACKET), 'source_pairs': len(sources), 'files': sum(src.is_file() for src in PACKET.rglob('*'))}))

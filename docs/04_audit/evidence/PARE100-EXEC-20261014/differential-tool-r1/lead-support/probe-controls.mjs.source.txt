@@ -1,0 +1,38 @@
+import fs from 'node:fs'
+import crypto from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
+import { measureToolTurn } from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tests/differential/compare-tool-turn.mjs'
+const directory = '/tmp/cvg-pare100-exec-20261014-6az3hlay/differential-tool-r1'
+const observed = `${directory}/observed/focused-r1/tool-turn`
+const positive = []
+const negative = []
+for (const id of ['tool-ascii', 'tool-unicode', 'tool-json']) {
+  const data = JSON.parse(fs.readFileSync(`${observed}/${id}.native.json`))
+  positive.push({id,result:measureToolTurn(data.reference,data.cvg,data.fixture).status})
+  // Deliberately defective control, never a historical or production verifier.
+  const summaryOnly = (r,c,f) => r.native.finalText === f.text && c.native.turn.response === f.text && r.native.toolBodies.length === 1 && c.native.toolBodies.length === 1
+  const controls = [
+    x => { x.reference.native.events.splice(9,1) },
+    x => { x.cvg.native.events.splice(2,1) },
+    x => { x.reference.native.requests[1][3].content[0].text += '!forged' },
+    x => { x.cvg.native.responses[0] = '{}' },
+    x => { x.reference.reference.artifacts[0].sha256 = '0'.repeat(64) },
+    x => { x.cvg.native.approvalRequests.push({status:'APPROVED'}) },
+    x => { x.cvg.native.events[2].payload.output = 'invented' },
+    x => { x.reference.native.toolBodies.push({name:'extra',input:{},output:'extra'}) }
+  ]
+  for (let i=0;i<controls.length;i++) {
+    const copy=structuredClone(data)
+    controls[i](copy)
+    let rejected=false
+    try { measureToolTurn(copy.reference,copy.cvg,copy.fixture) } catch { rejected=true }
+    if (!rejected) throw new Error(`accepted adulteration ${id}/${i}`)
+    const weakAccepted=summaryOnly(copy.reference,copy.cvg,copy.fixture)
+    if(i<7 && !weakAccepted) throw new Error('known-bad control no longer discriminates')
+    negative.push({id,index:i,currentRejected:rejected,summaryOnlyAccepted:weakAccepted})
+  }
+}
+if(!positive.every(x=>x.result==='MEASURED_BOUNDED_NATIVE_TOOL_TURN') || negative.length!==24) throw new Error('incomplete probes')
+const output={kind:'OFFLINE_VALIDATOR_PROBES_NOT_NATIVE_ENGINE_EXECUTIONS',positive,negative,knownBadSummaryOnlyAccepted:negative.filter(x=>x.summaryOnlyAccepted).length,currentRejected:negative.length,noParityPass:true}
+fs.writeFileSync(`${directory}/known-bad-controls.json`,JSON.stringify(output,null,2)+'\n')
+process.stdout.write(JSON.stringify({positive:positive.length,currentRejected:negative.length,weakAccepted:output.knownBadSummaryOnlyAccepted,sha256:crypto.createHash('sha256').update(JSON.stringify(output)).digest('hex')})+'\n')

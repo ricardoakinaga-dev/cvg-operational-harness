@@ -1,0 +1,33 @@
+from pathlib import Path
+import hashlib,json,re,shutil
+P=Path(__file__).parent;BASE=P.parents[1];W=BASE/'worktree';R=Path('/home/ricardo/Área de trabalho/cvg-operational-harness');B=Path('docs/04_audit/evidence/PARE100-EXEC-20261014');O=R/B/'spec0222/revision-r5'
+def sha(f):return hashlib.sha256(f.read_bytes()).hexdigest()
+def write(p,v):p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(v,ensure_ascii=False,indent=2)+'\n')
+def copy(s,d):d.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(s,d)
+packet=P/'review-packet';pairs=json.loads((packet/'source-manifest.json').read_text());entries=json.loads((packet/'packet-manifest.json').read_text());assert len(pairs)==43 and len(entries)==47
+assert all(sha(Path(x['live']))==x['sha256']==sha(packet/x['copy']) for x in pairs);assert all(sha(packet/x['path'])==x['sha256'] for x in entries)
+rel='docs/02_spec/0222_pare100_managed_capability_lifecycle.md';assert sha(W/rel)==sha(R/rel)==sha(packet/'spec.md');copy(W/rel,O/'spec.md.source.txt')
+for name in ['source-manifest.json','packet-manifest.json','constraints.json']:copy(packet/name,O/name)
+for f in P.iterdir():
+ if f.is_file():
+  d=O/f.name
+  if f.suffix=='.py':d=d.with_name(d.name+'.source.txt')
+  copy(f,d)
+frozen=json.loads((BASE/'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json').read_text());pins=frozen['newGroups'][0]['pins'];assert len(pins)==465 and all(sha(W/s)==h for s,h in pins.items())
+allowed={'docs/99_runtime_state.md','docs/20_master_execution_log.md','docs/30_backlog_master.md','docs/08_runtime/agent_coordination.md'};drift=[s for s,h in frozen['inputs'].items() if sha(W/s)!=h];assert set(drift)<=allowed
+protected={}
+for s,h in [('docs/02_spec/0217_pare100_durable_kernel_composition.md','1e5df50255e1634c06e09b46e2fc40da3a51a6e15be10ae4856e092bf910a905'),('docs/02_spec/0220_pare100_durable_kernel_boundary_qualification.md','211d341fed2bb70d07ab525e5e23279803d9fe387295bb14d4669ad22aa4d9a5'),('docs/02_spec/0221_pare100_public_session_persistence.md','1f9490ccee25f246e57a7c9c096c41c2572818c60e2c7bae5a4d315ad8e170e4')]:
+ assert sha(W/s)==sha(R/s)==h;protected[s]=h
+recon=BASE/'plugin-lifecycle-recon-r1';leafs=json.loads((recon/'leaf-bindings.json').read_text());mat=W/'docs/04_audit/evidence/PARE100-EXEC-20261014/matrix/r22/leaf-requirements.jsonl';current={x['id']:x for x in map(json.loads,mat.open())};assert len(current)==44132 and all(current[x['id']]==x for x in leafs);assert len(leafs)==271 and sum(x['extraction_status']=='UNKNOWN' for x in leafs)==29
+write(O/'lead-integrity.json',{'sourcePairs':43,'packetFiles':48,'specSHA256':sha(W/rel),'protectedSpecs':protected,'pins':465,'pinDrift':[],'nonledgerInputDrift':[],'ledgerInputDrift':drift,'originalLeafsRetained':271,'originalUnknowns':29,'matrixSHA256':sha(mat),'matrixDenominator':44132,'runtimeEvidence':'NOT_RUN'})
+prior=json.loads((R/B/'spec0221/revision-r2/program-scope-retention.json').read_text());backlog=R/'docs/03_build/0378_backlog_paridade_integral.md';parts=re.split(r'^#{2,3} (P100-\d+) — .*$',backlog.read_text(),flags=re.M);tasks={}
+for i in range(1,len(parts),2):
+ ident,body=parts[i:i+2];state=re.search(r'^- Estado: `([^`]+)`',body,re.M);criterion=re.search(r'^- Pronto: (.+)$',body,re.M);assert state and criterion;tasks[ident]={'state':state[1],'criterion':criterion[1]}
+assert tasks==prior['tasks'];bar=json.loads((W/'.gauntlet/bar.json').read_text());bh=hashlib.sha256(json.dumps(bar,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest();assert bh==prior['barCanonicalSHA256']
+write(O/'program-scope-retention.json',{'cards':36,'phases':8,'doneLocal':2,'open':34,'tasks':tasks,'barCanonicalSHA256':bh,'currentBacklogSHA256':sha(backlog),'allCriteriaRetained':True,'parity':'NOT_MEASURED','fullGoalComplete':False})
+for f in (P/'checks').rglob('*'):
+ if f.is_file() and f.stat().st_size:copy(f,O/f.relative_to(P))
+manifest=[{'path':str(f.relative_to(O)),'sha256':sha(f),'bytes':f.stat().st_size} for f in O.rglob('*') if f.is_file() and f.name!='evidence-manifest.json'];write(O/'evidence-manifest.json',manifest)
+for f in O.rglob('*'):
+ if f.is_file():copy(f,W/f.relative_to(R))
+print(json.dumps({'spec':sha(W/rel),'sources':43,'packetFiles':48,'pins':465,'originalLeaves':271,'unknowns':29,'cards':36,'open':34,'status':json.loads((P/'status.json').read_text())['status']}))

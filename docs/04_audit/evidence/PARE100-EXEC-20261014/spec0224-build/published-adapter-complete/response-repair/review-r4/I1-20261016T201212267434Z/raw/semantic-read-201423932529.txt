@@ -1,0 +1,202 @@
+
+packages/harness/src/kernel/controls.ts:1:200
+1: import type {
+2:   ApprovalEngine,
+3:   ApprovalExecutionRequest,
+4:   AuditSink,
+5:   ModelGateway,
+6:   Orchestrator,
+7:   PolicyEngine,
+8:   RuntimeInput,
+9:   SandboxGate,
+10:   TelemetryEvent,
+11:   TelemetrySink,
+12:   ToolRegistry
+13: } from '@cvg/harness-contracts'
+14: import {
+15:   DEADLINE,
+16:   PROCEED,
+17:   stop,
+18:   type BudgetService,
+19:   type EffectLedger,
+20:   type EffectRef,
+21:   type KernelLog,
+22:   type KernelLogEvent,
+23:   type KernelPlugin,
+24:   type KernelStop,
+25:   type PauseSwitch,
+26:   type ToolCallState,
+27:   type ToolOutcome,
+28:   type TurnBudget
+29: } from './types.ts'
+30: 
+31: /**
+32:  * Standard plugins of the kernel profile. Each control wraps an existing
+33:  * governance piece without changing its behavior (SPEC 0181 §7 step 2); the
+34:  * messages and stop reasons match `SinglePassGovernedRuntime`.
+35:  */
+36: 
+37: const AUDIT_GRACE_MS = 200
+38: 
+39: function errorMessage(error: unknown): string {
+40:   return error instanceof Error ? error.message : 'unknown failure'
+41: }
+42: 
+43: function bindCapabilityFingerprint(
+44:   payload: unknown,
+45:   capabilityFingerprint: string | undefined
+46: ): unknown {
+47:   return capabilityFingerprint
+48:     ? { capabilityFingerprint, input: payload }
+49:     : payload
+50: }
+51: 
+52: // ---------------------------------------------------------------- budget
+53: 
+54: class DurationBudget implements TurnBudget {
+55:   #modelCalls = 0
+56:   #totalInputTokens = 0
+57:   #totalOutputTokens = 0
+58:   #totalCostUsd = 0
+59: 
+60:   public constructor(
+61:     private readonly input: RuntimeInput,
+62:     private readonly startedAt: number
+63:   ) {}
+64: 
+65:   public remainingMs(): number {
+66:     return this.input.budget.maxDurationMs - (Date.now() - this.startedAt)
+67:   }
+68: 
+69:   public async withDeadline<T>(
+70:     operation: () => Promise<T>,
+71:     ms: number = this.remainingMs()
+72:   ): Promise<T | typeof DEADLINE> {
+73:     if (ms <= 0) return DEADLINE
+74:     let timer!: ReturnType<typeof setTimeout>
+75:     const deadline = new Promise<typeof DEADLINE>((resolve) => {
+76:       timer = setTimeout(() => resolve(DEADLINE), ms)
+77:     })
+78:     try {
+79:       return await Promise.race([operation(), deadline])
+80:     } finally {
+81:       clearTimeout(timer)
+82:     }
+83:   }
+84: 
+85:   /**
+86:    * Single pre-model gate (I11 / PDSH-004): consumes one model-call slot
+87:    * before the call. Tokens and cost are recorded post-result.
+88:    */
+89:   public beginModelRequest(): KernelStop | undefined {
+90:     if (this.#modelCalls + 1 > this.input.budget.maxModelCalls) {
+91:       return stop(
+92:         'MAX_MODEL_CALLS',
+93:         'Model-call budget exhausted before the call was started.',
+94:         {
+95:           modelCalls: this.#modelCalls,
+96:           usage: {
+97:             inputTokens: this.#totalInputTokens,
+98:             outputTokens: this.#totalOutputTokens,
+99:             costUsd: this.#totalCostUsd
+100:           }
+101:         }
+102:       )
+103:     }
+104:     this.#modelCalls += 1
+105:     if (this.remainingMs() <= 0) {
+106:       return stop(
+107:         'MAX_DURATION',
+108:         'Duration budget exhausted before the call was started.',
+109:         {
+110:           modelCalls: this.#modelCalls,
+111:           usage: {
+112:             inputTokens: this.#totalInputTokens,
+113:             outputTokens: this.#totalOutputTokens,
+114:             costUsd: this.#totalCostUsd
+115:           }
+116:         }
+117:       )
+118:     }
+119:     return undefined
+120:   }
+121: 
+122:   /**
+123:    * Single post-result accounting site (PDSH-004): records tokens and cost
+124:    * and checks the resulting totals. Callers never re-check budgets here.
+125:    */
+126:   public recordModelResult(result: {
+127:     readonly inputTokens: number
+128:     readonly outputTokens: number
+129:     readonly costUsd: number
+130:   }): KernelStop | undefined {
+131:     this.#totalInputTokens += result.inputTokens
+132:     this.#totalOutputTokens += result.outputTokens
+133:     this.#totalCostUsd += result.costUsd
+134:     const tokens = this.#totalInputTokens + this.#totalOutputTokens
+135:     if (tokens > this.input.budget.maxTokens) {
+136:       return stop(
+137:         'MAX_TOKENS',
+138:         'Token budget exhausted before a response could be completed.',
+139:         {
+140:           modelCalls: this.#modelCalls,
+141:           usage: {
+142:             inputTokens: this.#totalInputTokens,
+143:             outputTokens: this.#totalOutputTokens,
+144:             costUsd: this.#totalCostUsd
+145:           }
+146:         }
+147:       )
+148:     }
+149:     if (this.#totalCostUsd > this.input.budget.maxCostUsd) {
+150:       return stop(
+151:         'MAX_COST',
+152:         'Cost budget exhausted before a response could be completed.',
+153:         {
+154:           modelCalls: this.#modelCalls,
+155:           usage: {
+156:             inputTokens: this.#totalInputTokens,
+157:             outputTokens: this.#totalOutputTokens,
+158:             costUsd: this.#totalCostUsd
+159:           }
+160:         }
+161:       )
+162:     }
+163:     return undefined
+164:   }
+165: }
+166: 
+167: /** Budget is computed in one place (I11). */
+168: export function budgetControl(): KernelPlugin {
+169:   return {
+170:     name: 'control.budget',
+171:     kind: 'control',
+172:     provides: ['budget'],
+173:     apply(ctx) {
+174:       const service: BudgetService = {
+175:         begin: (input, startedAt) => new DurationBudget(input, startedAt)
+176:       }
+177:       ctx.provide('budget', service)
+178:       ctx.on('model/before-call', async (call, next) => {
+179:         // The single budget gate (I11 / PDSH-004) is beginModelRequest in
+180:         // kernel/pipeline.ts; this hook only re-checks the duration window.
+181:         if (call.turn.budget.remainingMs() <= 0) {
+182:           return stop(
+183:             'MAX_DURATION',
+184:             'Duration budget exhausted before model execution.'
+185:           )
+186:         }
+187:         return next()
+188:       })
+189:       ctx.on('tool/pre-execute', async (call, next) => {
+190:         if (call.turn.budget.remainingMs() <= 0) {
+191:           return stop(
+192:             'MAX_DURATION',
+193:             'Duration budget exhausted before policy evaluation.'
+194:           )
+195:         }
+196:         return next()
+197:       })
+198:     }
+199:   }
+200: }

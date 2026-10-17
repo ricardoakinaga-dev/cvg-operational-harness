@@ -1,0 +1,24 @@
+from pathlib import Path
+import json,hashlib,shutil,datetime,re
+root=Path('/home/ricardo/Área de trabalho/cvg-operational-harness');o=Path(__file__).parent;w=o.parent/'worktree';h=lambda f:hashlib.sha256(f.read_bytes()).hexdigest();source=json.loads((o/'source-freeze.json').read_text());assert all(h(w/k)==v for k,v in source.items())
+for name in ['focused-r3','types-r3','lint-r3']:assert json.loads((o/(name+'-command.json')).read_text())['exit']==0
+att=json.loads((o/'reference-attestation.json').read_text());assert all(h(Path(x['path']))==x['sha256'] for x in att['sourceInputs']);assert all(h(Path(x['file']))==x['sha256'] for x in att['directRuntimeArtifacts'])
+proposal=json.loads((o.parent/'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json').read_text());assert all(h(w/k)==v for k,v in proposal['newGroups'][0]['pins'].items());observed=o/'observed/focused-r3/model-failure';cases=[]
+for f in sorted(observed.glob('*.native.json')):
+ data=json.loads(f.read_text());name=f.name.removesuffix('.native.json');cmd=json.loads((observed/(name+'.command.json')).read_text());r=data['reference'];c=data['cvg'];assert cmd['exit']==0 and cmd['signal'] is None and cmd['error'] is None and cmd['childExitObserved'];assert cmd['elapsedMs']<cmd['timeoutMs']==5000;assert cmd['maxBuffer']==1048576;assert h(observed/(name+'.reference.stdout.log'))==cmd['stdoutSHA256'];assert r['native']['modelCalls']==c['native']['modelBodies']==c['native']['turn']['modelCalls']==1;assert r['native']['toolCalls']==c['native']['turn']['toolCalls']==0;assert r['networkAttempts']==[];assert c['native']['turn']['stopReason']=='MODEL_FAILURE'
+ cases.append({'id':name,'nativeRecordSHA256':h(f),'referenceExit':0,'referencePID':cmd['pid'],'referenceTerminal':[e['data']['reason'] for e in r['native']['events'] if e['type']=='turn/end'][0],'cvgTerminal':c['native']['turn'],'referenceEventTypes':[e['type'] for e in r['native']['events']],'cvgEventTypes':[e['type'] for e in c['native']['events']],'injectedReferenceError':r['native']['adapterErrors'],'injectedCvgError':c['native']['adapterErrors'],'parity':'NOT_VERIFIED'})
+assert len(cases)==3
+(o/'lead-integrity.json').write_text(json.dumps({'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'scope':'test-support native failure measurement, I1pending','source12Verified':source,'referenceDirectArtifactsVerified':9,'referencePinnedSourcesVerified':3,'compositionPins0220Verified':465,'currentFocusedTests':15,'nativeFailureCases':cases,'negativeObservationControls':57,'originalReplyCases':3,'originalReplyNegativeControls':18,'transitiveReferenceRuntimeClosure':'NOT_VERIFIED','sourceRuntimeBuildEquivalence':'NOT_VERIFIED','functionalParity':'NOT_MEASURED','goalComplete':False},ensure_ascii=False,indent=2)+'\n')
+rel=Path('docs/04_audit/evidence/PARE100-EXEC-20261014/differential-failure-r1');out=root/rel;out.mkdir();entries=[];empty=[]
+def cp(f,rel):
+ if not f.stat().st_size:empty.append({'source':str(f),'sha256':h(f),'bytes':0});return
+ d=out/rel;d.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(f,d);entries.append({'path':str(rel),'source':str(f),'sha256':h(d),'bytes':d.stat().st_size})
+for name in ['baseline.json','source-freeze.json','reference-attestation.json','lead-integrity.json','capture-history.json','native-initial.log','native-initial-command.json','focused-final.log','focused-final-command.json','focused-r2.log','focused-r2-command.json','focused-r3.log','focused-r3-command.json','types.log','types-command.json','types-r2.log','types-r2-command.json','types-r3.log','types-r3-command.json','lint-r3.log','lint-r3-command.json']:cp(o/name,Path('lead')/name)
+for name in ['run-check.py','probe-reference.mjs','persist.py']:cp(o/name,Path('recipes')/(name+'.source.txt'))
+for f in (o/'observed/focused-r3').rglob('*'):
+ if f.is_file():cp(f,Path('current-native')/f.relative_to(o/'observed/focused-r3'))
+for cat in ['current','before']:
+ for f in (o/'review-packet'/cat).rglob('*'):
+  if f.is_file():cp(f,Path('source-snapshots')/cat/(str(f.relative_to(o/'review-packet'/cat))+'.source.txt'))
+(out/'omitted-empty-logs.json').write_text(json.dumps({'reason':'empty successful stdout/stderr represented by command exit/hash; originals retained in parent','files':empty},indent=2)+'\n');(out/'initial-evidence-manifest.json').write_text(json.dumps({'scope':'T2testsupport proof only, pendingI1','files':entries},indent=2)+'\n');(out/'status.json').write_text(json.dumps({'status':'UNDER_REVIEW','task':'P100-004/F-DIF-ERR-001','critic':'01a1424e-d4c6-7451-aa09-847182f74634','sourceSHA256':source,'parity':'NOT_MEASURED','wholeGoalComplete':False},indent=2)+'\n');shutil.copytree(out,w/rel)
+print(json.dumps({'canonicalFiles':len(entries),'emptyLogsRepresented':len(empty),'nativeFailureCasesVerified':3,'sourceFiles':len(source),'pins220':465,'I1':'PENDING','parity':'NOT_MEASURED'}))

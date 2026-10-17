@@ -1,0 +1,237 @@
+"""Independent offline reconstruction; no CVG imports or database access.
+
+Checks cryptographic/physical/binding evidence shared by settlement cases.
+Scenario acceptance is a separate explicit pass: this alone is not TR05.
+"""
+import base64
+import hashlib
+import json
+import math
+import sys
+from pathlib import Path
+
+checks = 0
+counts = {"jsonFiles": 0, "checkpoints": 0, "physicalSnapshots": 0,
+          "attemptOccurrences": 0, "gatewayEntryOccurrences": 0, "fakeReturnOccurrences": 0}
+
+
+def check(value, message):
+    global checks
+    checks += 1
+    if not value:
+        raise AssertionError(message)
+
+
+def canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"), allow_nan=False).encode()
+
+
+def sha(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def checkpoint(cp, location):
+    counts["checkpoints"] += 1
+    unsigned = {k: v for k, v in cp.items()
+                if k not in ["checkpointId", "createdAt", "digest"]}
+    raw = canonical(unsigned)
+    check(cp["checkpointVersion"] == 2, location + ": checkpoint version")
+    check(len(raw) <= 8388608, location + ": 8MiB bound")
+    check(sha(b"cvg.checkpoint.v2\n" + raw) == cp["digest"],
+          location + ": checkpoint domain digest")
+    ctx = cp["state"]["toolResultContext"]
+    records = ctx["decisionAdmissions"]
+    check(len({r["admissionId"] for r in records}) == len(records),
+          location + ": duplicate receipt IDs")
+    reserved = [r for r in records if r["status"] == "RESERVED"]
+    check(len(reserved) <= 1, location + ": multiple pending receipts")
+    check(ctx["pendingDecisionAdmission"] ==
+          (reserved[0]["admissionId"] if reserved else None),
+          location + ": pending binding")
+    for receipt in records:
+        check(receipt["tenantId"] == cp["tenantId"] and
+              receipt["executionId"] == cp["executionId"],
+              location + ": receipt tenant/execution")
+        check(receipt["status"] in ["RESERVED", "SETTLED", "UNKNOWN"],
+              location + ": receipt status")
+        check(receipt["reserved"]["modelCalls"] == 1 and
+              receipt["reserved"]["outputTokens"] == 512 and
+              receipt["reserved"]["costUsd"] == 0,
+              location + ": unchanged synthetic reservation")
+        if receipt["status"] == "SETTLED":
+            actual = receipt["actual"]
+            check(actual["modelCalls"] == 1 and actual["outputTokens"] <= 512,
+                  location + ": invalid settled actual")
+            check(actual["inputTokens"] <= receipt["reserved"]["inputTokens"]
+                  and actual["costUsd"] <= receipt["reserved"]["costUsd"],
+                  location + ": settled bounds")
+    # This fixture has one model attempt per execution. UNKNOWN may retain an
+    # observed finite overuse; never silently cap it to the provider bound.
+    if len(records) == 1:
+        receipt = records[0]
+        expected = receipt["reserved"]
+        if receipt["status"] == "SETTLED":
+            expected = receipt["actual"]
+        elif receipt["status"] == "UNKNOWN" and receipt.get("actual"):
+            expected = {k: max(v, receipt["actual"][k])
+                        for k, v in expected.items()}
+        for field in ["modelCalls", "inputTokens", "outputTokens", "costUsd"]:
+            check(cp["budgetUsage"][field] == expected[field],
+                  location + ": durable usage " + field)
+
+
+def physical(value, location):
+    counts["physicalSnapshots"] += 1
+    cp = value["checkpoint"]
+    row = value["row"]
+    wrapper = row["state"]
+    check(json.loads(row["physical_state_text"]) == wrapper,
+          location + ": physical SQL wire")
+    check(set(wrapper) == {"storageCodec", "encoding", "decodedBytes",
+                           "decodedSha256", "data"},
+          location + ": exact physical wrapper")
+    check(wrapper["storageCodec"] == "cvg.checkpoint-state/2" and
+          wrapper["encoding"] == "base64", location + ": storage codec")
+    raw = base64.b64decode(wrapper["data"], validate=True)
+    check(base64.b64encode(raw).decode() == wrapper["data"],
+          location + ": canonical base64")
+    check(len(raw) == wrapper["decodedBytes"] and
+          sha(raw) == wrapper["decodedSha256"], location + ": physical hash")
+    check(raw == canonical(cp["state"]), location + ": physical state binding")
+    headers = {"checkpoint_id": "checkpointId", "execution_id": "executionId",
+               "tenant_id": "tenantId", "checkpoint_version": "checkpointVersion",
+               "runtime_profile": "runtimeProfile", "runtime_version": "runtimeVersion",
+               "orchestrator_version": "orchestratorVersion", "step_number": "stepNumber",
+               "digest": "digest", "created_at": "createdAt", "budget_usage": "budgetUsage"}
+    for sql, field in headers.items():
+        check(row[sql] == cp[field], location + ": row header " + sql)
+    identity = value["identity"]
+    check(identity["current_user"] == identity["session_user"],
+          location + ": authenticated service identity")
+    check(identity["tenant_context"] == cp["tenantId"], location + ": tenant context")
+    authority = value["authority"]
+    check(authority["tenant_id"] == cp["tenantId"] and
+          authority["execution_id"] == cp["executionId"],
+          location + ": native authority identity")
+    runtime = authority["admission_runtime"]
+    check(authority["prepared_runtime"] == runtime,
+          location + ": prepared/admission runtime identity")
+    check(runtime["executionId"] == cp["executionId"] and
+          authority["request"]["runtime"] ==
+          {k: v for k, v in runtime.items() if k != "executionId"},
+          location + ": native parent runtime normalization")
+    check(runtime["context"]["values"]["adapterVersion"] == "controlled-published-v1"
+          and runtime["context"]["values"]["requestDigest"] == authority["request_digest"],
+          location + ": native bound context")
+    check(runtime["capabilityFingerprint"] == authority["capability_fingerprint"]
+          == cp["state"]["capabilityFingerprint"], location + ": capability binding")
+    # Phase may legitimately be FAULTED after real takeover. Dispatch-time OPEN
+    # is checked against the fresh-service event at actual provider entry.
+
+
+def attempt(value, location):
+    counts["attemptOccurrences"] += 1
+    events = value["events"]
+    check([e["sequence"] for e in events] == list(range(1, len(events) + 1)),
+          location + ": event sequence")
+    check(all(e["pid"] == value["pid"] for e in events), location + ": process identity")
+    entries = {e["sequence"]: e for e in events}
+    models = [e for e in events if e["type"] == "model.complete-entry"]
+    returns = [e for e in events if e["type"] == "native-fake-provider-return"]
+    check(len(models) == value["calls"], location + ": actual gateway count")
+    check(sum(e["type"] == "counter-entry" for e in events) == value["measurements"],
+          location + ": actual counter count")
+    counts["gatewayEntryOccurrences"] += len(models)
+    counts["fakeReturnOccurrences"] += len(returns)
+    for event in events:
+        if event["type"] == "CAS-return-after-transaction":
+            prior = entries[event["entry"]]
+            cp = prior["checkpoint"]
+            check(prior["type"] == "CAS-entry" and prior["sequence"] < event["sequence"],
+                  location + ": native CAS sequence")
+            check(cp["checkpointId"] == event["checkpointId"] and
+                  cp["digest"] == event["digest"], location + ": proposed CAS token")
+            disposition = event["result"]
+            check(disposition["status"] in ["APPLIED", "CONFLICT"], location + ": CAS status")
+            if disposition["status"] == "APPLIED":
+                check(disposition["token"] == {"checkpointId": cp["checkpointId"],
+                                                "digest": cp["digest"]},
+                      location + ": committed token")
+    for event in models:
+        observations = [e for e in events if e["type"] == "fresh-service-SQL"
+                        and e["entry"] == event["sequence"]]
+        check(len(observations) == 1, location + ": model without fresh SQL observation")
+        observation = observations[0]
+        committed = entries[observation["commit"]]
+        cp = observation["physical"]["checkpoint"]
+        ctx = cp["state"]["toolResultContext"]
+        record = next(r for r in ctx["decisionAdmissions"]
+                      if r["admissionId"] == ctx["pendingDecisionAdmission"])
+        check(committed["type"] == "CAS-return-after-transaction" and
+              committed["result"]["status"] == "APPLIED",
+              location + ": model without actual committed reserve")
+        check(committed["sequence"] < event["sequence"] < observation["sequence"],
+              location + ": reserve commit before entry before SQL")
+        check(committed["checkpointId"] == cp["checkpointId"] and
+              committed["digest"] == cp["digest"] and
+              committed["pendingReceipt"] == record["admissionId"],
+              location + ": receipt/commit binding")
+        check(record["status"] == "RESERVED" and
+              record["requestSha256"] == sha(canonical(event["request"])),
+              location + ": request/receipt binding")
+        check(record["measurement"]["inputUpperBoundTokens"] ==
+              math.ceil(len(canonical(event["request"]))/64),
+              location + ": independently recomputed Toy64 input")
+        check(event["request"]["maxOutputTokens"] == 512,
+              location + ": native output cap")
+        p = observation["physical"]
+        check({k: v for k, v in value["input"].items() if k != "signal"} ==
+              p["authority"]["admission_runtime"], location + ": unchanged native admission input")
+        check(p["authority"]["phase_state"] == "OPEN" and
+              p["authority"]["open_phase_acked"] is False and
+              p["authority"]["execution_state"] == "RUNNING",
+              location + ": dispatch native OPEN authority")
+        check(p["identity"]["backend_pid"] not in observation["writerBackends"]
+              and bool(observation["writerBackends"]), location + ": separate authenticated reader")
+        native = [e for e in returns if e["entry"] == event["sequence"]]
+        check(len(native) == 1 and native[0]["sequence"] > observation["sequence"],
+              location + ": actual fake body order")
+        result = native[0]["nativeResult"]
+        check(result["provider"] == "fake" and result["model"] == "deterministic-v1"
+              and result["externalCall"] is False, location + ": native fake identity")
+
+
+def visit(value, location):
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            visit(item, location + "/" + str(i))
+    elif isinstance(value, dict):
+        if all(k in value for k in ["checkpointId", "checkpointVersion", "digest", "state", "budgetUsage"]):
+            checkpoint(value, location)
+        if all(k in value for k in ["checkpoint", "row", "authority", "identity"]):
+            physical(value, location)
+        if all(k in value for k in ["pid", "events", "calls", "measurements", "result", "final"]):
+            attempt(value, location)
+        for key, item in value.items():
+            visit(item, location + "/" + key)
+
+
+if __name__ == "__main__":
+    root = Path(sys.argv[1])
+    manifest = []
+    for path in sorted(root.rglob("*.json")):
+        if any(p in ["cache", "nodecache", "node_modules", "tmp", "__pycache__"]
+               for p in path.relative_to(root).parts) or "private" in path.name:
+            continue
+        raw = path.read_bytes()
+        value = json.loads(raw, parse_constant=lambda value: (_ for _ in ()).throw(
+            ValueError("Non-JSON constant " + value)))
+        counts["jsonFiles"] += 1
+        manifest.append({"path": str(path.relative_to(root)), "bytes": len(raw), "sha256": sha(raw)})
+        visit(value, str(path.relative_to(root)))
+    check(counts["checkpoints"] > 0 and counts["physicalSnapshots"] > 0 and counts["attemptOccurrences"] > 0,
+          "No actual persistent attempt evidence")
+    print(json.dumps({"status": "PASS_CORE_ONLY_NOT_SCENARIO_ACCEPTANCE", "checks": checks,
+                      "counts": counts, "rawInputs": manifest,
+                      "countLimit": "Counts are evidence occurrences; repeated snapshots/attempts can appear in multiple files. Never use these counts for runtime invocation totals."}, indent=2))

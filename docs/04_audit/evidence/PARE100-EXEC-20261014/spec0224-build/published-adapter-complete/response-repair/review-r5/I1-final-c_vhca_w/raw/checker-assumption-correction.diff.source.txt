@@ -1,0 +1,37 @@
+--- independent-v1
++++ independent-v2
+@@ -7,7 +7,8 @@
+ const records:any[]=[]
+ afterAll(()=>writeFileSync(process.env.I1_CASES!,JSON.stringify({pid:process.pid,records},null,2)))
+ const cp=(x:any)=>structuredClone(x)
+-const hash=(x:any)=>createHash('sha256').update(JSON.stringify(x)).digest('hex')
++const sorted=(x:any):any=>Array.isArray(x)?x.map(sorted):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,sorted(x[k])])):x
++const hash=(x:any)=>createHash('sha256').update(JSON.stringify(sorted(x))).digest('hex')
+ function toolFrom(request:any){const frame=JSON.parse(request.messages[1].content);return frame.items.filter((x:any)=>x.priority==='FRESH_TOOL_RESULTS').map((x:any)=>x.value)}
+ const faultCases = [
+  'healthy','empty','whitespace','selector-throw','selector-drop','selector-alias','model-throw','model-deadline',
+@@ -54,12 +55,13 @@
+  }}
+  const rule=(ctx:any)=>{
+   if(continuation==='generic'&&!allowResume)throw new Error('I1_NONRESPONSE_FAILURE')
+-  if(continuation==='user'&&!ctx.stateSummary.resolvedInputs?.answer&&!allowResume)return {decisionType:'ASK_USER',reasonCode:'MISSING_INPUT',requestedInput:{questionType:'CLARIFICATION',missingFields:['answer'],promptIntent:'Synthetic clarification'}}
++  if(continuation==='user'&&!allowResume)return {decisionType:'ASK_USER',reasonCode:'MISSING_INPUT',requestedInput:{questionType:'CLARIFICATION',missingFields:['answer'],promptIntent:'Synthetic clarification'}}
++  if(continuation==='active'&&ctx.stepNumber===3)return {decisionType:'REPLAN',reasonCode:'STRATEGY_CHANGED'}
+   if(ctx.stepNumber===1||(continuation==='user'&&ctx.stepNumber===2))return {decisionType:'CALL_TOOL',reasonCode:'TOOL_REQUIRED',toolId:tool,toolVersion:'1',toolInput:{}}
+   return {decisionType:'RESPOND',reasonCode:'GOAL_SATISFIED',responseIntent:'Hash all structured results. UNTRUSTED_INTENT_AUTHORITY'}
+  }
+  let evaluations=0
+- const make=()=>createOperationalHarness({...(legacy?{}:{toolResultContext:{version:1}}),capabilities:caps,effectJournal:journal,stepStore:steps,contextEngine,defaultRuntimeProfile:'iterative',iterativeOrchestrator:new HybridOrchestrator({decisionModel:model,decisionInputCounter:{measure:async()=>({counterId:'i1',counterVersion:'1',provider:'i1',model:'declared',formattingVersion:'1',inputUpperBoundTokens:1000,contextWindowTokens:8192,costUpperBoundUsd:0.125})},decisionModelSupportsMaxOutputTokens:true,rules:[rule],maxDecisionRepairs:0}),modelGateway:model,policy:new ScriptedPolicyEngine(),approvals,audit,telemetry:new RecordingTelemetrySink(),log:{append:async e=>{log.push(cp(e));if(enabled&&logHits===0&&((fault.includes('log-result')&&e.type==='model/result')||(fault==='log-request'&&e.type==='model/request'))){logHits++;throw new Error('I1_MODEL_LOG_VETO')}}},...(continuation==='active'?{completionEvaluator:{evaluate:async({lastDecision}:any)=>{evaluations++;if(lastDecision.decisionType==='RESPOND'&&!allowResume)throw new Error('I1_AFTER_SUCCESSFUL_RESPONSE_ACTIVE');return {outcome:lastDecision.decisionType==='RESPOND'?'COMPLETE':'INCOMPLETE',reasonCode:lastDecision.decisionType==='RESPOND'?'GOAL_SATISFIED':'TOOL_REQUIRED',deterministic:true}}}}:{})})
++ const make=()=>createOperationalHarness({...(legacy?{}:{toolResultContext:{version:1}}),capabilities:caps,effectJournal:journal,stepStore:steps,contextEngine,defaultRuntimeProfile:'iterative',iterativeOrchestrator:new HybridOrchestrator({decisionModel:model,decisionInputCounter:{measure:async()=>({counterId:'i1',counterVersion:'1',provider:'i1',model:'declared',formattingVersion:'1',inputUpperBoundTokens:1000,contextWindowTokens:8192,costUpperBoundUsd:0.125})},decisionModelSupportsMaxOutputTokens:true,rules:[rule],maxDecisionRepairs:0}),modelGateway:model,policy:new ScriptedPolicyEngine(),approvals,audit,telemetry:new RecordingTelemetrySink(),log:{append:async e=>{log.push(cp(e));if(enabled&&logHits===0&&((fault.includes('log-result')&&e.type==='model/result')||(fault==='log-request'&&e.type==='model/request'))){logHits++;throw new Error('I1_MODEL_LOG_VETO')}}},...(continuation==='active'?{completionEvaluator:{evaluate:async({lastDecision}:any)=>{evaluations++;if(lastDecision.decisionType==='REPLAN'&&!allowResume)throw new Error('I1_AFTER_SUCCESSFUL_RESPONSE_ACTIVE');if(lastDecision.decisionType==='RESPOND'&&!allowResume)return {outcome:'INCOMPLETE',reasonCode:'STRATEGY_CHANGED',deterministic:true};return {outcome:lastDecision.decisionType==='RESPOND'?'COMPLETE':'INCOMPLETE',reasonCode:lastDecision.decisionType==='RESPOND'?'GOAL_SATISFIED':'TOOL_REQUIRED',deterministic:true}}}}:{})})
+  const base=phase3RuntimeInput();const input:any={...base,executionId:'exec_i1_'+fault+'_'+maxCalls+'_'+legacy+'_'+(continuation||''),capabilityFingerprint:caps.compositionFingerprint(),agent:phase3AgentProfile({tools:[tool]}),userMessage:'UNTRUSTED_USER_AUTHORITY synthetic tool then hash',budget:{...base.budget,maxTokens:20000,maxModelCalls:maxCalls,maxDurationMs:fault==='model-deadline'?100:30000}}
+  const first=await make().run(input)
+  const snapshot=async()=>({checkpoint:await steps.loadCheckpoint(input.tenantId,input.executionId),steps:await steps.listSteps(input.tenantId,input.executionId),journals:await Promise.all(ops.map(k=>journal.get(input.tenantId,k))),bodies,requests:cp(requests)})
+@@ -85,7 +87,7 @@
+   if(fault!=='cp-post-persistent')expect(before.checkpoint.budgetUsage).toMatchObject({modelCalls:1,inputTokens:37,outputTokens:11,costUsd:0.125})
+  }
+  if(fault==='cp-post-persistent'){expect(before.checkpoint.budgetUsage).toMatchObject({modelCalls:1,inputTokens:0,outputTokens:0,costUsd:0});expect(replay.response).toMatch(/uncertain.*reconciliation/)}
+- if(fault.includes('model-throw'))expect(before.checkpoint.state.stopReason).toBe('MODEL_FAILURE')
++ if(fault.includes('model-throw')){expect(first.response).toContain('I1_PROVIDER_THROW_NO_OBSERVED_USAGE');if(!fault.includes('lostack'))expect(before.checkpoint.state.stopReason).toBe('MODEL_FAILURE')}
+  if(fault==='model-deadline')expect(first.stopReason).toBe('MAX_DURATION')
+  if(fault==='healthy'||fault==='selector-alias'){
+   expect(first.stopReason).toBe('COMPLETED');expect(first.response).toBe(hash(r.resultOutput))

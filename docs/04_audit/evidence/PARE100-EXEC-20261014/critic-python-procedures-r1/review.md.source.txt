@@ -1,0 +1,31 @@
+# REVISE — I1fresh T1, Python inventory/procedures R1
+
+Um achado P2 exige revisão do oráculo de `PY-SESSION_TREE-01`. O inventário sintático local está completo no limite solicitado; isso não concede aceite funcional, BUILD, T3 ou paridade.
+
+## F001 — exclusão universal de IDs ausentes não corresponde à fonte
+
+`procedures.json:1617` pede teste de IDs ausentes/self-edge; `:1620` afirma “unrelated/missing excluded” (`/groups/13/cases/0/expected_observable/0`). Em `client.py:492–504`, IDs incompletos ou self-edge não são registrados no mapa de ancestry. Entretanto, `client.py:509–516` decide a entrega do lifecycle separadamente: parent que pertence à raiz basta, ou child igual à raiz basta.
+
+Contraexemplo estático: raiz `s`, ancestry vazio e `{"method":"subagent.started","params":{"parentSessionId":"s"}}`. Nenhuma aresta é registrada; o filtro entrega a notificação porque `parentSessionId == raiz`. Apenas `childSessionId:"s"` também permite entrega. Os dois IDs ausentes não casam; self-edge não registra aresta, mas pode ser entregue. O fan-out de `:397–415` usa esse predicado. Todos os trechos pertencem ao SHA `78193d6b88d49b87dc0057ec92cbc512426e7712f75c3e700f0fc7e0046d28fc`, conferido no pin `768fb1f3d3dcf9a16659ee354e927d05475f22dd`.
+
+O oráculo atual pode aprovar um filtro estrito que descarte lifecycle incompleto, divergindo da fonte. Corrigir a proposta separando **registro da aresta** de **entrega da notificação**, com os quatro vetores concretos acima e negativo que rejeite o filtro estrito. Não há pedido de mudança no código, RPC nova ou execução da referência. Evidências: `findings.json`, `session-tree-counterexamples.json`, `verify_static.py` e o check `SESSION_TREE_missing_ids_oracle_fidelity`.
+
+## Evidência independente e limites
+
+- AST reconstruída dos cinco módulos: 120 registros, 99 públicos, 21 privados/suporte de tipagem, 39 campos anotados; 71 declarações no ledger, incluindo dois locais. Conjuntos, linhas, visibilidade, assinaturas, defaults e metadados de classes conferidos. Zero omissões ou promoções incidentais detectadas.
+- Os 12 nomes de `__all__` resolvem para declarações locais com linhas/hashes. Todo público tem grupo, procedimento e GAP; todos os 20 procedimentos em 19 grupos permanecem NOT_RUN. Os reexports não são mais 12 requisitos funcionais PASS.
+- 777 citações fonte/linha/hash válidas. Seis blobs de referência conferidos por leitura Git no pin. As 16 bases nomeadas coincidem com as citadas; o README R6 integra esse denominador com as sete fontes de código/dados R6, seis arquivos de referência, SPEC0218 e 0378.
+- Revisão semântica dos 19 grupos consta de `semantic-review.json`. Dezoito não apresentaram divergência material na proposta delimitada; SESSION_TREE requer F001. A aritmética sintética independente de V-RUN confirma 7 callbacks/3 eventos raiz, e V-TREE entrega índices 0,1,2,3. São modelos próprios em memória, não execução dos procedimentos.
+- Dependências de P100-025: AUD0611-G01/P100-020. Os consumidores citados dependem de 025; owners associados não foram invertidos. A lista de consumidores não foi tratada como exaustiva.
+- Manifesto TOML confirma apenas declarações de distribuição; wheel, runtime-bin instalado, ABI e execução continuam UNKNOWN. Resume/cancel não têm callable delimitada; requisito preservado UNKNOWN/GAP, sem inventar RPC e sem equiparar close/cancel local a cancelamento remoto.
+- Completude aceita apenas para declarações sintáticas locais. Membros dinâmicos, herdados de Pydantic e gerados por dataclass, API de resolver externo, semântica remota e restante do CVG ficam fora da prova. Não foi reconstituído o catálogo de 44 mil folhas.
+
+`verify_static.py` executou 25 checks próprios: 24 satisfeitos e 1 contradição do oráculo (F001). Controles em memória detectaram remoção de respond_error, remoção de export e promoção indevida de ModelT. O processo do verificador encerrou 0 porque preserva achados em JSON; isso não transforma o check semântico falho em PASS.
+
+## Integridade, isolamento e continuidade
+
+`hashes-before.json` e `hashes-after.json` cobrem os quatro artefatos, sentinel e 16 fontes nomeadas. `integrity.json` registra a comparação. O backlog histórico pre `4224199bfc430e3ffa9e0fb4d19d934f66b6db1d61afc1624ad85f053c0eda1c` foi preservado como histórico. A base válida de citações é a revisão post `4a8e002ec01201d90da8f3ace75a422184f9b0f0f73c85b10e654d1fe0d77946`, cujo snapshot UTF-8 no JSON também teve hash conferido; não se exigiu o pre como atual. Os outros 15 inputs preservam as bases pre/post do packet.
+
+Única escrita nesta revisão: diretório de resultado autorizado. Sem descendants de agentes, import/execução de referência/CVG, banco, rede, instalação, env/credenciais, testes de runtime, alteração de docs compartilhados, commit ou push. `review-notes.md` foi usado somente como escopo/limitações; nenhum handoff ou resultado do produtor foi adotado como aceite.
+
+Próxima ação: integrador devolve F001 ao autor da proposta, preserva o packet R1 e solicita nova revisão do artefato corrigido. Cartões e paridade permanecem abertos; continuidade isolada em `claim.json`/`result.json` substitui escrita nos ledgers compartilhados por restrição expressa desta lane.

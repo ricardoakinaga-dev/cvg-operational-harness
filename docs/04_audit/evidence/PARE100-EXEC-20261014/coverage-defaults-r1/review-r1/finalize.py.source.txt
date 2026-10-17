@@ -1,0 +1,66 @@
+import pathlib,json,hashlib,datetime
+B=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/coverage-defaults-r1');R=B/'review-r1';P=B/'review-packet'
+def h(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+before=json.loads((R/'sentinel-before.json').read_text());after=dict(time=datetime.datetime.now(datetime.timezone.utc).isoformat(),manifest_sha256=h(P/'packet-manifest.json'),rows=[])
+for item in before['rows']:
+ x=dict(item);x['actual']=h(pathlib.Path(x['path']));x['ok']=x['actual']==x['expected'];after['rows'].append(x)
+after['unchanged_from_before']=after['manifest_sha256']==before['manifest_sha256'] and all(a['actual']==b['actual'] for a,b in zip(after['rows'],before['rows']));(R/'sentinel-after.json').write_text(json.dumps(after,indent=2)+'\n')
+for stem,folder,manifest in [('raw',P/'native-raw','raw-manifest.json'),('addendum',B/'review-native-addendum','manifest.json')]:
+ old=json.loads((R/(stem+'-integrity-before.json')).read_text());rows=[]
+ for x in old['rows']:
+  n=dict(x);n['actual']=h(folder/x['path']);n['ok']=n['actual']==n['expected'];rows.append(n)
+ out=dict(manifest_sha256=h(folder/manifest),rows=rows,unchanged_from_before=h(folder/manifest)==old['manifest_sha256'] and all(a['actual']==b['actual'] for a,b in zip(rows,old['rows'])))
+ (R/(stem+'-integrity-after.json')).write_text(json.dumps(out,indent=2)+'\n');assert out['unchanged_from_before'] and all(x['ok'] for x in rows)
+assert after['unchanged_from_before'] and all(x['ok'] for x in after['rows'])
+verdict={
+ 'verdict':'REVISE','scope':'T2 P100-050/F-COV-CI-001; somente delta dos drivers e teste novo',
+ 'independence':{'level':'I1','fork_context':False,'model':'herdado','descendants':0,'builder_report_read':False,'prior_critics_read':False},
+ 'findings':[{'id':'I1-FRESH-001','severity':'P1','file':'scripts/ci-bar.mjs','line':377,'related_lines':[128,297,638], 'title':'Agregado histórico pode ser aceito como relatório atual', 'mechanism':'Após filho exit0 sem emissão, snapshotGateArtifacts copia coverage-summary histórico e renova mtime. A guarda observa mtime da cópia; validateAggregateCoverage aceita os bytes antigos e CI coverage retorna PASS.', 'preexisting':True,'introduced_by_delta':False,'blocks':'SPEC0208 §F-COV: validação sobre relatório atual; requisito de freshness do pedido','evidence':['probe-results.json','stale-None.stdout','stale-0.stdout','stale-garbage.stdout','baseline-stale.stdout'],'recommended_change':'Garantir emissão atual no caminho coverage antes de aceitar/snapshotar o relatório, sem mudar comandos/config/schema/seals; adicionar controle negativo com relatório histórico bom e filho exit0 sem emissão.'}],
+ 'integrity':{'packet_27_checks_unchanged':True,'raw_1276_checks_unchanged':True,'addendum_346_checks_unchanged':True,'phase10_log_bindings_192_match':True},
+ 'validation':{'own_cli_probes':21,'own_syntax_checks':3,'node':'22.23.2','max_command_seconds':90,'node_probe_timeout_seconds':15,'max_stdout_bytes':2097152,'node_options_present':False,'source_mutation':False,'writes_only_review_r1':True,'vitest_rerun_by_critic':False,'sealed_regression_result':'8 arquivos / 152 testes PASS; observado em log bruto, não reexecutado'},
+ 'program_qualified':False,'release_approved':False,'spec0220_approved':False,'human_approval_inferred':False,'p100_050_closed':False,'whole_candidate_gates':'PENDENTES',
+ 'report':'report.md','evidence_manifest':'evidence-manifest.json'
+}
+(R/'verdict.json').write_text(json.dumps(verdict,indent=2,ensure_ascii=False)+'\n')
+report='''# REVISE — Crítico I1, F-COV-CI-001
+
+Revisão readonly do delta T2 P100-050/F-COV-CI-001: `scripts/ci-bar.mjs`, `scripts/phase10-certify.mjs`, novo `tests/ci-coverage-defaults.test.js` e contrato adjacente necessário. Independência I1, modelo herdado, **fork_context=false**, zero descendentes. Não li retorno do builder, pareceres prévios, histórico, conversas ou ledgers/coordenação. As regras seladas e o pedido específico fixaram a barra. Escritas exclusivamente nesta pasta `review-r1`; nenhum arquivo analisado foi modificado.
+
+## Achado obrigatório
+
+**P1 — I1-FRESH-001 — `scripts/ci-bar.mjs:377` (mecanismo adjacente em 128, 297 e 638): o agregado pode vir de um relatório histórico.**
+
+O novo helper lê `coverage/coverage-summary.json` sem comprovar que o filho atual o produziu. Após exit0, `snapshotGateArtifacts` copia o arquivo existente com `copyFileSync`. A verificação de freshness consulta o mtime dessa cópia recém-criada, não o do relatório fonte. Assim, um relatório antigo bem formado, agregado100 e sem produto passa ambas as validações e produz `PASS`, mesmo quando o filho atual não emite cobertura.
+
+Reprodução independente com drivers byte-idênticos e bootstrap sem dependências instaladas: arquivo fonte com mtime **946684800 (2000-01-01 UTC)**, producer npm sintético identificado que apenas observa env/argv e sai0, sem escrever relatório. A candidata aceita esse relatório para flag ausente, `0` e `garbage`. No caso `stale-0`, SHA inicial/final/cópia é `45b3bbe41310647af9eccb560d6276aba99e8dc9f865dc51925bcc1b0050d2f1`; o fonte mantém o mtime antigo e a cópia ganha mtime1792111632.4838724. Resultado: `PASS`, exit0, `outputFailures=[]`. Ver [probe-results.json](probe-results.json), [stale-0.stdout](stale-0.stdout), [commands.json](commands.json) e [probe.py](probe.py).
+
+**A falha já existe no preimage**: `baseline-stale` também retorna PASS. Não atribuo sua introdução ao delta. Ela bloqueia o aceite solicitado de agregado sobre **relatório atual**, sustentado por SPEC0208 §F-COV e pelo pedido explícito de avaliar freshness. A simples preservação do comportamento anterior não prova esse requisito.
+
+Correção solicitada: garantir emissão atual no caminho coverage antes de aceitar ou snapshotar o relatório, mantendo comandos, globs, pisos, config, contrato/seals e runner F-CLI-001; adicionar teste negativo com histórico bom + filho exit0 sem emissão. Não basta datar novamente a cópia. O teste novo usa diretório limpo para cada execução e seu caso `missing` não contém relatório prévio; por isso não discrimina esta falha.
+
+## Critérios e evidências favoráveis
+
+- **Imposição per-file e env:** o diff mostra override após spread do env somente em CIcoverage/CIcertify e phase10coverage. Sondas próprias confirmam `1` para ausente/0/garbage, scope `core`, argv original e variável sentinela preservada. Gate format conserva `garbage`. O único delta de phase10 é o env; cadeia `test:coverage && coverage:critical && mutation:guard`, comandos, fluxo de exit e geração de resultados permanecem byte-idênticos ao preimage fora desse hunk.
+- **Agregado e escopo:** o CI reutiliza o helper puro existente, sem novas dependências, e o mesmo objeto lido para a guarda de escopo. Onze sondas próprias recusam cada piso abaixo90/85/90/90, somas inconsistentes, pct inconsistente, totalonly, malformed, null, array e produto. Missing recusa; filho7 conserva exit7 e não fabrica erro de relatório. Controle bom atual passa. Única reprovação encontrada: freshness descrita acima.
+- **Testes novos:** inspecionei sua execução real do driver, cópia recursiva do bootstrap e producer sintético, além dos asserts de env, argv, erro e exit; não são apenas assertions de strings de fonte. Não reexecutei Vitest: o log bruto selado registra oito arquivos/152 testes verdes, incluindo estes testes e regressões de bootstrap, contrato, seals e helpers. Isto é evidência fornecida verificada, não execução minha.
+- **Vitest real toy:** nos registros brutos examinados, CI recusa neutro99 com agregado99.5; recusa agregado50.5 com neutro100; aceita caso100. Os casos corrigidos `r2` de CIcertify observam efetivamente `precertify`, `pretest:coverage` e, quando alcançado, `precoverage:critical`, com flag1 e scope core. Logs de phase10 mostram falha per-file/aggregate e sucesso da cadeia boa. Os drivers verdes têm SHA igual aos selados/live. Config/package/lock são idênticos aos originais do pacote; o diff não altera globs/pisos/include/exclude ou comandos. Não houve execução nem alteração do runner F-CLI-001 nesta revisão.
+- **Certificação nãoqualificante:** conferi os 12 phase10-result adicionais: cada um tem16 gates e decisão NO_GO. Todos os192 hashes dos logs dos gates correspondem aos resultados. Demais gates são falhos/NOT_EXECUTED/stubs explícitos; mutation toy é stub. Nenhum desses resultados representa cobertura do produto ou aprovação de gates globais.
+
+## Integridade, comandos e limites
+
+Sentinelas antes/depois: **27 verificações** do pacote (18 selados + nove live), **1276 registros brutos permitidos** e **346 arquivos adicionais** sem drift; manifestos também idênticos. Registros interpretativos do builder e observações não foram usados como autoridade. Veja `sentinel-before/after.json`, `raw-integrity-before/after.json` e `addendum-integrity-before/after.json`.
+
+Executei **21 sondas CLI próprias**, `node --version` e três `node --check` sobre cópias privadas, em Node22.23.2. `commands.json` contém argv, cwd, env, exit, duração, hashes de stdout/stderr e limites; resultados estão em `probe-results.json` e `negative-results.json`. Todos os subprocessos próprios usam HOME/TMP/XDG/NPMconfig/cache privados, sem NODE_OPTIONS, sem links/deps para W. Cada sonda tem timeout15s e captura de saída limitada no contrato a2MiB; os comandos Python externos foram limitados a90s. Nenhuma instalação/rede/PG/Docker/app/serviço/credencial. Não rodei certify/E2E/SBOM/licenses reais nem importei phase10 no W. A análise do suplemento teve uma falha inicial de resolução de caminho (exit1); corrigi somente meu script de leitura e a nova análise exit0 verificou192 logs. Isto não foi falha da candidata.
+
+Não reexecutei lint, typecheck ou gates integrais; os registros selados de checks apontam exit0 para lint/typecheck/format. As execuções nativas toy foram avaliadas a partir de código, configurações, comandos, env, métricas e logs brutos com hash, sem aceitar conclusões do builder. A ausência de nova execução integral não é aprovação implícita.
+
+**Veredito limitado: REVISE pelo P1 acima.** P100-050 permanece aberto; PG/E2E/cobertura integral/certificação da candidata final continuam pendentes. Nenhuma autoqualificação de programa, release ou SPEC0220; nenhuma aprovação humana inferida. O Lead permanece responsável pela documentação/integridade disjunta.
+'''
+(R/'report.md').write_text(report)
+(R/'review-checks.json').write_text(json.dumps({'checks':[{'command':'timeout 90s python3 review-r1/probe.py','exit':0,'result':'10 sondas, incluindo três controles stale aceitos e baseline stale aceito'},{'command':'timeout 90s python3 review-r1/negative-probes.py','exit':0,'result':'11 controles negativos recusados'},{'command':'timeout 90s python3 review-r1/assess-raw.py','attempt':1,'exit':1,'result':'caminho do leitor incorreto; nenhum insumo alterado'},{'command':'timeout 90s python3 review-r1/assess-raw.py','attempt':2,'exit':0,'result':'28 cases derivados,192 hashes de logs correspondentes; script privado corrigido'}],'limits':{'per_command_seconds':90,'stdout_bytes':2097152},'runtime_commands':'commands.json'},indent=2,ensure_ascii=False)+'\n')
+# Inventory excludes itself; dependency to verdict/report is byte-bound here.
+files={}
+for p in sorted(R.rglob('*')):
+ if p.is_file() and p.name!='evidence-manifest.json':files[str(p.relative_to(R))]={'sha256':h(p),'bytes':p.stat().st_size}
+(R/'evidence-manifest.json').write_text(json.dumps({'scope':'Evidências próprias I1 readonly; sem qualificação global','fork_context':False,'files':files},indent=2,ensure_ascii=False)+'\n')
+print('REVISE; all before/after hashes match; evidence files',len(files),'report sha256',h(R/'report.md'))

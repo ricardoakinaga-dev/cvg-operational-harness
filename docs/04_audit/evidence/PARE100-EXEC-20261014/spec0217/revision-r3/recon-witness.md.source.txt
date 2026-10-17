@@ -1,0 +1,34 @@
+# SPEC0217 R3 — witness estático N1
+
+Estado: STATIC_RECON_AND_DESIGN_ONLY. Nenhum runtime/teste/DB/network, BUILD, descendants, ROOT/C ou inspeção de certificação/cliente Python. Mesmo claim e escrita somente SPEC0217 + spec0217/**. Não é julgamento independente da própria proposta.
+
+## Proveniência
+
+Baseline formatada do Lead conferida **antes de editar**: SHA-256 `7cf299cc8728d0e79166dc2879a7e8418e057f2a7d89f00989bae8efa9cf79cf`, arquivada byte a byte em [previous-spec0217.source.txt](previous-spec0217.source.txt). R1 e R2 anteriores continuam em suas revisões; fa6200 era a entrega pré-formatting, não foi usado como candidato corrente. [Crítica R2](critic-r2-review.source.txt) mantém REVISE N1 e reconhece os quatro remédios originais somente em nível de desenho; não autoriza BUILD.
+
+## Causa observada nas fontes atuais
+
+- `postgres-outbox.ts:183–247` claim seleciona processing somente se lease_until venceu; mesmo eventId não burla filtro. `ack:253–500` commita preparação, executa effect fora da tx e só depois faz tx final marker/status/audit. Um SIGKILL dentro do effect/S1 não libera lease nem cria marker.
+- `outbox.ts:124–147` não declara heartbeat/renew. `TenantScopedPostgresRuntimeRepository:218–243` não tem método atual de renovação externa. `postgres.ts:148–171` tem alias PG completo; `schema.ts:238–261` mantém metadados opcionais no envelope genérico. Nenhum attempt foi inferido por cast no desenho.
+- `continuous-worker.ts:270–383` cast opcional heartbeatClaim omite expectedAttempt, fallback só lê status/owner, timer pode sobrepor e stop não junta promessa; exceção só loga. `dispatchClaimed:430–472` cria esse loop separado. `controlled-worker.ts:46–87` não cria loop algum e só encaminha leaseMs/job.
+- `process-outbox-event.ts:82–173` compartilha o job das duas rotas e tem pontos concretos de claim→ACK→fail. Foi escolhido como seam para um único registry/handle NOVO; current código não tem esse contexto nem factory.
+- `continuous-worker.ts:705–761` release de shutdown pode ocorrer com handlers in-flight. `main.ts:344–438` controlled aguarda drain sem attempt abort e depois fecha pool; continuous para worker e então pool. Portanto stop/cancel/join precisam de delta explícito nos dois routes, não apenas novo SQL de renovação.
+- `operational-execution-postgres.ts:589–639` heartbeat inner abre própria tx e captura clock antes do lock. Não serve para chamada nested na renovação pareada; extrair helper transaction-free é mudança futura. `tenant-scoped-postgres.ts:157–215` fornece a raiz transacional real e cleanup tenant/release(error), não query(signal).
+- `postgres-outbox.ts:596–693` requeue zera attempts; `0010_outbox_durability.sql:84–93` já fornece outbox_attempts.id identity. Ref fenced proposta inclui esse id retornado no novo modo claim, além de owner/expectedAttempt, evitando ABA de contador resetado sem mudar comportamento unbound.
+- `platform/contracts.ts:79` conserva teto model.timeoutMs120000; o profile fixo180000 da R2 impedia recuperar antes do prazo mesmo no caso favorável. Não há fonte atual que faça renewal PG ou liberação pós-SIGKILL para corrigir isso por inferência.
+
+[Inventário](source-inventory.json)/[manifesto SHA](source-hashes.sha256) selam19 fontes causais novas com cópias inertes `.source.txt`; o recon41 da R2 continua referenciado para os remédios anteriores. Hashes são integridade estática, não execução.
+
+## Escolha concreta PROPOSED
+
+SPEC2.3 escolhe o **perfil servido**, não override de teste: TTL outer/inner10000ms, um loop renew2000ms, concurrency1/pool4, deadline kernel intacto. Novos claimNextFenced/renewOutboxClaim/ackClaim/failClaim e helper compartilhado de client/DBclock/CAS, mais renewClaimLeases pareado, não são APIs existentes. Retornos/ref incluem expectedOuterAttempt, processWorkerId único e outbox_attempts.id; nenhuma row expirada/fechada/reclaimed ressuscita por renew.
+
+O helper atual withTenantTransaction não observa signal nem tem hook pré-COMMIT. A proposta extrai corpo interno comum e adiciona runner guardado package-internal, sem mudar assinatura/export unbound; guard após cleanup tenant e antes de COMMIT é explícito, com rollback/cleanup ainda obrigatórios após stop. Não é um método encontrado nas fontes.
+
+Um registry/handle novo entra pelo job comum, reserva slot antes do claim, fecha effect sobre o mesmo controller, attach inner sem outro timer e propaga primeira falha. Controlled e continuous opt-in usam essa option; loop/cast/release legados ficam somente no caminho unbound. Stop síncrono/await da promessa real, detach após join, callback antes do ACK final fora da tx, fail apenas pelo job e cleanup de main resolvem ownership. Guardas finais mantêm ambos fences, independente de último tick.
+
+Aceites adicionam S1 kill/reclaim natural com budget60s, liveworker25s renovando e esgotamento depois de expiresAt+1s. Nenhum SQL admin de expiry/TTL de1000ms/clock independente pode provar esse positivo. Casos de lost heartbeat, stale attempt/ABA, row lock até expiry, late ACK, cleanup, shutdown e pool4 são explícitos em [acceptance-plan.md](acceptance-plan.md). Timeouts120s são futuros; nada foi executado nesta lane.
+
+## Limite e próxima ação
+
+Proposta R3 concreta para recheck técnico do Lead/crítico; gate humano T3 continua futuro. Todos K01–K12/N1 e métodos/SQL/fixtures NOT_RUN/NOT_IMPLEMENTED. Preservados R1 consumo bound0002/client único, R2 plano pós-output antes de S1 sem replan, R3 intents/P/P0/N e R4 ACK real; uma tool pura/default off/produção recusada, sem novo efeito/RAG/provider ou encerramento de P100-010. Lead cuida de packets/formatter/links/certificação em sua lane; este handoff não implementa nem aprova.

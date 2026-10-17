@@ -1,0 +1,638 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/docs/02_spec/0223_pare100_sandbox_metadata_observation.md
+1: # SPEC0223 — observação da preservação de sandbox na composição pública
+2: 
+3: ## Escopo e autoridade
+4: 
+5: Task `P100-004/P100-024/SBX-METADATA-OBS-001`, 16/10/2026. T2 de
+6: test-support local sob o pedido integral PARE100 e D-12 da
+7: [constituição](../07_agents/AGENTS.md). Estado inicial
+8: `BUILD_LOCAL_AUTHORIZED_TEST_SUPPORT_ONLY`: esta SPEC curta registra recon,
+9: regras e critérios antes do código da prova. Não modifica contrato público,
+10: segurança, policy, approval ou comportamento de produção. A correção de
+11: produção pertence à [SPEC0222](0222_pare100_managed_capability_lifecycle.md),
+12: que continua aguardando revisão humana. A decisão sobre essa SPEC não é
+13: inferida da execução desta observação.
+14: 
+15: É uma observação CVG independente. Não satisfaz a obrigação de dois motores da
+16: [SPEC0213](0213_pare100_keyless_differential.md), nem ML29 completo,
+17: isolamento nativo, distribuição compilada, API gerenciada ou paridade integral.
+18: 
+19: ## Recon e hipótese
+20: 
+21: No worktree isolado, `createOperationalHarness` aceita alternativamente
+22: `tools` ou `capabilities`, oferece `sandbox` e usa o pipeline real. O
+23: `CapabilityDescriptor` herda `ToolDescriptor.sandbox`; o normalizador atual de
+24: `capability-boundary.ts` enumera campos e omite esse metadado. O pipeline usa
+25: o modo do descritor para decidir se chama o gate. A hipótese a medir é que a
+26: mesma intenção `WORKSPACE` chega ao gate pela rota direta e se perde pela rota
+27: de capabilities. Leitura de fonte não é comprovação executável.
+28: 
+29: ## Regras da prova
+30: 
+31: - Código de prova e launcher somente no diretório temporário próprio;
+32:   documentação e evidências próprias são espelhadas no root e worktree.
+33:   Imports estáticos da entrada pública fonte CVG e das fixtures de teste
+34:   existentes; nenhum patch, monkeypatch, motor reimplementado ou alteração do
+35:   normalizador. Hashes dos inputs e das fontes antes e depois da execução.
+36: - Ferramenta única `synthetic.sandbox.metadata`, `LOW`, `sideEffect: NONE`,
+37:   idempotente, sem approval, entrada/saída JSON fixa. Seu corpo apenas conta e
+38:   devolve um eco em memória. Nenhum arquivo, shell, rede, subprocesso, grant,
+39:   helper nativo ou serviço é chamado pelo corpo.
+40: - Gate sintético sempre nega e registra seu pedido real. Orquestrador de teste
+41:   solicita uma chamada fixa; policy, approval, audit, telemetry, modelo e
+42:   journal usam portas sintéticas/em memória. Identificar essas substituições
+43:   explicitamente: a prova observa composição e despacho reais, não a policy
+44:   de produção nem o isolamento do sistema operacional.
+45: - Comparar três casos com composição fresca e journal próprio em cada caso:
+46:   ferramenta direta `WORKSPACE`, capability `WORKSPACE` e capability `NONE`.
+47:   Sem executionId durável ou retomada; conservar resultado nativo completo,
+48:   descritores antes/depois, fingerprint, pedidos ao gate, corpo, decisões,
+49:   policy, approval, audit, telemetry e chamadas de modelo.
+50: - Node22 instalado, ambiente permitido explícito, HOME/TMP/XDG privativos,
+51:   cache TS desabilitado e tsconfig existente autenticado. Processo próprio
+52:   com grupo próprio, limite de 5s/1MiB, captura dos dois streams e exit/join.
+53:   Falha ou timeout conserva evidências; não instalar dependências, alterar
+54:   lockfile, escrever cache no worktree ou usar ambiente/credenciais reais.
+55: 
+56: ## Critérios rejeitáveis
+57: 
+58: 1. `OBS-SBX-01`: controle direto `WORKSPACE` deve chamar o gate uma vez,
+59:    executar zero corpos e retornar `UNSAFE_REQUEST`. Sem esse controle, a
+60:    hipótese não foi isolada e a observação é inválida.
+61: 2. `OBS-SBX-02`: controle capability `NONE` deve completar um eco com zero
+62:    chamadas ao gate e um corpo, sem modelo ou aprovação. Falha de validação,
+63:    fingerprint, policy ou fixture torna a prova inconclusiva, não segura.
+64: 3. `OBS-SBX-03`: observar a rota capability `WORKSPACE` sem obrigar resultado
+65:    verde. O invariante desejado é preservação do metadado, gate uma vez e
+66:    corpo zero. Descritor perdido, gate zero e corpo um constituem testemunho
+67:    vermelho do invariante, mesmo que o processo de medição termine com exit0.
+68: 4. `OBS-SBX-04`: rejeitar observação com caso ausente/duplicado, contadores ou
+69:    resultado adulterados, gate não alcançado no controle, fonte alterada,
+70:    stream perdido, exit/teardown desconhecido ou execução fora dos limites.
+71:    Não converter mocks, texto de logs ou sucesso de processo em sandbox PASS.
+72: 5. `OBS-SBX-05`: preservar fonte e 465pins, quatro SPECs protegidas, 36critérios,
+73:    2DONE_LOCAL/34abertos; paridade `NOT_MEASURED`. Tipo/lint/formato focados e
+74:    revisão independente do observador antes de qualquer aceite da prova.
+75: 
+76: ## Verificação e continuidade
+77: 
+78: Resultados iniciais `NOT_RUN`. Evidências serão publicadas em
+79: `docs/04_audit/evidence/PARE100-EXEC-20261014/sandbox-metadata-observation-r1/`.
+80: Gates integrados T2 (`typecheck`, `lint`, `npm test`, `test:postgres`, E2E em
+81: Node22), cobertura e certificação continuam pendentes; a qualificação0220 e
+82: as falhas globais já registradas não recebem exceção nem refresh por esta
+83: prova. Não executar certify/E2E/SBOM/licenses ou mudar lockfile sem claim
+84: específico. O resultado desta task não fecha cartões pais.
+85: 
+86: Próxima ação: implementar o observador privado, executar os três casos e
+87: validar a evidência, preservando qualquer falha. A correção de produção só
+88: pode começar após a revisão humana explícita de sua SPEC T3.
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/observe.mts
+1: import type {
+2:   CapabilityDescriptor,
+3:   ModelGateway,
+4:   Orchestrator,
+5:   RuntimeInput,
+6:   SandboxGate,
+7:   SandboxMode,
+8:   ToolDefinition,
+9:   ToolExecutionContext,
+10:   ToolResult,
+11: } from "@cvg/harness-contracts";
+12: import {
+13:   createCapabilityRegistry,
+14:   createOperationalHarness,
+15:   InMemoryEffectJournal,
+16:   InMemoryKernelLog,
+17: } from "../worktree/packages/harness/src/index.ts";
+18: import {
+19:   InMemoryApprovalEngine,
+20:   RecordingAuditSink,
+21:   RecordingTelemetrySink,
+22:   ScriptedPolicyEngine,
+23:   phase3AgentProfile,
+24:   phase3RuntimeInput,
+25: } from "../worktree/packages/harness/src/__tests__/fixtures/phase3-fixtures.ts";
+26: 
+27: const id = "synthetic.sandbox.metadata";
+28: const version = "1.0.0";
+29: const echo = Object.freeze({ text: "synthetic echo only" });
+30: 
+31: // Explicitly preserve otherwise non-JSON data; no silent function/undefined loss.
+32: function capture(value: unknown, depth = 0): unknown {
+33:   if (depth > 64) throw new Error("observation depth exceeded");
+34:   if (value === undefined) return { $type: "undefined" };
+35:   if (typeof value === "function") return { $type: "function" };
+36:   if (
+37:     value === null ||
+38:     typeof value === "string" ||
+39:     typeof value === "boolean"
+40:   ) {
+41:     return value;
+42:   }
+43:   if (typeof value === "number" && Number.isFinite(value)) return value;
+44:   if (value instanceof AbortSignal) {
+45:     return {
+46:       $type: "AbortSignal",
+47:       aborted: value.aborted,
+48:       reason: capture(value.reason, depth + 1),
+49:     };
+50:   }
+51:   if (Array.isArray(value))
+52:     return value.map((item) => capture(item, depth + 1));
+53:   if (typeof value !== "object")
+54:     throw new Error("unsupported observation value");
+55:   const proto: unknown = Object.getPrototypeOf(value);
+56:   if (proto !== Object.prototype && proto !== null) {
+57:     throw new Error("unsupported observation object");
+58:   }
+59:   const result: Record<string, unknown> = {};
+60:   for (const key of Reflect.ownKeys(value)) {
+61:     if (typeof key !== "string") throw new Error("unsupported observation key");
+62:     const property = Object.getOwnPropertyDescriptor(value, key);
+63:     if (!property || !("value" in property)) {
+64:       throw new Error("observation getter refused");
+65:     }
+66:     result[key] = capture(property.value, depth + 1);
+67:   }
+68:   return result;
+69: }
+70: 
+71: async function observe(route: "direct" | "capability", mode: SandboxMode) {
+72:   const caseId = `${route}-${mode}`;
+73:   const bodyCalls: unknown[] = [];
+74:   const gateCalls: unknown[] = [];
+75:   const modelCalls: unknown[] = [];
+76:   const decisions: unknown[] = [];
+77:   const operationKey = `sandbox-metadata-${caseId}`;
+78:   const descriptor: CapabilityDescriptor = {
+79:     id,
+80:     version,
+81:     description: "Synthetic memory-only metadata observation",
+82:     inputSchema: { type: "object", required: ["text"] },
+83:     outputSchema: { type: "object", required: ["text"] },
+84:     risk: "LOW",
+85:     sideEffect: "NONE",
+86:     sandbox: mode,
+87:     idempotent: true,
+88:     requiresApproval: false,
+89:     origin: "core",
+90:     providerId: "synthetic-memory",
+91:     providerVersion: "1.0.0",
+92:   };
+93:   const execute = async (
+94:     input: unknown,
+95:     context: ToolExecutionContext,
+96:   ): Promise<ToolResult> => {
+97:     bodyCalls.push(capture({ input, context }));
+98:     return { status: "SUCCEEDED", output: { ...echo } };
+99:   };
+100:   const registry =
+101:     route === "capability"
+102:       ? createCapabilityRegistry().register({
+103:           descriptor,
+104:           implementation: {
+105:             validateInput: (input) =>
+106:               typeof input === "object" &&
+107:               input !== null &&
+108:               Object.keys(input).length === 1 &&
+109:               (input as Record<string, unknown>).text === echo.text,
+110:             execute,
+111:             validateOutput: (output) =>
+112:               typeof output === "object" &&
+113:               output !== null &&
+114:               Object.keys(output).length === 1 &&
+115:               (output as Record<string, unknown>).text === echo.text,
+116:           },
+117:         })
+118:       : undefined;
+119:   const rawTool: ToolDefinition = { ...descriptor, execute };
+120:   const gate: SandboxGate = {
+121:     evaluate: async (input) => {
+122:       gateCalls.push(capture(input));
+123:       return { kind: "denied", reason: "synthetic deny, no native backend" };
+124:     },
+125:   };
+126:   const modelGateway: ModelGateway = {
+127:     complete: async (request) => {
+128:       modelCalls.push(capture(request));
+129:       throw new Error("This fixture must never call a model");
+130:     },
+131:   };
+132:   const invocation = {
+133:     toolId: id,
+134:     toolVersion: version,
+135:     operationKey,
+136:     input: echo,
+137:   };
+138:   const orchestrator: Orchestrator = {
+139:     decideNextStep: async (input) => {
+140:       const decision = {
+141:         action: "CALL_TOOL" as const,
+142:         toolInvocation: invocation,
+143:       };
+144:       decisions.push(capture({ input, decision }));
+145:       return decision;
+146:     },
+147:   };
+148:   const audit = new RecordingAuditSink();
+149:   const telemetry = new RecordingTelemetrySink();
+150:   const policy = new ScriptedPolicyEngine();
+151:   const approvals = new InMemoryApprovalEngine();
+152:   const journal = new InMemoryEffectJournal();
+153:   const log = new InMemoryKernelLog();
+154:   const harness = createOperationalHarness({
+155:     modelGateway,
+156:     orchestrator,
+157:     policy,
+158:     approvals,
+159:     audit,
+160:     telemetry,
+161:     effectJournal: journal,
+162:     log,
+163:     sandbox: gate,
+164:     ...(registry
+165:       ? { capabilities: registry }
+166:       : {
+167:           tools: {
+168:             list: () => [rawTool],
+169:             resolve: (toolId: string, toolVersion?: string) =>
+170:               toolId === id &&
+171:               (toolVersion === undefined || toolVersion === version)
+172:                 ? rawTool
+173:                 : undefined,
+174:           },
+175:         }),
+176:   });
+177:   const { executionId: omittedExecutionId, ...base } = phase3RuntimeInput({
+178:     runtimeProfile: "single_pass",
+179:     agent: phase3AgentProfile({ tools: [id] }),
+180:     requestedTool: invocation,
+181:   });
+182:   void omittedExecutionId;
+183:   const input: RuntimeInput = base;
+184:   const nativeInput = capture(input);
+185:   const beforeDescriptor = capture(descriptor);
+186:   const registeredDescriptors = capture(registry?.listDescriptors());
+187:   const nativeResult = await harness.run(input);
+188:   return capture({
+189:     caseId,
+190:     route,
+191:     mode,
+192:     input: nativeInput,
+193:     beforeDescriptor,
+194:     registeredDescriptors,
+195:     submittedDescriptor: registry ? registry.listDescriptors()[0] : rawTool,
+196:     capabilityFingerprint: harness.capabilityFingerprint,
+197:     nativeResult,
+198:     gateCalls,
+199:     bodyCalls,
+200:     modelCalls,
+201:     decisions,
+202:     policyEvaluations: policy.evaluations,
+203:     approvalRequests: approvals.requests,
+204:     auditEvents: audit.events,
+205:     telemetryEvents: telemetry.events,
+206:     kernelLogEvents: log.events,
+207:     journalRecord: await journal.get(input.tenantId, operationKey),
+208:   });
+209: }
+210: 
+211: const cases = [];
+212: for (const [route, mode] of [
+213:   ["direct", "WORKSPACE"],
+214:   ["capability", "WORKSPACE"],
+215:   ["capability", "NONE"],
+216: ] as const) {
+217:   cases.push(await observe(route, mode));
+218: }
+219: process.stdout.write(
+220:   JSON.stringify({
+221:     schema: "cvg-sandbox-metadata-observation-v1",
+222:     boundary: "public source factory, single_pass only",
+223:     syntheticPorts: [
+224:       "orchestrator",
+225:       "model",
+226:       "policy",
+227:       "approval",
+228:       "audit",
+229:       "telemetry",
+230:       "sandbox-deny",
+231:     ],
+232:     cases,
+233:   }) + "\n",
+234: );
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/run.py
+1: from pathlib import Path
+2: import ctypes
+3: import hashlib
+4: import json
+5: import os
+6: import selectors
+7: import signal
+8: import subprocess
+9: import sys
+10: import time
+11: 
+12: P = Path(__file__).resolve().parent
+13: W = P.parent / 'worktree'
+14: NODE = Path('/home/ricardo/.nvm/versions/node/v22.23.2/bin/node')
+15: OUT = P / 'runs' / sys.argv[1]
+16: OUT.mkdir(parents=True, exist_ok=False)
+17: 
+18: def digest(path):
+19:     return hashlib.sha256(path.read_bytes()).hexdigest()
+20: 
+21: def put(name, value):
+22:     (OUT / name).write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n')
+23: 
+24: tsx = W / 'node_modules/tsx'
+25: tsx_package = json.loads((tsx / 'package.json').read_text())
+26: loader = (tsx / tsx_package['exports']['.']).resolve()
+27: assert loader.is_relative_to(tsx.resolve()) and loader.is_file()
+28: paths = set()
+29: for tree in ['packages', 'apps', 'legacy/packages', 'products']:
+30:     for src in (W / tree).glob('*/src'):
+31:         paths.update(f for f in src.rglob('*') if f.is_file())
+32: paths.update([W / 'tsconfig.base.json', W / 'package.json', W / 'package-lock.json',
+33:               P / 'observe.mts', P / 'run.py', NODE])
+34: paths.update(f for f in tsx.rglob('*') if f.is_file())
+35: frozen = json.loads((P.parent / 'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json').read_text())
+36: pins = frozen['newGroups'][0]['pins']
+37: assert len(pins) == 465
+38: assert all(digest(W / name) == sha for name, sha in pins.items())
+39: paths.update(W / name for name in pins)
+40: before = {str(f): digest(f) for f in sorted(paths)}
+41: put('sources-before.json', before)
+42: env = {
+43:     'PATH': f'{NODE.parent}:/usr/bin:/bin',
+44:     'HOME': str(P / 'home'),
+45:     'TMPDIR': str(P / 'tmp'),
+46:     'TMP': str(P / 'tmp'),
+47:     'TEMP': str(P / 'tmp'),
+48:     'XDG_CACHE_HOME': str(P / 'xdg-cache'),
+49:     'XDG_CONFIG_HOME': str(P / 'xdg-config'),
+50:     'XDG_DATA_HOME': str(P / 'xdg-data'),
+51:     'TSX_DISABLE_CACHE': '1',
+52:     'TSX_TSCONFIG_PATH': str(W / 'tsconfig.base.json'),
+53:     'LANG': 'C.UTF-8',
+54:     'TZ': 'UTC',
+55:     'NO_COLOR': '1'
+56: }
+57: argv = [str(NODE), '--import', str(loader), str(P / 'observe.mts')]
+58: started = time.monotonic()
+59: # Adopt and reap loader descendants so process-group cleanup is observable.
+60: libc = ctypes.CDLL(None, use_errno=True)
+61: if libc.prctl(36, 1, 0, 0, 0) != 0:  # Linux PR_SET_CHILD_SUBREAPER
+62:     raise OSError(ctypes.get_errno(), 'PR_SET_CHILD_SUBREAPER failed')
+63: child = subprocess.Popen(argv, cwd=P, env=env, stdin=subprocess.DEVNULL,
+64:                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+65:                          start_new_session=True)
+66: selector = selectors.DefaultSelector()
+67: selector.register(child.stdout, selectors.EVENT_READ, 'stdout')
+68: selector.register(child.stderr, selectors.EVENT_READ, 'stderr')
+69: streams = {'stdout': bytearray(), 'stderr': bytearray()}
+70: violation = None
+71: while selector.get_map():
+72:     if time.monotonic() - started > 5:
+73:         violation = 'deadline_5s'
+74:         break
+75:     for key, _ in selector.select(0.02):
+76:         data = os.read(key.fileobj.fileno(), 65536)
+77:         if not data:
+78:             selector.unregister(key.fileobj)
+79:             key.fileobj.close()
+80:             continue
+81:         streams[key.data].extend(data)
+82:         if sum(map(len, streams.values())) > 1048576:
+83:             violation = 'output_cap_1MiB'
+84:             break
+85:     if violation:
+86:         break
+87: if violation:
+88:     try:
+89:         os.killpg(child.pid, signal.SIGKILL)
+90:     except ProcessLookupError:
+91:         pass
+92: try:
+93:     exit_code = child.wait(timeout=2)
+94: except subprocess.TimeoutExpired:
+95:     violation = violation or 'join_timeout_2s'
+96:     os.killpg(child.pid, signal.SIGKILL)
+97:     exit_code = child.wait(timeout=2)
+98: selector.close()
+99: descendants_reaped = []
+100: group_seen_after_parent = False
+101: cleanup_deadline = time.monotonic() + 2
+102: while True:
+103:     try:
+104:         os.killpg(child.pid, 0)
+105:         group_seen_after_parent = True
+106:         os.killpg(child.pid, signal.SIGKILL)
+107:     except ProcessLookupError:
+108:         break
+109:     while True:
+110:         try:
+111:             pid, status = os.waitpid(-child.pid, os.WNOHANG)
+112:             if pid == 0:
+113:                 break
+114:             descendants_reaped.append({'pid': pid, 'waitStatus': status})
+115:         except ChildProcessError:
+116:             break
+117:     if time.monotonic() >= cleanup_deadline:
+118:         violation = violation or 'descendant_join_timeout_2s'
+119:         break
+120:     time.sleep(0.01)
+121: try:
+122:     os.killpg(child.pid, 0)
+123:     remaining_group = True
+124: except ProcessLookupError:
+125:     remaining_group = False
+126: records = {}
+127: for name, data in streams.items():
+128:     if data:
+129:         file = OUT / (name + '.txt')
+130:         file.write_bytes(data)
+131:         records[name] = {'path': str(file), 'bytes': len(data), 'sha256': digest(file)}
+132:     else:
+133:         records[name] = {'bytes': 0, 'status': 'expected_empty', 'file_omitted': True}
+134: after = {str(f): digest(f) for f in sorted(paths)}
+135: put('sources-after.json', after)
+136: new_source_paths = {f for tree in ['packages', 'apps', 'legacy/packages', 'products']
+137:                     for src in (W / tree).glob('*/src') for f in src.rglob('*') if f.is_file()} - paths
+138: metadata = {
+139:     'argv': argv, 'cwd': str(P), 'env': env, 'pid': child.pid,
+140:     'dedicatedProcessGroup': child.pid, 'exitCode': exit_code,
+141:     'durationMs': round((time.monotonic() - started) * 1000),
+142:     'limits': {'deadlineMs': 5000, 'combinedOutputBytes': 1048576},
+143:     'violation': violation, 'joined': True, 'remainingProcessGroup': remaining_group,
+144:     'subreaper': True, 'groupSeenAfterParent': group_seen_after_parent,
+145:     'descendantsReaped': descendants_reaped,
+146:     'sourceFiles': len(before), 'sourcesUnchanged': before == after,
+147:     'newSourcePaths': sorted(map(str, new_source_paths)),
+148:     'pins': len(pins), 'streams': records,
+149:     'observationOnly': True, 'sandboxInvariantStatus': 'NOT_EVALUATED_BY_LAUNCHER'
+150: }
+151: put('process.json', metadata)
+152: print(json.dumps(metadata))
+153: sys.exit(0 if exit_code == 0 and not violation and not remaining_group and before == after and not new_source_paths else 1)
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/validate.py
+1: from pathlib import Path
+2: import copy
+3: import hashlib
+4: import json
+5: import sys
+6: 
+7: UNDEFINED = {'$type': 'undefined'}
+8: ECHO = {'text': 'synthetic echo only'}
+9: ID = 'synthetic.sandbox.metadata'
+10: CASES = ['direct-WORKSPACE', 'capability-WORKSPACE', 'capability-NONE']
+11: CASE_KEYS = set('caseId route mode input beforeDescriptor registeredDescriptors submittedDescriptor capabilityFingerprint nativeResult gateCalls bodyCalls modelCalls decisions policyEvaluations approvalRequests auditEvents telemetryEvents kernelLogEvents journalRecord'.split())
+12: 
+13: def require(condition, reason):
+14:     if not condition:
+15:         raise ValueError(reason)
+16: 
+17: def metadata(descriptor):
+18:     return {key: value for key, value in descriptor.items() if key != 'execute'}
+19: 
+20: def evaluate(data):
+21:     require(set(data) == {'schema', 'boundary', 'syntheticPorts', 'cases'}, 'top-level shape')
+22:     require(data['schema'] == 'cvg-sandbox-metadata-observation-v1', 'schema')
+23:     require(data['boundary'] == 'public source factory, single_pass only', 'boundary')
+24:     require(data['syntheticPorts'] == ['orchestrator', 'model', 'policy', 'approval', 'audit', 'telemetry', 'sandbox-deny'], 'ports')
+25:     require([c['caseId'] for c in data['cases']] == CASES, 'case membership/order')
+26:     summaries = []
+27:     for c in data['cases']:
+28:         require(set(c) == CASE_KEYS, 'case shape')
+29:         require(c['caseId'] == c['route'] + '-' + c['mode'], 'route/mode identity')
+30:         inp = c['input']
+31:         require('executionId' not in inp and inp['runtimeProfile'] == 'single_pass', 'non-durable profile')
+32:         require(inp['agent']['tools'] == [ID], 'agent tool binding')
+33:         require(c['modelCalls'] == c['approvalRequests'] == [], 'unexpected model/approval')
+34:         expected_invocation = {'toolId': ID, 'toolVersion': '1.0.0', 'operationKey': 'sandbox-metadata-' + c['caseId'], 'input': ECHO}
+35:         require(inp['requestedTool'] == expected_invocation, 'input invocation')
+36:         require(len(c['decisions']) == 1 and c['decisions'][0]['decision'] == {'action': 'CALL_TOOL', 'toolInvocation': expected_invocation}, 'native decision')
+37:         before = c['beforeDescriptor']
+38:         require(before == {
+39:             'id': ID, 'version': '1.0.0', 'description': 'Synthetic memory-only metadata observation',
+40:             'inputSchema': {'type': 'object', 'required': ['text']},
+41:             'outputSchema': {'type': 'object', 'required': ['text']},
+42:             'risk': 'LOW', 'sideEffect': 'NONE', 'sandbox': c['mode'], 'idempotent': True,
+43:             'requiresApproval': False, 'origin': 'core', 'providerId': 'synthetic-memory', 'providerVersion': '1.0.0'
+44:         }, 'input descriptor')
+45:         submitted = metadata(c['submittedDescriptor'])
+46:         if c['route'] == 'direct':
+47:             require(submitted == before and c['registeredDescriptors'] == UNDEFINED and c['capabilityFingerprint'] == UNDEFINED, 'direct route binding')
+48:         else:
+49:             require(c['registeredDescriptors'] == [submitted], 'registry snapshot linkage')
+50:             require(submitted == before or submitted == {k: v for k, v in before.items() if k != 'sandbox'}, 'unexpected normalization')
+51:             fp = c['capabilityFingerprint']
+52:             require(isinstance(fp, str) and len(fp) == 64 and all(ch in '0123456789abcdef' for ch in fp), 'capability fingerprint')
+53:         require(len(c['policyEvaluations']) == 1, 'policy count')
+54:         policy = c['policyEvaluations'][0]
+55:         require(policy['invocation'] == expected_invocation and metadata(policy['tool']) == submitted, 'policy tool linkage')
+56:         require(policy['tenantId'] == inp['tenantId'] and policy['agentId'] == inp['agent']['id'] and policy['action'] == 'tool.execute', 'policy actor linkage')
+57:         result = c['nativeResult']
+58:         bodies = c['bodyCalls']
+59:         gates = c['gateCalls']
+60:         blocked = len(gates) == 1 and not bodies and result['stopReason'] == 'UNSAFE_REQUEST'
+61:         completed = not gates and len(bodies) == 1 and result['stopReason'] == 'COMPLETED'
+62:         require(blocked or completed, 'unexpected execution topology')
+63:         require(result['steps'] == 1 and result['modelCalls'] == 0 and result['toolCalls'] == len(bodies), 'result counters')
+64:         require(result['usage'] == {'inputTokens': 0, 'outputTokens': 0, 'costUsd': 0}, 'unexpected usage')
+65:         require(len(c['auditEvents']) == 1 and c['auditEvents'][0]['result'] == result['stopReason'] and c['auditEvents'][0]['policy'] == 'ALLOW', 'audit result linkage')
+66:         logs = c['kernelLogEvents']
+67:         require(logs[0]['type'] == 'turn/start' and logs[-1]['type'] == 'turn/end' and logs[-1]['stopReason'] == result['stopReason'], 'log turn linkage')
+68:         if blocked:
+69:             require(set(result) == {'response', 'stopReason', 'steps', 'modelCalls', 'toolCalls', 'usage'}, 'blocked result shape')
+70:             require(result['response'] == f'Sandbox denied tool "{ID}": synthetic deny, no native backend.', 'denial response')
+71:             require(metadata(gates[0]['descriptor']) == submitted and gates[0]['policy']['requiredMode'] == c['mode'], 'gate metadata linkage')
+72:             require(c['journalRecord'] is None, 'blocked journal')
+73:             require([x['type'] for x in logs] == ['turn/start', 'tool/call', 'tool/result', 'turn/end'] and logs[2]['outcome'] == 'not_started', 'blocked log topology')
+74:         else:
+75:             require(set(result) == {'response', 'stopReason', 'steps', 'modelCalls', 'toolCalls', 'usage', 'toolResult'}, 'completed result shape')
+76:             require(result['toolResult'] == {'status': 'SUCCEEDED', 'output': ECHO} and json.loads(result['response']) == ECHO, 'echo result linkage')
+77:             require(bodies[0]['input'] == ECHO and bodies[0]['context']['operationKey'] == expected_invocation['operationKey'], 'body input linkage')
+78:             journal = c['journalRecord']
+79:             require(journal['state'] == 'CONFIRMED' and journal['result'] == ECHO and journal['operationKey'] == expected_invocation['operationKey'], 'journal linkage')
+80:             require([x['type'] for x in logs] == ['turn/start', 'tool/call', 'tool/result', 'turn/end'] and logs[2]['outcome'] == 'succeeded', 'completed log topology')
+81:         summaries.append({'case': c['caseId'], 'gateCalls': len(gates), 'bodyCalls': len(bodies), 'stopReason': result['stopReason'], 'submittedSandbox': submitted.get('sandbox', 'ABSENT')})
+82:     require(summaries[0]['gateCalls'] == 1 and summaries[0]['bodyCalls'] == 0, 'direct WORKSPACE control failed')
+83:     require(summaries[2]['gateCalls'] == 0 and summaries[2]['bodyCalls'] == 1, 'capability NONE control failed')
+84:     target = summaries[1]
+85:     violation = target['submittedSandbox'] == 'ABSENT' and target['gateCalls'] == 0 and target['bodyCalls'] == 1
+86:     preserved = target['submittedSandbox'] == 'WORKSPACE' and target['gateCalls'] == 1 and target['bodyCalls'] == 0
+87:     require(violation or preserved, 'target observation inconclusive')
+88:     return {
+89:         'controls': 'PASS', 'sandboxPreservationInvariant': 'FAIL' if violation else 'PASS_SCOPED',
+90:         'finding': 'OBS-SBX-METADATA-001' if violation else None,
+91:         'sameCapabilityFingerprints': data['cases'][1]['capabilityFingerprint'] == data['cases'][2]['capabilityFingerprint'],
+92:         'cases': summaries, 'fullParity': 'NOT_MEASURED', 'nativeIsolation': 'NOT_TESTED',
+93:         'policyProduction': 'NOT_TESTED', 'managedLifecycleML29': 'NOT_TESTED'
+94:     }
+95: 
+96: def check_run(folder):
+97:     meta = json.loads((folder / 'process.json').read_text())
+98:     require(meta['exitCode'] == 0 and meta['joined'] and not meta['remainingProcessGroup'] and meta['violation'] is None and meta['subreaper'], 'process lifecycle')
+99:     require(meta['sourcesUnchanged'] and not meta['newSourcePaths'] and meta['pins'] == 465, 'source integrity metadata')
+100:     before = json.loads((folder / 'sources-before.json').read_text())
+101:     after = json.loads((folder / 'sources-after.json').read_text())
+102:     require(before == after and len(before) == meta['sourceFiles'], 'source sentinel')
+103:     for file, expected in before.items():
+104:         require(hashlib.sha256(Path(file).read_bytes()).hexdigest() == expected, 'live source drift: ' + file)
+105:     stream = folder / 'stdout.txt'
+106:     raw = stream.read_bytes()
+107:     require(0 < len(raw) <= 1048576 and len(raw) == meta['streams']['stdout']['bytes'] and hashlib.sha256(raw).hexdigest() == meta['streams']['stdout']['sha256'], 'stdout integrity')
+108:     require(meta['streams']['stderr'] == {'bytes': 0, 'status': 'expected_empty', 'file_omitted': True}, 'stderr not empty')
+109:     return json.loads(raw), meta
+110: 
+111: if __name__ == '__main__':
+112:     folder = Path(sys.argv[1])
+113:     data, process = check_run(folder)
+114:     result = evaluate(data)
+115:     mutations = []
+116:     def reject(name, change):
+117:         mutant = copy.deepcopy(data)
+118:         change(mutant)
+119:         try:
+120:             evaluate(mutant)
+121:         except (ValueError, KeyError, TypeError, IndexError):
+122:             mutations.append({'name': name, 'result': 'REJECTED'})
+123:             return
+124:         raise ValueError('Invalid observation accepted: ' + name)
+125:     reject('missing target', lambda d: d['cases'].pop(1))
+126:     reject('duplicate case', lambda d: d['cases'].append(copy.deepcopy(d['cases'][1])))
+127:     reject('forged body count', lambda d: d['cases'][1]['bodyCalls'].clear())
+128:     reject('forged completion', lambda d: d['cases'][1]['nativeResult'].__setitem__('stopReason', 'UNSAFE_REQUEST'))
+129:     reject('missing direct gate', lambda d: d['cases'][0]['gateCalls'].clear())
+130:     reject('extra model call', lambda d: d['cases'][1]['modelCalls'].append({}))
+131:     reject('extra approval', lambda d: d['cases'][1]['approvalRequests'].append({}))
+132:     reject('forged metadata retention', lambda d: d['cases'][1]['submittedDescriptor'].__setitem__('sandbox', 'WORKSPACE'))
+133:     reject('changed echo', lambda d: d['cases'][1]['nativeResult']['toolResult']['output'].__setitem__('text', 'forged'))
+134:     reject('lost kernel event', lambda d: d['cases'][1]['kernelLogEvents'].pop(1))
+135:     reject('wrong requested key', lambda d: d['cases'][1]['input']['requestedTool'].__setitem__('operationKey', 'forged'))
+136:     result['observerControls'] = mutations
+137:     result['run'] = str(folder)
+138:     result['processExit'] = process['exitCode']
+139:     result['sourceFiles'] = process['sourceFiles']
+140:     result['independence'] = 'I0_PENDING_I1'
+141:     result['validatorSHA256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+142:     (folder / 'lead-observation-validation.json').write_text(json.dumps(result, indent=2) + '\n')
+143:     print(json.dumps(result))
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/tsconfig.json
+1: {
+2:   "extends": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tsconfig.base.json",
+3:   "compilerOptions": {
+4:     "composite": false,
+5:     "declaration": false,
+6:     "noEmit": true,
+7:     "rootDir": "/tmp/cvg-pare100-exec-20261014-6az3hlay",
+8:     "typeRoots": [
+9:       "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/@types"
+10:     ]
+11:   },
+12:   "include": [
+13:     "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/observe.mts"
+14:   ]
+15: }

@@ -1,0 +1,1007 @@
+
+FILE packages/harness/src/complete-tool-results.ts
+   1: import { createHash } from 'node:crypto'
+   2: import type {
+   3:   CompleteToolObservationPayload,
+   4:   CompleteJsonValue,
+   5:   ContextItem,
+   6:   Observation,
+   7:   SideEffect,
+   8:   StepContext,
+   9:   ToolResult,
+  10:   ToolRegistry
+  11: } from '@cvg/harness-contracts'
+  12: import {
+  13:   canonicalizeCompleteJson,
+  14:   COMPLETE_CHECKPOINT_MAX_BYTES,
+  15:   CompleteJsonError,
+  16:   MAX_CHECKPOINT_OBSERVATIONS,
+  17:   ToolResultContextError
+  18: } from '@cvg/harness-contracts'
+  19: 
+  20: const LARGE_LIMITS = {
+  21:   maxBytes: COMPLETE_CHECKPOINT_MAX_BYTES,
+  22:   maxDepth: 64,
+  23:   maxNodes: 1_000_000
+  24: }
+  25: 
+  26: /** Before legacy serialization/validators can coerce or invoke output data. */
+  27: export function prepareCompleteToolResult(raw: unknown): ToolResult {
+  28:   let safe: Record<string, unknown>
+  29:   try {
+  30:     const text = canonicalizeCompleteJson(raw, LARGE_LIMITS)
+  31:     safe = JSON.parse(text) as Record<string, unknown>
+  32:     if (
+  33:       !safe ||
+  34:       Array.isArray(safe) ||
+  35:       !['SUCCEEDED', 'FAILED', 'REJECTED'].includes(safe.status as string)
+  36:     )
+  37:       throw new Error('shape')
+  38:     if (
+  39:       safe.error !== undefined &&
+  40:       (typeof safe.error !== 'string' || safe.error.length > 512)
+  41:     )
+  42:       throw new Error('error')
+  43:   } catch {
+  44:     // The body may already have acted; do not turn capture failure into safe replay.
+  45:     throw new Error('unknown_effect: complete_result_not_representable')
+  46:   }
+  47:   return {
+  48:     status: safe.status as ToolResult['status'],
+  49:     ...(Object.hasOwn(safe, 'output') ? { output: safe.output } : {}),
+  50:     ...(typeof safe.error === 'string' ? { error: safe.error } : {})
+  51:   }
+  52: }
+  53: 
+  54: export function prepareCompleteToolRegistry(
+  55:   registry: ToolRegistry
+  56: ): ToolRegistry {
+  57:   const prepare = (tool: ReturnType<ToolRegistry['resolve']>) =>
+  58:     tool
+  59:       ? {
+  60:           ...tool,
+  61:           execute: async (...args: Parameters<typeof tool.execute>) =>
+  62:             prepareCompleteToolResult(await tool.execute(...args))
+  63:         }
+  64:       : undefined
+  65:   return {
+  66:     list: () => registry.list().map((tool) => prepare(tool)!),
+  67:     resolve: (id, version) => prepare(registry.resolve(id, version))
+  68:   }
+  69: }
+  70: 
+  71: export function completeSnapshot(value: unknown): string {
+  72:   return canonicalizeCompleteJson(value, LARGE_LIMITS)
+  73: }
+  74: 
+  75: export function completeToolPayload(
+  76:   output: unknown,
+  77:   sideEffect: SideEffect
+  78: ): CompleteToolObservationPayload {
+  79:   try {
+  80:     const serialized = canonicalizeCompleteJson(output)
+  81:     return {
+  82:       schemaVersion: 1,
+  83:       status: 'SUCCEEDED',
+  84:       sideEffect,
+  85:       completion: 'COMPLETE',
+  86:       resultAvailability: 'AVAILABLE',
+  87:       output: JSON.parse(serialized) as CompleteJsonValue,
+  88:       outputBytes: Buffer.byteLength(serialized, 'utf8'),
+  89:       outputSha256: createHash('sha256').update(serialized).digest('hex')
+  90:     }
+  91:   } catch (error) {
+  92:     if (!(error instanceof CompleteJsonError)) throw error
+  93:     return {
+  94:       schemaVersion: 1,
+  95:       status: 'SUCCEEDED',
+  96:       sideEffect,
+  97:       completion: 'UNAVAILABLE',
+  98:       resultAvailability: 'UNAVAILABLE',
+  99:       reason: error.code
+ 100:     }
+ 101:   }
+ 102: }
+ 103: 
+ 104: export function assertCompleteToolObservation(observation: Observation): void {
+ 105:   if (observation.type !== 'TOOL_RESULT') return
+ 106:   const raw = observation.payload
+ 107:   // Validate plain JSON before reading individual fields; never invoke accessors.
+ 108:   completeSnapshot(raw)
+ 109:   const payload = raw as CompleteToolObservationPayload
+ 110:   if (
+ 111:     !payload ||
+ 112:     payload.schemaVersion !== 1 ||
+ 113:     observation.source !== 'TOOL' ||
+ 114:     observation.trust !== 'UNTRUSTED' ||
+ 115:     !['NONE', 'READ', 'WRITE', 'EXTERNAL'].includes(payload.sideEffect)
+ 116:   ) {
+ 117:     throw new ToolResultContextError(
+ 118:       'STATE_CONFLICT',
+ 119:       'Invalid complete tool envelope.',
+ 120:       'STATE_CONFLICT'
+ 121:     )
+ 122:   }
+ 123:   if (payload.status === 'SUCCEEDED' && payload.completion === 'COMPLETE') {
+ 124:     const value = canonicalizeCompleteJson(payload.output)
+ 125:     if (
+ 126:       payload.resultAvailability !== 'AVAILABLE' ||
+ 127:       payload.outputBytes !== Buffer.byteLength(value, 'utf8') ||
+ 128:       payload.outputSha256 !==
+ 129:         createHash('sha256').update(value).digest('hex') ||
+ 130:       Object.keys(payload).sort().join(',') !==
+ 131:         'completion,output,outputBytes,outputSha256,resultAvailability,schemaVersion,sideEffect,status'
+ 132:     ) {
+ 133:       throw new ToolResultContextError(
+ 134:         'STATE_CONFLICT',
+ 135:         'Tool result integrity mismatch.',
+ 136:         'STATE_CONFLICT'
+ 137:       )
+ 138:     }
+ 139:   } else if (
+ 140:     payload.status === 'SUCCEEDED' &&
+ 141:     payload.completion === 'UNAVAILABLE'
+ 142:   ) {
+ 143:     if (
+ 144:       payload.resultAvailability !== 'UNAVAILABLE' ||
+ 145:       !['INVALID_JSON', 'RESULT_TOO_LARGE', 'RESULT_COMPLEXITY'].includes(
+ 146:         payload.reason
+ 147:       ) ||
+ 148:       Object.keys(payload).sort().join(',') !==
+ 149:         'completion,reason,resultAvailability,schemaVersion,sideEffect,status'
+ 150:     ) {
+ 151:       throw new ToolResultContextError(
+ 152:         'STATE_CONFLICT',
+ 153:         'Invalid unavailable result.',
+ 154:         'STATE_CONFLICT'
+ 155:       )
+ 156:     }
+ 157:   } else if (
+ 158:     (payload.status !== 'FAILED' && payload.status !== 'REJECTED') ||
+ 159:     payload.completion !== 'NOT_APPLICABLE' ||
+ 160:     payload.resultAvailability !== 'UNAVAILABLE' ||
+ 161:     typeof payload.error !== 'string' ||
+ 162:     payload.error.length > 512 ||
+ 163:     Object.keys(payload).sort().join(',') !==
+ 164:       'completion,error,resultAvailability,schemaVersion,sideEffect,status'
+ 165:   ) {
+ 166:     throw new ToolResultContextError(
+ 167:       'STATE_CONFLICT',
+ 168:       'Invalid failed tool result.',
+ 169:       'STATE_CONFLICT'
+ 170:     )
+ 171:   }
+ 172: 
+ 173:   const identifiers = [
+ 174:     observation.observationId,
+ 175:     observation.executionId,
+ 176:     observation.stepId,
+ 177:     observation.provenance.sourceId,
+ 178:     observation.provenance.sourceVersion,
+ 179:     observation.provenance.operationKey,
+ 180:     observation.provenance.effectRef
+ 181:   ]
+ 182:   if (
+ 183:     identifiers.some(
+ 184:       (value) =>
+ 185:         value !== undefined &&
+ 186:         (typeof value !== 'string' ||
+ 187:           value.length > 512 ||
+ 188:           value.includes('\0'))
+ 189:     )
+ 190:   ) {
+ 191:     throw new ToolResultContextError(
+ 192:       'STATE_CONFLICT',
+ 193:       'Invalid tool result metadata.',
+ 194:       'STATE_CONFLICT'
+ 195:     )
+ 196:   }
+ 197:   const encoded = completeSnapshot(observation)
+ 198:   const outputBytes =
+ 199:     payload.completion === 'COMPLETE' ? payload.outputBytes : 0
+ 200:   if (Buffer.byteLength(encoded, 'utf8') - outputBytes > 4_096) {
+ 201:     throw new ToolResultContextError(
+ 202:       'CONTEXT_OVERFLOW',
+ 203:       'Tool result metadata exceeds its envelope limit.'
+ 204:     )
+ 205:   }
+ 206: }
+ 207: 
+ 208: export function completeToolItem(observation: Observation): ContextItem {
+ 209:   assertCompleteToolObservation(observation)
+ 210:   return {
+ 211:     contextId: `tool.${observation.observationId}`,
+ 212:     priority: 'FRESH_TOOL_RESULTS',
+ 213:     trust: 'UNTRUSTED',
+ 214:     source: observation.provenance.sourceId,
+ 215:     content: completeSnapshot(observation),
+ 216:     // Informational only. Qualified whole-request admission owns the real bound.
+ 217:     tokenEstimate: 0,
+ 218:     evidenceRefs: [observation.observationId]
+ 219:   }
+ 220: }
+ 221: 
+ 222: export function retainCompleteObservations(
+ 223:   observations: readonly Observation[]
+ 224: ): Observation[] {
+ 225:   const retained = [...observations]
+ 226:   while (retained.length > MAX_CHECKPOINT_OBSERVATIONS) {
+ 227:     const optional = retained.findIndex((value) => value.type !== 'TOOL_RESULT')
+ 228:     if (optional < 0) {
+ 229:       throw new ToolResultContextError(
+ 230:         'CONTEXT_OVERFLOW',
+ 231:         'No checkpoint slot for another complete tool result.'
+ 232:       )
+ 233:     }
+ 234:     retained.splice(optional, 1)
+ 235:   }
+ 236:   return retained
+ 237: }
+ 238: 
+ 239: /** Validate a custom selector against native items and immutable runtime facts. */
+ 240: export function validateCompleteStepContext(
+ 241:   actual: StepContext,
+ 242:   native: StepContext
+ 243: ): void {
+ 244:   completeSnapshot(actual)
+ 245:   for (const key of [
+ 246:     'executionId',
+ 247:     'tenantId',
+ 248:     'conversationId',
+ 249:     'stepNumber',
+ 250:     'runtimeProfile',
+ 251:     'agentId',
+ 252:     'agentVersion',
+ 253:     'objective',
+ 254:     'instructions',
+ 255:     'goal',
+ 256:     'userMessage',
+ 257:     'stateSummary',
+ 258:     'observations',
+ 259:     'capabilities',
+ 260:     'knowledgeAvailable',
+ 261:     'completionStrategy',
+ 262:     'allowedDecisionTypes',
+ 263:     'budget',
+ 264:     'budgetUsage',
+ 265:     'pendingApprovalId',
+ 266:     'pendingQuestion',
+ 267:     'lastEvaluation',
+ 268:     'correlationId',
+ 269:     'traceId',
+ 270:     'decisionRepair',
+ 271:     'toolResultContext'
+ 272:   ] as const) {
+ 273:     if (
+ 274:       completeSnapshot(actual[key] ?? null) !==
+ 275:       completeSnapshot(native[key] ?? null)
+ 276:     ) {
+ 277:       throw new ToolResultContextError(
+ 278:         'STATE_CONFLICT',
+ 279:         `Context changed native field ${key}.`,
+ 280:         'STATE_CONFLICT'
+ 281:       )
+ 282:     }
+ 283:   }
+ 284:   if (!Number.isSafeInteger(actual.tokenBudget) || actual.tokenBudget < 1) {
+ 285:     throw new ToolResultContextError(
+ 286:       'ADMISSION_UNAVAILABLE',
+ 287:       'Invalid context token bound.'
+ 288:     )
+ 289:   }
+ 290:   const nativeItems = new Map(
+ 291:     native.contextItems.map((value) => [value.contextId, value])
+ 292:   )
+ 293:   const actualIds = new Set<string>()
+ 294:   for (const item of actual.contextItems) {
+ 295:     const expected = nativeItems.get(item.contextId)
+ 296:     if (
+ 297:       actualIds.has(item.contextId) ||
+ 298:       !expected ||
+ 299:       completeSnapshot(item) !== completeSnapshot(expected)
+ 300:     ) {
+ 301:       throw new ToolResultContextError(
+ 302:         'STATE_CONFLICT',
+ 303:         'Context item changed or duplicated native data.',
+ 304:         'STATE_CONFLICT'
+ 305:       )
+ 306:     }
+ 307:     actualIds.add(item.contextId)
+ 308:   }
+ 309:   for (const item of native.contextItems) {
+ 310:     if (
+ 311:       [
+ 312:         'SYSTEM',
+ 313:         'AGENT_PROFILE',
+ 314:         'CURRENT_GOAL',
+ 315:         'CURRENT_STATE',
+ 316:         'FRESH_TOOL_RESULTS'
+ 317:       ].includes(item.priority) &&
+ 318:       !actualIds.has(item.contextId)
+ 319:     ) {
+ 320:       throw new ToolResultContextError(
+ 321:         'CONTEXT_OVERFLOW',
+ 322:         'A mandatory context item was omitted.'
+ 323:       )
+ 324:     }
+ 325:   }
+ 326: }
+
+FILE packages/harness/src/complete-decision-admission.ts
+   1: import { createHash, randomUUID } from 'node:crypto'
+   2: import type {
+   3:   DecisionAdmissionPort,
+   4:   DecisionAdmissionRecord,
+   5:   DecisionAdmissionReserveInput,
+   6:   DecisionAdmissionSettlement,
+   7:   ModelResult,
+   8:   ModelUsage
+   9: } from '@cvg/harness-contracts'
+  10: import {
+  11:   canonicalizeCompleteJson,
+  12:   COMPLETE_DECISION_OUTPUT_TOKENS,
+  13:   COMPLETE_DECISION_REQUEST_MAX_BYTES,
+  14:   ToolResultContextError
+  15: } from '@cvg/harness-contracts'
+  16: import type { LoopRun } from './iterative-runtime.ts'
+  17: 
+  18: interface AdmissionOptions {
+  19:   readonly run: LoopRun
+  20:   readonly stepNumber: number
+  21:   readonly tokenBudget: number
+  22:   readonly signal: AbortSignal
+  23:   readonly remainingMs: () => number
+  24:   readonly persist: () => Promise<void>
+  25:   readonly audit: (action: string, result: string) => Promise<void>
+  26: }
+  27: 
+  28: function digest(value: unknown): string {
+  29:   return createHash('sha256')
+  30:     .update(
+  31:       canonicalizeCompleteJson(value, {
+  32:         maxBytes: COMPLETE_DECISION_REQUEST_MAX_BYTES,
+  33:         maxDepth: 64,
+  34:         maxNodes: 20_000
+  35:       })
+  36:     )
+  37:     .digest('hex')
+  38: }
+  39: 
+  40: function finiteUsage(result: ModelResult): ModelUsage | null {
+  41:   if (
+  42:     !result ||
+  43:     typeof result.text !== 'string' ||
+  44:     typeof result.provider !== 'string' ||
+  45:     typeof result.model !== 'string' ||
+  46:     !Number.isSafeInteger(result.inputTokens) ||
+  47:     result.inputTokens < 0 ||
+  48:     !Number.isSafeInteger(result.outputTokens) ||
+  49:     result.outputTokens < 0 ||
+  50:     !Number.isFinite(result.costUsd) ||
+  51:     result.costUsd < 0
+  52:   )
+  53:     return null
+  54:   return {
+  55:     modelCalls: 1,
+  56:     inputTokens: result.inputTokens,
+  57:     outputTokens: result.outputTokens,
+  58:     costUsd: result.costUsd
+  59:   }
+  60: }
+  61: 
+  62: /** Native, checkpoint-backed decision accounting. The model cannot issue receipts. */
+  63: export class CompleteDecisionAdmission implements DecisionAdmissionPort {
+  64:   private queue: Promise<unknown> = Promise.resolve()
+  65:   private closed = false
+  66: 
+  67:   public constructor(private readonly options: AdmissionOptions) {}
+  68: 
+  69:   private serial<T>(operation: () => Promise<T>): Promise<T> {
+  70:     const next = this.queue.then(operation)
+  71:     this.queue = next.catch(() => undefined)
+  72:     return next
+  73:   }
+  74: 
+  75:   public reserve(
+  76:     input: DecisionAdmissionReserveInput
+  77:   ): Promise<DecisionAdmissionRecord> {
+  78:     return this.serial(() => this.reserveNow(input))
+  79:   }
+  80: 
+  81:   public settle(
+  82:     input: DecisionAdmissionSettlement
+  83:   ): Promise<DecisionAdmissionRecord> {
+  84:     return this.serial(() => this.settleNow(input))
+  85:   }
+  86: 
+  87:   /** Close synchronously, then persist uncertainty before accepting a late result. */
+  88:   public close(reason = 'decision_closed'): Promise<void> {
+  89:     this.closed = true
+  90:     return this.serial(async () => {
+  91:       const state = this.state()
+  92:       if (state.pendingDecisionAdmission) {
+  93:         const record = state.decisionAdmissions.find(
+  94:           (value) => value.admissionId === state.pendingDecisionAdmission
+  95:         )
+  96:         if (!record || record.status !== 'RESERVED') throw this.conflict()
+  97:         await this.unknown(record, reason)
+  98:       }
+  99:     })
+ 100:   }
+ 101: 
+ 102:   private state() {
+ 103:     const state = this.options.run.state.toolResultContext
+ 104:     if (!state || state.version !== 1) throw this.conflict()
+ 105:     return state
+ 106:   }
+ 107: 
+ 108:   private conflict(): ToolResultContextError {
+ 109:     return new ToolResultContextError(
+ 110:       'STATE_CONFLICT',
+ 111:       'Decision admission identity or state conflicts.',
+ 112:       'STATE_CONFLICT'
+ 113:     )
+ 114:   }
+ 115: 
+ 116:   private async reserveNow(
+ 117:     input: DecisionAdmissionReserveInput
+ 118:   ): Promise<DecisionAdmissionRecord> {
+ 119:     const { run, stepNumber, signal } = this.options
+ 120:     if (this.closed || signal.aborted) {
+ 121:       throw new ToolResultContextError(
+ 122:         'DECISION_USAGE_UNKNOWN',
+ 123:         'Decision admission is closed.',
+ 124:         'CANCELLED'
+ 125:       )
+ 126:     }
+ 127:     if (this.options.remainingMs() <= 0) {
+ 128:       throw new ToolResultContextError(
+ 129:         'DECISION_USAGE_UNKNOWN',
+ 130:         'Decision deadline elapsed.',
+ 131:         'MAX_DURATION'
+ 132:       )
+ 133:     }
+ 134:     const state = this.state()
+ 135:     if (
+ 136:       state.pendingDecisionAdmission ||
+ 137:       state.decisionAdmissions.some((value) => value.status === 'UNKNOWN')
+ 138:     )
+ 139:       throw this.conflict()
+ 140:     const { request, measurement } = input
+ 141:     const purpose = request.purpose
+ 142:     if (
+ 143:       (purpose !== 'ORCHESTRATION' && purpose !== 'REPAIR') ||
+ 144:       request.correlationId !== run.input.correlationId ||
+ 145:       request.maxOutputTokens !== COMPLETE_DECISION_OUTPUT_TOKENS ||
+ 146:       !Number.isSafeInteger(input.attempt) ||
+ 147:       input.attempt < 0 ||
+ 148:       !Number.isSafeInteger(measurement.inputUpperBoundTokens) ||
+ 149:       measurement.inputUpperBoundTokens < 0 ||
+ 150:       !Number.isSafeInteger(measurement.contextWindowTokens) ||
+ 151:       measurement.contextWindowTokens < 1 ||
+ 152:       !Number.isFinite(measurement.costUpperBoundUsd) ||
+ 153:       measurement.costUpperBoundUsd < 0 ||
+ 154:       [
+ 155:         measurement.counterId,
+ 156:         measurement.counterVersion,
+ 157:         measurement.provider,
+ 158:         measurement.model,
+ 159:         measurement.formattingVersion
+ 160:       ].some(
+ 161:         (value) =>
+ 162:           typeof value !== 'string' ||
+ 163:           !value ||
+ 164:           value.length > 512 ||
+ 165:           value.includes('\0')
+ 166:       )
+ 167:     )
+ 168:       throw new ToolResultContextError(
+ 169:         'ADMISSION_UNAVAILABLE',
+ 170:         'Invalid qualified decision measurement.'
+ 171:       )
+ 172:     const requestSha256 = digest(request)
+ 173:     const inputTokens = measurement.inputUpperBoundTokens
+ 174:     if (
+ 175:       inputTokens > this.options.tokenBudget ||
+ 176:       inputTokens + COMPLETE_DECISION_OUTPUT_TOKENS >
+ 177:         measurement.contextWindowTokens
+ 178:     ) {
+ 179:       throw new ToolResultContextError(
+ 180:         'CONTEXT_OVERFLOW',
+ 181:         'The complete decision input does not fit its qualified context.'
+ 182:       )
+ 183:     }
+ 184:     if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
+ 185:       throw new ToolResultContextError(
+ 186:         'CONTEXT_OVERFLOW',
+ 187:         'No decision model-call slot remains.',
+ 188:         'MAX_MODEL_CALLS'
+ 189:       )
+ 190:     }
+ 191:     if (
+ 192:       run.usage.inputTokens +
+ 193:         run.usage.outputTokens +
+ 194:         inputTokens +
+ 195:         COMPLETE_DECISION_OUTPUT_TOKENS >
+ 196:       run.input.budget.maxTokens
+ 197:     ) {
+ 198:       throw new ToolResultContextError(
+ 199:         'CONTEXT_OVERFLOW',
+ 200:         'Insufficient decision token reserve.',
+ 201:         'MAX_TOKENS'
+ 202:       )
+ 203:     }
+ 204:     if (
+ 205:       run.usage.costUsd + measurement.costUpperBoundUsd >
+ 206:       run.input.budget.maxCostUsd
+ 207:     ) {
+ 208:       throw new ToolResultContextError(
+ 209:         'CONTEXT_OVERFLOW',
+ 210:         'Insufficient decision cost reserve.',
+ 211:         'MAX_COST'
+ 212:       )
+ 213:     }
+ 214:     if (
+ 215:       purpose === 'REPAIR' &&
+ 216:       run.usage.decisionRepairs + 1 > (run.input.budget.maxDecisionRepairs ?? 1)
+ 217:     ) {
+ 218:       throw new ToolResultContextError(
+ 219:         'ADMISSION_UNAVAILABLE',
+ 220:         'Decision repair limit exhausted.',
+ 221:         'MODEL_FAILURE'
+ 222:       )
+ 223:     }
+ 224:     const record: DecisionAdmissionRecord = {
+ 225:       admissionId: `admission_${randomUUID()}`,
+ 226:       tenantId: run.input.tenantId,
+ 227:       executionId: run.executionId,
+ 228:       stepNumber,
+ 229:       attempt: state.decisionAdmissions.filter(
+ 230:         (value) => value.stepNumber === stepNumber
+ 231:       ).length,
+ 232:       purpose,
+ 233:       requestSha256,
+ 234:       measurement: structuredClone(measurement),
+ 235:       reserved: {
+ 236:         modelCalls: 1,
+ 237:         inputTokens,
+ 238:         outputTokens: COMPLETE_DECISION_OUTPUT_TOKENS,
+ 239:         costUsd: measurement.costUpperBoundUsd
+ 240:       },
+ 241:       status: 'RESERVED'
+ 242:     }
+ 243:     run.usage.modelCalls += 1
+ 244:     run.usage.inputTokens += record.reserved.inputTokens
+ 245:     run.usage.outputTokens += record.reserved.outputTokens
+ 246:     run.usage.costUsd += record.reserved.costUsd
+ 247:     if (purpose === 'REPAIR') run.usage.decisionRepairs += 1
+ 248:     run.state.toolResultContext = {
+ 249:       ...state,
+ 250:       pendingDecisionAdmission: record.admissionId,
+ 251:       decisionAdmissions: [...state.decisionAdmissions, record]
+ 252:     }
+ 253:     await this.options.persist()
+ 254:     await this.options.audit('decision.admission.reserved', requestSha256)
+ 255:     // The receipt is returned only after the checkpoint commit and audit.
+ 256:     return structuredClone(record)
+ 257:   }
+ 258: 
+ 259:   private async replace(record: DecisionAdmissionRecord): Promise<void> {
+ 260:     const state = this.state()
+ 261:     this.options.run.state.toolResultContext = {
+ 262:       ...state,
+ 263:       pendingDecisionAdmission:
+ 264:         record.status === 'RESERVED' ? record.admissionId : null,
+ 265:       decisionAdmissions: state.decisionAdmissions.map((value) =>
+ 266:         value.admissionId === record.admissionId ? record : value
+ 267:       )
+ 268:     }
+ 269:     try {
+ 270:       await this.options.persist()
+ 271:     } catch (error) {
+ 272:       this.options.run.state.toolResultContext = state
+ 273:       throw error
+ 274:     }
+ 275:   }
+ 276: 
+ 277:   private async unknown(
+ 278:     record: DecisionAdmissionRecord,
+ 279:     reason: string,
+ 280:     actual?: ModelUsage
+ 281:   ): Promise<DecisionAdmissionRecord> {
+ 282:     const next: DecisionAdmissionRecord = {
+ 283:       ...record,
+ 284:       status: 'UNKNOWN',
+ 285:       unknownReason: /^[a-zA-Z0-9_:-]{1,128}$/.test(reason)
+ 286:         ? reason
+ 287:         : 'decision_model_failed',
+ 288:       ...(actual ? { actual } : {})
+ 289:     }
+ 290:     if (actual) {
+ 291:       const usage = this.options.run.usage
+ 292:       usage.inputTokens +=
+ 293:         Math.max(record.reserved.inputTokens, actual.inputTokens) -
+ 294:         record.reserved.inputTokens
+ 295:       usage.outputTokens +=
+ 296:         Math.max(record.reserved.outputTokens, actual.outputTokens) -
+ 297:         record.reserved.outputTokens
+ 298:       usage.costUsd +=
+ 299:         Math.max(record.reserved.costUsd, actual.costUsd) -
+ 300:         record.reserved.costUsd
+ 301:     }
+ 302:     await this.replace(next)
+ 303:     return structuredClone(next)
+ 304:   }
+ 305: 
+ 306:   private async settleNow(
+ 307:     input: DecisionAdmissionSettlement
+ 308:   ): Promise<DecisionAdmissionRecord> {
+ 309:     const { run } = this.options
+ 310:     const record = this.state().decisionAdmissions.find(
+ 311:       (value) => value.admissionId === input.admissionId
+ 312:     )
+ 313:     if (
+ 314:       !record ||
+ 315:       record.tenantId !== run.input.tenantId ||
+ 316:       record.executionId !== run.executionId ||
+ 317:       record.requestSha256 !== input.requestSha256
+ 318:     )
+ 319:       throw this.conflict()
+ 320:     if (record.status === 'SETTLED') {
+ 321:       if (
+ 322:         input.kind !== 'RESULT' ||
+ 323:         digest(input.result) !== record.resultSha256
+ 324:       )
+ 325:         throw this.conflict()
+ 326:       return structuredClone(record)
+ 327:     }
+ 328:     if (
+ 329:       record.status !== 'RESERVED' ||
+ 330:       this.state().pendingDecisionAdmission !== record.admissionId
+ 331:     )
+ 332:       throw this.conflict()
+ 333:     if (input.kind === 'UNKNOWN') return this.unknown(record, input.reason)
+ 334:     if (
+ 335:       this.closed ||
+ 336:       this.options.signal.aborted ||
+ 337:       this.options.remainingMs() <= 0
+ 338:     ) {
+ 339:       await this.unknown(record, 'decision_closed')
+ 340:       throw new ToolResultContextError(
+ 341:         'DECISION_USAGE_UNKNOWN',
+ 342:         'A late decision result cannot be accepted.'
+ 343:       )
+ 344:     }
+ 345:     const actual = finiteUsage(input.result)
+ 346:     if (
+ 347:       !actual ||
+ 348:       input.result.provider !== record.measurement.provider ||
+ 349:       input.result.model !== record.measurement.model ||
+ 350:       actual.inputTokens > record.reserved.inputTokens ||
+ 351:       actual.outputTokens > record.reserved.outputTokens ||
+ 352:       actual.costUsd > record.reserved.costUsd
+ 353:     ) {
+ 354:       await this.unknown(record, 'ADMISSION_BREACH', actual ?? undefined)
+ 355:       await this.options.audit(
+ 356:         'decision.admission.breach',
+ 357:         record.requestSha256
+ 358:       )
+ 359:       throw new ToolResultContextError(
+ 360:         'ADMISSION_BREACH',
+ 361:         'The model violated its qualified decision bounds.'
+ 362:       )
+ 363:     }
+ 364:     const resultSha256 = digest(input.result)
+ 365:     const usage = run.usage
+ 366:     const previous = {
+ 367:       inputTokens: usage.inputTokens,
+ 368:       outputTokens: usage.outputTokens,
+ 369:       costUsd: usage.costUsd
+ 370:     }
+ 371:     usage.inputTokens += actual.inputTokens - record.reserved.inputTokens
+ 372:     usage.outputTokens += actual.outputTokens - record.reserved.outputTokens
+ 373:     usage.costUsd += actual.costUsd - record.reserved.costUsd
+ 374:     const settled: DecisionAdmissionRecord = {
+ 375:       ...record,
+ 376:       status: 'SETTLED',
+ 377:       actual,
+ 378:       resultSha256
+ 379:     }
+ 380:     try {
+ 381:       await this.replace(settled)
+ 382:     } catch (error) {
+ 383:       // No acknowledged settlement: retain the pre-call conservative charge.
+ 384:       Object.assign(usage, previous)
+ 385:       throw error
+ 386:     }
+ 387:     await this.options.audit('decision.admission.settled', record.requestSha256)
+ 388:     return structuredClone(settled)
+ 389:   }
+ 390: }
+
+FILE packages/harness/src/createOperationalHarness.ts
+   1: import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
+   2: import type {
+   3:   AgenticKnowledgeProvider,
+   4:   Claim,
+   5:   CompletionEvaluator,
+   6:   CompleteToolContextConfiguration,
+   7:   ContextEngine,
+   8:   ExecutionStepStore,
+   9:   IterativeOrchestrator,
+  10:   RuntimeInput,
+  11:   RuntimeProfile,
+  12:   RuntimeResult,
+  13:   SandboxGate,
+  14:   SufficiencyEvaluator,
+  15:   CapabilityRegistry,
+  16:   ToolRegistry
+  17: } from '@cvg/harness-contracts'
+  18: import { createCapabilityToolRegistry } from './capability-boundary.ts'
+  19: import {
+  20:   createJournaledToolRegistry,
+  21:   type EffectJournal,
+  22:   type JournaledToolRegistryOptions
+  23: } from './effect-journal.ts'
+  24: import {
+  25:   SinglePassGovernedRuntime,
+  26:   type HarnessRuntimeOptions
+  27: } from './runtime.ts'
+  28: import { IterativeGovernedRuntime } from './iterative-runtime.ts'
+  29: import {
+  30:   prepareCompleteToolRegistry,
+  31:   prepareCompleteToolResult
+  32: } from './complete-tool-results.ts'
+  33: 
+  34: export interface OperationalHarnessOptions extends Omit<
+  35:   HarnessRuntimeOptions,
+  36:   'orchestrator' | 'tools' | 'capabilityFingerprint'
+  37: > {
+  38:   readonly toolResultContext?: CompleteToolContextConfiguration
+  39:   readonly orchestrator?: HarnessRuntimeOptions['orchestrator']
+  40:   /**
+  41:    * Explicit capability composition. Its adapter is the only runtime-facing
+  42:    * registry for this path; callers cannot provide both registries.
+  43:    */
+  44:   readonly capabilities?: CapabilityRegistry
+  45:   /** Compatibility port retained for existing Phase 2/3 consumers. */
+  46:   readonly tools?: ToolRegistry
+  47:   /** Required for capability composition and optional for compatibility tools. */
+  48:   readonly effectJournal?: EffectJournal
+  49:   readonly effectJournalOptions?: JournaledToolRegistryOptions
+  50:   /**
+  51:    * Required to run the iterative profile. The runtime registry resolves the
+  52:    * requested profile here; the worker never selects a runtime class.
+  53:    */
+  54:   readonly iterativeOrchestrator?: IterativeOrchestrator
+  55:   readonly stepStore?: ExecutionStepStore
+  56:   readonly contextEngine?: ContextEngine
+  57:   readonly knowledge?: AgenticKnowledgeProvider
+  58:   readonly sufficiencyEvaluator?: SufficiencyEvaluator
+  59:   readonly completionEvaluator?: CompletionEvaluator
+  60:   readonly claimExtractor?: (response: string) => readonly Claim[]
+  61:   readonly defaultRuntimeProfile?: RuntimeProfile
+  62:   readonly clock?: () => Date
+  63:   /** Optional containment gate; absent means fail-closed for contained tools. */
+  64:   readonly sandbox?: SandboxGate
+  65: }
+  66: 
+  67: export interface OperationalHarness {
+  68:   readonly run: (input: RuntimeInput) => Promise<RuntimeResult>
+  69:   readonly execute: (input: RuntimeInput) => Promise<RuntimeResult>
+  70:   readonly resolveProfile: (input: RuntimeInput) => RuntimeProfile
+  71:   readonly capabilityFingerprint?: string
+  72: }
+  73: 
+  74: /**
+  75:  * Canonical public composition root for the neutral harness packages. Product
+  76:  * adapters provide the ports; this function only wires them together and
+  77:  * resolves the runtime profile through a registry-like selection.
+  78:  */
+  79: export function createOperationalHarness(
+  80:   options: OperationalHarnessOptions
+  81: ): OperationalHarness {
+  82:   if (
+  83:     options.toolResultContext &&
+  84:     (!options.iterativeOrchestrator || !options.stepStore)
+  85:   ) {
+  86:     throw new Error(
+  87:       'complete-tool-v1 requires iterative orchestration and a checkpoint store.'
+  88:     )
+  89:   }
+  90:   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
+  91:   if (options.capabilities && !options.effectJournal) {
+  92:     throw new Error(
+  93:       'Capability composition requires an explicit effect journal'
+  94:     )
+  95:   }
+  96:   const tools = resolveTools(options, capabilityFingerprint)
+  97:   const singlePass = new SinglePassGovernedRuntime({
+  98:     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+  99:     modelGateway: options.modelGateway,
+ 100:     policy: options.policy,
+ 101:     approvals: options.approvals,
+ 102:     tools,
+ 103:     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+ 104:     audit: options.audit,
+ 105:     telemetry: options.telemetry,
+ 106:     ...(options.pause ? { pause: options.pause } : {}),
+ 107:     ...(options.effects ? { effects: options.effects } : {}),
+ 108:     ...(options.log ? { log: options.log } : {}),
+ 109:     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+ 110:   })
+ 111: 
+ 112:   const iterative =
+ 113:     options.iterativeOrchestrator && options.stepStore
+ 114:       ? new IterativeGovernedRuntime({
+ 115:           orchestrator: options.iterativeOrchestrator,
+ 116:           modelGateway: options.modelGateway,
+ 117:           policy: options.policy,
+ 118:           approvals: options.approvals,
+ 119:           tools,
+ 120:           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+ 121:           audit: options.audit,
+ 122:           telemetry: options.telemetry,
+ 123:           ...(options.pause ? { pause: options.pause } : {}),
+ 124:           ...(options.effects ? { effects: options.effects } : {}),
+ 125:           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+ 126:           ...(options.log ? { log: options.log } : {}),
+ 127:           stepStore: options.stepStore,
+ 128:           ...(options.toolResultContext
+ 129:             ? { toolResultContext: options.toolResultContext }
+ 130:             : {}),
+ 131:           ...(options.contextEngine
+ 132:             ? { contextEngine: options.contextEngine }
+ 133:             : {}),
+ 134:           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+ 135:           ...(options.sufficiencyEvaluator
+ 136:             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+ 137:             : {}),
+ 138:           ...(options.completionEvaluator
+ 139:             ? { completionEvaluator: options.completionEvaluator }
+ 140:             : {}),
+ 141:           ...(options.claimExtractor
+ 142:             ? { claimExtractor: options.claimExtractor }
+ 143:             : {}),
+ 144:           ...(options.clock ? { clock: options.clock } : {})
+ 145:         })
+ 146:       : undefined
+ 147: 
+ 148:   const resolveProfile = (input: RuntimeInput): RuntimeProfile => {
+ 149:     const profile =
+ 150:       input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+ 151:     if (options.toolResultContext && profile !== 'iterative') {
+ 152:       throw new Error(
+ 153:         'complete-tool-v1 is only supported by the iterative profile.'
+ 154:       )
+ 155:     }
+ 156:     return profile
+ 157:   }
+ 158: 
+ 159:   const execute = async (input: RuntimeInput): Promise<RuntimeResult> => {
+ 160:     const governedInput = capabilityFingerprint
+ 161:       ? { ...input, capabilityFingerprint }
+ 162:       : input
+ 163:     if (
+ 164:       capabilityFingerprint &&
+ 165:       input.executionId &&
+ 166:       input.capabilityFingerprint === undefined
+ 167:     ) {
+ 168:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+ 169:       return {
+ 170:         response:
+ 171:           'Capability composition fingerprint is required for durable execution.',
+ 172:         stopReason: 'STATE_CONFLICT',
+ 173:         steps: 0,
+ 174:         modelCalls: 0,
+ 175:         toolCalls: 0,
+ 176:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+ 177:       }
+ 178:     }
+ 179:     if (
+ 180:       capabilityFingerprint &&
+ 181:       input.capabilityFingerprint !== undefined &&
+ 182:       input.capabilityFingerprint !== capabilityFingerprint
+ 183:     ) {
+ 184:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+ 185:       return {
+ 186:         response:
+ 187:           'Capability composition fingerprint does not match the runtime.',
+ 188:         stopReason: 'STATE_CONFLICT',
+ 189:         steps: 0,
+ 190:         modelCalls: 0,
+ 191:         toolCalls: 0,
+ 192:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+ 193:       }
+ 194:     }
+ 195:     const profile = resolveProfile(governedInput)
+ 196:     if (profile === 'iterative') {
+ 197:       if (!iterative) {
+ 198:         await safeAudit(
+ 199:           options,
+ 200:           governedInput,
+ 201:           'runtime.stopped',
+ 202:           'STATE_CONFLICT'
+ 203:         )
+ 204:         return {
+ 205:           response:
+ 206:             'The iterative runtime profile is not configured in this composition.',
+ 207:           stopReason: 'STATE_CONFLICT',
+ 208:           steps: 0,
+ 209:           modelCalls: 0,
+ 210:           toolCalls: 0,
+ 211:           usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+ 212:         }
+ 213:       }
+ 214:       return iterative.execute(governedInput)
+ 215:     }
+ 216:     return singlePass.execute(governedInput)
+ 217:   }
+ 218: 
+ 219:   return {
+ 220:     run: (input) => execute(input),
+ 221:     execute,
+ 222:     resolveProfile,
+ 223:     ...(options.capabilities
+ 224:       ? { capabilityFingerprint: options.capabilities.compositionFingerprint() }
+ 225:       : {})
+ 226:   }
+ 227: }
+ 228: 
+ 229: function resolveTools(
+ 230:   options: OperationalHarnessOptions,
+ 231:   capabilityFingerprint: string | undefined
+ 232: ): ToolRegistry {
+ 233:   if (options.capabilities && options.tools) {
+ 234:     throw new Error(
+ 235:       'Operational harness composition accepts capabilities or tools, not both'
+ 236:     )
+ 237:   }
+ 238:   const baseRegistry = options.capabilities
+ 239:     ? createCapabilityToolRegistry(
+ 240:         options.capabilities,
+ 241:         options.toolResultContext ? prepareCompleteToolResult : undefined
+ 242:       )
+ 243:     : options.tools
+ 244:   if (!baseRegistry) {
+ 245:     throw new Error(
+ 246:       'Operational harness composition requires an explicit capability or tool registry'
+ 247:     )
+ 248:   }
+ 249:   const registry = options.toolResultContext
+ 250:     ? prepareCompleteToolRegistry(baseRegistry)
+ 251:     : baseRegistry
+ 252:   if (!options.effectJournal) return registry
+ 253:   return createJournaledToolRegistry(registry, options.effectJournal, {
+ 254:     ...options.effectJournalOptions,
+ 255:     ...(capabilityFingerprint
+ 256:       ? { compositionFingerprint: capabilityFingerprint }
+ 257:       : {})
+ 258:   })
+ 259: }
+ 260: 
+ 261: async function safeAudit(
+ 262:   options: OperationalHarnessOptions,
+ 263:   input: RuntimeInput,
+ 264:   action: string,
+ 265:   result: string
+ 266: ): Promise<void> {
+ 267:   try {
+ 268:     await options.audit.append({
+ 269:       actor: input.agent.id,
+ 270:       agent: input.agent.id,
+ 271:       tenant: input.tenantId,
+ 272:       action,
+ 273:       policy: null,
+ 274:       approval: null,
+ 275:       tool: null,
+ 276:       result,
+ 277:       timestamp: new Date().toISOString(),
+ 278:       traceId: input.traceId,
+ 279:       correlationId: input.correlationId
+ 280:     })
+ 281:   } catch {
+ 282:     // misconfiguration must still fail closed without an unhandled error
+ 283:   }
+ 284: }
+

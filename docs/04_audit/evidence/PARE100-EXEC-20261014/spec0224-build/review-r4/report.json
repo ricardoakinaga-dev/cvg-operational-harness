@@ -1,0 +1,3004 @@
+{
+  "verdict": "REJECT",
+  "scope": "Only SPEC0224 unresolved-tool public complete-mode recovery, bounded TR06/TR09 behavior. No overall SPEC/TR, 36-card, storage qualification, or release decision.",
+  "createdAt": "2026-10-16T13:23:07.051671+00:00",
+  "reviewer": {
+    "role": "I1 fresh independent critic",
+    "directCurrentContext": true,
+    "descendantsSpawned": 0,
+    "modelEffortOverride": false,
+    "modelEffort": "Host inherited; actual model/effort metadata not exposed to reviewer tools.",
+    "fork_context": {
+      "requested": false,
+      "actualToolAttestation": null,
+      "limitation": "The caller specified fork_context=false. This context cannot independently attest its launcher/fork metadata; no subagent was spawned here."
+    },
+    "freshness": "No repository policy/coordination/ledgers/history, hidden agent folders, previous review/build reports or rationale were read. Packet proofs were hashed; only the explicitly supplied original raw witness test was inspected as context. It was not executed."
+  },
+  "integrity": {
+    "manifestExpectedSha256": "9033fbe8c33caa96cb020f568bfdfd0d9128c0e7b10f52bd55224620cd2afd11",
+    "manifestActualBefore": {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r4/manifest.json",
+      "sha256": "9033fbe8c33caa96cb020f568bfdfd0d9128c0e7b10f52bd55224620cd2afd11",
+      "bytes": 28138
+    },
+    "manifestActualAfter": {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r4/manifest.json",
+      "sha256": "9033fbe8c33caa96cb020f568bfdfd0d9128c0e7b10f52bd55224620cd2afd11",
+      "bytes": 28138
+    },
+    "sourceBindings": 68,
+    "proofs": 19,
+    "checksPerPass": 155,
+    "mismatchesBefore": 0,
+    "mismatchesAfter": 0,
+    "approvedSpecSha256": "f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea",
+    "currentSourceSentinelFiles": 95,
+    "currentSourceSentinelUnchanged": true,
+    "artifacts": [
+      "integrity-before.json",
+      "integrity-after.json",
+      "current-source-bindings.json",
+      "current-source/",
+      "source-anchors.txt"
+    ],
+    "note": "95 current source/config files conservatively cover local transitive reads; they were hashed before semantics and again after tests, and exact current snapshots were checked against before hashes. This is not attestation of the whole node_modules dependency graph."
+  },
+  "largestMaterialFinding": {
+    "id": "I1-R4-F01",
+    "severity": "HIGH",
+    "confidence": "HIGH (two directly observed public-factory reproductions)",
+    "title": "An empty native journal grants replay permission to an already in-flight custom tool",
+    "criterion": "Approved SPEC0224 section 3.2: without settlement proof or recoverable result, handoff/uncertainty, never replay.",
+    "sourceAnchors": [
+      {
+        "path": "packages/harness/src/iterative-runtime.ts",
+        "line": 785,
+        "detail": "The no-replay guard checks native descriptor provenance, not an existing operation settlement record."
+      },
+      {
+        "path": "packages/harness/src/effect-journal.ts",
+        "line": 143,
+        "detail": "An absent operation becomes a fresh RESERVED record."
+      },
+      {
+        "path": "packages/harness/src/effect-journal.ts",
+        "line": 330,
+        "detail": "Recovery enters reserve; fresh reservation passes the checks and reaches tool.execute at line 362."
+      },
+      {
+        "path": "packages/harness/src/createOperationalHarness.ts",
+        "line": 252,
+        "detail": "Optional native journal wraps compatibility custom tools on composition/recreation."
+      }
+    ],
+    "preconditions": [
+      "Public complete mode, compatibility tools port, acknowledged V2 pending CALL_TOOL checkpoint and its original TOOL/RUNNING step.",
+      "The first synthetic body has incremented a memory counter and has no completed result.",
+      "Recreate the public harness with the same tool ID/version/input and a fresh InMemoryEffectJournal whose get(tenant,operationKey) is null.",
+      "Case none: the initial custom invocation had no journal; case factory: the initial invocation used a separate native journal whose pre-body record is not present in the recreated journal."
+    ],
+    "observed": {
+      "cases": 2,
+      "bodyEntriesBeforeRecovery": 1,
+      "bodyEntriesAfterRecovery": 2,
+      "sameOperationKey": true,
+      "stopReason": "COMPLETED",
+      "reportedToolCalls": 1,
+      "modelCalls": 0,
+      "returnedOutput": {
+        "ordinal": 2,
+        "origin": "body"
+      },
+      "journalBefore": null,
+      "journalAfter": "CONFIRMED"
+    },
+    "impact": "The original unresolved invocation is replayed without prior native settlement proof, and the new journal confirms only the second invocation. Two actual body entries remain accounted as one tool call.",
+    "repro": "authority-gap.test.ts (cases none and factory); focused-authority-gap.command.json; authority-gap-observed.json",
+    "boundedCorrection": "An existing in-flight recovery must require native reconciliation/settlement evidence before invoking the executor; native wrapper provenance alone is insufficient. Keep fresh initial dispatch and recovery of confirmed recoverable output usable. No journal schema redesign is proposed.",
+    "limits": "This requires absent journal history on recreation or adding a fresh journal to an unjournaled custom-tool recovery. It does not reproduce against the same retained native journal with EFFECT_STARTED or CONFIRMED history. No external side effect or actual OS-process restart was performed."
+  },
+  "criteria": [
+    {
+      "id": "unresolved_no_journal_same_composition",
+      "result": "PASS",
+      "evidence": "provided two RUNNING/FAILED cases plus independent two repeated-recovery cases; one body, TOOL_FAILURE, exact checkpoint preserved"
+    },
+    {
+      "id": "initial_custom_tools",
+      "result": "PASS",
+      "evidence": "provided initial invocation plus independent NONE/READ/WRITE/EXTERNAL controls complete with one body and no model call"
+    },
+    {
+      "id": "native_uncertain_retained_history",
+      "result": "PASS",
+      "evidence": "factory and prewrapped controls retain EFFECT_STARTED and block another body"
+    },
+    {
+      "id": "native_confirmed_recovery",
+      "result": "PASS",
+      "evidence": "factory and prewrapped controls recover exact journal-origin object including Unicode/U+0000; one body, one tool call, zero model/token/cost usage; journal record unchanged"
+    },
+    {
+      "id": "checkpoint_usage_conservation",
+      "result": "PASS_FOR_RETAINED_AUTHORITY; FAIL_FOR_EMPTY_JOURNAL",
+      "evidence": "unjournaled handoff checkpoint exact, returned token/cost/call usage conserved; confirmed result retained in complete envelope; empty-journal cases run two bodies while toolCalls remains one"
+    },
+    {
+      "id": "caller_claims_not_authority",
+      "result": "PASS",
+      "evidence": "user text, idempotent=true, string flags and two caller-created lookalike symbols did not authorize unjournaled replay"
+    },
+    {
+      "id": "native_policy_approval_authority",
+      "result": "PASS",
+      "evidence": "both compositions still evaluate native policy; DENY returns POLICY_DENIED; required approval returns APPROVAL_REQUIRED; confirmed journal remains unchanged"
+    },
+    {
+      "id": "public_journal_exports",
+      "result": "PASS_BOUNDED_SOURCE_AND_RUNTIME",
+      "evidence": "all four existing journal value exports callable; all five journal type exports explicitly retained at index.ts:21; internal hasNativeEffectJournal absent from public entrypoint; no typecheck performed"
+    },
+    {
+      "id": "absent_settlement_proof_on_recreation",
+      "result": "FAIL",
+      "evidence": "I1-R4-F01: two failing adversarial tests, original acknowledged checkpoint and all original pre-body steps preserved, get() null before recovery; second body with same operationKey and COMPLETED"
+    }
+  ],
+  "testSummary": {
+    "provided": {
+      "passed": 7,
+      "failed": 0,
+      "exitCode": 0
+    },
+    "independentFinal": {
+      "passed": 15,
+      "failed": 0,
+      "exitCode": 0
+    },
+    "adversarialSettlementGap": {
+      "passed": 0,
+      "failed": 2,
+      "exitCode": 1
+    },
+    "preservedObserverDraft": {
+      "passed": 11,
+      "failed": 4,
+      "exitCode": 1,
+      "cause": "Incorrect test assumptions, not candidate defects: second execution after COMPLETED is STATE_CONFLICT; pending approval is APPROVAL_REQUIRED. Corrected after reading actual source contract; no candidate changes.",
+      "preserved": [
+        "independent-v1.test.ts",
+        "independent-observed.json",
+        "independent-observed-v1.json",
+        "focused-independent.stdout.log",
+        "focused-independent.stderr.log"
+      ]
+    },
+    "uniqueFinalCases": 24
+  },
+  "commands": [
+    {
+      "argv": [
+        "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs",
+        "run",
+        "--config",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/vitest.config.mjs",
+        "--configLoader",
+        "native",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/__tests__/complete-tool-unjournaled-recovery.test.ts"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree",
+      "env": {
+        "PATH": "/home/ricardo/.nvm/versions/node/v22.23.2/bin:/home/ricardo/.local/bin:/home/ricardo/.codex/packages/app-server-daemon/releases/0.163.0-x86_64-unknown-linux-musl/codex-path:/home/ricardo/.codex/tmp/arg0-linux/codex-arg0T0oZoJ:/home/ricardo/.codex/tmp/arg0/codex-arg0awnYW2:/home/ricardo/.nvm/versions/node/v24.20.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/debugCommand:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/copilotCli:/home/ricardo/.local/bin:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.nvm/versions/node/v24.20.0/bin:/home/ricardo/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/tmp",
+        "XDG_CACHE_HOME": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/xdg",
+        "NODE_COMPILE_CACHE": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/node"
+      },
+      "startUtc": "2026-10-16T13:18:37.077540+00:00",
+      "exitCode": 0,
+      "stdout": "focused-existing.stdout.log",
+      "stderr": "focused-existing.stderr.log",
+      "command": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs run --config /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/vitest.config.mjs --configLoader native /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/__tests__/complete-tool-unjournaled-recovery.test.ts",
+      "fullStdout": "\n RUN  v4.1.11 /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree\n\n \u2713 packages/harness/src/__tests__/complete-tool-unjournaled-recovery.test.ts > SPEC0224 unresolved dispatch recovery authority > hands off an unjournaled in-flight dispatch without replay (failed=false) 24ms\n \u2713 packages/harness/src/__tests__/complete-tool-unjournaled-recovery.test.ts > SPEC0224 unresolved dispatch recovery authority > hands off an unjournaled in-flight dispatch without replay (failed=true) 11ms\n \u2713 packages/harness/src/__tests__/complete-tool-unjournaled-recovery.test.ts > SPEC0224 unresolved dispatch recovery authority > keeps native journal uncertainty authoritative through factory composition 19ms\n \u2713 packages/harness/src/__tests__/complete-tool-unjournaled-recovery.test.ts > SPEC0224 unresolved dispatch recovery authority > keeps native journal uncertainty authoritative through prewrapped composition 12ms\n \u2713 packages/harness/src/__tests__/complete-tool-unjournaled-recovery.test.ts > SPEC0224 unresolved dispatch recovery authority > recovers a confirmed journal result without a second body through factory 19ms\n \u2713 packages/harness/src/__tests__/complete-tool-unjournaled-recovery.test.ts > SPEC0224 unresolved dispatch recovery authority > recovers a confirmed journal result without a second body through prewrapped 17ms\n \u2713 packages/harness/src/__tests__/complete-tool-unjournaled-recovery.test.ts > SPEC0224 unresolved dispatch recovery authority > preserves the initial custom-tools invocation without a journal 11ms\n\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n   Start at  10:18:37\n   Duration  526ms (transform 246ms, setup 0ms, import 312ms, tests 114ms, environment 0ms)\n\n",
+      "fullStderr": ""
+    },
+    {
+      "argv": [
+        "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs",
+        "run",
+        "--config",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/vitest.config.mjs",
+        "--configLoader",
+        "native",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/independent.test.ts"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree",
+      "env": {
+        "PATH": "/home/ricardo/.nvm/versions/node/v22.23.2/bin:/home/ricardo/.local/bin:/home/ricardo/.codex/packages/app-server-daemon/releases/0.163.0-x86_64-unknown-linux-musl/codex-path:/home/ricardo/.codex/tmp/arg0-linux/codex-arg0T0oZoJ:/home/ricardo/.codex/tmp/arg0/codex-arg0awnYW2:/home/ricardo/.nvm/versions/node/v24.20.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/debugCommand:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/copilotCli:/home/ricardo/.local/bin:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.nvm/versions/node/v24.20.0/bin:/home/ricardo/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/tmp",
+        "XDG_CACHE_HOME": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/xdg",
+        "NODE_COMPILE_CACHE": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/node"
+      },
+      "startUtc": "2026-10-16T13:19:33.380113+00:00",
+      "exitCode": 1,
+      "stdout": "focused-independent.stdout.log",
+      "stderr": "focused-independent.stderr.log",
+      "command": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs run --config /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/vitest.config.mjs --configLoader native /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/independent.test.ts",
+      "fullStdout": "\n RUN  v4.1.11 /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree\n\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > initial custom NONE body remains usable 32ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > initial custom READ body remains usable 17ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > initial custom WRITE body remains usable 12ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > initial custom EXTERNAL body remains usable 11ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > unjournaled RUNNING resists caller claims and repeated recovery 10ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > unjournaled FAILED resists caller claims and repeated recovery 9ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native factory uncertainty remains authoritative 13ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native prewrapped uncertainty remains authoritative 13ms\n \u00d7 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native factory confirmed value and accounting survive preparation/repeated recovery 28ms\n   \u2192 expected 'STATE_CONFLICT' to be 'COMPLETED' // Object.is equality\n \u00d7 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native prewrapped confirmed value and accounting survive preparation/repeated recovery 22ms\n   \u2192 expected 'STATE_CONFLICT' to be 'COMPLETED' // Object.is equality\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native factory confirmed recovery still obeys deny 10ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native prewrapped confirmed recovery still obeys deny 13ms\n \u00d7 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native factory confirmed recovery still obeys approval 14ms\n   \u2192 expected 'APPROVAL_REQUIRED' to be 'WAITING_APPROVAL' // Object.is equality\n \u00d7 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native prewrapped confirmed recovery still obeys approval 12ms\n   \u2192 expected 'APPROVAL_REQUIRED' to be 'WAITING_APPROVAL' // Object.is equality\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > public entrypoint preserves journal value exports and keeps provenance predicate private 1ms\n\n Test Files  1 failed (1)\n      Tests  4 failed | 11 passed (15)\n   Start at  10:19:33\n   Duration  619ms (transform 238ms, setup 0ms, import 304ms, tests 219ms, environment 0ms)\n\n",
+      "fullStderr": "\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 4 \u23af\u23af\u23af\u23af\u23af\u23af\u23af\n\n FAIL  ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native factory confirmed value and accounting survive preparation/repeated recovery\n FAIL  ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native prewrapped confirmed value and accounting survive preparation/repeated recovery\nAssertionError: expected 'STATE_CONFLICT' to be 'COMPLETED' // Object.is equality\n\nExpected: \"COMPLETED\"\nReceived: \"STATE_CONFLICT\"\n\n \u276f ../spec0224-build/review-r4/independent.test.ts:62:72\n\n\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af[1/4]\u23af\n\n FAIL  ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native factory confirmed recovery still obeys approval\n FAIL  ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native prewrapped confirmed recovery still obeys approval\nAssertionError: expected 'APPROVAL_REQUIRED' to be 'WAITING_APPROVAL' // Object.is equality\n\nExpected: \"WAITING_APPROVAL\"\nReceived: \"APPROVAL_REQUIRED\"\n\n \u276f ../spec0224-build/review-r4/independent.test.ts:68:29\n\n\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af[2/4]\u23af\n\n"
+    },
+    {
+      "argv": [
+        "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs",
+        "run",
+        "--config",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/vitest.config.mjs",
+        "--configLoader",
+        "native",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/independent.test.ts"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree",
+      "env": {
+        "PATH": "/home/ricardo/.nvm/versions/node/v22.23.2/bin:/home/ricardo/.local/bin:/home/ricardo/.codex/packages/app-server-daemon/releases/0.163.0-x86_64-unknown-linux-musl/codex-path:/home/ricardo/.codex/tmp/arg0-linux/codex-arg0T0oZoJ:/home/ricardo/.codex/tmp/arg0/codex-arg0awnYW2:/home/ricardo/.nvm/versions/node/v24.20.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/debugCommand:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/copilotCli:/home/ricardo/.local/bin:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.nvm/versions/node/v24.20.0/bin:/home/ricardo/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/tmp",
+        "XDG_CACHE_HOME": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/xdg",
+        "NODE_COMPILE_CACHE": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/node"
+      },
+      "startUtc": "2026-10-16T13:20:01.332927+00:00",
+      "exitCode": 0,
+      "stdout": "focused-independent-v2.stdout.log",
+      "stderr": "focused-independent-v2.stderr.log",
+      "command": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs run --config /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/vitest.config.mjs --configLoader native /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/independent.test.ts",
+      "fullStdout": "\n RUN  v4.1.11 /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree\n\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > initial custom NONE body remains usable 32ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > initial custom READ body remains usable 17ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > initial custom WRITE body remains usable 12ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > initial custom EXTERNAL body remains usable 11ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > unjournaled RUNNING resists caller claims and repeated recovery 9ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > unjournaled FAILED resists caller claims and repeated recovery 8ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native factory uncertainty remains authoritative 13ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native prewrapped uncertainty remains authoritative 13ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native factory confirmed value and accounting survive preparation/repeated recovery 23ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native prewrapped confirmed value and accounting survive preparation/repeated recovery 19ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native factory confirmed recovery still obeys deny 12ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native prewrapped confirmed recovery still obeys deny 10ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native factory confirmed recovery still obeys approval 12ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > native prewrapped confirmed recovery still obeys approval 12ms\n \u2713 ../spec0224-build/review-r4/independent.test.ts > independent bounded recovery controls > public entrypoint preserves journal value exports and keeps provenance predicate private 1ms\n\n Test Files  1 passed (1)\n      Tests  15 passed (15)\n   Start at  10:20:01\n   Duration  611ms (transform 242ms, setup 0ms, import 309ms, tests 207ms, environment 0ms)\n\n",
+      "fullStderr": ""
+    },
+    {
+      "argv": [
+        "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs",
+        "run",
+        "--config",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/vitest.config.mjs",
+        "--configLoader",
+        "native",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/authority-gap.test.ts"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree",
+      "env": {
+        "PATH": "/home/ricardo/.nvm/versions/node/v22.23.2/bin:/home/ricardo/.local/bin:/home/ricardo/.codex/packages/app-server-daemon/releases/0.163.0-x86_64-unknown-linux-musl/codex-path:/home/ricardo/.codex/tmp/arg0-linux/codex-arg0T0oZoJ:/home/ricardo/.codex/tmp/arg0/codex-arg0awnYW2:/home/ricardo/.nvm/versions/node/v24.20.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/debugCommand:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/copilotCli:/home/ricardo/.local/bin:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.nvm/versions/node/v24.20.0/bin:/home/ricardo/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/tmp",
+        "XDG_CACHE_HOME": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/xdg",
+        "NODE_COMPILE_CACHE": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/node"
+      },
+      "startUtc": "2026-10-16T13:20:41.365262+00:00",
+      "exitCode": 1,
+      "stdout": "focused-authority-gap.stdout.log",
+      "stderr": "focused-authority-gap.stderr.log",
+      "command": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs run --config /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/vitest.config.mjs --configLoader native /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/authority-gap.test.ts",
+      "fullStdout": "\n RUN  v4.1.11 /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree\n\n \u00d7 ../spec0224-build/review-r4/authority-gap.test.ts > missing native settlement proof control > original composition none cannot gain replay authority from an empty journal 48ms\n   \u2192 expected 2 to be 1 // Object.is equality\n \u00d7 ../spec0224-build/review-r4/authority-gap.test.ts > missing native settlement proof control > original composition factory cannot gain replay authority from an empty journal 22ms\n   \u2192 expected 2 to be 1 // Object.is equality\n\n Test Files  1 failed (1)\n      Tests  2 failed (2)\n   Start at  10:20:41\n   Duration  477ms (transform 242ms, setup 0ms, import 308ms, tests 72ms, environment 0ms)\n\n",
+      "fullStderr": "\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 2 \u23af\u23af\u23af\u23af\u23af\u23af\u23af\n\n FAIL  ../spec0224-build/review-r4/authority-gap.test.ts > missing native settlement proof control > original composition none cannot gain replay authority from an empty journal\n FAIL  ../spec0224-build/review-r4/authority-gap.test.ts > missing native settlement proof control > original composition factory cannot gain replay authority from an empty journal\nAssertionError: expected 2 to be 1 // Object.is equality\n\n- Expected\n+ Received\n\n- 1\n+ 2\n\n \u276f ../spec0224-build/review-r4/authority-gap.test.ts:45:22\n\n\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af[1/2]\u23af\n\n"
+    },
+    {
+      "argv": [
+        "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+        "--version"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree",
+      "env": {
+        "PATH": "/home/ricardo/.nvm/versions/node/v22.23.2/bin:/home/ricardo/.local/bin:/home/ricardo/.codex/packages/app-server-daemon/releases/0.163.0-x86_64-unknown-linux-musl/codex-path:/home/ricardo/.codex/tmp/arg0-linux/codex-arg0T0oZoJ:/home/ricardo/.codex/tmp/arg0/codex-arg0awnYW2:/home/ricardo/.nvm/versions/node/v24.20.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/debugCommand:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/copilotCli:/home/ricardo/.local/bin:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.nvm/versions/node/v24.20.0/bin:/home/ricardo/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/tmp",
+        "XDG_CACHE_HOME": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/xdg",
+        "NODE_COMPILE_CACHE": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/node"
+      },
+      "startUtc": "2026-10-16T13:21:31.469091+00:00",
+      "exitCode": 0,
+      "stdout": "node-version.stdout.log",
+      "stderr": "node-version.stderr.log",
+      "command": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node --version",
+      "fullStdout": "v22.23.2\n",
+      "fullStderr": ""
+    },
+    {
+      "argv": [
+        "python3",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/capture-sources.py"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree",
+      "env": {
+        "PATH": "/home/ricardo/.nvm/versions/node/v22.23.2/bin:/home/ricardo/.local/bin:/home/ricardo/.codex/packages/app-server-daemon/releases/0.163.0-x86_64-unknown-linux-musl/codex-path:/home/ricardo/.codex/tmp/arg0-linux/codex-arg0T0oZoJ:/home/ricardo/.codex/tmp/arg0/codex-arg0awnYW2:/home/ricardo/.nvm/versions/node/v24.20.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/debugCommand:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/copilotCli:/home/ricardo/.local/bin:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.nvm/versions/node/v24.20.0/bin:/home/ricardo/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/tmp",
+        "XDG_CACHE_HOME": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/xdg",
+        "NODE_COMPILE_CACHE": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/node"
+      },
+      "startUtc": "2026-10-16T13:21:31.547123+00:00",
+      "exitCode": 0,
+      "stdout": "source-capture.stdout.log",
+      "stderr": "source-capture.stderr.log",
+      "command": "python3 /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/capture-sources.py",
+      "fullStdout": "{\"capturedCurrentSourceFiles\": 95, \"anchorFiles\": 7}\n",
+      "fullStderr": ""
+    },
+    {
+      "argv": [
+        "python3",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/integrity.py",
+        "after"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree",
+      "env": {
+        "PATH": "/home/ricardo/.nvm/versions/node/v22.23.2/bin:/home/ricardo/.local/bin:/home/ricardo/.codex/packages/app-server-daemon/releases/0.163.0-x86_64-unknown-linux-musl/codex-path:/home/ricardo/.codex/tmp/arg0-linux/codex-arg0T0oZoJ:/home/ricardo/.codex/tmp/arg0/codex-arg0awnYW2:/home/ricardo/.nvm/versions/node/v24.20.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/debugCommand:/home/ricardo/.config/Code/User/globalStorage/github.copilot-chat/copilotCli:/home/ricardo/.local/bin:/home/ricardo/.bun/bin:/home/ricardo/.bun/bin:/home/ricardo/.opencode/bin:/home/ricardo/.nvm/versions/node/v24.20.0/bin:/home/ricardo/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/tmp",
+        "XDG_CACHE_HOME": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/xdg",
+        "NODE_COMPILE_CACHE": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/cache/node"
+      },
+      "startUtc": "2026-10-16T13:21:31.611883+00:00",
+      "exitCode": 0,
+      "stdout": "integrity-after.stdout.log",
+      "stderr": "integrity-after.stderr.log",
+      "command": "python3 /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4/integrity.py after",
+      "fullStdout": "{\"phase\": \"after\", \"manifest\": {\"path\": \"/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r4/manifest.json\", \"sha256\": \"9033fbe8c33caa96cb020f568bfdfd0d9128c0e7b10f52bd55224620cd2afd11\", \"bytes\": 28138}, \"sourceCount\": 68, \"proofCount\": 19, \"verifiedBindings\": 155, \"failures\": 0, \"transitiveSentinelFiles\": 95}\n",
+      "fullStderr": ""
+    }
+  ],
+  "rawOutputs": {
+    "independentFinal": [
+      {
+        "name": "initial-NONE",
+        "result": {
+          "response": "synthetic complete",
+          "stopReason": "COMPLETED",
+          "steps": 2,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "toolResult": {
+            "status": "SUCCEEDED",
+            "output": {
+              "ordinal": 1,
+              "origin": "body"
+            }
+          }
+        },
+        "checkpoint": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 2,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "lastEvaluation": {
+              "detail": "Structured completion accepted by the deterministic strategy.",
+              "deterministic": true,
+              "outcome": "COMPLETE",
+              "reasonCode": "COMPLETION_CONFIRMED"
+            },
+            "loopSignatures": [
+              "3f7897d438b2bb16282127b5087247e8994daf3685db5b94c2c04697cbf3242c",
+              "05536d25702cf04766c96c3ab37adc9526c187f4b9ad67d0c7146bdfc270e21a"
+            ],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_3d220968-f969-41cf-a1c3-11d12933236c",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:01.947Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_59a9a409-80e0-4655-9f4f-60541a9ebd6c",
+                "payload": {
+                  "completion": "COMPLETE",
+                  "output": {
+                    "ordinal": 1,
+                    "origin": "body"
+                  },
+                  "outputBytes": 29,
+                  "outputSha256": "a834c84d56a541f5815fd622223d6a58db476a018077b935535e617abb8f5dfd",
+                  "resultAvailability": "AVAILABLE",
+                  "schemaVersion": 1,
+                  "sideEffect": "NONE",
+                  "status": "SUCCEEDED"
+                },
+                "provenance": {
+                  "effectRef": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "sourceId": "synthetic.i1.counter",
+                  "sourceVersion": "1"
+                },
+                "source": "TOOL",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Tool result captured for governed context.",
+                "timestamp": "2026-10-16T13:20:01.950Z",
+                "trust": "UNTRUSTED",
+                "type": "TOOL_RESULT"
+              }
+            ],
+            "openQuestions": [],
+            "resolvedInputs": {},
+            "selectedCapability": "synthetic.i1.counter",
+            "stepNumber": 2,
+            "stopReason": "COMPLETED",
+            "toolResultContext": {
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 2,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 27
+          },
+          "checkpointId": "ckpt_06929b14-aa39-49b0-ac40-2e9bd43511bc",
+          "createdAt": "2026-10-16T13:20:01.960Z",
+          "digest": "897356531de611d39950b08e7b8bb403ab45b4127fb8e778ae7436262781cdd6"
+        },
+        "bodies": 1
+      },
+      {
+        "name": "initial-READ",
+        "result": {
+          "response": "synthetic complete",
+          "stopReason": "COMPLETED",
+          "steps": 2,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "toolResult": {
+            "status": "SUCCEEDED",
+            "output": {
+              "ordinal": 1,
+              "origin": "body"
+            }
+          }
+        },
+        "checkpoint": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 2,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "lastEvaluation": {
+              "detail": "Structured completion accepted by the deterministic strategy.",
+              "deterministic": true,
+              "outcome": "COMPLETE",
+              "reasonCode": "COMPLETION_CONFIRMED"
+            },
+            "loopSignatures": [
+              "3f7897d438b2bb16282127b5087247e8994daf3685db5b94c2c04697cbf3242c",
+              "05536d25702cf04766c96c3ab37adc9526c187f4b9ad67d0c7146bdfc270e21a"
+            ],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_5567721c-d322-48c4-8cc9-630c6cfd4afc",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:01.969Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_4395dac2-be2a-488b-9fd2-0fa5eb48359d",
+                "payload": {
+                  "completion": "COMPLETE",
+                  "output": {
+                    "ordinal": 1,
+                    "origin": "body"
+                  },
+                  "outputBytes": 29,
+                  "outputSha256": "a834c84d56a541f5815fd622223d6a58db476a018077b935535e617abb8f5dfd",
+                  "resultAvailability": "AVAILABLE",
+                  "schemaVersion": 1,
+                  "sideEffect": "READ",
+                  "status": "SUCCEEDED"
+                },
+                "provenance": {
+                  "effectRef": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "sourceId": "synthetic.i1.counter",
+                  "sourceVersion": "1"
+                },
+                "source": "TOOL",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Tool result captured for governed context.",
+                "timestamp": "2026-10-16T13:20:01.971Z",
+                "trust": "UNTRUSTED",
+                "type": "TOOL_RESULT"
+              }
+            ],
+            "openQuestions": [],
+            "resolvedInputs": {},
+            "selectedCapability": "synthetic.i1.counter",
+            "stepNumber": 2,
+            "stopReason": "COMPLETED",
+            "toolResultContext": {
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 2,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 14
+          },
+          "checkpointId": "ckpt_396014c9-07cf-4b57-b29e-3b08196543d5",
+          "createdAt": "2026-10-16T13:20:01.977Z",
+          "digest": "474a5cb09d999efcbe26ce180780508c433a3c978fa2e2c77bc23f0585a5e3e7"
+        },
+        "bodies": 1
+      },
+      {
+        "name": "initial-WRITE",
+        "result": {
+          "response": "synthetic complete",
+          "stopReason": "COMPLETED",
+          "steps": 2,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "toolResult": {
+            "status": "SUCCEEDED",
+            "output": {
+              "ordinal": 1,
+              "origin": "body"
+            }
+          }
+        },
+        "checkpoint": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 2,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "lastEvaluation": {
+              "detail": "Structured completion accepted by the deterministic strategy.",
+              "deterministic": true,
+              "outcome": "COMPLETE",
+              "reasonCode": "COMPLETION_CONFIRMED"
+            },
+            "loopSignatures": [
+              "3f7897d438b2bb16282127b5087247e8994daf3685db5b94c2c04697cbf3242c",
+              "05536d25702cf04766c96c3ab37adc9526c187f4b9ad67d0c7146bdfc270e21a"
+            ],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_558dfd03-baa3-428b-af49-f18669782f89",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:01.984Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_df450f76-89c7-49dd-9f92-ba77248287c8",
+                "payload": {
+                  "completion": "COMPLETE",
+                  "output": {
+                    "ordinal": 1,
+                    "origin": "body"
+                  },
+                  "outputBytes": 29,
+                  "outputSha256": "a834c84d56a541f5815fd622223d6a58db476a018077b935535e617abb8f5dfd",
+                  "resultAvailability": "AVAILABLE",
+                  "schemaVersion": 1,
+                  "sideEffect": "WRITE",
+                  "status": "SUCCEEDED"
+                },
+                "provenance": {
+                  "effectRef": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "sourceId": "synthetic.i1.counter",
+                  "sourceVersion": "1"
+                },
+                "source": "TOOL",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Tool result captured for governed context.",
+                "timestamp": "2026-10-16T13:20:01.985Z",
+                "trust": "UNTRUSTED",
+                "type": "TOOL_RESULT"
+              }
+            ],
+            "openQuestions": [],
+            "resolvedInputs": {},
+            "selectedCapability": "synthetic.i1.counter",
+            "stepNumber": 2,
+            "stopReason": "COMPLETED",
+            "toolResultContext": {
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 2,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 11
+          },
+          "checkpointId": "ckpt_89385c7c-0316-44eb-913f-d48e4a26d84b",
+          "createdAt": "2026-10-16T13:20:01.991Z",
+          "digest": "35e628be9bd5324866db92eafb6a1eef65f0850bed8f0f9f73b273cd7ac8f73c"
+        },
+        "bodies": 1
+      },
+      {
+        "name": "initial-EXTERNAL",
+        "result": {
+          "response": "synthetic complete",
+          "stopReason": "COMPLETED",
+          "steps": 2,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "toolResult": {
+            "status": "SUCCEEDED",
+            "output": {
+              "ordinal": 1,
+              "origin": "body"
+            }
+          }
+        },
+        "checkpoint": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 2,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "lastEvaluation": {
+              "detail": "Structured completion accepted by the deterministic strategy.",
+              "deterministic": true,
+              "outcome": "COMPLETE",
+              "reasonCode": "COMPLETION_CONFIRMED"
+            },
+            "loopSignatures": [
+              "3f7897d438b2bb16282127b5087247e8994daf3685db5b94c2c04697cbf3242c",
+              "05536d25702cf04766c96c3ab37adc9526c187f4b9ad67d0c7146bdfc270e21a"
+            ],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_8f4ba40e-081e-4557-886f-858e79f80040",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:01.995Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_de684c60-46df-4d9c-be6d-3c254d12f29f",
+                "payload": {
+                  "completion": "COMPLETE",
+                  "output": {
+                    "ordinal": 1,
+                    "origin": "body"
+                  },
+                  "outputBytes": 29,
+                  "outputSha256": "a834c84d56a541f5815fd622223d6a58db476a018077b935535e617abb8f5dfd",
+                  "resultAvailability": "AVAILABLE",
+                  "schemaVersion": 1,
+                  "sideEffect": "EXTERNAL",
+                  "status": "SUCCEEDED"
+                },
+                "provenance": {
+                  "effectRef": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "sourceId": "synthetic.i1.counter",
+                  "sourceVersion": "1"
+                },
+                "source": "TOOL",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Tool result captured for governed context.",
+                "timestamp": "2026-10-16T13:20:01.997Z",
+                "trust": "UNTRUSTED",
+                "type": "TOOL_RESULT"
+              }
+            ],
+            "openQuestions": [],
+            "resolvedInputs": {},
+            "selectedCapability": "synthetic.i1.counter",
+            "stepNumber": 2,
+            "stopReason": "COMPLETED",
+            "toolResultContext": {
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 2,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 10
+          },
+          "checkpointId": "ckpt_89c8896b-c0cc-4723-88ab-4bc8c11fd977",
+          "createdAt": "2026-10-16T13:20:02.002Z",
+          "digest": "4c39fa23eac5bd950443be24f0c5ed50e8efe7f764e671a5e942273c6781437a"
+        },
+        "bodies": 1
+      },
+      {
+        "name": "unjournaled-flags-RUNNING",
+        "interrupted": {
+          "response": "Execution was cancelled by the caller.",
+          "stopReason": "CANCELLED",
+          "steps": 1,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          }
+        },
+        "before": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 0,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "loopSignatures": [],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_3caec944-ff73-4335-9a51-4fda9431f0d6",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.008Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              }
+            ],
+            "openQuestions": [],
+            "pendingDecision": {
+              "decisionType": "CALL_TOOL",
+              "reasonCode": "TOOL_REQUIRED",
+              "toolId": "synthetic.i1.counter",
+              "toolInput": {
+                "synthetic": true
+              },
+              "toolVersion": "1"
+            },
+            "pendingStepNumber": 1,
+            "resolvedInputs": {},
+            "stepNumber": 0,
+            "toolResultContext": {
+              "acceptedDecision": {
+                "decision": {
+                  "decisionType": "CALL_TOOL",
+                  "reasonCode": "TOOL_REQUIRED",
+                  "toolId": "synthetic.i1.counter",
+                  "toolInput": {
+                    "synthetic": true
+                  },
+                  "toolVersion": "1"
+                },
+                "decisionAdmissionIds": [],
+                "stepNumber": 1
+              },
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 0,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 0
+          },
+          "checkpointId": "ckpt_583e67cf-dc70-459d-bd23-95022a5ba5f8",
+          "createdAt": "2026-10-16T13:20:02.008Z",
+          "digest": "dffe59e217d0593eddb9e6a5df19af1f905d585aa8c51c5588cab8da64280c0b"
+        },
+        "steps": [
+          {
+            "stepId": "step_exec_phase3_fixture_1_tool",
+            "executionId": "exec_phase3_fixture",
+            "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+            "stepNumber": 1,
+            "stepType": "TOOL",
+            "status": "RUNNING",
+            "attempt": 1,
+            "sideEffecting": true,
+            "startedAt": "2026-10-16T13:20:02.008Z",
+            "decisionType": "CALL_TOOL",
+            "reasonCode": "TOOL_REQUIRED",
+            "observationRefs": []
+          }
+        ],
+        "results": [
+          {
+            "response": "unknown_effect: pending tool dispatch has no native journal; explicit reconciliation is required.",
+            "stopReason": "TOOL_FAILURE",
+            "steps": 0,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "costUsd": 0
+            }
+          },
+          {
+            "response": "unknown_effect: pending tool dispatch has no native journal; explicit reconciliation is required.",
+            "stopReason": "TOOL_FAILURE",
+            "steps": 0,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "costUsd": 0
+            }
+          }
+        ],
+        "after": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 0,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "loopSignatures": [],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_3caec944-ff73-4335-9a51-4fda9431f0d6",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.008Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              }
+            ],
+            "openQuestions": [],
+            "pendingDecision": {
+              "decisionType": "CALL_TOOL",
+              "reasonCode": "TOOL_REQUIRED",
+              "toolId": "synthetic.i1.counter",
+              "toolInput": {
+                "synthetic": true
+              },
+              "toolVersion": "1"
+            },
+            "pendingStepNumber": 1,
+            "resolvedInputs": {},
+            "stepNumber": 0,
+            "toolResultContext": {
+              "acceptedDecision": {
+                "decision": {
+                  "decisionType": "CALL_TOOL",
+                  "reasonCode": "TOOL_REQUIRED",
+                  "toolId": "synthetic.i1.counter",
+                  "toolInput": {
+                    "synthetic": true
+                  },
+                  "toolVersion": "1"
+                },
+                "decisionAdmissionIds": [],
+                "stepNumber": 1
+              },
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 0,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 0
+          },
+          "checkpointId": "ckpt_583e67cf-dc70-459d-bd23-95022a5ba5f8",
+          "createdAt": "2026-10-16T13:20:02.008Z",
+          "digest": "dffe59e217d0593eddb9e6a5df19af1f905d585aa8c51c5588cab8da64280c0b"
+        },
+        "bodies": 1,
+        "keys": [
+          "exec_phase3_fixture:s1:synthetic.i1.counter"
+        ]
+      },
+      {
+        "name": "unjournaled-flags-FAILED",
+        "interrupted": {
+          "response": "Execution was cancelled by the caller.",
+          "stopReason": "CANCELLED",
+          "steps": 1,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          }
+        },
+        "before": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 0,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "loopSignatures": [],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_3459a266-7943-4f4f-ae31-5149ad7946fa",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.017Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              }
+            ],
+            "openQuestions": [],
+            "pendingDecision": {
+              "decisionType": "CALL_TOOL",
+              "reasonCode": "TOOL_REQUIRED",
+              "toolId": "synthetic.i1.counter",
+              "toolInput": {
+                "synthetic": true
+              },
+              "toolVersion": "1"
+            },
+            "pendingStepNumber": 1,
+            "resolvedInputs": {},
+            "stepNumber": 0,
+            "toolResultContext": {
+              "acceptedDecision": {
+                "decision": {
+                  "decisionType": "CALL_TOOL",
+                  "reasonCode": "TOOL_REQUIRED",
+                  "toolId": "synthetic.i1.counter",
+                  "toolInput": {
+                    "synthetic": true
+                  },
+                  "toolVersion": "1"
+                },
+                "decisionAdmissionIds": [],
+                "stepNumber": 1
+              },
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 0,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 0
+          },
+          "checkpointId": "ckpt_d2bb45a4-dc69-428b-a73e-adbe4f49da42",
+          "createdAt": "2026-10-16T13:20:02.017Z",
+          "digest": "23743050ab83e7934f6b21a2e2ddbe68e924876865fca477618d8b8e4f942854"
+        },
+        "steps": [
+          {
+            "stepId": "step_exec_phase3_fixture_1_tool",
+            "executionId": "exec_phase3_fixture",
+            "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+            "stepNumber": 1,
+            "stepType": "TOOL",
+            "status": "RUNNING",
+            "attempt": 1,
+            "sideEffecting": true,
+            "startedAt": "2026-10-16T13:20:02.018Z",
+            "decisionType": "CALL_TOOL",
+            "reasonCode": "TOOL_REQUIRED",
+            "observationRefs": []
+          }
+        ],
+        "results": [
+          {
+            "response": "unknown_effect: pending tool dispatch has no native journal; explicit reconciliation is required.",
+            "stopReason": "TOOL_FAILURE",
+            "steps": 0,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "costUsd": 0
+            }
+          },
+          {
+            "response": "unknown_effect: pending tool dispatch has no native journal; explicit reconciliation is required.",
+            "stopReason": "TOOL_FAILURE",
+            "steps": 0,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "costUsd": 0
+            }
+          }
+        ],
+        "after": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 0,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "loopSignatures": [],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_3459a266-7943-4f4f-ae31-5149ad7946fa",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.017Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              }
+            ],
+            "openQuestions": [],
+            "pendingDecision": {
+              "decisionType": "CALL_TOOL",
+              "reasonCode": "TOOL_REQUIRED",
+              "toolId": "synthetic.i1.counter",
+              "toolInput": {
+                "synthetic": true
+              },
+              "toolVersion": "1"
+            },
+            "pendingStepNumber": 1,
+            "resolvedInputs": {},
+            "stepNumber": 0,
+            "toolResultContext": {
+              "acceptedDecision": {
+                "decision": {
+                  "decisionType": "CALL_TOOL",
+                  "reasonCode": "TOOL_REQUIRED",
+                  "toolId": "synthetic.i1.counter",
+                  "toolInput": {
+                    "synthetic": true
+                  },
+                  "toolVersion": "1"
+                },
+                "decisionAdmissionIds": [],
+                "stepNumber": 1
+              },
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 0,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 0
+          },
+          "checkpointId": "ckpt_d2bb45a4-dc69-428b-a73e-adbe4f49da42",
+          "createdAt": "2026-10-16T13:20:02.017Z",
+          "digest": "23743050ab83e7934f6b21a2e2ddbe68e924876865fca477618d8b8e4f942854"
+        },
+        "bodies": 1,
+        "keys": [
+          "exec_phase3_fixture:s1:synthetic.i1.counter"
+        ]
+      },
+      {
+        "name": "native-uncertain-factory",
+        "result": {
+          "response": "unknown_effect: unknown_effect: explicit reconciliation is required before retry",
+          "stopReason": "TOOL_FAILURE",
+          "steps": 1,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          }
+        },
+        "journal": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "EFFECT_STARTED",
+          "attemptId": "attempt_69e414c5-a92a-44f5-8b75-0cb9d7f47e0e",
+          "createdAt": "2026-10-16T13:20:02.026Z",
+          "updatedAt": "2026-10-16T13:20:02.026Z"
+        },
+        "checkpoint": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 1,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "loopSignatures": [],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_a1e80bcc-d876-492f-9917-23388c48334c",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.025Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_c590aad4-f8b1-46bb-9422-2a68aeb92ed3",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.031Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_b7bcf3d7-6995-442e-97d9-f5fa9f0564d7",
+                "payload": {
+                  "completion": "NOT_APPLICABLE",
+                  "error": "unknown_effect: explicit reconciliation is required before retry",
+                  "resultAvailability": "UNAVAILABLE",
+                  "schemaVersion": 1,
+                  "sideEffect": "WRITE",
+                  "status": "REJECTED"
+                },
+                "provenance": {
+                  "effectRef": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "sourceId": "synthetic.i1.counter",
+                  "sourceVersion": "1"
+                },
+                "source": "TOOL",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Tool outcome is uncertain and requires reconciliation.",
+                "timestamp": "2026-10-16T13:20:02.032Z",
+                "trust": "UNTRUSTED",
+                "type": "TOOL_RESULT"
+              }
+            ],
+            "openQuestions": [],
+            "pendingDecision": {
+              "decisionType": "CALL_TOOL",
+              "reasonCode": "TOOL_REQUIRED",
+              "toolId": "synthetic.i1.counter",
+              "toolInput": {
+                "synthetic": true
+              },
+              "toolVersion": "1"
+            },
+            "pendingStepNumber": 1,
+            "resolvedInputs": {},
+            "stepNumber": 1,
+            "stopReason": "TOOL_FAILURE",
+            "toolResultContext": {
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 1,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 4
+          },
+          "checkpointId": "ckpt_e7257757-2cd4-4611-bc9f-9d9344a4ff3a",
+          "createdAt": "2026-10-16T13:20:02.032Z",
+          "digest": "15883d65ee144c3cff7b7e5fd77e654f61807d9449212b412e96ad0683f4fd8e"
+        },
+        "bodies": 1
+      },
+      {
+        "name": "native-uncertain-prewrapped",
+        "result": {
+          "response": "unknown_effect: unknown_effect: explicit reconciliation is required before retry",
+          "stopReason": "TOOL_FAILURE",
+          "steps": 1,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          }
+        },
+        "journal": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "EFFECT_STARTED",
+          "attemptId": "attempt_4d4b7404-c865-4b17-8d3a-1d9f4a35ab6e",
+          "createdAt": "2026-10-16T13:20:02.040Z",
+          "updatedAt": "2026-10-16T13:20:02.040Z"
+        },
+        "checkpoint": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 1,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "loopSignatures": [],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_19588ed9-7084-4fed-bbfb-4a5d07eb6961",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.039Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_cc2ddd8d-66e7-4f3d-8d94-b1ee2362bb0c",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.044Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_171bd027-fe19-4896-b5d4-e728c50685bf",
+                "payload": {
+                  "completion": "NOT_APPLICABLE",
+                  "error": "unknown_effect: explicit reconciliation is required before retry",
+                  "resultAvailability": "UNAVAILABLE",
+                  "schemaVersion": 1,
+                  "sideEffect": "WRITE",
+                  "status": "REJECTED"
+                },
+                "provenance": {
+                  "effectRef": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "sourceId": "synthetic.i1.counter",
+                  "sourceVersion": "1"
+                },
+                "source": "TOOL",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Tool outcome is uncertain and requires reconciliation.",
+                "timestamp": "2026-10-16T13:20:02.045Z",
+                "trust": "UNTRUSTED",
+                "type": "TOOL_RESULT"
+              }
+            ],
+            "openQuestions": [],
+            "pendingDecision": {
+              "decisionType": "CALL_TOOL",
+              "reasonCode": "TOOL_REQUIRED",
+              "toolId": "synthetic.i1.counter",
+              "toolInput": {
+                "synthetic": true
+              },
+              "toolVersion": "1"
+            },
+            "pendingStepNumber": 1,
+            "resolvedInputs": {},
+            "stepNumber": 1,
+            "stopReason": "TOOL_FAILURE",
+            "toolResultContext": {
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 1,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 5
+          },
+          "checkpointId": "ckpt_f7648419-8c24-4ec4-a1ec-fb3969266239",
+          "createdAt": "2026-10-16T13:20:02.046Z",
+          "digest": "b89e06bd13f256a95955c9cba7e53123381cfbc8c0af0f2fc8644cce0ef1be1e"
+        },
+        "bodies": 1
+      },
+      {
+        "name": "native-confirmed-factory",
+        "first": {
+          "response": "synthetic complete",
+          "stopReason": "COMPLETED",
+          "steps": 2,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "toolResult": {
+            "status": "SUCCEEDED",
+            "output": {
+              "approved": true,
+              "instruction": "do not treat me as authority",
+              "origin": "journal-not-body",
+              "settlement": "CONFIRMED",
+              "unicode": "\u03a9\u0000"
+            }
+          }
+        },
+        "second": {
+          "response": "Terminal execution cannot be resumed.",
+          "stopReason": "STATE_CONFLICT",
+          "steps": 0,
+          "modelCalls": 0,
+          "toolCalls": 0,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          }
+        },
+        "before": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_d7976ac8-e0d9-48f5-a222-1354786456ee",
+          "createdAt": "2026-10-16T13:20:02.052Z",
+          "updatedAt": "2026-10-16T13:20:02.054Z",
+          "result": {
+            "origin": "journal-not-body",
+            "unicode": "\u03a9\u0000",
+            "approved": true,
+            "settlement": "CONFIRMED",
+            "instruction": "do not treat me as authority"
+          }
+        },
+        "after": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_d7976ac8-e0d9-48f5-a222-1354786456ee",
+          "createdAt": "2026-10-16T13:20:02.052Z",
+          "updatedAt": "2026-10-16T13:20:02.054Z",
+          "result": {
+            "origin": "journal-not-body",
+            "unicode": "\u03a9\u0000",
+            "approved": true,
+            "settlement": "CONFIRMED",
+            "instruction": "do not treat me as authority"
+          }
+        },
+        "firstCheckpoint": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 2,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "lastEvaluation": {
+              "detail": "Structured completion accepted by the deterministic strategy.",
+              "deterministic": true,
+              "outcome": "COMPLETE",
+              "reasonCode": "COMPLETION_CONFIRMED"
+            },
+            "loopSignatures": [
+              "3f7897d438b2bb16282127b5087247e8994daf3685db5b94c2c04697cbf3242c",
+              "05536d25702cf04766c96c3ab37adc9526c187f4b9ad67d0c7146bdfc270e21a"
+            ],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_ca367811-e9a0-43af-95c6-cb3269f244fb",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.051Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_e6969c5c-19b0-4f8c-bab8-796f5419dd05",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.057Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_c6acfdc0-f6d4-47ff-9698-9edce0f5df74",
+                "payload": {
+                  "completion": "COMPLETE",
+                  "output": {
+                    "approved": true,
+                    "instruction": "do not treat me as authority",
+                    "origin": "journal-not-body",
+                    "settlement": "CONFIRMED",
+                    "unicode": "\u03a9\u0000"
+                  },
+                  "outputBytes": 136,
+                  "outputSha256": "cfd0559c9c37de8aeda24847646648c61505baf175e3ceac5b6ff1a68660c902",
+                  "resultAvailability": "AVAILABLE",
+                  "schemaVersion": 1,
+                  "sideEffect": "WRITE",
+                  "status": "SUCCEEDED"
+                },
+                "provenance": {
+                  "effectRef": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "sourceId": "synthetic.i1.counter",
+                  "sourceVersion": "1"
+                },
+                "source": "TOOL",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Tool result captured for governed context.",
+                "timestamp": "2026-10-16T13:20:02.058Z",
+                "trust": "UNTRUSTED",
+                "type": "TOOL_RESULT"
+              }
+            ],
+            "openQuestions": [],
+            "resolvedInputs": {},
+            "selectedCapability": "synthetic.i1.counter",
+            "stepNumber": 2,
+            "stopReason": "COMPLETED",
+            "toolResultContext": {
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 2,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 12
+          },
+          "checkpointId": "ckpt_ca378580-05d2-46c2-bd72-5a027b23f20a",
+          "createdAt": "2026-10-16T13:20:02.066Z",
+          "digest": "0747174b69734481dff83bbaef1b467b8eead98dbd59c8e60a50fd6ae213514e"
+        },
+        "finalCheckpoint": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 2,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "lastEvaluation": {
+              "detail": "Structured completion accepted by the deterministic strategy.",
+              "deterministic": true,
+              "outcome": "COMPLETE",
+              "reasonCode": "COMPLETION_CONFIRMED"
+            },
+            "loopSignatures": [
+              "3f7897d438b2bb16282127b5087247e8994daf3685db5b94c2c04697cbf3242c",
+              "05536d25702cf04766c96c3ab37adc9526c187f4b9ad67d0c7146bdfc270e21a"
+            ],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_ca367811-e9a0-43af-95c6-cb3269f244fb",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.051Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_e6969c5c-19b0-4f8c-bab8-796f5419dd05",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.057Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_c6acfdc0-f6d4-47ff-9698-9edce0f5df74",
+                "payload": {
+                  "completion": "COMPLETE",
+                  "output": {
+                    "approved": true,
+                    "instruction": "do not treat me as authority",
+                    "origin": "journal-not-body",
+                    "settlement": "CONFIRMED",
+                    "unicode": "\u03a9\u0000"
+                  },
+                  "outputBytes": 136,
+                  "outputSha256": "cfd0559c9c37de8aeda24847646648c61505baf175e3ceac5b6ff1a68660c902",
+                  "resultAvailability": "AVAILABLE",
+                  "schemaVersion": 1,
+                  "sideEffect": "WRITE",
+                  "status": "SUCCEEDED"
+                },
+                "provenance": {
+                  "effectRef": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "sourceId": "synthetic.i1.counter",
+                  "sourceVersion": "1"
+                },
+                "source": "TOOL",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Tool result captured for governed context.",
+                "timestamp": "2026-10-16T13:20:02.058Z",
+                "trust": "UNTRUSTED",
+                "type": "TOOL_RESULT"
+              }
+            ],
+            "openQuestions": [],
+            "resolvedInputs": {},
+            "selectedCapability": "synthetic.i1.counter",
+            "stepNumber": 2,
+            "stopReason": "COMPLETED",
+            "toolResultContext": {
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 2,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 12
+          },
+          "checkpointId": "ckpt_ca378580-05d2-46c2-bd72-5a027b23f20a",
+          "createdAt": "2026-10-16T13:20:02.066Z",
+          "digest": "0747174b69734481dff83bbaef1b467b8eead98dbd59c8e60a50fd6ae213514e"
+        },
+        "bodies": 1,
+        "keys": [
+          "exec_phase3_fixture:s1:synthetic.i1.counter"
+        ]
+      },
+      {
+        "name": "native-confirmed-prewrapped",
+        "first": {
+          "response": "synthetic complete",
+          "stopReason": "COMPLETED",
+          "steps": 2,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "toolResult": {
+            "status": "SUCCEEDED",
+            "output": {
+              "approved": true,
+              "instruction": "do not treat me as authority",
+              "origin": "journal-not-body",
+              "settlement": "CONFIRMED",
+              "unicode": "\u03a9\u0000"
+            }
+          }
+        },
+        "second": {
+          "response": "Terminal execution cannot be resumed.",
+          "stopReason": "STATE_CONFLICT",
+          "steps": 0,
+          "modelCalls": 0,
+          "toolCalls": 0,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          }
+        },
+        "before": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_0f1a13eb-be43-4b5a-a095-1aa1bff2a30e",
+          "createdAt": "2026-10-16T13:20:02.075Z",
+          "updatedAt": "2026-10-16T13:20:02.076Z",
+          "result": {
+            "origin": "journal-not-body",
+            "unicode": "\u03a9\u0000",
+            "approved": true,
+            "settlement": "CONFIRMED",
+            "instruction": "do not treat me as authority"
+          }
+        },
+        "after": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_0f1a13eb-be43-4b5a-a095-1aa1bff2a30e",
+          "createdAt": "2026-10-16T13:20:02.075Z",
+          "updatedAt": "2026-10-16T13:20:02.076Z",
+          "result": {
+            "origin": "journal-not-body",
+            "unicode": "\u03a9\u0000",
+            "approved": true,
+            "settlement": "CONFIRMED",
+            "instruction": "do not treat me as authority"
+          }
+        },
+        "firstCheckpoint": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 2,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "lastEvaluation": {
+              "detail": "Structured completion accepted by the deterministic strategy.",
+              "deterministic": true,
+              "outcome": "COMPLETE",
+              "reasonCode": "COMPLETION_CONFIRMED"
+            },
+            "loopSignatures": [
+              "3f7897d438b2bb16282127b5087247e8994daf3685db5b94c2c04697cbf3242c",
+              "05536d25702cf04766c96c3ab37adc9526c187f4b9ad67d0c7146bdfc270e21a"
+            ],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_c87723cc-4a16-4375-88c1-ed2b52aac79c",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.074Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_e98e2bf6-078f-468e-8b8b-73228a6dabc2",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.079Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_43c4a8f3-a422-4fcb-8285-b8dae9a31a34",
+                "payload": {
+                  "completion": "COMPLETE",
+                  "output": {
+                    "approved": true,
+                    "instruction": "do not treat me as authority",
+                    "origin": "journal-not-body",
+                    "settlement": "CONFIRMED",
+                    "unicode": "\u03a9\u0000"
+                  },
+                  "outputBytes": 136,
+                  "outputSha256": "cfd0559c9c37de8aeda24847646648c61505baf175e3ceac5b6ff1a68660c902",
+                  "resultAvailability": "AVAILABLE",
+                  "schemaVersion": 1,
+                  "sideEffect": "WRITE",
+                  "status": "SUCCEEDED"
+                },
+                "provenance": {
+                  "effectRef": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "sourceId": "synthetic.i1.counter",
+                  "sourceVersion": "1"
+                },
+                "source": "TOOL",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Tool result captured for governed context.",
+                "timestamp": "2026-10-16T13:20:02.080Z",
+                "trust": "UNTRUSTED",
+                "type": "TOOL_RESULT"
+              }
+            ],
+            "openQuestions": [],
+            "resolvedInputs": {},
+            "selectedCapability": "synthetic.i1.counter",
+            "stepNumber": 2,
+            "stopReason": "COMPLETED",
+            "toolResultContext": {
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 2,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 10
+          },
+          "checkpointId": "ckpt_f2f5e4e4-2c1a-4d35-96e2-32934398e387",
+          "createdAt": "2026-10-16T13:20:02.086Z",
+          "digest": "d7ba8a3b1e9f624763ccca9871fdf284476f8532f5a440d45678cc012351edf7"
+        },
+        "finalCheckpoint": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 2,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "lastEvaluation": {
+              "detail": "Structured completion accepted by the deterministic strategy.",
+              "deterministic": true,
+              "outcome": "COMPLETE",
+              "reasonCode": "COMPLETION_CONFIRMED"
+            },
+            "loopSignatures": [
+              "3f7897d438b2bb16282127b5087247e8994daf3685db5b94c2c04697cbf3242c",
+              "05536d25702cf04766c96c3ab37adc9526c187f4b9ad67d0c7146bdfc270e21a"
+            ],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_c87723cc-4a16-4375-88c1-ed2b52aac79c",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.074Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_e98e2bf6-078f-468e-8b8b-73228a6dabc2",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:02.079Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_43c4a8f3-a422-4fcb-8285-b8dae9a31a34",
+                "payload": {
+                  "completion": "COMPLETE",
+                  "output": {
+                    "approved": true,
+                    "instruction": "do not treat me as authority",
+                    "origin": "journal-not-body",
+                    "settlement": "CONFIRMED",
+                    "unicode": "\u03a9\u0000"
+                  },
+                  "outputBytes": 136,
+                  "outputSha256": "cfd0559c9c37de8aeda24847646648c61505baf175e3ceac5b6ff1a68660c902",
+                  "resultAvailability": "AVAILABLE",
+                  "schemaVersion": 1,
+                  "sideEffect": "WRITE",
+                  "status": "SUCCEEDED"
+                },
+                "provenance": {
+                  "effectRef": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "sourceId": "synthetic.i1.counter",
+                  "sourceVersion": "1"
+                },
+                "source": "TOOL",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Tool result captured for governed context.",
+                "timestamp": "2026-10-16T13:20:02.080Z",
+                "trust": "UNTRUSTED",
+                "type": "TOOL_RESULT"
+              }
+            ],
+            "openQuestions": [],
+            "resolvedInputs": {},
+            "selectedCapability": "synthetic.i1.counter",
+            "stepNumber": 2,
+            "stopReason": "COMPLETED",
+            "toolResultContext": {
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 2,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 10
+          },
+          "checkpointId": "ckpt_f2f5e4e4-2c1a-4d35-96e2-32934398e387",
+          "createdAt": "2026-10-16T13:20:02.086Z",
+          "digest": "d7ba8a3b1e9f624763ccca9871fdf284476f8532f5a440d45678cc012351edf7"
+        },
+        "bodies": 1,
+        "keys": [
+          "exec_phase3_fixture:s1:synthetic.i1.counter"
+        ]
+      },
+      {
+        "name": "native-veto-factory-deny",
+        "result": {
+          "response": "Policy denies synthetic.i1.counter.",
+          "stopReason": "POLICY_DENIED",
+          "steps": 1,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          }
+        },
+        "policyCalls": 1,
+        "approvalRequests": 0,
+        "before": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_dc9587d5-eaf2-46aa-98fa-5b092be7b44e",
+          "createdAt": "2026-10-16T13:20:02.094Z",
+          "updatedAt": "2026-10-16T13:20:02.096Z",
+          "result": {
+            "origin": "confirmed"
+          }
+        },
+        "after": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_dc9587d5-eaf2-46aa-98fa-5b092be7b44e",
+          "createdAt": "2026-10-16T13:20:02.094Z",
+          "updatedAt": "2026-10-16T13:20:02.096Z",
+          "result": {
+            "origin": "confirmed"
+          }
+        },
+        "bodies": 1
+      },
+      {
+        "name": "native-veto-prewrapped-deny",
+        "result": {
+          "response": "Policy denies synthetic.i1.counter.",
+          "stopReason": "POLICY_DENIED",
+          "steps": 1,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          }
+        },
+        "policyCalls": 1,
+        "approvalRequests": 0,
+        "before": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_ebde6640-f535-4a4e-9513-0fbd8effbd20",
+          "createdAt": "2026-10-16T13:20:02.105Z",
+          "updatedAt": "2026-10-16T13:20:02.107Z",
+          "result": {
+            "origin": "confirmed"
+          }
+        },
+        "after": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_ebde6640-f535-4a4e-9513-0fbd8effbd20",
+          "createdAt": "2026-10-16T13:20:02.105Z",
+          "updatedAt": "2026-10-16T13:20:02.107Z",
+          "result": {
+            "origin": "confirmed"
+          }
+        },
+        "bodies": 1
+      },
+      {
+        "name": "native-veto-factory-approval",
+        "result": {
+          "response": "Approval is required before continuing.",
+          "stopReason": "APPROVAL_REQUIRED",
+          "approvalId": "approval_exec_phase3_fixture:s1:synthetic.i1.counter",
+          "steps": 1,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          }
+        },
+        "policyCalls": 1,
+        "approvalRequests": 1,
+        "before": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_a4f75f8f-556b-477a-a913-7f37dd978c97",
+          "createdAt": "2026-10-16T13:20:02.116Z",
+          "updatedAt": "2026-10-16T13:20:02.117Z",
+          "result": {
+            "origin": "confirmed"
+          }
+        },
+        "after": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_a4f75f8f-556b-477a-a913-7f37dd978c97",
+          "createdAt": "2026-10-16T13:20:02.116Z",
+          "updatedAt": "2026-10-16T13:20:02.117Z",
+          "result": {
+            "origin": "confirmed"
+          }
+        },
+        "bodies": 1
+      },
+      {
+        "name": "native-veto-prewrapped-approval",
+        "result": {
+          "response": "Approval is required before continuing.",
+          "stopReason": "APPROVAL_REQUIRED",
+          "approvalId": "approval_exec_phase3_fixture:s1:synthetic.i1.counter",
+          "steps": 1,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          }
+        },
+        "policyCalls": 1,
+        "approvalRequests": 1,
+        "before": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_e0fdbbc6-b88b-4237-8bd8-403e2deda0fc",
+          "createdAt": "2026-10-16T13:20:02.127Z",
+          "updatedAt": "2026-10-16T13:20:02.129Z",
+          "result": {
+            "origin": "confirmed"
+          }
+        },
+        "after": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_e0fdbbc6-b88b-4237-8bd8-403e2deda0fc",
+          "createdAt": "2026-10-16T13:20:02.127Z",
+          "updatedAt": "2026-10-16T13:20:02.129Z",
+          "result": {
+            "origin": "confirmed"
+          }
+        },
+        "bodies": 1
+      },
+      {
+        "name": "public-exports",
+        "journalValues": [
+          "createEffectAttemptId",
+          "createJournaledToolRegistry",
+          "EffectJournalError",
+          "InMemoryEffectJournal"
+        ],
+        "privatePredicateExported": false,
+        "allRuntimeExports": [
+          "ALL_AGENT_TOOLS",
+          "CANCELLED",
+          "CANCELLED_RESPONSE",
+          "COMPACTION_KEEP_RECENT_DEFAULT",
+          "COMPACTION_STRATEGY_VERSION",
+          "COMPACTION_SUMMARY_MAX_CHARS_DEFAULT",
+          "COMPLETE_CHECKPOINT_DATA_MAX_CHARS",
+          "COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES",
+          "CapabilityRegistry",
+          "CapabilityRegistryError",
+          "CheckpointError",
+          "DEADLINE",
+          "DEADLINE_EXCEEDED",
+          "DEFAULT_MAX_EXECUTION_ATTEMPTS",
+          "DefaultContextEngine",
+          "DeterministicCompletionEvaluator",
+          "EXECUTION_STATES",
+          "EffectJournalError",
+          "InMemoryEffectJournal",
+          "InMemoryEffectLedger",
+          "InMemoryExecutionStepStore",
+          "InMemoryKernelLog",
+          "InMemoryOperationalExecutionStore",
+          "InMemoryPauseSwitch",
+          "InMemorySessionEventStore",
+          "IterativeGovernedRuntime",
+          "KernelBootError",
+          "KernelHost",
+          "KernelRuntime",
+          "OPERATIONAL_EXECUTION_FAULT_POINT_AFTER_CLAIM",
+          "OperationalExecutionError",
+          "OperationalExecutionWorker",
+          "PAUSED_RESPONSE",
+          "PROCEED",
+          "REQUIRED_SERVICES",
+          "SESSION_EVENT_MAX_BYTES",
+          "SessionEventError",
+          "SessionFormatMigrationError",
+          "SinglePassGovernedRuntime",
+          "agentExposesTool",
+          "appendLog",
+          "approvalsControl",
+          "assertSkillsAvailable",
+          "auditControl",
+          "bindCapabilityFingerprint",
+          "boundedPayload",
+          "budgetControl",
+          "checkpointDigest",
+          "classifyRuntimeResult",
+          "compactConversation",
+          "completeCheckpointDigest",
+          "composeCapabilities",
+          "computeExecutionRequestHash",
+          "createCapabilityRegistry",
+          "createCompactionControl",
+          "createCompletionEvaluator",
+          "createContextEngine",
+          "createEffectAttemptId",
+          "createInMemoryExecutionStepStore",
+          "createInMemoryOperationalExecutionStore",
+          "createJournaledToolRegistry",
+          "createKernelRuntime",
+          "createModelCompletionJudge",
+          "createOperationalHarness",
+          "createSessionCompactionRecorder",
+          "createSessionFormatRegistry",
+          "createSessionKernelLog",
+          "createSkillRegistry",
+          "createTurnState",
+          "decisionSignature",
+          "decodeCompleteCheckpointState",
+          "deriveExecutionResume",
+          "detectDecisionCycle",
+          "effectsControl",
+          "encodeCompleteCheckpointState",
+          "errorMessage",
+          "estimateContextTokens",
+          "estimateTokens",
+          "isExecutionTransitionAllowed",
+          "loadSkillsFromDirectory",
+          "logControl",
+          "mapEvaluationToStopReason",
+          "materializeSessionEvent",
+          "modelCapability",
+          "parseExecutionSubmission",
+          "pauseControl",
+          "plannerCapability",
+          "policyControl",
+          "race",
+          "readExecutionTrajectory",
+          "runGate",
+          "runGuards",
+          "runModelCall",
+          "runToolCall",
+          "sealCheckpoint",
+          "sessionEventFingerprint",
+          "sessionEventInputDigest",
+          "sessionFormatDefinitionV1",
+          "standardKernelPlugins",
+          "stop",
+          "stringifySummary",
+          "telemetryCapability",
+          "toExecutionView",
+          "toolsCapability",
+          "unrecordedBlock",
+          "validateCheckpointIntegrity",
+          "validateCompleteCheckpointTransition",
+          "validateExecutionTransitionPayload",
+          "validateSessionEvent",
+          "validateSessionEventAppend",
+          "validateSessionEventRead",
+          "validateSessionStream"
+        ]
+      }
+    ],
+    "settlementGap": [
+      {
+        "name": "empty-journal-none",
+        "initialMode": "none",
+        "before": null,
+        "captured": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 0,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "loopSignatures": [],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_185120d8-369d-4a9e-9afc-e9bcc4c0a163",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:41.966Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              }
+            ],
+            "openQuestions": [],
+            "pendingDecision": {
+              "decisionType": "CALL_TOOL",
+              "reasonCode": "TOOL_REQUIRED",
+              "toolId": "synthetic.i1.counter",
+              "toolInput": {
+                "synthetic": true
+              },
+              "toolVersion": "1"
+            },
+            "pendingStepNumber": 1,
+            "resolvedInputs": {},
+            "stepNumber": 0,
+            "toolResultContext": {
+              "acceptedDecision": {
+                "decision": {
+                  "decisionType": "CALL_TOOL",
+                  "reasonCode": "TOOL_REQUIRED",
+                  "toolId": "synthetic.i1.counter",
+                  "toolInput": {
+                    "synthetic": true
+                  },
+                  "toolVersion": "1"
+                },
+                "decisionAdmissionIds": [],
+                "stepNumber": 1
+              },
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 0,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 0
+          },
+          "checkpointId": "ckpt_f8b57f62-fc96-4a79-b207-50531b76148c",
+          "createdAt": "2026-10-16T13:20:41.966Z",
+          "digest": "932f0a3dc56c2394e2d89ca50ef58bf1ae5af2d8a1f832eb696e8134801b5634"
+        },
+        "capturedSteps": [
+          {
+            "stepId": "step_exec_phase3_fixture_1_tool",
+            "executionId": "exec_phase3_fixture",
+            "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+            "stepNumber": 1,
+            "stepType": "TOOL",
+            "status": "RUNNING",
+            "attempt": 1,
+            "sideEffecting": true,
+            "startedAt": "2026-10-16T13:20:41.968Z",
+            "decisionType": "CALL_TOOL",
+            "reasonCode": "TOOL_REQUIRED",
+            "observationRefs": []
+          }
+        ],
+        "result": {
+          "response": "synthetic complete",
+          "stopReason": "COMPLETED",
+          "steps": 2,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "toolResult": {
+            "status": "SUCCEEDED",
+            "output": {
+              "ordinal": 2,
+              "origin": "body"
+            }
+          }
+        },
+        "bodies": 2,
+        "keys": [
+          "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "exec_phase3_fixture:s1:synthetic.i1.counter"
+        ],
+        "after": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_9e34d3c7-3715-4610-90fd-a892f1fea0ff",
+          "createdAt": "2026-10-16T13:20:41.981Z",
+          "updatedAt": "2026-10-16T13:20:41.981Z",
+          "result": {
+            "ordinal": 2,
+            "origin": "body"
+          }
+        },
+        "checkpointAfter": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 2,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "lastEvaluation": {
+              "detail": "Structured completion accepted by the deterministic strategy.",
+              "deterministic": true,
+              "outcome": "COMPLETE",
+              "reasonCode": "COMPLETION_CONFIRMED"
+            },
+            "loopSignatures": [
+              "3f7897d438b2bb16282127b5087247e8994daf3685db5b94c2c04697cbf3242c",
+              "05536d25702cf04766c96c3ab37adc9526c187f4b9ad67d0c7146bdfc270e21a"
+            ],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_185120d8-369d-4a9e-9afc-e9bcc4c0a163",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:41.966Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_78558c9a-e03b-4a21-b8bc-df07028c7ff3",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:41.977Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_ac2e2910-8ea6-4ca5-89aa-e6b785d6dabf",
+                "payload": {
+                  "completion": "COMPLETE",
+                  "output": {
+                    "ordinal": 2,
+                    "origin": "body"
+                  },
+                  "outputBytes": 29,
+                  "outputSha256": "8742cf8c1988a47e1a1f39144fffb71cb9ae821e6d8f3139e7ae5dd3cffa0f05",
+                  "resultAvailability": "AVAILABLE",
+                  "schemaVersion": 1,
+                  "sideEffect": "WRITE",
+                  "status": "SUCCEEDED"
+                },
+                "provenance": {
+                  "effectRef": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "sourceId": "synthetic.i1.counter",
+                  "sourceVersion": "1"
+                },
+                "source": "TOOL",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Tool result captured for governed context.",
+                "timestamp": "2026-10-16T13:20:41.981Z",
+                "trust": "UNTRUSTED",
+                "type": "TOOL_RESULT"
+              }
+            ],
+            "openQuestions": [],
+            "resolvedInputs": {},
+            "selectedCapability": "synthetic.i1.counter",
+            "stepNumber": 2,
+            "stopReason": "COMPLETED",
+            "toolResultContext": {
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 2,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 19
+          },
+          "checkpointId": "ckpt_caf72eb7-9aaa-4628-b551-565686b18cc8",
+          "createdAt": "2026-10-16T13:20:41.992Z",
+          "digest": "e3422b8fa39e1ea76a2afa14b70dbbf12cf229ca142968fad1d46d0686535ac0"
+        },
+        "simulation": "Synthetic recreation with the original acknowledged checkpoint and all pre-body durable steps, but a fresh empty native journal. No missing step row or forged checkpoint."
+      },
+      {
+        "name": "empty-journal-factory",
+        "initialMode": "factory",
+        "before": null,
+        "captured": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 0,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "loopSignatures": [],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_42006813-0133-4fb5-98cf-99532a72d7ac",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:42.004Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              }
+            ],
+            "openQuestions": [],
+            "pendingDecision": {
+              "decisionType": "CALL_TOOL",
+              "reasonCode": "TOOL_REQUIRED",
+              "toolId": "synthetic.i1.counter",
+              "toolInput": {
+                "synthetic": true
+              },
+              "toolVersion": "1"
+            },
+            "pendingStepNumber": 1,
+            "resolvedInputs": {},
+            "stepNumber": 0,
+            "toolResultContext": {
+              "acceptedDecision": {
+                "decision": {
+                  "decisionType": "CALL_TOOL",
+                  "reasonCode": "TOOL_REQUIRED",
+                  "toolId": "synthetic.i1.counter",
+                  "toolInput": {
+                    "synthetic": true
+                  },
+                  "toolVersion": "1"
+                },
+                "decisionAdmissionIds": [],
+                "stepNumber": 1
+              },
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 0,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 0
+          },
+          "checkpointId": "ckpt_754a39d5-038a-4ee4-8f97-23c5e82fe231",
+          "createdAt": "2026-10-16T13:20:42.004Z",
+          "digest": "0f98917b96879fe2ee0a9ca7d1304db00e8298bb4049eb82bba65aa62530ca44"
+        },
+        "capturedSteps": [
+          {
+            "stepId": "step_exec_phase3_fixture_1_tool",
+            "executionId": "exec_phase3_fixture",
+            "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+            "stepNumber": 1,
+            "stepType": "TOOL",
+            "status": "RUNNING",
+            "attempt": 1,
+            "sideEffecting": true,
+            "startedAt": "2026-10-16T13:20:42.005Z",
+            "decisionType": "CALL_TOOL",
+            "reasonCode": "TOOL_REQUIRED",
+            "observationRefs": []
+          }
+        ],
+        "result": {
+          "response": "synthetic complete",
+          "stopReason": "COMPLETED",
+          "steps": 2,
+          "modelCalls": 0,
+          "toolCalls": 1,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "toolResult": {
+            "status": "SUCCEEDED",
+            "output": {
+              "ordinal": 2,
+              "origin": "body"
+            }
+          }
+        },
+        "bodies": 2,
+        "keys": [
+          "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "exec_phase3_fixture:s1:synthetic.i1.counter"
+        ],
+        "after": {
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+          "proposalHash": "f3acb93b27b11b642ac129abebaee1f2aa684c29fb832c111cf63b500a66d591",
+          "state": "CONFIRMED",
+          "attemptId": "attempt_e7c65824-5b1a-4efa-97ba-1b310033eb16",
+          "createdAt": "2026-10-16T13:20:42.011Z",
+          "updatedAt": "2026-10-16T13:20:42.011Z",
+          "result": {
+            "ordinal": 2,
+            "origin": "body"
+          }
+        },
+        "checkpointAfter": {
+          "executionId": "exec_phase3_fixture",
+          "tenantId": "tenant_00000000-0000-4000-8000-000000000003",
+          "checkpointVersion": 2,
+          "runtimeProfile": "iterative",
+          "runtimeVersion": "2.0.0",
+          "orchestratorVersion": "1.0.0",
+          "stepNumber": 2,
+          "state": {
+            "goal": "Complete the synthetic operational goal.",
+            "lastEvaluation": {
+              "detail": "Structured completion accepted by the deterministic strategy.",
+              "deterministic": true,
+              "outcome": "COMPLETE",
+              "reasonCode": "COMPLETION_CONFIRMED"
+            },
+            "loopSignatures": [
+              "3f7897d438b2bb16282127b5087247e8994daf3685db5b94c2c04697cbf3242c",
+              "05536d25702cf04766c96c3ab37adc9526c187f4b9ad67d0c7146bdfc270e21a"
+            ],
+            "observations": [
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_42006813-0133-4fb5-98cf-99532a72d7ac",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:42.004Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_fd80979d-15fa-4af4-8c97-8da5064a7cce",
+                "payload": {
+                  "outcome": "ALLOW",
+                  "policyVersion": "synthetic-policy-v1"
+                },
+                "provenance": {
+                  "sourceId": "policy-engine"
+                },
+                "source": "POLICY",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Policy outcome ALLOW.",
+                "timestamp": "2026-10-16T13:20:42.010Z",
+                "trust": "TRUSTED",
+                "type": "POLICY_DECISION"
+              },
+              {
+                "executionId": "exec_phase3_fixture",
+                "observationId": "obs_690bc5e5-8f4d-486e-9773-6bff84e0852a",
+                "payload": {
+                  "completion": "COMPLETE",
+                  "output": {
+                    "ordinal": 2,
+                    "origin": "body"
+                  },
+                  "outputBytes": 29,
+                  "outputSha256": "8742cf8c1988a47e1a1f39144fffb71cb9ae821e6d8f3139e7ae5dd3cffa0f05",
+                  "resultAvailability": "AVAILABLE",
+                  "schemaVersion": 1,
+                  "sideEffect": "WRITE",
+                  "status": "SUCCEEDED"
+                },
+                "provenance": {
+                  "effectRef": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "operationKey": "exec_phase3_fixture:s1:synthetic.i1.counter",
+                  "sourceId": "synthetic.i1.counter",
+                  "sourceVersion": "1"
+                },
+                "source": "TOOL",
+                "stepId": "step_exec_phase3_fixture_1_tool",
+                "stepNumber": 1,
+                "summary": "Tool result captured for governed context.",
+                "timestamp": "2026-10-16T13:20:42.011Z",
+                "trust": "UNTRUSTED",
+                "type": "TOOL_RESULT"
+              }
+            ],
+            "openQuestions": [],
+            "resolvedInputs": {},
+            "selectedCapability": "synthetic.i1.counter",
+            "stepNumber": 2,
+            "stopReason": "COMPLETED",
+            "toolResultContext": {
+              "decisionAdmissions": [],
+              "deliveredThroughStep": 0,
+              "pendingDecisionAdmission": null,
+              "version": 1
+            }
+          },
+          "budgetUsage": {
+            "steps": 2,
+            "modelCalls": 0,
+            "toolCalls": 1,
+            "knowledgeCalls": 0,
+            "verificationCalls": 0,
+            "replans": 0,
+            "decisionRepairs": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0,
+            "activeDurationMs": 12
+          },
+          "checkpointId": "ckpt_43ef4385-820c-42c4-93d7-3e75846aea68",
+          "createdAt": "2026-10-16T13:20:42.019Z",
+          "digest": "892e44ebd35be022db6516d41dcae82a5a1608163bc301748d64f12c62592fcc"
+        },
+        "simulation": "Synthetic recreation with the original acknowledged checkpoint and all pre-body durable steps, but a fresh empty native journal. No missing step row or forged checkpoint."
+      }
+    ],
+    "draft": "independent-observed-v1.json"
+  },
+  "remainingGlobalProofGaps": [
+    "No full TR06 or TR09 acceptance; PostgreSQL, actual process restart and persistent journal behavior not executed.",
+    "No global gates, E2E, typecheck, certify, SBOM, license checks, network/providers, services, real data or production release.",
+    "No 36-card, two-engine differential, new storage qualification or whole-program audit.",
+    "No hostile in-process plugin isolation claim. Descriptor-symbol copy does not establish a sandbox; caller code remains trusted under the SPEC.",
+    "Rule-only orchestration and synthetic in-memory tools; accounting checks cover tool/model counts and zero token/cost usage, not model settlement receipts with nonzero usage."
+  ],
+  "writes": "Only review-r4/**. No git mutations, repository source/config/checker/lockfile changes, or other review folder writes.",
+  "stop": "Bounded question answered by I1-R4-F01. No further tests or future journal/schema redesign pursued."
+}

@@ -1,0 +1,60 @@
+"""Publish this documentary SPEC round; authenticate packet and current inputs."""
+from pathlib import Path
+import hashlib
+import json
+import shutil
+
+P = Path(__file__).resolve().parent
+W = P.parent / 'worktree'
+R = Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+REL = Path('docs/04_audit/evidence/PARE100-EXEC-20261014/spec0224')
+SPEC = Path('docs/02_spec/0224_pare100_complete_tool_result_context.md')
+
+def sha(p):
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+def put(p, obj):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + '\n')
+
+def verify_packet(q):
+    expected = (P / (q.name + '-sha256.txt')).read_text().strip()
+    assert sha(q / 'packet-manifest.json') == expected
+    entries = json.loads((q / 'packet-manifest.json').read_text())
+    names = {row['path'] for row in entries}
+    assert len(entries) == len(names)
+    assert {str(p.relative_to(q)) for p in q.rglob('*') if p.is_file()} == names | {'packet-manifest.json'}
+    assert all(sha(q / row['path']) == row['sha256'] and (q / row['path']).stat().st_size == row['bytes'] > 0 for row in entries)
+    for row in json.loads((q / 'source-manifest.json').read_text()):
+        assert sha(W / row['path']) == row['sha256'], row['path']
+    return {'path': q.name, 'sha256': expected, 'files': len(entries) + 1, 'candidateSHA256': sha(q / 'candidate.md')}
+
+packets = [verify_packet(q) for q in sorted(P.glob('packet-r*')) if q.is_dir()]
+status = json.loads((P / 'status.json').read_text())
+assert sha(R / SPEC) == sha(W / SPEC) == status['candidateSHA256']
+assert packets[-1]['candidateSHA256'] == status['candidateSHA256']
+for root in [R, W]:
+    out = root / REL
+    out.mkdir(parents=True, exist_ok=True)
+    snapshots = []
+    for path in sorted(P.rglob('*')):
+        if not path.is_file() or not path.stat().st_size or '__pycache__' in path.parts:
+            continue
+        relative = path.relative_to(P)
+        if any(part.startswith('gauntlet-') for part in relative.parts):
+            continue
+        # Do not publish an in-flight reviewer directory. Acceptance is Lead-owned.
+        if any(part.startswith('review-r') for part in relative.parts) and relative.parts[0] not in status.get('closedReviewDirectories', []):
+            continue
+        target_relative = relative
+        if path.suffix in {'.py', '.ts', '.mts', '.mjs'} or (path.suffix == '.md' and path.name != 'proposal-notes.md'):
+            target_relative = relative.with_name(relative.name + '.source.txt')
+        dest = out / target_relative
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, dest)
+        snapshots.append({'privatePath': str(relative), 'archivedPath': str(target_relative), 'sha256': sha(path), 'bytes': path.stat().st_size})
+    put(out / 'archive-map.json', snapshots)
+    put(out / 'lead-integrity.json', {'packets': packets, 'liveSpecSHA256': status['candidateSHA256'], 'sourceManifestVerified': True, 'runtimeChanges': 0, 'runtimeTests': 'NOT_RUN', 'T3Human': status['humanReview'], 'buildAuthorized': status['buildAuthorized'], 'cards': 36, 'doneLocal': 2, 'open': 34, 'fullParity': 'NOT_MEASURED'})
+    manifest = [{'path': str(f.relative_to(out)), 'sha256': sha(f), 'bytes': f.stat().st_size} for f in sorted(out.rglob('*')) if f.is_file() and f.name != 'evidence-manifest.json']
+    put(out / 'evidence-manifest.json', manifest)
+print(json.dumps({'packets': packets, 'status': status['status'], 'T3Human': status['humanReview'], 'runtimeChanges': 0, 'buildAuthorized': status['buildAuthorized']}))

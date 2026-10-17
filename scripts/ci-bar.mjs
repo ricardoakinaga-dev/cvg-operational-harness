@@ -162,7 +162,10 @@ function isExcluded(relativePath) {
 
 function candidateFiles() {
   const tracked = new Set(
-    execFileSync('git', ['ls-files', '-z'], { cwd: root })
+    execFileSync('git', ['ls-files', '-z'], {
+      cwd: root,
+      maxBuffer: 16 * 1024 * 1024
+    })
       .toString('utf8')
       .split('\0')
       .filter(Boolean)
@@ -170,7 +173,7 @@ function candidateFiles() {
   const listed = execFileSync(
     'git',
     ['ls-files', '-co', '--exclude-standard', '-z'],
-    { cwd: root }
+    { cwd: root, maxBuffer: 16 * 1024 * 1024 }
   )
     .toString('utf8')
     .split('\0')

@@ -6,6 +6,7 @@ import {
   type RegisteredPlugin
 } from './plugin-gateway.ts'
 import { z } from 'zod'
+import { attestReviewedPlugin } from './plugin-execution-core.ts'
 
 export const CONTROLLED_SCHEDULING_PLUGIN = 'scheduling.controlled'
 export const CONTROLLED_SCHEDULING_TOOL = 'find_available_slots'
@@ -19,7 +20,7 @@ const controlledActorAuthorizer: CapabilityActorAuthorizer = ({
     : []
 
 export function createControlledSchedulingPlugin(): RegisteredPlugin {
-  return {
+  const plugin: RegisteredPlugin = {
     manifest: {
       name: CONTROLLED_SCHEDULING_PLUGIN,
       version: '1.0.0',
@@ -66,6 +67,21 @@ export function createControlledSchedulingPlugin(): RegisteredPlugin {
         .strict()
     }
   }
+  attestReviewedPlugin(plugin, {
+    id: CONTROLLED_SCHEDULING_TOOL,
+    version: '1.0.0',
+    description: 'Pure synthetic constant scheduling slots',
+    inputSchema: { type: 'object' },
+    outputSchema: { type: 'object' },
+    risk: 'LOW',
+    sideEffect: 'NONE',
+    idempotent: true,
+    requiresApproval: false,
+    origin: 'plugin',
+    providerId: CONTROLLED_SCHEDULING_PLUGIN,
+    providerVersion: '1.0.0'
+  })
+  return plugin
 }
 
 export function createControlledCapabilityGateway(

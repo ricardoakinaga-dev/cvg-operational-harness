@@ -1,0 +1,2328 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/index.ts
+1: export * from './createOperationalHarness.ts'
+2: export * from './compaction.ts'
+3: export * from './session/index.ts'
+4: export {
+5:   CapabilityRegistry,
+6:   CapabilityRegistryError,
+7:   composeCapabilities,
+8:   createCapabilityRegistry
+9: } from './capability-boundary.ts'
+10: export type {
+11:   CapabilityComposition,
+12:   CapabilityRegistryErrorCode
+13: } from './capability-boundary.ts'
+14: export * from './effect-journal.ts'
+15: export * from './execution-spine.ts'
+16: export * from './runtime.ts'
+17: export {
+18:   CANCELLED,
+19:   CANCELLED_RESPONSE,
+20:   DEADLINE,
+21:   InMemoryEffectLedger,
+22:   InMemoryKernelLog,
+23:   InMemoryPauseSwitch,
+24:   KernelBootError,
+25:   KernelHost,
+26:   KernelRuntime,
+27:   PAUSED_RESPONSE,
+28:   PROCEED,
+29:   REQUIRED_SERVICES,
+30:   appendLog,
+31:   approvalsControl,
+32:   auditControl,
+33:   budgetControl,
+34:   createKernelRuntime,
+35:   createTurnState,
+36:   effectsControl,
+37:   logControl,
+38:   modelCapability,
+39:   pauseControl,
+40:   plannerCapability,
+41:   policyControl,
+42:   race,
+43:   runGate,
+44:   runGuards,
+45:   runModelCall,
+46:   runToolCall,
+47:   standardKernelPlugins,
+48:   stop,
+49:   telemetryCapability,
+50:   toolsCapability,
+51:   unrecordedBlock
+52: } from './kernel/index.ts'
+53: export type {
+54:   BudgetService,
+55:   EffectLedger,
+56:   EffectRef,
+57:   GuardVerdict,
+58:   HookMap,
+59:   HookPoint,
+60:   KernelContext,
+61:   KernelGate,
+62:   KernelLog,
+63:   KernelLogEvent,
+64:   KernelPlugin,
+65:   KernelProceed,
+66:   KernelStop,
+67:   ModelCallState,
+68:   ModelPipelineResult,
+69:   PauseSwitch,
+70:   PluginKind,
+71:   ServiceKey,
+72:   Services,
+73:   StandardKernelOptions,
+74:   StopCause,
+75:   ToolCallState,
+76:   ToolGuard,
+77:   ToolOutcome,
+78:   ToolPipelineHooks,
+79:   ToolPipelineResult,
+80:   TurnBudget,
+81:   TurnState
+82: } from './kernel/index.ts'
+83: export * from './context-engine.ts'
+84: export * from './completion.ts'
+85: export * from './step-store.ts'
+86: export * from './iterative-runtime.ts'
+87: export * from './trajectory.ts'
+88: export * from './skills/index.ts'
+89: 
+90: export type { ExecutionStepStore } from '@cvg/harness-contracts'
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/capability-boundary.ts
+1: import { createHash } from 'node:crypto'
+2: import type {
+3:   CapabilityDescriptor,
+4:   CapabilityImplementation,
+5:   CapabilityOrigin,
+6:   CapabilityRegistration,
+7:   CapabilityRegistry as CapabilityRegistryPort,
+8:   ToolDefinition,
+9:   ToolExecutionContext,
+10:   ToolRegistry,
+11:   ToolResult
+12: } from '@cvg/harness-contracts'
+13: 
+14: const CAPABILITY_ID_PATTERN = /^[A-Za-z0-9._:-]+$/
+15: const MAX_ID_LENGTH = 120
+16: const MAX_VERSION_LENGTH = 80
+17: const MAX_DESCRIPTION_LENGTH = 4000
+18: const MAX_JSON_DEPTH = 64
+19: const MAX_JSON_NODES = 20_000
+20: const MAX_JSON_STRING_LENGTH = 16_384
+21: const MAX_JSON_KEY_LENGTH = 512
+22: const MAX_JSON_KEYS = 512
+23: const MAX_JSON_ARRAY_LENGTH = 512
+24: const MAX_JSON_BYTES = 256 * 1024
+25: const UNSAFE_JSON_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+26: const AUTHORITY_FIELDS = [
+27:   'tenantId',
+28:   'agentId',
+29:   'correlationId',
+30:   'traceId'
+31: ] as const
+32: const ORIGINS: readonly CapabilityOrigin[] = [
+33:   'core',
+34:   'skill',
+35:   'plugin',
+36:   'knowledge',
+37:   'mcp'
+38: ]
+39: 
+40: export type CapabilityRegistryErrorCode =
+41:   | 'invalid_descriptor'
+42:   | 'invalid_implementation'
+43:   | 'duplicate_capability'
+44: 
+45: export class CapabilityRegistryError extends Error {
+46:   public readonly code: CapabilityRegistryErrorCode
+47: 
+48:   public constructor(code: CapabilityRegistryErrorCode, message: string) {
+49:     super(message)
+50:     this.name = 'CapabilityRegistryError'
+51:     this.code = code
+52:   }
+53: }
+54: 
+55: interface StoredRegistration {
+56:   readonly descriptor: CapabilityDescriptor
+57:   readonly implementation: CapabilityImplementation
+58: }
+59: 
+60: const registrationsByRegistry = new WeakMap<
+61:   object,
+62:   readonly StoredRegistration[]
+63: >()
+64: 
+65: /**
+66:  * Explicit, immutable capability composition for the neutral harness.
+67:  * Implementations are retained in a private module-owned store. The
+68:  * executable adapter is only reachable from the composition root.
+69:  */
+70: export class CapabilityRegistry implements CapabilityRegistryPort {
+71:   public constructor(registrations: readonly CapabilityRegistration[] = []) {
+72:     const stored: StoredRegistration[] = []
+73:     for (const registration of registrations) {
+74:       const normalized = normalizeRegistration(registration)
+75:       if (
+76:         stored.some(
+77:           (candidate) =>
+78:             candidate.descriptor.id === normalized.descriptor.id &&
+79:             candidate.descriptor.version === normalized.descriptor.version
+80:         )
+81:       ) {
+82:         throw new CapabilityRegistryError(
+83:           'duplicate_capability',
+84:           `Capability already registered: ${normalized.descriptor.id}@${normalized.descriptor.version}`
+85:         )
+86:       }
+87:       stored.push(normalized)
+88:     }
+89:     registrationsByRegistry.set(this, Object.freeze(stored))
+90:   }
+91: 
+92:   public register(registration: CapabilityRegistration): CapabilityRegistry {
+93:     const normalized = normalizeRegistration(registration)
+94:     if (
+95:       getRegistrations(this).some(
+96:         (candidate) =>
+97:           candidate.descriptor.id === normalized.descriptor.id &&
+98:           candidate.descriptor.version === normalized.descriptor.version
+99:       )
+100:     ) {
+101:       throw new CapabilityRegistryError(
+102:         'duplicate_capability',
+103:         `Capability already registered: ${normalized.descriptor.id}@${normalized.descriptor.version}`
+104:       )
+105:     }
+106: 
+107:     return CapabilityRegistry.fromStored([
+108:       ...getRegistrations(this),
+109:       normalized
+110:     ])
+111:   }
+112: 
+113:   public listDescriptors(): readonly CapabilityDescriptor[] {
+114:     return sorted(getRegistrations(this)).map(({ descriptor }) =>
+115:       cloneDescriptor(descriptor)
+116:     )
+117:   }
+118: 
+119:   public resolveDescriptor(
+120:     capabilityId: string,
+121:     version: string
+122:   ): CapabilityDescriptor | undefined {
+123:     if (!isBoundedIdentifier(capabilityId, MAX_ID_LENGTH)) return undefined
+124:     if (!isBoundedVersion(version)) return undefined
+125:     const registration = getRegistrations(this).find(
+126:       (candidate) =>
+127:         candidate.descriptor.id === capabilityId &&
+128:         candidate.descriptor.version === version
+129:     )
+130:     return registration ? cloneDescriptor(registration.descriptor) : undefined
+131:   }
+132: 
+133:   public compositionFingerprint(): string {
+134:     const descriptors = sorted(getRegistrations(this)).map(
+135:       ({ descriptor }) => descriptor
+136:     )
+137:     return createHash('sha256')
+138:       .update(
+139:         stableSerialize({
+140:           schemaVersion: 'capability-composition-v1',
+141:           descriptors
+142:         })
+143:       )
+144:       .digest('hex')
+145:   }
+146: 
+147:   private static fromStored(
+148:     registrations: readonly StoredRegistration[]
+149:   ): CapabilityRegistry {
+150:     const registry = Object.create(
+151:       CapabilityRegistry.prototype
+152:     ) as CapabilityRegistry
+153:     registrationsByRegistry.set(registry, Object.freeze([...registrations]))
+154:     return registry
+155:   }
+156: }
+157: 
+158: /** Creates an empty registry without requiring callers to know the class. */
+159: export function createCapabilityRegistry(
+160:   registrations: readonly CapabilityRegistration[] = []
+161: ): CapabilityRegistry {
+162:   return new CapabilityRegistry(registrations)
+163: }
+164: 
+165: export interface CapabilityComposition {
+166:   readonly registry: CapabilityRegistry
+167:   readonly fingerprint: string
+168: }
+169: 
+170: export function composeCapabilities(
+171:   registrations: readonly CapabilityRegistration[] = []
+172: ): CapabilityComposition {
+173:   const registry = createCapabilityRegistry(registrations)
+174:   return {
+175:     registry,
+176:     fingerprint: registry.compositionFingerprint()
+177:   }
+178: }
+179: 
+180: /**
+181:  * Internal executable bridge for the public harness composition root. This is
+182:  * deliberately not re-exported from the package entrypoint.
+183:  */
+184: export function createCapabilityToolRegistry(
+185:   registry: CapabilityRegistryPort
+186: ): ToolRegistry {
+187:   const snapshot = sorted(getRegistrations(registry))
+188:   return {
+189:     list: () => snapshot.map((registration) => toTool(registration)),
+190:     resolve: (capabilityId, version) => {
+191:       if (
+192:         !isBoundedIdentifier(capabilityId, MAX_ID_LENGTH) ||
+193:         !isBoundedVersion(version)
+194:       ) {
+195:         return undefined
+196:       }
+197:       const registration = snapshot.find(
+198:         (candidate) =>
+199:           candidate.descriptor.id === capabilityId &&
+200:           candidate.descriptor.version === version
+201:       )
+202:       return registration ? toTool(registration) : undefined
+203:     }
+204:   }
+205: }
+206: 
+207: function normalizeDescriptor(value: unknown): CapabilityDescriptor {
+208:   if (!isPlainRecord(value)) {
+209:     throw new CapabilityRegistryError(
+210:       'invalid_descriptor',
+211:       'Capability descriptor must be a plain object'
+212:     )
+213:   }
+214: 
+215:   const descriptor = value as Record<string, unknown>
+216:   if (!isBoundedIdentifier(descriptor.id, MAX_ID_LENGTH)) {
+217:     throw invalidDescriptor('Capability id is invalid')
+218:   }
+219:   if (!isBoundedVersion(descriptor.version)) {
+220:     throw invalidDescriptor('Capability version must be exact and bounded')
+221:   }
+222:   if (
+223:     typeof descriptor.description !== 'string' ||
+224:     descriptor.description.trim().length === 0 ||
+225:     descriptor.description.length > MAX_DESCRIPTION_LENGTH
+226:   ) {
+227:     throw invalidDescriptor('Capability description is invalid')
+228:   }
+229:   if (!ORIGINS.includes(descriptor.origin as CapabilityOrigin)) {
+230:     throw invalidDescriptor('Capability origin is invalid')
+231:   }
+232:   if (!isBoundedIdentifier(descriptor.providerId, MAX_ID_LENGTH)) {
+233:     throw invalidDescriptor('Capability provider id is invalid')
+234:   }
+235:   if (!isBoundedVersion(descriptor.providerVersion)) {
+236:     throw invalidDescriptor('Capability provider version is invalid')
+237:   }
+238:   if (
+239:     !isRisk(descriptor.risk) ||
+240:     !isSideEffect(descriptor.sideEffect) ||
+241:     typeof descriptor.idempotent !== 'boolean' ||
+242:     typeof descriptor.requiresApproval !== 'boolean'
+243:   ) {
+244:     throw invalidDescriptor('Capability governance metadata is invalid')
+245:   }
+246: 
+247:   const inputSchema = cloneJsonValue(descriptor.inputSchema)
+248:   const outputSchema = cloneJsonValue(descriptor.outputSchema)
+249:   return deepFreeze({
+250:     id: descriptor.id,
+251:     version: descriptor.version,
+252:     description: descriptor.description.trim(),
+253:     inputSchema,
+254:     outputSchema,
+255:     risk: descriptor.risk,
+256:     sideEffect: descriptor.sideEffect,
+257:     idempotent: descriptor.idempotent,
+258:     requiresApproval: descriptor.requiresApproval,
+259:     origin: descriptor.origin,
+260:     providerId: descriptor.providerId,
+261:     providerVersion: descriptor.providerVersion
+262:   }) as CapabilityDescriptor
+263: }
+264: 
+265: function normalizeRegistration(value: unknown): StoredRegistration {
+266:   try {
+267:     if (!isPlainRecord(value)) {
+268:       throw new CapabilityRegistryError(
+269:         'invalid_descriptor',
+270:         'Capability registration must be a plain object'
+271:       )
+272:     }
+273:     const registration = value as Record<string, unknown>
+274:     return {
+275:       descriptor: normalizeDescriptor(registration.descriptor),
+276:       implementation: normalizeImplementation(registration.implementation)
+277:     }
+278:   } catch (error) {
+279:     if (error instanceof CapabilityRegistryError) throw error
+280:     throw new CapabilityRegistryError(
+281:       'invalid_descriptor',
+282:       'Capability registration contains unsupported data'
+283:     )
+284:   }
+285: }
+286: 
+287: function getRegistrations(
+288:   registry: CapabilityRegistryPort
+289: ): readonly StoredRegistration[] {
+290:   const registrations = registrationsByRegistry.get(registry as object)
+291:   if (!registrations) {
+292:     throw new CapabilityRegistryError(
+293:       'invalid_descriptor',
+294:       'Capability registry was not created by the neutral registry factory'
+295:     )
+296:   }
+297:   return registrations
+298: }
+299: 
+300: function normalizeImplementation(value: unknown): CapabilityImplementation {
+301:   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+302:     throw new CapabilityRegistryError(
+303:       'invalid_implementation',
+304:       'Capability implementation requires input validation, execution, and output validation'
+305:     )
+306:   }
+307: 
+308:   let validateInput: CapabilityImplementation['validateInput']
+309:   let execute: CapabilityImplementation['execute']
+310:   let validateOutput: CapabilityImplementation['validateOutput']
+311:   try {
+312:     const implementation = value as Record<string, unknown>
+313:     if (
+314:       typeof implementation.validateInput !== 'function' ||
+315:       typeof implementation.execute !== 'function' ||
+316:       typeof implementation.validateOutput !== 'function'
+317:     ) {
+318:       throw new Error('missing implementation method')
+319:     }
+320:     validateInput = (
+321:       implementation.validateInput as CapabilityImplementation['validateInput']
+322:     ).bind(value)
+323:     execute = (
+324:       implementation.execute as CapabilityImplementation['execute']
+325:     ).bind(value)
+326:     validateOutput = (
+327:       implementation.validateOutput as CapabilityImplementation['validateOutput']
+328:     ).bind(value)
+329:   } catch {
+330:     throw new CapabilityRegistryError(
+331:       'invalid_implementation',
+332:       'Capability implementation requires input validation, execution, and output validation'
+333:     )
+334:   }
+335:   return Object.freeze({
+336:     validateInput,
+337:     execute,
+338:     validateOutput
+339:   }) as CapabilityImplementation
+340: }
+341: 
+342: function toTool(registration: StoredRegistration): ToolDefinition {
+343:   const descriptor = cloneDescriptor(registration.descriptor)
+344:   return {
+345:     ...descriptor,
+346:     execute: (input: unknown, context: ToolExecutionContext) =>
+347:       executeBound(registration.implementation, input, context)
+348:   }
+349: }
+350: 
+351: async function executeBound(
+352:   implementation: CapabilityImplementation,
+353:   input: unknown,
+354:   context: ToolExecutionContext
+355: ): Promise<ToolResult> {
+356:   let safeInput: unknown
+357:   try {
+358:     safeInput = cloneJsonValue(input)
+359:     if (!inputMatchesExecutionContext(safeInput, context)) {
+360:       return { status: 'REJECTED', error: 'capability_input_invalid' }
+361:     }
+362:     if (implementation.validateInput(safeInput) !== true) {
+363:       return { status: 'REJECTED', error: 'capability_input_invalid' }
+364:     }
+365:   } catch {
+366:     return { status: 'REJECTED', error: 'capability_input_invalid' }
+367:   }
+368: 
+369:   let result: ToolResult
+370:   try {
+371:     const safeContext = Object.freeze({ ...context }) as ToolExecutionContext
+372:     const rawResult = await implementation.execute(safeInput, safeContext)
+373:     const normalizedResult = normalizeToolResult(rawResult)
+374:     if (!normalizedResult) {
+375:       return { status: 'REJECTED', error: 'capability_result_invalid' }
+376:     }
+377:     result = normalizedResult
+378:   } catch {
+379:     return { status: 'FAILED', error: 'capability_execution_failed' }
+380:   }
+381: 
+382:   if (result.status === 'SUCCEEDED') {
+383:     try {
+384:       if (implementation.validateOutput(result.output) !== true) {
+385:         return { status: 'REJECTED', error: 'capability_output_invalid' }
+386:       }
+387:     } catch {
+388:       return { status: 'REJECTED', error: 'capability_output_invalid' }
+389:     }
+390:   }
+391: 
+392:   try {
+393:     return {
+394:       status: result.status,
+395:       ...(result.output !== undefined
+396:         ? { output: cloneJsonValue(result.output) }
+397:         : {}),
+398:       ...(result.error !== undefined ? { error: result.error } : {})
+399:     }
+400:   } catch {
+401:     return { status: 'REJECTED', error: 'capability_result_invalid' }
+402:   }
+403: }
+404: 
+405: function cloneDescriptor(
+406:   descriptor: CapabilityDescriptor
+407: ): CapabilityDescriptor {
+408:   return deepFreeze({
+409:     ...descriptor,
+410:     inputSchema: cloneJsonValue(descriptor.inputSchema),
+411:     outputSchema: cloneJsonValue(descriptor.outputSchema)
+412:   }) as CapabilityDescriptor
+413: }
+414: 
+415: function sorted(
+416:   registrations: readonly StoredRegistration[]
+417: ): readonly StoredRegistration[] {
+418:   return [...registrations].sort((left, right) => {
+419:     const idOrder = compareCodeUnits(left.descriptor.id, right.descriptor.id)
+420:     if (idOrder !== 0) return idOrder
+421:     return compareCodeUnits(left.descriptor.version, right.descriptor.version)
+422:   })
+423: }
+424: 
+425: function compareCodeUnits(left: string, right: string): number {
+426:   return left < right ? -1 : left > right ? 1 : 0
+427: }
+428: 
+429: function inputMatchesExecutionContext(
+430:   value: unknown,
+431:   context: ToolExecutionContext
+432: ): boolean {
+433:   if (Array.isArray(value)) {
+434:     return value.every((child) => inputMatchesExecutionContext(child, context))
+435:   }
+436:   if (!isPlainRecord(value)) return true
+437: 
+438:   for (const [key, child] of Object.entries(value)) {
+439:     if (
+440:       (AUTHORITY_FIELDS as readonly string[]).includes(key) &&
+441:       child !== context[key as (typeof AUTHORITY_FIELDS)[number]]
+442:     ) {
+443:       return false
+444:     }
+445:     if (!inputMatchesExecutionContext(child, context)) return false
+446:   }
+447:   return true
+448: }
+449: 
+450: function invalidDescriptor(message: string): CapabilityRegistryError {
+451:   return new CapabilityRegistryError('invalid_descriptor', message)
+452: }
+453: 
+454: function isBoundedIdentifier(
+455:   value: unknown,
+456:   maxLength: number
+457: ): value is string {
+458:   return (
+459:     typeof value === 'string' &&
+460:     value.trim() === value &&
+461:     value.length > 0 &&
+462:     value.length <= maxLength &&
+463:     CAPABILITY_ID_PATTERN.test(value)
+464:   )
+465: }
+466: 
+467: function isBoundedVersion(value: unknown): value is string {
+468:   return (
+469:     isBoundedIdentifier(value, MAX_VERSION_LENGTH) &&
+470:     value.toLowerCase() !== 'latest'
+471:   )
+472: }
+473: 
+474: function isRisk(value: unknown): boolean {
+475:   return (
+476:     value === 'LOW' ||
+477:     value === 'MEDIUM' ||
+478:     value === 'HIGH' ||
+479:     value === 'CRITICAL'
+480:   )
+481: }
+482: 
+483: function isSideEffect(value: unknown): boolean {
+484:   return (
+485:     value === 'NONE' ||
+486:     value === 'READ' ||
+487:     value === 'WRITE' ||
+488:     value === 'EXTERNAL'
+489:   )
+490: }
+491: 
+492: function normalizeToolResult(value: unknown): ToolResult | undefined {
+493:   try {
+494:     const safeValue = cloneJsonValue(value)
+495:     if (!isPlainRecord(safeValue)) return undefined
+496:     const status = safeValue.status
+497:     if (!isToolStatus(status)) return undefined
+498:     const error = safeValue.error
+499:     if (
+500:       error !== undefined &&
+501:       (typeof error !== 'string' || error.length > 240)
+502:     ) {
+503:       return undefined
+504:     }
+505:     const output = safeValue.output
+506:     return {
+507:       status,
+508:       ...(output !== undefined ? { output } : {}),
+509:       ...(error !== undefined ? { error } : {})
+510:     }
+511:   } catch {
+512:     return undefined
+513:   }
+514: }
+515: 
+516: function isToolStatus(value: unknown): value is ToolResult['status'] {
+517:   return value === 'SUCCEEDED' || value === 'FAILED' || value === 'REJECTED'
+518: }
+519: 
+520: function cloneJsonValue(value: unknown): unknown {
+521:   return JSON.parse(stableSerialize(value)) as unknown
+522: }
+523: 
+524: interface SerializationState {
+525:   readonly seen: WeakSet<object>
+526:   nodes: number
+527: }
+528: 
+529: function stableSerialize(
+530:   value: unknown,
+531:   state: SerializationState = { seen: new WeakSet<object>(), nodes: 0 },
+532:   depth = 0
+533: ): string {
+534:   state.nodes += 1
+535:   if (state.nodes > MAX_JSON_NODES) {
+536:     throw new Error('JSON node budget exceeded')
+537:   }
+538:   if (depth > MAX_JSON_DEPTH) {
+539:     throw new Error('JSON depth budget exceeded')
+540:   }
+541: 
+542:   if (value === null) return 'null'
+543:   if (typeof value === 'string') {
+544:     if (value.length > MAX_JSON_STRING_LENGTH) {
+545:       throw new Error('JSON string budget exceeded')
+546:     }
+547:     return JSON.stringify(value)
+548:   }
+549:   if (typeof value === 'boolean') return value ? 'true' : 'false'
+550:   if (typeof value === 'number') {
+551:     if (!Number.isFinite(value)) throw new Error('Non-finite value')
+552:     return JSON.stringify(value)
+553:   }
+554:   if (typeof value !== 'object' || value === undefined) {
+555:     throw new Error('Value is not JSON serializable')
+556:   }
+557:   if (state.seen.has(value)) throw new Error('Value contains a cycle')
+558:   state.seen.add(value)
+559:   try {
+560:     if (Array.isArray(value)) {
+561:       if (value.length > MAX_JSON_ARRAY_LENGTH) {
+562:         throw new Error('JSON array budget exceeded')
+563:       }
+564:       const items: string[] = []
+565:       for (let index = 0; index < value.length; index += 1) {
+566:         if (!Object.prototype.hasOwnProperty.call(value, index)) {
+567:           throw new Error('Sparse arrays are not supported')
+568:         }
+569:         items.push(stableSerialize(value[index], state, depth + 1))
+570:       }
+571:       return boundedSerialized(`[${items.join(',')}]`)
+572:     }
+573:     if (!isPlainRecord(value)) throw new Error('Value is not a plain object')
+574:     const keys = Object.keys(value)
+575:     if (
+576:       keys.length > MAX_JSON_KEYS ||
+577:       Object.getOwnPropertySymbols(value).length > 0 ||
+578:       Object.getOwnPropertyNames(value).length !== keys.length
+579:     ) {
+580:       throw new Error('JSON object budget or shape exceeded')
+581:     }
+582:     const parts: string[] = []
+583:     for (const key of keys.sort()) {
+584:       if (key.length > MAX_JSON_KEY_LENGTH || UNSAFE_JSON_KEYS.has(key)) {
+585:         throw new Error('Unsafe JSON object key')
+586:       }
+587:       const property = Object.getOwnPropertyDescriptor(value, key)
+588:       if (!property || !('value' in property)) {
+589:         throw new Error('Accessor properties are not supported')
+590:       }
+591:       parts.push(
+592:         `${JSON.stringify(key)}:${stableSerialize(property.value, state, depth + 1)}`
+593:       )
+594:     }
+595:     return boundedSerialized(`{${parts.join(',')}}`)
+596:   } finally {
+597:     state.seen.delete(value)
+598:   }
+599: }
+600: 
+601: function boundedSerialized(value: string): string {
+602:   if (value.length > MAX_JSON_BYTES) {
+603:     throw new Error('JSON byte budget exceeded')
+604:   }
+605:   return value
+606: }
+607: 
+608: function deepFreeze<T>(value: T): T {
+609:   if (typeof value !== 'object' || value === null) return value
+610:   Object.freeze(value)
+611:   for (const child of Object.values(value)) deepFreeze(child)
+612:   return value
+613: }
+614: 
+615: function isPlainRecord(value: unknown): value is Record<string, unknown> {
+616:   try {
+617:     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+618:       return false
+619:     }
+620:     const prototype = Object.getPrototypeOf(value)
+621:     return prototype === Object.prototype || prototype === null
+622:   } catch {
+623:     return false
+624:   }
+625: }
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/kernel-runtime.ts
+1: import type {
+2:   HarnessRuntime,
+3:   RuntimeInput,
+4:   RuntimeResult,
+5:   ToolDescriptor,
+6:   ToolDefinition,
+7:   ToolInvocation,
+8:   ToolResult
+9: } from '@cvg/harness-contracts'
+10: import { KernelHost } from './host.ts'
+11: import {
+12:   CANCELLED,
+13:   CANCELLED_RESPONSE,
+14:   appendLog,
+15:   createTurnState,
+16:   race,
+17:   runGate,
+18:   runModelCall,
+19:   runToolCall,
+20:   unrecordedBlock
+21: } from './pipeline.ts'
+22: import {
+23:   CONTROL_SERVICES,
+24:   DEADLINE,
+25:   LOOP_CAPABILITIES,
+26:   stop,
+27:   type KernelPlugin,
+28:   type KernelStop,
+29:   type ToolCallState,
+30:   type ToolOutcome,
+31:   type TurnState
+32: } from './types.ts'
+33: 
+34: /** Services every kernel profile must provide before it may run (I1). */
+35: export const REQUIRED_SERVICES = [
+36:   ...CONTROL_SERVICES,
+37:   ...LOOP_CAPABILITIES
+38: ] as const
+39: 
+40: function errorMessage(error: unknown): string {
+41:   return error instanceof Error ? error.message : 'unknown failure'
+42: }
+43: 
+44: function isNonEmptyString(value: unknown): value is string {
+45:   return typeof value === 'string' && value.trim().length > 0
+46: }
+47: 
+48: function hasValidBoundaryInput(input: RuntimeInput): boolean {
+49:   const identity = [
+50:     input.agent?.id,
+51:     input.agent?.version,
+52:     input.tenantId,
+53:     input.conversationId,
+54:     input.sessionId,
+55:     input.correlationId,
+56:     input.traceId
+57:   ]
+58:   const budget = [
+59:     input.budget?.maxSteps,
+60:     input.budget?.maxModelCalls,
+61:     input.budget?.maxToolCalls,
+62:     input.budget?.maxDurationMs,
+63:     input.budget?.maxCostUsd,
+64:     input.budget?.maxTokens
+65:   ]
+66:   return (
+67:     identity.every(isNonEmptyString) &&
+68:     budget.every(
+69:       (value) =>
+70:         typeof value === 'number' && Number.isFinite(value) && value >= 0
+71:     )
+72:   )
+73: }
+74: 
+75: function stringifyOutput(value: unknown): string {
+76:   if (typeof value === 'string') return value
+77:   try {
+78:     return JSON.stringify(value) ?? String(value)
+79:   } catch {
+80:     return String(value)
+81:   }
+82: }
+83: 
+84: /** Wildcard that explicitly exposes every registered tool to a profile. */
+85: export const ALL_AGENT_TOOLS = '*'
+86: 
+87: /**
+88:  * Tool exposure is deny-by-default: an empty list exposes nothing and only
+89:  * the explicit wildcard exposes the whole registry (ENG-004).
+90:  */
+91: export function agentExposesTool(
+92:   allowed: readonly string[],
+93:   toolId: string
+94: ): boolean {
+95:   return allowed.includes(ALL_AGENT_TOOLS) || allowed.includes(toolId)
+96: }
+97: 
+98: const exposes = agentExposesTool
+99: 
+100: function describe(tool: ToolDefinition): ToolDescriptor {
+101:   const { execute, ...descriptor } = tool
+102:   void execute
+103:   return descriptor
+104: }
+105: 
+106: interface ResultValues {
+107:   readonly response: string
+108:   readonly stopReason: RuntimeResult['stopReason']
+109:   readonly approvalId?: RuntimeResult['approvalId']
+110:   readonly modelCalls: number
+111:   readonly toolCalls: number
+112:   readonly inputTokens?: number
+113:   readonly outputTokens?: number
+114:   readonly costUsd?: number
+115:   readonly toolResult?: ToolResult
+116: }
+117: 
+118: function result(values: ResultValues): RuntimeResult {
+119:   return {
+120:     response: values.response,
+121:     stopReason: values.stopReason,
+122:     ...(values.approvalId !== undefined
+123:       ? { approvalId: values.approvalId }
+124:       : {}),
+125:     steps: 1,
+126:     modelCalls: values.modelCalls,
+127:     toolCalls: values.toolCalls,
+128:     usage: {
+129:       inputTokens: values.inputTokens ?? 0,
+130:       outputTokens: values.outputTokens ?? 0,
+131:       costUsd: values.costUsd ?? 0
+132:     },
+133:     ...(values.toolResult ? { toolResult: values.toolResult } : {})
+134:   }
+135: }
+136: 
+137: function fromStop(gate: KernelStop): RuntimeResult {
+138:   return result({
+139:     response: gate.response,
+140:     stopReason: gate.stopReason,
+141:     ...(gate.approvalId !== undefined ? { approvalId: gate.approvalId } : {}),
+142:     modelCalls: gate.modelCalls ?? 0,
+143:     toolCalls: gate.toolCalls ?? 0,
+144:     ...(gate.usage ?? {})
+145:   })
+146: }
+147: 
+148: export interface KernelRuntimeOptions {
+149:   /** Response used when the kernel cannot boot (lazy facade path). */
+150:   readonly bootFailureResponse?: string
+151: }
+152: 
+153: /**
+154:  * Single-turn governed loop on the plugin kernel (SPEC 0181). Every phase runs
+155:  * through a named interception point; governance lives in control plugins.
+156:  * Behavior matches `SinglePassGovernedRuntime` and closes the conformance gaps
+157:  * I5 (call logged before dispatch), I6 (model request logged), I7 (listener
+158:  * failures normalized) and I8 (cancellation by `RuntimeInput.signal`).
+159:  */
+160: export class KernelRuntime implements HarnessRuntime {
+161:   #host: Promise<KernelHost> | undefined
+162: 
+163:   private constructor(
+164:     private readonly plugins: readonly KernelPlugin[],
+165:     host: KernelHost | undefined,
+166:     private readonly options: KernelRuntimeOptions = {}
+167:   ) {
+168:     if (host) this.#host = Promise.resolve(host)
+169:   }
+170: 
+171:   /** Boots eagerly and fails loudly when the profile is incomplete. */
+172:   public static async boot(
+173:     plugins: readonly KernelPlugin[],
+174:     options: KernelRuntimeOptions = {}
+175:   ): Promise<KernelRuntime> {
+176:     const host = await KernelHost.boot(plugins, REQUIRED_SERVICES)
+177:     return new KernelRuntime(plugins, host, options)
+178:   }
+179: 
+180:   /** Boots on first use; a boot failure becomes a fail-closed result. */
+181:   public static lazy(
+182:     plugins: readonly KernelPlugin[],
+183:     options: KernelRuntimeOptions = {}
+184:   ): KernelRuntime {
+185:     return new KernelRuntime(plugins, undefined, options)
+186:   }
+187: 
+188:   public async dispose(): Promise<void> {
+189:     if (!this.#host) return
+190:     const host = await this.#host.catch(() => undefined)
+191:     await host?.dispose()
+192:   }
+193: 
+194:   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
+195:     let host: KernelHost
+196:     try {
+197:       this.#host ??= KernelHost.boot(this.plugins, REQUIRED_SERVICES)
+198:       host = await this.#host
+199:     } catch (error) {
+200:       return result({
+201:         response:
+202:           this.options.bootFailureResponse ??
+203:           `Kernel could not start: ${errorMessage(error)}.`,
+204:         stopReason: 'INTERNAL_FAILURE',
+205:         modelCalls: 0,
+206:         toolCalls: 0
+207:       })
+208:     }
+209:     return new Turn(host, input).run()
+210:   }
+211: }
+212: 
+213: /** One execution of the loop over a booted, sealed host. */
+214: class Turn {
+215:   readonly #host: KernelHost
+216:   readonly #controller = new AbortController()
+217:   readonly #state: TurnState
+218: 
+219:   public constructor(host: KernelHost, input: RuntimeInput) {
+220:     this.#host = host
+221:     const startedAt = Date.now()
+222:     if (input.signal?.aborted) this.#controller.abort()
+223:     input.signal?.addEventListener('abort', () => this.#controller.abort(), {
+224:       once: true
+225:     })
+226:     this.#state = createTurnState(
+227:       input,
+228:       startedAt,
+229:       host.get('budget').begin(input, startedAt),
+230:       this.#controller.signal
+231:     )
+232:   }
+233: 
+234:   public async run(): Promise<RuntimeResult> {
+235:     const input = this.#state.input
+236:     if (!hasValidBoundaryInput(input)) {
+237:       return this.#finish(
+238:         result({
+239:           response: 'Runtime identity or execution budget is invalid.',
+240:           stopReason: 'UNSAFE_REQUEST',
+241:           modelCalls: 0,
+242:           toolCalls: 0
+243:         })
+244:       )
+245:     }
+246:     if (input.budget.maxSteps < 1) {
+247:       return this.#finish(
+248:         fromStop(
+249:           stop('MAX_STEPS', 'Execution budget exhausted before the first step.')
+250:         )
+251:       )
+252:     }
+253:     if (input.budget.maxDurationMs < 1) {
+254:       return this.#finish(
+255:         fromStop(
+256:           stop('MAX_DURATION', 'Execution duration budget is not available.')
+257:         )
+258:       )
+259:     }
+260: 
+261:     const logged = await appendLog(this.#host, {
+262:       type: 'turn/start',
+263:       correlationId: input.correlationId
+264:     })
+265:     if (logged) return this.#finish(fromStop(logged))
+266: 
+267:     const gate = await runGate(this.#host, 'turn/before-step', this.#state)
+268:     if (gate.kind === 'stop') return this.#finish(fromStop(gate))
+269: 
+270:     try {
+271:       if (this.#state.signal.aborted) {
+272:         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+273:       }
+274:       if (this.#state.budget.remainingMs() <= 0) {
+275:         return this.#finish(
+276:           fromStop(
+277:             stop('MAX_DURATION', 'Duration budget exhausted before planning.')
+278:           )
+279:         )
+280:       }
+281:       const decision = await race(this.#state, () =>
+282:         this.#host.get('planner').decideNextStep({
+283:           runtime: input,
+284:           availableTools: this.#availableTools(),
+285:           step: 1
+286:         })
+287:       )
+288:       if (decision === CANCELLED) {
+289:         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+290:       }
+291:       if (decision === DEADLINE) {
+292:         return this.#finish(
+293:           fromStop(
+294:             stop('MAX_DURATION', 'Duration budget exhausted while planning.')
+295:           )
+296:         )
+297:       }
+298:       switch (decision.action) {
+299:         case 'RESPOND':
+300:           return await this.#respond(decision.response)
+301:         case 'CALL_TOOL':
+302:           return await this.#callTool(decision.toolInvocation)
+303:         case 'ASK_USER':
+304:           return this.#finish(
+305:             fromStop(
+306:               stop(
+307:                 'NEEDS_USER_INPUT',
+308:                 decision.response ??
+309:                   decision.reason ??
+310:                   'More information is required.'
+311:               )
+312:             )
+313:           )
+314:         case 'REQUEST_APPROVAL':
+315:           return this.#finish(
+316:             fromStop(
+317:               stop(
+318:                 'APPROVAL_REQUIRED',
+319:                 decision.response ??
+320:                   decision.reason ??
+321:                   'Approval is required before continuing.'
+322:               )
+323:             )
+324:           )
+325:         case 'HANDOFF':
+326:           return this.#finish(
+327:             fromStop(
+328:               stop(
+329:                 'HUMAN_TAKEOVER',
+330:                 decision.response ??
+331:                   decision.reason ??
+332:                   'Human takeover is required.'
+333:               )
+334:             )
+335:           )
+336:         case 'STOP':
+337:           return this.#finish(
+338:             fromStop(
+339:               stop(
+340:                 'INSUFFICIENT_EVIDENCE',
+341:                 decision.response ?? decision.reason ?? 'Execution stopped.'
+342:               )
+343:             )
+344:           )
+345:         case 'RETRIEVE':
+346:         case 'VERIFY':
+347:           return this.#finish(
+348:             fromStop(
+349:               stop(
+350:                 'INSUFFICIENT_EVIDENCE',
+351:                 'This single-pass compatibility runtime does not execute retrieval or verification steps.'
+352:               )
+353:             )
+354:           )
+355:       }
+356:     } catch (error) {
+357:       return this.#finish(
+358:         fromStop(
+359:           stop(
+360:             'INSUFFICIENT_EVIDENCE',
+361:             `Execution could not be planned: ${errorMessage(error)}.`
+362:           )
+363:         )
+364:       )
+365:     }
+366:   }
+367: 
+368:   async #respond(response: string | undefined): Promise<RuntimeResult> {
+369:     if (response?.trim()) {
+370:       return this.#finish(
+371:         result({
+372:           response,
+373:           stopReason: 'COMPLETED',
+374:           modelCalls: 0,
+375:           toolCalls: 0
+376:         })
+377:       )
+378:     }
+379:     const input = this.#state.input
+380:     // Single pre-model gate: runModelCall (kernel/pipeline.ts) consumes the
+381:     // model-call slot via turn.budget.beginModelRequest() and records tokens/
+382:     // cost via recordModelResult() (PDSH-004 / I11). Gating here too would
+383:     // double-consume the slot for one turn.
+384:     const outcome = await runModelCall(this.#host, this.#state, {
+385:       messages: [
+386:         {
+387:           role: 'system',
+388:           content: `${input.agent.objective}\n${input.agent.instructions.join('\n')}`
+389:         },
+390:         { role: 'user', content: input.userMessage }
+391:       ],
+392:       context: input.context,
+393:       budget: input.budget,
+394:       correlationId: input.correlationId
+395:     })
+396:     switch (outcome.kind) {
+397:       case 'stopped':
+398:         return this.#finish(fromStop(outcome.gate))
+399:       case 'cancelled':
+400:         return this.#finish(
+401:           fromStop(stop('CANCELLED', CANCELLED_RESPONSE, { modelCalls: 1 }))
+402:         )
+403:       case 'deadline':
+404:         return this.#finish(
+405:           fromStop(
+406:             stop(
+407:               'MAX_DURATION',
+408:               'Duration budget exhausted during model execution.',
+409:               { modelCalls: 1 }
+410:             )
+411:           )
+412:         )
+413:       case 'failed':
+414:         return this.#finish(
+415:           fromStop(
+416:             stop('MODEL_FAILURE', `Model execution failed: ${outcome.error}.`, {
+417:               modelCalls: 1
+418:             })
+419:           )
+420:         )
+421:       case 'unrecorded':
+422:         return this.#finish(
+423:           fromStop({
+424:             ...outcome.gate,
+425:             modelCalls: 1,
+426:             usage: {
+427:               inputTokens: outcome.result.inputTokens,
+428:               outputTokens: outcome.result.outputTokens,
+429:               costUsd: outcome.result.costUsd
+430:             }
+431:           })
+432:         )
+433:       case 'completed': {
+434:         const model = outcome.result
+435:         const metadata = this.#state.metadata
+436:         metadata.provider = model.provider
+437:         metadata.inputTokens = model.inputTokens
+438:         metadata.outputTokens = model.outputTokens
+439:         metadata.costUsd = model.costUsd
+440:         const exhausted = this.#state.budget.recordModelResult(model)
+441:         if (exhausted) return this.#finish(fromStop(exhausted))
+442:         return this.#finish(
+443:           result({
+444:             response: model.text,
+445:             stopReason: 'COMPLETED',
+446:             modelCalls: 1,
+447:             toolCalls: 0,
+448:             inputTokens: model.inputTokens,
+449:             outputTokens: model.outputTokens,
+450:             costUsd: model.costUsd
+451:           })
+452:         )
+453:       }
+454:     }
+455:   }
+456: 
+457:   async #callTool(
+458:     requested: ToolInvocation | undefined
+459:   ): Promise<RuntimeResult> {
+460:     const input = this.#state.input
+461:     const invocation = requested ?? input.requestedTool
+462:     if (!invocation) {
+463:       return this.#finish(
+464:         fromStop(stop('TOOL_FAILURE', 'No tool invocation was supplied.'))
+465:       )
+466:     }
+467:     if (input.budget.maxToolCalls < 1) {
+468:       return this.#finish(
+469:         fromStop(
+470:           stop(
+471:             'MAX_TOOL_CALLS',
+472:             'Tool-call budget exhausted before the tool could run.'
+473:           )
+474:         )
+475:       )
+476:     }
+477:     const tool = this.#host
+478:       .get('tools')
+479:       .resolve(invocation.toolId, invocation.toolVersion)
+480:     this.#state.metadata.tool = invocation.toolId
+481:     if (!tool) {
+482:       return this.#finish(
+483:         fromStop(
+484:           stop('TOOL_FAILURE', `Tool "${invocation.toolId}" is unavailable.`, {
+485:             toolCalls: 1
+486:           })
+487:         )
+488:       )
+489:     }
+490:     if (!exposes(input.agent.tools, tool.id)) {
+491:       return this.#finish(
+492:         fromStop(
+493:           stop(
+494:             'POLICY_DENIED',
+495:             `Tool "${tool.id}" is not exposed to this agent profile.`
+496:           )
+497:         )
+498:       )
+499:     }
+500: 
+501:     const call: ToolCallState = {
+502:       turn: this.#state,
+503:       tool,
+504:       invocation,
+505:       needsApproval: false
+506:     }
+507: 
+508:     const pipeline = await runToolCall(this.#host, call)
+509:     if (pipeline.kind === 'stopped') {
+510:       const approvalId = pipeline.gate.approvalId ?? call.grant?.approvalId
+511:       return this.#finish(
+512:         fromStop({
+513:           ...pipeline.gate,
+514:           ...(approvalId !== undefined ? { approvalId } : {})
+515:         })
+516:       )
+517:     }
+518:     const settled = pipeline.outcome
+519:     this.#state.metadata.toolDurationMs =
+520:       'durationMs' in settled ? settled.durationMs : 0
+521:     const toolResult = this.#toolResult(call, settled)
+522:     if (pipeline.logFailure) {
+523:       // F04: the effect fact stays in the result; the turn is not a success.
+524:       // A call blocked after its reservation keeps the reason it was blocked
+525:       // (AUD-0599 F01).
+526:       return this.#finish({
+527:         ...toolResult,
+528:         response:
+529:           settled.kind === 'not_started'
+530:             ? unrecordedBlock(pipeline.logFailure, settled.gate).response
+531:             : pipeline.logFailure.response,
+532:         stopReason: 'INSUFFICIENT_EVIDENCE'
+533:       })
+534:     }
+535:     return this.#finish(toolResult)
+536:   }
+537: 
+538:   #toolResult(call: ToolCallState, outcome: ToolOutcome): RuntimeResult {
+539:     const approvalId = call.grant?.approvalId
+540:     const withApproval = approvalId !== undefined ? { approvalId } : {}
+541:     switch (outcome.kind) {
+542:       case 'not_started':
+543:         return fromStop({ ...outcome.gate, ...withApproval })
+544:       case 'deadline':
+545:         return result({
+546:           response: call.approval
+547:             ? 'unknown_effect: duration budget exhausted during tool execution.'
+548:             : 'Duration budget exhausted during tool execution.',
+549:           stopReason: call.approval ? 'TOOL_FAILURE' : 'MAX_DURATION',
+550:           ...withApproval,
+551:           modelCalls: 0,
+552:           toolCalls: 1
+553:         })
+554:       case 'cancelled':
+555:         return result({
+556:           response: call.approval
+557:             ? `unknown_effect: ${CANCELLED_RESPONSE}`
+558:             : CANCELLED_RESPONSE,
+559:           stopReason: call.approval ? 'TOOL_FAILURE' : 'CANCELLED',
+560:           ...withApproval,
+561:           modelCalls: 0,
+562:           toolCalls: 1
+563:         })
+564:       case 'threw': {
+565:         const toolResult: ToolResult = {
+566:           status: 'FAILED',
+567:           error: outcome.error
+568:         }
+569:         return result({
+570:           response: call.approval
+571:             ? `unknown_effect: ${outcome.error}`
+572:             : outcome.error,
+573:           stopReason: 'TOOL_FAILURE',
+574:           ...withApproval,
+575:           modelCalls: 0,
+576:           toolCalls: 1,
+577:           toolResult
+578:         })
+579:       }
+580:       case 'failed':
+581:         return result({
+582:           response: outcome.result.error ?? 'Tool execution failed.',
+583:           stopReason: 'TOOL_FAILURE',
+584:           ...withApproval,
+585:           modelCalls: 0,
+586:           toolCalls: 1,
+587:           toolResult: outcome.result
+588:         })
+589:       case 'confirm_failed':
+590:         return result({
+591:           response: `unknown_effect: approval confirmation failed: ${outcome.error}.`,
+592:           stopReason: 'TOOL_FAILURE',
+593:           ...withApproval,
+594:           modelCalls: 0,
+595:           toolCalls: 1,
+596:           toolResult: outcome.result
+597:         })
+598:       case 'succeeded':
+599:         if (
+600:           Date.now() - this.#state.startedAt >
+601:           this.#state.input.budget.maxDurationMs
+602:         ) {
+603:           return result({
+604:             response: 'Duration budget exhausted after tool execution.',
+605:             stopReason: 'MAX_DURATION',
+606:             modelCalls: 0,
+607:             toolCalls: 1,
+608:             toolResult: outcome.result
+609:           })
+610:         }
+611:         return result({
+612:           response: stringifyOutput(
+613:             outcome.result.output ?? 'Tool completed successfully.'
+614:           ),
+615:           stopReason: 'COMPLETED',
+616:           ...(this.#state.metadata.approval
+617:             ? { approvalId: this.#state.metadata.approval }
+618:             : {}),
+619:           modelCalls: 0,
+620:           toolCalls: 1,
+621:           toolResult: outcome.result
+622:         })
+623:     }
+624:   }
+625: 
+626:   #availableTools(): readonly ToolDescriptor[] {
+627:     const allowed = this.#state.input.agent.tools
+628:     return this.#host
+629:       .get('tools')
+630:       .list()
+631:       .filter((tool) => exposes(allowed, tool.id))
+632:       .map(describe)
+633:   }
+634: 
+635:   async #finish(initial: RuntimeResult): Promise<RuntimeResult> {
+636:     let current = initial
+637:     for (const entry of this.#host.listeners('turn/end')) {
+638:       try {
+639:         current = await entry.fn(this.#state, current)
+640:       } catch (error) {
+641:         if (entry.kind === 'control') {
+642:           current = {
+643:             ...current,
+644:             response: `Execution could not be completed because ${entry.plugin} failed: ${errorMessage(error)}.`,
+645:             stopReason: 'INSUFFICIENT_EVIDENCE'
+646:           }
+647:         }
+648:       }
+649:     }
+650:     const unrecorded = await appendLog(this.#host, {
+651:       type: 'turn/end',
+652:       correlationId: this.#state.input.correlationId,
+653:       stopReason: current.stopReason
+654:     })
+655:     if (unrecorded) {
+656:       // F04: a turn whose closing record failed is never reported as done.
+657:       // A turn that had already stopped keeps why it stopped (AUD-0600 F01).
+658:       return {
+659:         ...current,
+660:         response:
+661:           current.stopReason === 'COMPLETED'
+662:             ? unrecorded.response
+663:             : current.response.startsWith(unrecorded.response)
+664:               ? current.response
+665:               : `${unrecorded.response} The turn had already stopped (${current.stopReason}): ${current.response}`,
+666:         stopReason: 'INSUFFICIENT_EVIDENCE'
+667:       }
+668:     }
+669:     return current
+670:   }
+671: }
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/host.ts
+1: import {
+2:   CONTROL_SERVICES,
+3:   type Disposer,
+4:   type HookMap,
+5:   type HookPoint,
+6:   type KernelContext,
+7:   type KernelPlugin,
+8:   type PluginKind,
+9:   type ServiceKey,
+10:   type Services,
+11:   type ToolGuard
+12: } from './types.ts'
+13: 
+14: export class KernelBootError extends Error {
+15:   public constructor(
+16:     public readonly code:
+17:       | 'duplicate_plugin'
+18:       | 'missing_service'
+19:       | 'dependency_cycle'
+20:       | 'duplicate_service'
+21:       | 'control_service_from_capability'
+22:       | 'guard_from_capability'
+23:       | 'undeclared_service'
+24:       | 'host_sealed'
+25:       | 'plugin_apply_failed',
+26:     message: string
+27:   ) {
+28:     super(message)
+29:     this.name = 'KernelBootError'
+30:   }
+31: }
+32: 
+33: export interface Listener<P extends HookPoint> {
+34:   readonly kind: PluginKind
+35:   readonly plugin: string
+36:   readonly fn: HookMap[P]
+37: }
+38: 
+39: type ListenerTable = { [P in HookPoint]: Listener<P>[] }
+40: 
+41: const isControlService = (key: ServiceKey): boolean =>
+42:   (CONTROL_SERVICES as readonly ServiceKey[]).includes(key)
+43: 
+44: /**
+45:  * Plugin host (SPEC 0181 §2). Plugins find each other by service key, load in
+46:  * dependency order and register reversible effects. After boot the host is
+47:  * sealed: no plugin, agent or configuration can add, remove or reorder a
+48:  * registration while turns run (I2).
+49:  */
+50: export class KernelHost {
+51:   readonly #services = new Map<ServiceKey, { owner: string; value: unknown }>()
+52:   readonly #listeners: ListenerTable = {
+53:     'turn/before-step': [],
+54:     'model/before-call': [],
+55:     'tool/pre-execute': [],
+56:     'tool/execute': [],
+57:     'tool/post-execute': [],
+58:     'turn/end': []
+59:   }
+60:   readonly #guards: { plugin: string; fn: ToolGuard }[] = []
+61:   readonly #disposers: Disposer[] = []
+62:   #sealed = false
+63: 
+64:   private constructor() {}
+65: 
+66:   /**
+67:    * Boots a profile. Fails closed: a missing required service, a cycle, a
+68:    * control service offered by a capability or a throwing `apply` aborts the
+69:    * boot and unwinds everything already registered.
+70:    */
+71:   public static async boot(
+72:     plugins: readonly KernelPlugin[],
+73:     required: readonly ServiceKey[]
+74:   ): Promise<KernelHost> {
+75:     const host = new KernelHost()
+76:     try {
+77:       for (const plugin of KernelHost.order(plugins)) {
+78:         await host.#apply(plugin)
+79:       }
+80:       for (const key of required) {
+81:         if (!host.#services.has(key)) {
+82:           throw new KernelBootError(
+83:             'missing_service',
+84:             `Required service "${key}" is not provided by the profile.`
+85:           )
+86:         }
+87:       }
+88:     } catch (error) {
+89:       await host.dispose()
+90:       if (error instanceof KernelBootError) throw error
+91:       throw new KernelBootError(
+92:         'plugin_apply_failed',
+93:         error instanceof Error ? error.message : 'plugin apply failed'
+94:       )
+95:     }
+96:     host.#sealed = true
+97:     return host
+98:   }
+99: 
+100:   public get<K extends ServiceKey>(key: K): Services[K] {
+101:     const entry = this.#services.get(key)
+102:     if (!entry) {
+103:       throw new KernelBootError(
+104:         'missing_service',
+105:         `Service "${key}" is not available.`
+106:       )
+107:     }
+108:     return entry.value as Services[K]
+109:   }
+110: 
+111:   public has(key: ServiceKey): boolean {
+112:     return this.#services.has(key)
+113:   }
+114: 
+115:   /** Controls first, then capabilities; registration order inside each. */
+116:   public listeners<P extends HookPoint>(point: P): readonly Listener<P>[] {
+117:     const table = this.#listeners[point] as Listener<P>[]
+118:     return [
+119:       ...table.filter((entry) => entry.kind === 'control'),
+120:       ...table.filter((entry) => entry.kind === 'capability')
+121:     ]
+122:   }
+123: 
+124:   public guards(): readonly ToolGuard[] {
+125:     return this.#guards.map((entry) => entry.fn)
+126:   }
+127: 
+128:   /** Unwinds registrations in reverse order and waits for each to finish. */
+129:   public async dispose(): Promise<void> {
+130:     while (this.#disposers.length > 0) {
+131:       const dispose = this.#disposers.pop()
+132:       try {
+133:         await dispose?.()
+134:       } catch {
+135:         // One failing disposer must not leave the remaining ones running.
+136:       }
+137:     }
+138:   }
+139: 
+140:   static order(plugins: readonly KernelPlugin[]): KernelPlugin[] {
+141:     const byName = new Map<string, KernelPlugin>()
+142:     const provider = new Map<ServiceKey, string>()
+143:     for (const plugin of plugins) {
+144:       if (byName.has(plugin.name)) {
+145:         throw new KernelBootError(
+146:           'duplicate_plugin',
+147:           `Plugin "${plugin.name}" is declared twice.`
+148:         )
+149:       }
+150:       byName.set(plugin.name, plugin)
+151:       for (const key of plugin.provides ?? []) {
+152:         if (provider.has(key)) {
+153:           throw new KernelBootError(
+154:             'duplicate_service',
+155:             `Service "${key}" is provided by "${provider.get(key)}" and "${plugin.name}".`
+156:           )
+157:         }
+158:         provider.set(key, plugin.name)
+159:       }
+160:     }
+161:     const ordered: KernelPlugin[] = []
+162:     const state = new Map<string, 'visiting' | 'done'>()
+163:     const visit = (plugin: KernelPlugin): void => {
+164:       const current = state.get(plugin.name)
+165:       if (current === 'done') return
+166:       if (current === 'visiting') {
+167:         throw new KernelBootError(
+168:           'dependency_cycle',
+169:           `Plugin "${plugin.name}" is part of a dependency cycle.`
+170:         )
+171:       }
+172:       state.set(plugin.name, 'visiting')
+173:       for (const key of plugin.requires ?? []) {
+174:         const owner = provider.get(key)
+175:         if (!owner) {
+176:           throw new KernelBootError(
+177:             'missing_service',
+178:             `Plugin "${plugin.name}" requires "${key}", which no plugin provides.`
+179:           )
+180:         }
+181:         visit(byName.get(owner) as KernelPlugin)
+182:       }
+183:       state.set(plugin.name, 'done')
+184:       ordered.push(plugin)
+185:     }
+186:     plugins.forEach(visit)
+187:     return ordered
+188:   }
+189: 
+190:   async #apply(plugin: KernelPlugin): Promise<void> {
+191:     const declared = new Set(plugin.provides ?? [])
+192:     const context: KernelContext = {
+193:       provide: (key, service) => {
+194:         this.#assertOpen()
+195:         if (!declared.has(key)) {
+196:           throw new KernelBootError(
+197:             'undeclared_service',
+198:             `Plugin "${plugin.name}" provides "${key}" without declaring it.`
+199:           )
+200:         }
+201:         if (plugin.kind === 'capability' && isControlService(key)) {
+202:           throw new KernelBootError(
+203:             'control_service_from_capability',
+204:             `Capability "${plugin.name}" cannot provide control service "${key}".`
+205:           )
+206:         }
+207:         this.#services.set(key, { owner: plugin.name, value: service })
+208:         const dispose: Disposer = async () => {
+209:           this.#services.delete(key)
+210:         }
+211:         this.#disposers.push(dispose)
+212:         return dispose
+213:       },
+214:       get: (key) => this.get(key),
+215:       on: (point, listener) => {
+216:         this.#assertOpen()
+217:         const table = this.#listeners[point] as Listener<typeof point>[]
+218:         const entry: Listener<typeof point> = {
+219:           kind: plugin.kind,
+220:           plugin: plugin.name,
+221:           fn: listener
+222:         }
+223:         table.push(entry)
+224:         const dispose: Disposer = async () => {
+225:           const index = table.indexOf(entry)
+226:           if (index >= 0) table.splice(index, 1)
+227:         }
+228:         this.#disposers.push(dispose)
+229:         return dispose
+230:       },
+231:       guard: (guard) => {
+232:         this.#assertOpen()
+233:         if (plugin.kind !== 'control') {
+234:           throw new KernelBootError(
+235:             'guard_from_capability',
+236:             `Capability "${plugin.name}" cannot register a guard.`
+237:           )
+238:         }
+239:         const entry = { plugin: plugin.name, fn: guard }
+240:         this.#guards.push(entry)
+241:         const dispose: Disposer = async () => {
+242:           const index = this.#guards.indexOf(entry)
+243:           if (index >= 0) this.#guards.splice(index, 1)
+244:         }
+245:         this.#disposers.push(dispose)
+246:         return dispose
+247:       },
+248:       effect: (dispose) => {
+249:         this.#assertOpen()
+250:         this.#disposers.push(dispose)
+251:       }
+252:     }
+253:     await plugin.apply(context)
+254:     for (const key of declared) {
+255:       if (!this.#services.has(key)) {
+256:         throw new KernelBootError(
+257:           'missing_service',
+258:           `Plugin "${plugin.name}" declared "${key}" but did not provide it.`
+259:         )
+260:       }
+261:     }
+262:   }
+263: 
+264:   #assertOpen(): void {
+265:     if (this.#sealed) {
+266:       throw new KernelBootError(
+267:         'host_sealed',
+268:         'The kernel is sealed; registrations are only allowed during boot.'
+269:       )
+270:     }
+271:   }
+272: }
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/pipeline.ts
+1: import { isAbsolute } from 'node:path'
+2: import type {
+3:   ModelRequest,
+4:   ModelResult,
+5:   RuntimeInput,
+6:   SandboxGateOutcome,
+7:   SandboxMode,
+8:   ToolDescriptor
+9: } from '@cvg/harness-contracts'
+10: import type { KernelHost } from './host.ts'
+11: import {
+12:   DEADLINE,
+13:   PROCEED,
+14:   stop,
+15:   type GuardVerdict,
+16:   type KernelGate,
+17:   type KernelLogEvent,
+18:   type KernelStop,
+19:   type ToolCallState,
+20:   type ToolOutcome,
+21:   type TurnBudget,
+22:   type TurnState
+23: } from './types.ts'
+24: 
+25: /**
+26:  * The governed pipelines every loop mode runs through (SPEC 0181 §4). The
+27:  * single-turn loop and the iterative loop both call these functions, so policy,
+28:  * approval, guards, pause, cancellation, the log and the effect ledger live in
+29:  * one implementation.
+30:  */
+31: 
+32: export const CANCELLED = Symbol('kernel-cancelled')
+33: export const CANCELLED_RESPONSE = 'Execution was cancelled by the caller.'
+34: 
+35: export type GatePoint =
+36:   | 'turn/before-step'
+37:   | 'model/before-call'
+38:   | 'tool/pre-execute'
+39: 
+40: /** A fresh turn: identity, budget view and the linked cancel signal. */
+41: export function createTurnState(
+42:   input: RuntimeInput,
+43:   startedAt: number,
+44:   budget: TurnBudget,
+45:   signal: AbortSignal
+46: ): TurnState {
+47:   return {
+48:     input,
+49:     startedAt,
+50:     signal,
+51:     budget,
+52:     metadata: {
+53:       policy: null,
+54:       approval: null,
+55:       tool: null,
+56:       provider: null,
+57:       inputTokens: 0,
+58:       outputTokens: 0,
+59:       costUsd: 0,
+60:       toolDurationMs: 0
+61:     }
+62:   }
+63: }
+64: 
+65: /** Detached copy for the log, so later mutation cannot rewrite history. */
+66: function snapshot<T>(value: T): T {
+67:   try {
+68:     return structuredClone(value)
+69:   } catch {
+70:     return value
+71:   }
+72: }
+73: 
+74: function errorMessage(error: unknown): string {
+75:   return error instanceof Error ? error.message : 'unknown failure'
+76: }
+77: 
+78: /** Waterfall over a gate point; a throwing listener becomes a stop (I7). */
+79: export function runGate<S>(
+80:   host: KernelHost,
+81:   point: GatePoint,
+82:   state: S
+83: ): Promise<KernelGate> {
+84:   const listeners = host.listeners(point) as unknown as readonly {
+85:     readonly plugin: string
+86:     readonly fn: (
+87:       state: S,
+88:       next: () => Promise<KernelGate>
+89:     ) => Promise<KernelGate>
+90:   }[]
+91:   const run = (index: number): Promise<KernelGate> => {
+92:     const entry = listeners[index]
+93:     if (!entry) return Promise.resolve(PROCEED)
+94:     return entry
+95:       .fn(state, () => run(index + 1))
+96:       .catch((error: unknown) =>
+97:         stop(
+98:           'INSUFFICIENT_EVIDENCE',
+99:           `${entry.plugin} failed at ${point}: ${errorMessage(error)}.`
+100:         )
+101:       )
+102:   }
+103:   return run(0)
+104: }
+105: 
+106: /** Appends to the kernel log; a failing log stops the turn (fail-closed). */
+107: export async function appendLog(
+108:   host: KernelHost,
+109:   event: KernelLogEvent
+110: ): Promise<KernelStop | undefined> {
+111:   try {
+112:     await host.get('log').append(event)
+113:     return undefined
+114:   } catch (error) {
+115:     return stop(
+116:       'INSUFFICIENT_EVIDENCE',
+117:       `Kernel log could not record the turn: ${errorMessage(error)}.`
+118:     )
+119:   }
+120: }
+121: 
+122: /**
+123:  * A call that was blocked and whose closing record was then lost: the turn
+124:  * reports the missing evidence without hiding why the call was blocked
+125:  * (AUD-0598 R04, AUD-0599 F01).
+126:  */
+127: export function unrecordedBlock(
+128:   lost: KernelStop,
+129:   blocked: KernelStop
+130: ): KernelStop {
+131:   return stop(
+132:     'INSUFFICIENT_EVIDENCE',
+133:     `${lost.response} The call was blocked before it started: ${blocked.response}`,
+134:     blocked.approvalId !== undefined ? { approvalId: blocked.approvalId } : {}
+135:   )
+136: }
+137: 
+138: /** Races an operation against the turn budget and the cancel signal (I8). */
+139: export async function race<T>(
+140:   turn: TurnState,
+141:   operation: () => Promise<T>
+142: ): Promise<T | typeof DEADLINE | typeof CANCELLED> {
+143:   const signal = turn.signal
+144:   if (signal.aborted) return CANCELLED
+145:   let onAbort!: () => void
+146:   const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+147:     onAbort = () => resolve(CANCELLED)
+148:     signal.addEventListener('abort', onAbort, { once: true })
+149:   })
+150:   try {
+151:     return await Promise.race([turn.budget.withDeadline(operation), cancelled])
+152:   } finally {
+153:     signal.removeEventListener('abort', onAbort)
+154:   }
+155: }
+156: 
+157: /**
+158:  * Like `race`, but always starts the operation first: used once the kernel has
+159:  * committed to dispatch, so the cancel signal is passed to the body instead of
+160:  * skipping it.
+161:  */
+162: async function raceInvoked<T>(
+163:   turn: TurnState,
+164:   operation: () => Promise<T>
+165: ): Promise<T | typeof DEADLINE | typeof CANCELLED> {
+166:   const running = operation()
+167:   // The operation may start and then find an exhausted deadline at race time;
+168:   // its later rejection must never surface as an unhandled rejection.
+169:   void running.catch(() => undefined)
+170:   const signal = turn.signal
+171:   let onAbort!: () => void
+172:   const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+173:     if (signal.aborted) resolve(CANCELLED)
+174:     onAbort = () => resolve(CANCELLED)
+175:     signal.addEventListener('abort', onAbort, { once: true })
+176:   })
+177:   try {
+178:     return await Promise.race([
+179:       turn.budget.withDeadline(() => running),
+180:       cancelled
+181:     ])
+182:   } finally {
+183:     signal.removeEventListener('abort', onAbort)
+184:   }
+185: }
+186: 
+187: /** Monotonic guards: the first denial wins; a throwing guard denies. */
+188: export async function runGuards(
+189:   host: KernelHost,
+190:   call: ToolCallState
+191: ): Promise<KernelStop | undefined> {
+192:   for (const guard of host.guards()) {
+193:     let verdict: GuardVerdict
+194:     try {
+195:       verdict = await guard(call)
+196:     } catch (error) {
+197:       verdict = `A guard failed: ${errorMessage(error)}.`
+198:     }
+199:     if (typeof verdict === 'string') return stop('POLICY_DENIED', verdict)
+200:     if (verdict) {
+201:       return stop(
+202:         verdict.stopReason,
+203:         verdict.reason,
+204:         verdict.cause ? { cause: verdict.cause } : {}
+205:       )
+206:     }
+207:   }
+208:   return undefined
+209: }
+210: 
+211: /**
+212:  * Guards and cancellation, re-run at every point where the world may have
+213:  * changed before dispatch: after the loop's checkpoint and after the approval
+214:  * reservation (AUD-0597 F01/F02).
+215:  */
+216: export async function revalidate(
+217:   host: KernelHost,
+218:   call: ToolCallState
+219: ): Promise<KernelStop | undefined> {
+220:   return (
+221:     (await runGuards(host, call)) ??
+222:     (call.turn.signal.aborted
+223:       ? stop('CANCELLED', CANCELLED_RESPONSE)
+224:       : undefined)
+225:   )
+226: }
+227: 
+228: export type ToolPipelineResult =
+229:   /**
+230:    * Nothing ran and nothing is reserved; the call is closed as not started.
+231:    * `blocked` is set when that closing record was lost: `gate` then reports
+232:    * the missing evidence and `blocked` keeps the control's own decision, so
+233:    * the loop can still close its step for the real reason (AUD-0599 F02).
+234:    */
+235:   | {
+236:       readonly kind: 'stopped'
+237:       readonly gate: KernelStop
+238:       readonly blocked?: KernelStop
+239:     }
+240:   /**
+241:    * Dispatch was attempted; the outcome is already settled. `logFailure` is
+242:    * set when the final record could not be written: the outcome stays the
+243:    * fact of what happened, and the loop must not report success (F04).
+244:    */
+245:   | {
+246:       readonly kind: 'settled'
+247:       readonly outcome: ToolOutcome
+248:       readonly logFailure?: KernelStop
+249:     }
+250: 
+251: export interface ToolPipelineHooks {
+252:   /**
+253:    * Runs after every control allowed the call and before any reservation or
+254:    * effect; the iterative loop persists its checkpoint here.
+255:    */
+256:   readonly beforeDispatch?: (
+257:     call: ToolCallState
+258:   ) => Promise<KernelStop | undefined>
+259: }
+260: 
+261: /**
+262:  * log `tool/call` → `tool/pre-execute` → guards → cancellation → hook →
+263:  * `tool/execute` around the body → `tool/post-execute` → log `tool/result`.
+264:  */
+265: export async function runToolCall(
+266:   host: KernelHost,
+267:   call: ToolCallState,
+268:   hooks: ToolPipelineHooks = {}
+269: ): Promise<ToolPipelineResult> {
+270:   const { turn, tool, invocation } = call
+271:   const correlationId = turn.input.correlationId
+272:   // I5: the call is on the log before any policy runs or the body starts.
+273:   const logged = await appendLog(host, {
+274:     type: 'tool/call',
+275:     correlationId,
+276:     toolId: tool.id,
+277:     operationKey: invocation.operationKey,
+278:     input: invocation.input
+279:   })
+280:   if (logged) return { kind: 'stopped', gate: logged }
+281: 
+282:   // Every call that was logged is closed exactly once (I5, AUD-0597 F06).
+283:   const closeNotStarted = async (
+284:     blocked: KernelStop
+285:   ): Promise<ToolPipelineResult> => {
+286:     const unrecorded = await appendLog(host, {
+287:       type: 'tool/result',
+288:       correlationId,
+289:       toolId: tool.id,
+290:       outcome: 'not_started'
+291:     })
+292:     // A lost closing record is not hidden behind the denial (AUD-0598 R04):
+293:     // the call stays blocked, and the turn reports the missing evidence.
+294:     return unrecorded
+295:       ? { kind: 'stopped', gate: unrecordedBlock(unrecorded, blocked), blocked }
+296:       : { kind: 'stopped', gate: blocked }
+297:   }
+298: 
+299:   const gate = await runGate(host, 'tool/pre-execute', call)
+300:   if (gate.kind === 'stop') return closeNotStarted(gate)
+301: 
+302:   const denial = await revalidate(host, call)
+303:   if (denial) return closeNotStarted(denial)
+304: 
+305:   const sandbox = await enforceSandbox(host, call)
+306:   if (sandbox) return closeNotStarted(sandbox)
+307: 
+308:   let hooked: KernelStop | undefined
+309:   try {
+310:     hooked = await hooks.beforeDispatch?.(call)
+311:   } catch (error) {
+312:     // The loop's own checkpoint failed: the logged call is still closed once
+313:     // and the original failure reaches the loop unchanged (AUD-0598 R03).
+314:     await appendLog(host, {
+315:       type: 'tool/result',
+316:       correlationId,
+317:       toolId: tool.id,
+318:       outcome: 'not_started'
+319:     })
+320:     throw error
+321:   }
+322:   if (hooked) return closeNotStarted(hooked)
+323: 
+324:   // The hook may have taken time (checkpoint): re-check before reserving.
+325:   const late = await revalidate(host, call)
+326:   if (late) return closeNotStarted(late)
+327: 
+328:   const settled = await postExecute(host, call, await dispatch(host, call))
+329:   const logFailure = await appendLog(host, {
+330:     type: 'tool/result',
+331:     correlationId,
+332:     toolId: tool.id,
+333:     outcome: settled.kind
+334:   })
+335:   return logFailure
+336:     ? { kind: 'settled', outcome: settled, logFailure }
+337:     : { kind: 'settled', outcome: settled }
+338: }
+339: 
+340: /**
+341:  * Derives the containment a tool needs from its descriptor (SPEC 0195 §2/§5).
+342:  * EXTERNAL effects require an EGRESS gate; WRITE effects require WORKSPACE;
+343:  * READ effects require at least IN_PROCESS. A mode-`NONE` capability is pure
+344:  * in-memory and never reaches the sandbox gate.
+345:  */
+346: /**
+347:  * The mode is declared on the descriptor (SPEC 0195 §5). Absent or `'NONE'`
+348:  * means no gate; the harness never infers containment from `sideEffect`, so
+349:  * legacy side-effecting tools keep running until they opt in.
+350:  */
+351: export function requiredSandboxMode(descriptor: ToolDescriptor): SandboxMode {
+352:   return descriptor.sandbox ?? 'NONE'
+353: }
+354: 
+355: /**
+356:  * Enforcement point between every control decision and the capability body
+357:  * (SPEC 0195 §3/§4). Fails closed: a missing gate, an `unavailable` outcome
+358:  * or a thrown gate stops the call as `UNSAFE_REQUEST` and never downgrades
+359:  * to in-process execution. Pure (`NONE`) tools skip the gate entirely.
+360:  */
+361: async function enforceSandbox(
+362:   host: KernelHost,
+363:   call: ToolCallState
+364: ): Promise<KernelStop | undefined> {
+365:   const requiredMode = requiredSandboxMode(call.tool)
+366:   if (requiredMode === 'NONE') return undefined
+367:   if (!host.has('sandbox')) {
+368:     return stop(
+369:       'UNSAFE_REQUEST',
+370:       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+371:     )
+372:   }
+373:   const gate = host.get('sandbox')
+374:   if (!gate) {
+375:     // host.has was checked; a missing entry here is a host-integrity fault,
+376:     // so fail closed the same way as an unconfigured gate.
+377:     return stop(
+378:       'UNSAFE_REQUEST',
+379:       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+380:     )
+381:   }
+382:   try {
+383:     const outcome: SandboxGateOutcome = await gate.evaluate({
+384:       descriptor: call.tool,
+385:       context: {
+386:         tenantId: call.turn.input.tenantId,
+387:         agentId: call.turn.input.agent.id,
+388:         correlationId: call.turn.input.correlationId,
+389:         traceId: call.turn.input.traceId,
+390:         operationKey: call.invocation.operationKey
+391:       },
+392:       policy: {
+393:         requiredMode,
+394:         workspaceScoped: requiredMode === 'WORKSPACE',
+395:         networkAllowed: requiredMode === 'EGRESS',
+396:         subprocessAllowed: requiredMode === 'PROCESS'
+397:       }
+398:     })
+399:     if (outcome.kind === 'denied') {
+400:       return stop(
+401:         'UNSAFE_REQUEST',
+402:         `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
+403:       )
+404:     }
+405:     if (outcome.kind === 'unavailable') {
+406:       return stop(
+407:         'UNSAFE_REQUEST',
+408:         `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
+409:       )
+410:     }
+411:     const granted = outcome.kind === 'allowed' ? outcome.handle : undefined
+412:     const handle = granted && {
+413:       mode: granted.mode,
+414:       allowNetwork: granted.allowNetwork,
+415:       allowSubprocess: granted.allowSubprocess,
+416:       workspaceRoot: granted.workspaceRoot,
+417:       deadlineMs: granted.deadlineMs
+418:     }
+419:     if (
+420:       outcome.kind !== 'allowed' ||
+421:       outcome.mode !== requiredMode ||
+422:       !handle ||
+423:       handle.mode !== requiredMode ||
+424:       typeof handle.allowNetwork !== 'boolean' ||
+425:       typeof handle.allowSubprocess !== 'boolean' ||
+426:       (handle.deadlineMs !== undefined &&
+427:         (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0)) ||
+428:       (requiredMode === 'WORKSPACE' && handle.workspaceRoot === undefined) ||
+429:       (handle.workspaceRoot !== undefined &&
+430:         (typeof handle.workspaceRoot !== 'string' ||
+431:           !isAbsolute(handle.workspaceRoot) ||
+432:           handle.workspaceRoot.includes('\0')))
+433:     ) {
+434:       return stop(
+435:         'UNSAFE_REQUEST',
+436:         `Sandbox gate returned an invalid handle for tool "${call.tool.id}".`
+437:       )
+438:     }
+439:     // Copy only validated grants. Neither a later gate mutation nor model
+440:     // JSON can rewrite the authority passed to the capability body.
+441:     call.sandboxHandle = Object.freeze({
+442:       mode: handle.mode,
+443:       allowNetwork: handle.allowNetwork,
+444:       allowSubprocess: handle.allowSubprocess,
+445:       ...(handle.workspaceRoot !== undefined
+446:         ? { workspaceRoot: handle.workspaceRoot }
+447:         : {}),
+448:       ...(handle.deadlineMs !== undefined
+449:         ? { deadlineMs: handle.deadlineMs }
+450:         : {})
+451:     })
+452:     return undefined
+453:   } catch (error) {
+454:     return stop(
+455:       'UNSAFE_REQUEST',
+456:       `Sandbox gate failed for tool "${call.tool.id}": ${errorMessage(error)}.`
+457:     )
+458:   }
+459: }
+460: 
+461: async function dispatch(
+462:   host: KernelHost,
+463:   call: ToolCallState
+464: ): Promise<ToolOutcome> {
+465:   const { turn } = call
+466:   const ref = {
+467:     tenantId: turn.input.tenantId,
+468:     correlationId: turn.input.correlationId,
+469:     toolId: call.tool.id,
+470:     operationKey: call.invocation.operationKey
+471:   }
+472:   let started = false
+473:   const terminal = async (): Promise<ToolOutcome> => {
+474:     if (turn.budget.remainingMs() <= 0) {
+475:       return {
+476:         kind: 'not_started',
+477:         gate: stop(
+478:           'MAX_DURATION',
+479:           'Duration budget exhausted before tool execution.'
+480:         )
+481:       }
+482:     }
+483:     // Last decision point: after every wrapper (the approval reservation),
+484:     // a pause or a cancellation still prevents the effect (F01/F02).
+485:     const blocked = await revalidate(host, call)
+486:     if (blocked) return { kind: 'not_started', gate: blocked }
+487:     try {
+488:       await host.get('effects').started(ref)
+489:     } catch (error) {
+490:       return {
+491:         kind: 'not_started',
+492:         gate: stop(
+493:           'INSUFFICIENT_EVIDENCE',
+494:           `Effect ledger could not record the start: ${errorMessage(error)}.`
+495:         )
+496:       }
+497:     }
+498:     started = true
+499:     const startedAt = Date.now()
+500:     const toolController = new AbortController()
+501:     try {
+502:       // Past the decision point the body is always invoked, so a recorded
+503:       // start never pairs with a body that did not run.
+504:       const value = await raceInvoked(turn, () =>
+505:         call.tool.execute(call.invocation.input, {
+506:           tenantId: turn.input.tenantId,
+507:           agentId: turn.input.agent.id,
+508:           correlationId: turn.input.correlationId,
+509:           traceId: turn.input.traceId,
+510:           operationKey: call.invocation.operationKey,
+511:           ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
+512:           signal: AbortSignal.any([toolController.signal, turn.signal])
+513:         })
+514:       )
+515:       const durationMs = Date.now() - startedAt
+516:       if (value === DEADLINE || value === CANCELLED) {
+517:         toolController.abort()
+518:         return {
+519:           kind: value === DEADLINE ? 'deadline' : 'cancelled',
+520:           durationMs
+521:         }
+522:       }
+523:       return value.status === 'SUCCEEDED'
+524:         ? { kind: 'succeeded', result: value, durationMs }
+525:         : { kind: 'failed', result: value, durationMs }
+526:     } catch (error) {
+527:       return {
+528:         kind: 'threw',
+529:         error: errorMessage(error),
+530:         durationMs: Date.now() - startedAt
+531:       }
+532:     }
+533:   }
+534:   const listeners = host.listeners('tool/execute')
+535:   const run = (index: number): Promise<ToolOutcome> => {
+536:     const entry = listeners[index]
+537:     if (!entry) return terminal()
+538:     return entry
+539:       .fn(call, () => run(index + 1))
+540:       .catch(
+541:         (error: unknown): ToolOutcome =>
+542:           started
+543:             ? {
+544:                 kind: 'threw',
+545:                 error: `${entry.plugin} failed: ${errorMessage(error)}`,
+546:                 durationMs: 0
+547:               }
+548:             : {
+549:                 kind: 'not_started',
+550:                 gate: stop(
+551:                   'INSUFFICIENT_EVIDENCE',
+552:                   `${entry.plugin} failed before dispatch: ${errorMessage(error)}.`
+553:                 )
+554:               }
+555:       )
+556:   }
+557:   const outcome = await run(0)
+558:   if (started) {
+559:     try {
+560:       await host.get('effects').finished(ref, outcome.kind)
+561:     } catch {
+562:       // The body already ran. A missing settlement is uncertain, never a
+563:       // successful effect or permission to retry the body/ledger.
+564:       return {
+565:         kind: 'threw',
+566:         error: 'unknown_effect: effect_settlement_failed',
+567:         durationMs: 'durationMs' in outcome ? outcome.durationMs : 0
+568:       }
+569:     }
+570:   }
+571:   return outcome
+572: }
+573: 
+574: async function postExecute(
+575:   host: KernelHost,
+576:   call: ToolCallState,
+577:   outcome: ToolOutcome
+578: ): Promise<ToolOutcome> {
+579:   let current = outcome
+580:   for (const entry of host.listeners('tool/post-execute')) {
+581:     try {
+582:       current = await entry.fn(call, current)
+583:     } catch (error) {
+584:       // I7: a failing settlement after an effect never reads as success.
+585:       if (current.kind === 'succeeded') {
+586:         current = {
+587:           kind: 'confirm_failed',
+588:           result: current.result,
+589:           error: `${entry.plugin} failed: ${errorMessage(error)}`,
+590:           durationMs: current.durationMs
+591:         }
+592:       }
+593:     }
+594:   }
+595:   return current
+596: }
+597: 
+598: export type ModelPipelineResult =
+599:   | { readonly kind: 'stopped'; readonly gate: KernelStop }
+600:   | { readonly kind: 'deadline' }
+601:   | { readonly kind: 'cancelled' }
+602:   | { readonly kind: 'failed'; readonly error: string }
+603:   | { readonly kind: 'completed'; readonly result: ModelResult }
+604:   /** The model answered but the result could not be logged (F04). */
+605:   | {
+606:       readonly kind: 'unrecorded'
+607:       readonly result: ModelResult
+608:       readonly gate: KernelStop
+609:     }
+610: 
+611: /**
+612:  * `model/before-call` → log `model/request` (I6) → call raced against the
+613:  * budget and the cancel signal → log `model/result`.
+614:  */
+615: export async function runModelCall(
+616:   host: KernelHost,
+617:   turn: TurnState,
+618:   request: Omit<ModelRequest, 'signal'>
+619: ): Promise<ModelPipelineResult> {
+620:   const controller = new AbortController()
+621:   const full: ModelRequest = {
+622:     ...request,
+623:     signal: AbortSignal.any([controller.signal, turn.signal])
+624:   }
+625:   const preGate = turn.budget.beginModelRequest()
+626:   if (preGate) return { kind: 'stopped', gate: preGate }
+627:   const gate = await runGate(host, 'model/before-call', { turn, request: full })
+628:   if (gate.kind === 'stop') return { kind: 'stopped', gate }
+629:   if (turn.signal.aborted) return { kind: 'cancelled' }
+630:   // I6: log the request as it will be sent, after every control adjusted it.
+631:   const { signal: _signal, ...effective } = full
+632:   void _signal
+633:   const logged = await appendLog(host, {
+634:     type: 'model/request',
+635:     correlationId: turn.input.correlationId,
+636:     request: snapshot(effective)
+637:   })
+638:   if (logged) return { kind: 'stopped', gate: logged }
+639:   try {
+640:     const outcome = await race(turn, () => host.get('model').complete(full))
+641:     if (outcome === DEADLINE || outcome === CANCELLED) {
+642:       controller.abort()
+643:       return { kind: outcome === DEADLINE ? 'deadline' : 'cancelled' }
+644:     }
+645:     const unrecorded = await appendLog(host, {
+646:       type: 'model/result',
+647:       correlationId: turn.input.correlationId,
+648:       provider: outcome.provider,
+649:       inputTokens: outcome.inputTokens,
+650:       outputTokens: outcome.outputTokens
+651:     })
+652:     if (unrecorded) {
+653:       return { kind: 'unrecorded', result: outcome, gate: unrecorded }
+654:     }
+655:     const accounted = turn.budget.recordModelResult({
+656:       inputTokens: outcome.inputTokens,
+657:       outputTokens: outcome.outputTokens,
+658:       costUsd: outcome.costUsd
+659:     })
+660:     if (accounted) return { kind: 'stopped', gate: accounted }
+661:     return { kind: 'completed', result: outcome }
+662:   } catch (error) {
+663:     return { kind: 'failed', error: errorMessage(error) }
+664:   }
+665: }

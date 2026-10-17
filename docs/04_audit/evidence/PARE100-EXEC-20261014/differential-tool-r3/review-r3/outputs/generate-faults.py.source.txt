@@ -1,0 +1,28 @@
+import pathlib,json,difflib
+r=pathlib.Path.cwd(); d=r/'outputs/fault-drivers';d.mkdir(exist_ok=False)
+s=(r/'tests/differential/reference-agent-driver.mjs').read_text()
+for name in ['failure-case','tool-case','capture-port-data']: s=s.replace("'./"+name+".mjs'","'../../tests/differential/"+name+".mjs'")
+seam="      requests.push(\n        mode === 'tool' ? capturePortRequest(options) : json(options.messages)\n      )"
+faults={
+'exit':"process.stderr.write('I1_ADAPTER_EXIT_23\\n'); process.exit(23)",
+'hang':"process.stderr.write('I1_ADAPTER_HANG\\n'); setInterval(() => {},1000); await new Promise(() => {})",
+'empty-tools':"options = {...options, tools: []}",
+'schema':"options = {...options, tools: options.tools.map(t => ({...t, parameters:{type:'string'}}))}",
+'routing':"options = {...options, provider:'I1-forged', model:'I1-forged'}",
+'history':"options = {...options, toolHistory: {...options.toolHistory, updates:[{I1:'extra'}]}}",
+'correlation':"if(calls===2) options={...options,messages:options.messages.map(m=>m.role==='tool'?{...m,toolCallId:'I1-wrong'}:m)}",
+'signal-shadow':"const i1 = new AbortController(); i1.abort('I1-real'); Object.defineProperties(i1.signal,{aborted:{value:false},reason:{value:undefined}}); options={...options,signal:i1.signal}",
+'signal-fake':"options={...options,signal:Object.create(AbortSignal.prototype)}",
+'request-getter':"options={...options}; Object.defineProperty(options,'I1extra',{enumerable:true,get(){process.stderr.write('I1_GETTER_EXECUTED\\n');return 'bad'}})",
+}
+for name,fault in faults.items():
+ text=s.replace(seam,'      '+fault+'\n'+seam)
+ assert text!=s
+ file=d/(name+'.mjs');file.write_text(text)
+ (d/(name+'-entry.mjs')).write_text("import {runReferenceFixture} from './"+name+".mjs';runReferenceFixture('tool').catch(e=>{process.stderr.write(String(e.stack??e)+'\\n');process.exitCode=1})\n")
+ (d/(name+'.diff')).write_text(''.join(difflib.unified_diff((r/'tests/differential/reference-agent-driver.mjs').read_text().splitlines(True),text.splitlines(True),fromfile='sealed/reference-agent-driver.mjs',tofile=str(file.relative_to(r)))))
+t=(r/'tests/differential/tool-turn-differential.test.ts').read_text()
+for name in ['evidence-lifecycle.mjs','cvg-tool.ts','tool-case.mjs','compare-tool-turn.mjs','capture-port-data.mjs']:t=t.replace("'./"+name+"'","'../tests/differential/"+name+"'")
+t=t.replace("path.resolve('tests/differential/reference-tool-driver.mjs')","path.resolve(process.env.CVG_CRITIC_DRIVER!)")
+(r/'outputs/current-runner-fault.test.ts').write_text(t)
+(r/'outputs/current-runner-fault.diff').write_text(''.join(difflib.unified_diff((r/'tests/differential/tool-turn-differential.test.ts').read_text().splitlines(True),t.splitlines(True))))

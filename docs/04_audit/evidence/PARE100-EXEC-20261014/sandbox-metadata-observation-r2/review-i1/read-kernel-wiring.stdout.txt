@@ -1,0 +1,825 @@
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/runtime.ts ===
+   1 import type {
+   2   ApprovalEngine,
+   3   AuditSink,
+   4   HarnessRuntime,
+   5   ModelGateway,
+   6   Orchestrator,
+   7   PolicyEngine,
+   8   RuntimeInput,
+   9   RuntimeResult,
+  10   SandboxGate,
+  11   TelemetrySink,
+  12   ToolRegistry
+  13 } from '@cvg/harness-contracts'
+  14 import { createKernelRuntime } from './kernel/profile.ts'
+  15 import type { KernelRuntime } from './kernel/kernel-runtime.ts'
+  16 import type { EffectLedger, KernelLog, PauseSwitch } from './kernel/types.ts'
+  17 
+  18 export { ALL_AGENT_TOOLS, agentExposesTool } from './kernel/kernel-runtime.ts'
+  19 
+  20 export interface HarnessRuntimeOptions {
+  21   readonly orchestrator: Orchestrator
+  22   readonly modelGateway: ModelGateway
+  23   readonly policy: PolicyEngine
+  24   readonly approvals: ApprovalEngine
+  25   readonly tools: ToolRegistry
+  26   readonly capabilityFingerprint?: string
+  27   readonly audit: AuditSink
+  28   readonly telemetry: TelemetrySink
+  29   /** Kernel controls; in-memory defaults when omitted. */
+  30   readonly pause?: PauseSwitch
+  31   readonly log?: KernelLog
+  32   readonly effects?: EffectLedger
+  33   /** Optional containment gate; absent means fail-closed for contained tools. */
+  34   readonly sandbox?: SandboxGate
+  35 }
+  36 
+  37 /**
+  38  * Single-pass profile, now a thin facade over the plugin kernel (SPEC 0181,
+  39  * decision D-0181-3). Governance runs as kernel control plugins; this class
+  40  * only keeps the public name and constructor while consumers migrate.
+  41  */
+  42 export class SinglePassGovernedRuntime implements HarnessRuntime {
+  43   readonly #kernel: KernelRuntime
+  44 
+  45   public constructor(options: HarnessRuntimeOptions) {
+  46     this.#kernel = createKernelRuntime({
+  47       ...options,
+  48       eventName: 'harness.single_pass'
+  49     })
+  50   }
+  51 
+  52   public execute(input: RuntimeInput): Promise<RuntimeResult> {
+  53     return this.#kernel.execute(input)
+  54   }
+  55 }
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/kernel/profile.ts ===
+   1 import type {
+   2   ApprovalEngine,
+   3   AuditSink,
+   4   ModelGateway,
+   5   Orchestrator,
+   6   PolicyEngine,
+   7   SandboxGate,
+   8   TelemetrySink,
+   9   ToolRegistry
+  10 } from '@cvg/harness-contracts'
+  11 import {
+  12   approvalsControl,
+  13   auditControl,
+  14   budgetControl,
+  15   effectsControl,
+  16   logControl,
+  17   modelCapability,
+  18   pauseControl,
+  19   plannerCapability,
+  20   policyControl,
+  21   sandboxControl,
+  22   telemetryCapability,
+  23   toolsCapability
+  24 } from './controls.ts'
+  25 import { KernelRuntime } from './kernel-runtime.ts'
+  26 import type {
+  27   EffectLedger,
+  28   KernelLog,
+  29   KernelPlugin,
+  30   PauseSwitch
+  31 } from './types.ts'
+  32 
+  33 export interface StandardKernelOptions {
+  34   readonly orchestrator: Orchestrator
+  35   readonly modelGateway: ModelGateway
+  36   readonly policy: PolicyEngine
+  37   readonly approvals: ApprovalEngine
+  38   readonly tools: ToolRegistry
+  39   readonly capabilityFingerprint?: string
+  40   readonly audit: AuditSink
+  41   readonly telemetry: TelemetrySink
+  42   readonly pause?: PauseSwitch
+  43   readonly log?: KernelLog
+  44   readonly effects?: EffectLedger
+  45   /** Optional containment gate; absent means fail-closed for contained tools. */
+  46   readonly sandbox?: SandboxGate
+  47   /** Audit action and telemetry event name; defaults to `harness.kernel`. */
+  48   readonly eventName?: string
+  49   /** Extra plugins mounted after the standard profile. */
+  50   readonly plugins?: readonly KernelPlugin[]
+  51 }
+  52 
+  53 /**
+  54  * The standard profile: every control the kernel requires (I1), in a fixed
+  55  * order, followed by the capabilities of the single-turn loop.
+  56  */
+  57 export function standardKernelPlugins(
+  58   options: StandardKernelOptions
+  59 ): KernelPlugin[] {
+  60   const eventName = options.eventName ?? 'harness.kernel'
+  61   return [
+  62     budgetControl(),
+  63     pauseControl(options.pause),
+  64     logControl(options.log),
+  65     effectsControl(options.effects),
+  66     policyControl(options.policy),
+  67     approvalsControl(
+  68       options.approvals,
+  69       options.capabilityFingerprint
+  70         ? { capabilityFingerprint: options.capabilityFingerprint }
+  71         : {}
+  72     ),
+  73     auditControl(options.audit, { action: eventName }),
+  74     ...(options.sandbox ? [sandboxControl(options.sandbox)] : []),
+  75     plannerCapability(options.orchestrator),
+  76     modelCapability(options.modelGateway),
+  77     toolsCapability(options.tools),
+  78     telemetryCapability(options.telemetry, { name: eventName }),
+  79     ...(options.plugins ?? [])
+  80   ]
+  81 }
+  82 
+  83 /** Kernel runtime with the standard profile, booted on first use. */
+  84 export function createKernelRuntime(
+  85   options: StandardKernelOptions
+  86 ): KernelRuntime {
+  87   return KernelRuntime.lazy(standardKernelPlugins(options))
+  88 }
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/kernel/kernel-runtime.ts ===
+   1 import type {
+   2   HarnessRuntime,
+   3   RuntimeInput,
+   4   RuntimeResult,
+   5   ToolDescriptor,
+   6   ToolDefinition,
+   7   ToolInvocation,
+   8   ToolResult
+   9 } from '@cvg/harness-contracts'
+  10 import { KernelHost } from './host.ts'
+  11 import {
+  12   CANCELLED,
+  13   CANCELLED_RESPONSE,
+  14   appendLog,
+  15   createTurnState,
+  16   race,
+  17   runGate,
+  18   runModelCall,
+  19   runToolCall,
+  20   unrecordedBlock
+  21 } from './pipeline.ts'
+  22 import {
+  23   CONTROL_SERVICES,
+  24   DEADLINE,
+  25   LOOP_CAPABILITIES,
+  26   stop,
+  27   type KernelPlugin,
+  28   type KernelStop,
+  29   type ToolCallState,
+  30   type ToolOutcome,
+  31   type TurnState
+  32 } from './types.ts'
+  33 
+  34 /** Services every kernel profile must provide before it may run (I1). */
+  35 export const REQUIRED_SERVICES = [
+  36   ...CONTROL_SERVICES,
+  37   ...LOOP_CAPABILITIES
+  38 ] as const
+  39 
+  40 function errorMessage(error: unknown): string {
+  41   return error instanceof Error ? error.message : 'unknown failure'
+  42 }
+  43 
+  44 function isNonEmptyString(value: unknown): value is string {
+  45   return typeof value === 'string' && value.trim().length > 0
+  46 }
+  47 
+  48 function hasValidBoundaryInput(input: RuntimeInput): boolean {
+  49   const identity = [
+  50     input.agent?.id,
+  51     input.agent?.version,
+  52     input.tenantId,
+  53     input.conversationId,
+  54     input.sessionId,
+  55     input.correlationId,
+  56     input.traceId
+  57   ]
+  58   const budget = [
+  59     input.budget?.maxSteps,
+  60     input.budget?.maxModelCalls,
+  61     input.budget?.maxToolCalls,
+  62     input.budget?.maxDurationMs,
+  63     input.budget?.maxCostUsd,
+  64     input.budget?.maxTokens
+  65   ]
+  66   return (
+  67     identity.every(isNonEmptyString) &&
+  68     budget.every(
+  69       (value) =>
+  70         typeof value === 'number' && Number.isFinite(value) && value >= 0
+  71     )
+  72   )
+  73 }
+  74 
+  75 function stringifyOutput(value: unknown): string {
+  76   if (typeof value === 'string') return value
+  77   try {
+  78     return JSON.stringify(value) ?? String(value)
+  79   } catch {
+  80     return String(value)
+  81   }
+  82 }
+  83 
+  84 /** Wildcard that explicitly exposes every registered tool to a profile. */
+  85 export const ALL_AGENT_TOOLS = '*'
+  86 
+  87 /**
+  88  * Tool exposure is deny-by-default: an empty list exposes nothing and only
+  89  * the explicit wildcard exposes the whole registry (ENG-004).
+  90  */
+  91 export function agentExposesTool(
+  92   allowed: readonly string[],
+  93   toolId: string
+  94 ): boolean {
+  95   return allowed.includes(ALL_AGENT_TOOLS) || allowed.includes(toolId)
+  96 }
+  97 
+  98 const exposes = agentExposesTool
+  99 
+ 100 function describe(tool: ToolDefinition): ToolDescriptor {
+ 101   const { execute, ...descriptor } = tool
+ 102   void execute
+ 103   return descriptor
+ 104 }
+ 105 
+ 106 interface ResultValues {
+ 107   readonly response: string
+ 108   readonly stopReason: RuntimeResult['stopReason']
+ 109   readonly approvalId?: RuntimeResult['approvalId']
+ 110   readonly modelCalls: number
+ 111   readonly toolCalls: number
+ 112   readonly inputTokens?: number
+ 113   readonly outputTokens?: number
+ 114   readonly costUsd?: number
+ 115   readonly toolResult?: ToolResult
+ 116 }
+ 117 
+ 118 function result(values: ResultValues): RuntimeResult {
+ 119   return {
+ 120     response: values.response,
+ 121     stopReason: values.stopReason,
+ 122     ...(values.approvalId !== undefined
+ 123       ? { approvalId: values.approvalId }
+ 124       : {}),
+ 125     steps: 1,
+ 126     modelCalls: values.modelCalls,
+ 127     toolCalls: values.toolCalls,
+ 128     usage: {
+ 129       inputTokens: values.inputTokens ?? 0,
+ 130       outputTokens: values.outputTokens ?? 0,
+ 131       costUsd: values.costUsd ?? 0
+ 132     },
+ 133     ...(values.toolResult ? { toolResult: values.toolResult } : {})
+ 134   }
+ 135 }
+ 136 
+ 137 function fromStop(gate: KernelStop): RuntimeResult {
+ 138   return result({
+ 139     response: gate.response,
+ 140     stopReason: gate.stopReason,
+ 141     ...(gate.approvalId !== undefined ? { approvalId: gate.approvalId } : {}),
+ 142     modelCalls: gate.modelCalls ?? 0,
+ 143     toolCalls: gate.toolCalls ?? 0,
+ 144     ...(gate.usage ?? {})
+ 145   })
+ 146 }
+ 147 
+ 148 export interface KernelRuntimeOptions {
+ 149   /** Response used when the kernel cannot boot (lazy facade path). */
+ 150   readonly bootFailureResponse?: string
+ 151 }
+ 152 
+ 153 /**
+ 154  * Single-turn governed loop on the plugin kernel (SPEC 0181). Every phase runs
+ 155  * through a named interception point; governance lives in control plugins.
+ 156  * Behavior matches `SinglePassGovernedRuntime` and closes the conformance gaps
+ 157  * I5 (call logged before dispatch), I6 (model request logged), I7 (listener
+ 158  * failures normalized) and I8 (cancellation by `RuntimeInput.signal`).
+ 159  */
+ 160 export class KernelRuntime implements HarnessRuntime {
+ 161   #host: Promise<KernelHost> | undefined
+ 162 
+ 163   private constructor(
+ 164     private readonly plugins: readonly KernelPlugin[],
+ 165     host: KernelHost | undefined,
+ 166     private readonly options: KernelRuntimeOptions = {}
+ 167   ) {
+ 168     if (host) this.#host = Promise.resolve(host)
+ 169   }
+ 170 
+ 171   /** Boots eagerly and fails loudly when the profile is incomplete. */
+ 172   public static async boot(
+ 173     plugins: readonly KernelPlugin[],
+ 174     options: KernelRuntimeOptions = {}
+ 175   ): Promise<KernelRuntime> {
+ 176     const host = await KernelHost.boot(plugins, REQUIRED_SERVICES)
+ 177     return new KernelRuntime(plugins, host, options)
+ 178   }
+ 179 
+ 180   /** Boots on first use; a boot failure becomes a fail-closed result. */
+ 181   public static lazy(
+ 182     plugins: readonly KernelPlugin[],
+ 183     options: KernelRuntimeOptions = {}
+ 184   ): KernelRuntime {
+ 185     return new KernelRuntime(plugins, undefined, options)
+ 186   }
+ 187 
+ 188   public async dispose(): Promise<void> {
+ 189     if (!this.#host) return
+ 190     const host = await this.#host.catch(() => undefined)
+ 191     await host?.dispose()
+ 192   }
+ 193 
+ 194   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
+ 195     let host: KernelHost
+ 196     try {
+ 197       this.#host ??= KernelHost.boot(this.plugins, REQUIRED_SERVICES)
+ 198       host = await this.#host
+ 199     } catch (error) {
+ 200       return result({
+ 201         response:
+ 202           this.options.bootFailureResponse ??
+ 203           `Kernel could not start: ${errorMessage(error)}.`,
+ 204         stopReason: 'INTERNAL_FAILURE',
+ 205         modelCalls: 0,
+ 206         toolCalls: 0
+ 207       })
+ 208     }
+ 209     return new Turn(host, input).run()
+ 210   }
+ 211 }
+ 212 
+ 213 /** One execution of the loop over a booted, sealed host. */
+ 214 class Turn {
+ 215   readonly #host: KernelHost
+ 216   readonly #controller = new AbortController()
+ 217   readonly #state: TurnState
+ 218 
+ 219   public constructor(host: KernelHost, input: RuntimeInput) {
+ 220     this.#host = host
+ 221     const startedAt = Date.now()
+ 222     if (input.signal?.aborted) this.#controller.abort()
+ 223     input.signal?.addEventListener('abort', () => this.#controller.abort(), {
+ 224       once: true
+ 225     })
+ 226     this.#state = createTurnState(
+ 227       input,
+ 228       startedAt,
+ 229       host.get('budget').begin(input, startedAt),
+ 230       this.#controller.signal
+ 231     )
+ 232   }
+ 233 
+ 234   public async run(): Promise<RuntimeResult> {
+ 235     const input = this.#state.input
+ 236     if (!hasValidBoundaryInput(input)) {
+ 237       return this.#finish(
+ 238         result({
+ 239           response: 'Runtime identity or execution budget is invalid.',
+ 240           stopReason: 'UNSAFE_REQUEST',
+ 241           modelCalls: 0,
+ 242           toolCalls: 0
+ 243         })
+ 244       )
+ 245     }
+ 246     if (input.budget.maxSteps < 1) {
+ 247       return this.#finish(
+ 248         fromStop(
+ 249           stop('MAX_STEPS', 'Execution budget exhausted before the first step.')
+ 250         )
+ 251       )
+ 252     }
+ 253     if (input.budget.maxDurationMs < 1) {
+ 254       return this.#finish(
+ 255         fromStop(
+ 256           stop('MAX_DURATION', 'Execution duration budget is not available.')
+ 257         )
+ 258       )
+ 259     }
+ 260 
+ 261     const logged = await appendLog(this.#host, {
+ 262       type: 'turn/start',
+ 263       correlationId: input.correlationId
+ 264     })
+ 265     if (logged) return this.#finish(fromStop(logged))
+ 266 
+ 267     const gate = await runGate(this.#host, 'turn/before-step', this.#state)
+ 268     if (gate.kind === 'stop') return this.#finish(fromStop(gate))
+ 269 
+ 270     try {
+ 271       if (this.#state.signal.aborted) {
+ 272         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+ 273       }
+ 274       if (this.#state.budget.remainingMs() <= 0) {
+ 275         return this.#finish(
+ 276           fromStop(
+ 277             stop('MAX_DURATION', 'Duration budget exhausted before planning.')
+ 278           )
+ 279         )
+ 280       }
+ 281       const decision = await race(this.#state, () =>
+ 282         this.#host.get('planner').decideNextStep({
+ 283           runtime: input,
+ 284           availableTools: this.#availableTools(),
+ 285           step: 1
+ 286         })
+ 287       )
+ 288       if (decision === CANCELLED) {
+ 289         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+ 290       }
+ 291       if (decision === DEADLINE) {
+ 292         return this.#finish(
+ 293           fromStop(
+ 294             stop('MAX_DURATION', 'Duration budget exhausted while planning.')
+ 295           )
+ 296         )
+ 297       }
+ 298       switch (decision.action) {
+ 299         case 'RESPOND':
+ 300           return await this.#respond(decision.response)
+ 301         case 'CALL_TOOL':
+ 302           return await this.#callTool(decision.toolInvocation)
+ 303         case 'ASK_USER':
+ 304           return this.#finish(
+ 305             fromStop(
+ 306               stop(
+ 307                 'NEEDS_USER_INPUT',
+ 308                 decision.response ??
+ 309                   decision.reason ??
+ 310                   'More information is required.'
+ 311               )
+ 312             )
+ 313           )
+ 314         case 'REQUEST_APPROVAL':
+ 315           return this.#finish(
+ 316             fromStop(
+ 317               stop(
+ 318                 'APPROVAL_REQUIRED',
+ 319                 decision.response ??
+ 320                   decision.reason ??
+ 321                   'Approval is required before continuing.'
+ 322               )
+ 323             )
+ 324           )
+ 325         case 'HANDOFF':
+ 326           return this.#finish(
+ 327             fromStop(
+ 328               stop(
+ 329                 'HUMAN_TAKEOVER',
+ 330                 decision.response ??
+ 331                   decision.reason ??
+ 332                   'Human takeover is required.'
+ 333               )
+ 334             )
+ 335           )
+ 336         case 'STOP':
+ 337           return this.#finish(
+ 338             fromStop(
+ 339               stop(
+ 340                 'INSUFFICIENT_EVIDENCE',
+ 341                 decision.response ?? decision.reason ?? 'Execution stopped.'
+ 342               )
+ 343             )
+ 344           )
+ 345         case 'RETRIEVE':
+ 346         case 'VERIFY':
+ 347           return this.#finish(
+ 348             fromStop(
+ 349               stop(
+ 350                 'INSUFFICIENT_EVIDENCE',
+ 351                 'This single-pass compatibility runtime does not execute retrieval or verification steps.'
+ 352               )
+ 353             )
+ 354           )
+ 355       }
+ 356     } catch (error) {
+ 357       return this.#finish(
+ 358         fromStop(
+ 359           stop(
+ 360             'INSUFFICIENT_EVIDENCE',
+ 361             `Execution could not be planned: ${errorMessage(error)}.`
+ 362           )
+ 363         )
+ 364       )
+ 365     }
+ 366   }
+ 367 
+ 368   async #respond(response: string | undefined): Promise<RuntimeResult> {
+ 369     if (response?.trim()) {
+ 370       return this.#finish(
+ 371         result({
+ 372           response,
+ 373           stopReason: 'COMPLETED',
+ 374           modelCalls: 0,
+ 375           toolCalls: 0
+ 376         })
+ 377       )
+ 378     }
+ 379     const input = this.#state.input
+ 380     // Single pre-model gate: runModelCall (kernel/pipeline.ts) consumes the
+ 381     // model-call slot via turn.budget.beginModelRequest() and records tokens/
+ 382     // cost via recordModelResult() (PDSH-004 / I11). Gating here too would
+ 383     // double-consume the slot for one turn.
+ 384     const outcome = await runModelCall(this.#host, this.#state, {
+ 385       messages: [
+ 386         {
+ 387           role: 'system',
+ 388           content: `${input.agent.objective}\n${input.agent.instructions.join('\n')}`
+ 389         },
+ 390         { role: 'user', content: input.userMessage }
+ 391       ],
+ 392       context: input.context,
+ 393       budget: input.budget,
+ 394       correlationId: input.correlationId
+ 395     })
+ 396     switch (outcome.kind) {
+ 397       case 'stopped':
+ 398         return this.#finish(fromStop(outcome.gate))
+ 399       case 'cancelled':
+ 400         return this.#finish(
+ 401           fromStop(stop('CANCELLED', CANCELLED_RESPONSE, { modelCalls: 1 }))
+ 402         )
+ 403       case 'deadline':
+ 404         return this.#finish(
+ 405           fromStop(
+ 406             stop(
+ 407               'MAX_DURATION',
+ 408               'Duration budget exhausted during model execution.',
+ 409               { modelCalls: 1 }
+ 410             )
+ 411           )
+ 412         )
+ 413       case 'failed':
+ 414         return this.#finish(
+ 415           fromStop(
+ 416             stop('MODEL_FAILURE', `Model execution failed: ${outcome.error}.`, {
+ 417               modelCalls: 1
+ 418             })
+ 419           )
+ 420         )
+ 421       case 'unrecorded':
+ 422         return this.#finish(
+ 423           fromStop({
+ 424             ...outcome.gate,
+ 425             modelCalls: 1,
+ 426             usage: {
+ 427               inputTokens: outcome.result.inputTokens,
+ 428               outputTokens: outcome.result.outputTokens,
+ 429               costUsd: outcome.result.costUsd
+ 430             }
+ 431           })
+ 432         )
+ 433       case 'completed': {
+ 434         const model = outcome.result
+ 435         const metadata = this.#state.metadata
+ 436         metadata.provider = model.provider
+ 437         metadata.inputTokens = model.inputTokens
+ 438         metadata.outputTokens = model.outputTokens
+ 439         metadata.costUsd = model.costUsd
+ 440         const exhausted = this.#state.budget.recordModelResult(model)
+ 441         if (exhausted) return this.#finish(fromStop(exhausted))
+ 442         return this.#finish(
+ 443           result({
+ 444             response: model.text,
+ 445             stopReason: 'COMPLETED',
+ 446             modelCalls: 1,
+ 447             toolCalls: 0,
+ 448             inputTokens: model.inputTokens,
+ 449             outputTokens: model.outputTokens,
+ 450             costUsd: model.costUsd
+ 451           })
+ 452         )
+ 453       }
+ 454     }
+ 455   }
+ 456 
+ 457   async #callTool(
+ 458     requested: ToolInvocation | undefined
+ 459   ): Promise<RuntimeResult> {
+ 460     const input = this.#state.input
+ 461     const invocation = requested ?? input.requestedTool
+ 462     if (!invocation) {
+ 463       return this.#finish(
+ 464         fromStop(stop('TOOL_FAILURE', 'No tool invocation was supplied.'))
+ 465       )
+ 466     }
+ 467     if (input.budget.maxToolCalls < 1) {
+ 468       return this.#finish(
+ 469         fromStop(
+ 470           stop(
+ 471             'MAX_TOOL_CALLS',
+ 472             'Tool-call budget exhausted before the tool could run.'
+ 473           )
+ 474         )
+ 475       )
+ 476     }
+ 477     const tool = this.#host
+ 478       .get('tools')
+ 479       .resolve(invocation.toolId, invocation.toolVersion)
+ 480     this.#state.metadata.tool = invocation.toolId
+ 481     if (!tool) {
+ 482       return this.#finish(
+ 483         fromStop(
+ 484           stop('TOOL_FAILURE', `Tool "${invocation.toolId}" is unavailable.`, {
+ 485             toolCalls: 1
+ 486           })
+ 487         )
+ 488       )
+ 489     }
+ 490     if (!exposes(input.agent.tools, tool.id)) {
+ 491       return this.#finish(
+ 492         fromStop(
+ 493           stop(
+ 494             'POLICY_DENIED',
+ 495             `Tool "${tool.id}" is not exposed to this agent profile.`
+ 496           )
+ 497         )
+ 498       )
+ 499     }
+ 500 
+ 501     const call: ToolCallState = {
+ 502       turn: this.#state,
+ 503       tool,
+ 504       invocation,
+ 505       needsApproval: false
+ 506     }
+ 507 
+ 508     const pipeline = await runToolCall(this.#host, call)
+ 509     if (pipeline.kind === 'stopped') {
+ 510       const approvalId = pipeline.gate.approvalId ?? call.grant?.approvalId
+ 511       return this.#finish(
+ 512         fromStop({
+ 513           ...pipeline.gate,
+ 514           ...(approvalId !== undefined ? { approvalId } : {})
+ 515         })
+ 516       )
+ 517     }
+ 518     const settled = pipeline.outcome
+ 519     this.#state.metadata.toolDurationMs =
+ 520       'durationMs' in settled ? settled.durationMs : 0
+ 521     const toolResult = this.#toolResult(call, settled)
+ 522     if (pipeline.logFailure) {
+ 523       // F04: the effect fact stays in the result; the turn is not a success.
+ 524       // A call blocked after its reservation keeps the reason it was blocked
+ 525       // (AUD-0599 F01).
+ 526       return this.#finish({
+ 527         ...toolResult,
+ 528         response:
+ 529           settled.kind === 'not_started'
+ 530             ? unrecordedBlock(pipeline.logFailure, settled.gate).response
+ 531             : pipeline.logFailure.response,
+ 532         stopReason: 'INSUFFICIENT_EVIDENCE'
+ 533       })
+ 534     }
+ 535     return this.#finish(toolResult)
+ 536   }
+ 537 
+ 538   #toolResult(call: ToolCallState, outcome: ToolOutcome): RuntimeResult {
+ 539     const approvalId = call.grant?.approvalId
+ 540     const withApproval = approvalId !== undefined ? { approvalId } : {}
+ 541     switch (outcome.kind) {
+ 542       case 'not_started':
+ 543         return fromStop({ ...outcome.gate, ...withApproval })
+ 544       case 'deadline':
+ 545         return result({
+ 546           response: call.approval
+ 547             ? 'unknown_effect: duration budget exhausted during tool execution.'
+ 548             : 'Duration budget exhausted during tool execution.',
+ 549           stopReason: call.approval ? 'TOOL_FAILURE' : 'MAX_DURATION',
+ 550           ...withApproval,
+ 551           modelCalls: 0,
+ 552           toolCalls: 1
+ 553         })
+ 554       case 'cancelled':
+ 555         return result({
+ 556           response: call.approval
+ 557             ? `unknown_effect: ${CANCELLED_RESPONSE}`
+ 558             : CANCELLED_RESPONSE,
+ 559           stopReason: call.approval ? 'TOOL_FAILURE' : 'CANCELLED',
+ 560           ...withApproval,
+ 561           modelCalls: 0,
+ 562           toolCalls: 1
+ 563         })
+ 564       case 'threw': {
+ 565         const toolResult: ToolResult = {
+ 566           status: 'FAILED',
+ 567           error: outcome.error
+ 568         }
+ 569         return result({
+ 570           response: call.approval
+ 571             ? `unknown_effect: ${outcome.error}`
+ 572             : outcome.error,
+ 573           stopReason: 'TOOL_FAILURE',
+ 574           ...withApproval,
+ 575           modelCalls: 0,
+ 576           toolCalls: 1,
+ 577           toolResult
+ 578         })
+ 579       }
+ 580       case 'failed':
+ 581         return result({
+ 582           response: outcome.result.error ?? 'Tool execution failed.',
+ 583           stopReason: 'TOOL_FAILURE',
+ 584           ...withApproval,
+ 585           modelCalls: 0,
+ 586           toolCalls: 1,
+ 587           toolResult: outcome.result
+ 588         })
+ 589       case 'confirm_failed':
+ 590         return result({
+ 591           response: `unknown_effect: approval confirmation failed: ${outcome.error}.`,
+ 592           stopReason: 'TOOL_FAILURE',
+ 593           ...withApproval,
+ 594           modelCalls: 0,
+ 595           toolCalls: 1,
+ 596           toolResult: outcome.result
+ 597         })
+ 598       case 'succeeded':
+ 599         if (
+ 600           Date.now() - this.#state.startedAt >
+ 601           this.#state.input.budget.maxDurationMs
+ 602         ) {
+ 603           return result({
+ 604             response: 'Duration budget exhausted after tool execution.',
+ 605             stopReason: 'MAX_DURATION',
+ 606             modelCalls: 0,
+ 607             toolCalls: 1,
+ 608             toolResult: outcome.result
+ 609           })
+ 610         }
+ 611         return result({
+ 612           response: stringifyOutput(
+ 613             outcome.result.output ?? 'Tool completed successfully.'
+ 614           ),
+ 615           stopReason: 'COMPLETED',
+ 616           ...(this.#state.metadata.approval
+ 617             ? { approvalId: this.#state.metadata.approval }
+ 618             : {}),
+ 619           modelCalls: 0,
+ 620           toolCalls: 1,
+ 621           toolResult: outcome.result
+ 622         })
+ 623     }
+ 624   }
+ 625 
+ 626   #availableTools(): readonly ToolDescriptor[] {
+ 627     const allowed = this.#state.input.agent.tools
+ 628     return this.#host
+ 629       .get('tools')
+ 630       .list()
+ 631       .filter((tool) => exposes(allowed, tool.id))
+ 632       .map(describe)
+ 633   }
+ 634 
+ 635   async #finish(initial: RuntimeResult): Promise<RuntimeResult> {
+ 636     let current = initial
+ 637     for (const entry of this.#host.listeners('turn/end')) {
+ 638       try {
+ 639         current = await entry.fn(this.#state, current)
+ 640       } catch (error) {
+ 641         if (entry.kind === 'control') {
+ 642           current = {
+ 643             ...current,
+ 644             response: `Execution could not be completed because ${entry.plugin} failed: ${errorMessage(error)}.`,
+ 645             stopReason: 'INSUFFICIENT_EVIDENCE'
+ 646           }
+ 647         }
+ 648       }
+ 649     }
+ 650     const unrecorded = await appendLog(this.#host, {
+ 651       type: 'turn/end',
+ 652       correlationId: this.#state.input.correlationId,
+ 653       stopReason: current.stopReason
+ 654     })
+ 655     if (unrecorded) {
+ 656       // F04: a turn whose closing record failed is never reported as done.
+ 657       // A turn that had already stopped keeps why it stopped (AUD-0600 F01).
+ 658       return {
+ 659         ...current,
+ 660         response:
+ 661           current.stopReason === 'COMPLETED'
+ 662             ? unrecorded.response
+ 663             : current.response.startsWith(unrecorded.response)
+ 664               ? current.response
+ 665               : `${unrecorded.response} The turn had already stopped (${current.stopReason}): ${current.response}`,
+ 666         stopReason: 'INSUFFICIENT_EVIDENCE'
+ 667       }
+ 668     }
+ 669     return current
+ 670   }
+ 671 }
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/kernel/index.ts ===
+   1 export * from './types.ts'
+   2 export { KernelBootError, KernelHost } from './host.ts'
+   3 export type { Listener } from './host.ts'
+   4 export * from './controls.ts'
+   5 export * from './kernel-runtime.ts'
+   6 export * from './pipeline.ts'
+   7 export * from './profile.ts'

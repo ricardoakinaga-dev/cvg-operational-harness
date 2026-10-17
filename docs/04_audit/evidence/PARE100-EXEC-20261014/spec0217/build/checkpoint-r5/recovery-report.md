@@ -1,0 +1,15 @@
+# SPEC0217 — recuperação R5
+
+O reparo S2 já estava aplicado quando esta recuperação começou. Os artefatos posteriores ao checkpointR4 mostraram um segundo desvio: um comando S1 podia omitir a aprovação exigida pela entrada confiável. Quatro negativos reproduziram o problema antes do reparo. A reidratação agora vincula aprovação, política, modo e entrada ao pedido confiável; o store também valida esses vínculos antes de certificar um seal. Três negativos PG passaram após corrigir uma referência inválida do primeiro patch.
+
+A certificaçãoR1 expôs regressões reais de compatibilidade de roles mínimas. O marcador já persistido no pedido operacional agora discrimina o trabalho reservado antes de consultar sidecars; ele só nega acesso e nunca concede autoridade. A guarda completa permanece no caminho bound. UPDATE que remove o marcador e DELETE antigos continuam negados em PG real. Nenhuma role antiga recebeu privilégios extras e nenhuma função ganhou SECURITY DEFINER. A migration0029 ainda é própria/não promovida; migrations anteriores e0028 foram preservadas.
+
+A rodada executou60testesPG/zero skips, cinco do caminho nativoAPI→worker→ACK/zero skips,183unitários com quatro opcionaisPG executados separadamente,59documentação/arquitetura e dois controles selecionados. Tipagem/lint/formatação e os três builds públicos passaram. Os testes nativos comprovam S1/S2,25s de renovação, prazo expirado e janelas de intenção/ACK/rollback; os cinco processos da jornada real limparam schemas,roles e sessões. Cada número mantém seu escopo; não é uma suíte global nem certificação corrente.
+
+A execução de certificaçãoR1 foi encerrada após falhas conhecidas de formatação e58testes;4297passaram. Fonte congelada e logs permanecem, e somente o PostgreSQL descartável daquela execução foi removido. O resumo distingue exit desconhecido do runner original e término observado. A falha de cleanup de evidência de processos vinha de record chamado duas vezes e agora é idempotente, preservando o erro original.
+
+A proposta0220R2 foi recalculada em494inputs observados;462pins de código por grupo ainda conferidos. O checker oficial não mudou e continuaINCOMPLETE/66diagnósticos/0violações. A simulação privada tem0diagnósticos, sem efeito no checker oficial. A proposta antiga e as SPECs aprovadas permanecem íntegras. Metadados operacionais do freeze são observações históricas; pins de código/emits foram revalidados depois.
+
+A crítica independenteR4 anterior foi interrompida pelo controle automático de segurança e não emitiu aceite. Seus120testes e o contraexemplo são evidência técnica preservada, não um veredito. O host atual não expõe spawn/lifecycle/fresh-context nativos; esta rodada é I0, com pacote de crítica selado para execução independente. Não houve aceite independente, integração de runtime217 no checkout principal, certificação final, release ou fechamento dos34cartões.
+
+Próxima ação: executar a crítica fresca sobre review-packet, revalidar seus hashes e revisar tecnicamente a SPEC0220R2 antes de apresentar seu gateT3 concreto ao usuário. Goal36 segue ativo; paridadeNOT_MEASURED, produçãoNO_GO.

@@ -1,0 +1,75 @@
+import { EMPTY_MODEL_USAGE } from "@cvg/harness-contracts";
+/**
+* Deterministic scripted decision source. It makes governed loop tests
+* independent from any real model while still flowing through the same
+* validation, policy and budget boundaries.
+*/
+export class ScriptedOrchestrator {
+	options;
+	index = 0;
+	constructor(options) {
+		this.options = options;
+	}
+	get calls() {
+		return this.index;
+	}
+	async decide() {
+		const entry = this.options.script[this.index];
+		if (!entry) {
+			throw new Error("scripted orchestrator script exhausted");
+		}
+		const turn = "decision" in entry ? entry : { decision: entry };
+		this.options.onDecision?.(this.index, turn.decision);
+		this.index += 1;
+		return turn;
+	}
+}
+/** Repeats the same decision; used by adversarial and budget proofs. */
+export class StaticOrchestrator {
+	options;
+	calls = 0;
+	constructor(options) {
+		this.options = options;
+	}
+	async decide() {
+		this.calls += 1;
+		if (this.calls > (this.options.maxCalls ?? 1e3)) {
+			throw new Error("static orchestrator call bound exceeded");
+		}
+		return {
+			decision: this.options.decision,
+			usage: EMPTY_MODEL_USAGE
+		};
+	}
+}
+/**
+* Deterministic fake model provider. Fundamental correctness never depends on
+* a real API; scripted output drives the orchestrator/response paths.
+*/
+export class ScriptedModelGateway {
+	options;
+	index = 0;
+	constructor(options) {
+		this.options = options;
+	}
+	get calls() {
+		return this.index;
+	}
+	async complete(request) {
+		void request;
+		const entry = this.options.responses[this.index];
+		if (entry === undefined) {
+			throw new Error("scripted model gateway responses exhausted");
+		}
+		this.index += 1;
+		const response = typeof entry === "string" ? { text: entry } : entry;
+		return {
+			text: response.text,
+			provider: this.options.provider ?? "scripted",
+			model: this.options.model ?? "scripted-1",
+			inputTokens: response.inputTokens ?? 10,
+			outputTokens: response.outputTokens ?? 10,
+			costUsd: response.costUsd ?? .001
+		};
+	}
+}

@@ -1,0 +1,261 @@
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/operational-execution-postgres.ts
+270:   }
+271: }
+272: 
+273: async function transaction<T>(
+274:   client: PostgresQueryable,
+275:   operation: () => Promise<T>
+276: ): Promise<T> {
+277:   await client.query('BEGIN')
+278:   try {
+279:     const result = await operation()
+280:     await client.query('COMMIT')
+281:     return result
+282:   } catch (error) {
+283:     await client.query('ROLLBACK').catch(() => undefined)
+284:     throw error
+285:   }
+286: }
+287: 
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/controlled-published-fencing.ts
+235:   const queueResult = await client.query<Record<string, unknown>>(
+236:     'SELECT status,lease_owner,lease_until,attempts FROM operational_execution_outbox WHERE tenant_id=$1 AND execution_id=$2 FOR UPDATE',
+237:     [fence.tenantId, fence.executionId]
+238:   )
+239:   const queue = queueResult.rows[0]
+240:   const outboxResult = await client.query<Record<string, unknown>>(
+241:     'SELECT * FROM outbox_events WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+242:     [fence.tenantId, outer.eventId]
+243:   )
+244:   const event = outboxResult.rows[0]
+245:   const attemptResult = await client.query<Record<string, unknown>>(
+246:     `SELECT id,event_id,attempt,worker_id,outcome FROM outbox_attempts
+247:       WHERE tenant_id=$1 AND event_id=$2 AND id=$3
+248:         AND NOT EXISTS (SELECT 1 FROM outbox_attempts newer WHERE newer.tenant_id=$1
+249:           AND newer.event_id=$2 AND newer.id>outbox_attempts.id) FOR UPDATE`,
+250:     [fence.tenantId, outer.eventId, outer.expectedAttemptRowId]
+251:   )
+252:   const attempt = attemptResult.rows[0]
+253:   if (
+254:     !queue ||
+255:     queue.status !== 'processing' ||
+256:     queue.lease_owner !== fence.workerId ||
+257:     queue.attempts !== fence.attempt ||
+258:     !event ||
+259:     event.status !== 'processing' ||
+260:     event.lease_owner !== outer.processWorkerId ||
+261:     event.attempts !== outer.expectedOuterAttempt ||
+262:     !attempt ||
+263:     String(attempt.id) !== outer.expectedAttemptRowId ||
+264:     attempt.attempt !== outer.expectedOuterAttempt ||
+265:     attempt.worker_id !== outer.processWorkerId ||
+266:     attempt.outcome !== null
+267:   )
+268:     publishedFenceError()
+269:   if (!options.skipPause) {
+270:     const session = await client.query<Record<string, unknown>>(
+271:       'SELECT conversation_id,takeover_state,status FROM sessions WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+272:       [fence.tenantId, binding.session_id]
+273:     )
+274:     if (
+275:       !session.rows[0] ||
+276:       session.rows[0].conversation_id !== binding.conversation_id ||
+277:       (!options.settlement && session.rows[0].takeover_state !== 'BOT_ACTIVE')
+278:     )
+279:       publishedFenceError()
+280:     await client.query(
+281:       `INSERT INTO kernel_pause_switches(tenant_id,paused,updated_by)
+282:       VALUES ($1,false,'controlled-published-initialization') ON CONFLICT (tenant_id) DO NOTHING`,
+283:       [fence.tenantId]
+284:     )
+285:     const pause = await client.query<{ paused: boolean }>(
+286:       'SELECT paused FROM kernel_pause_switches WHERE tenant_id=$1 FOR UPDATE',
+287:       [fence.tenantId]
+288:     )
+289:     if (
+290:       !pause.rows[0] ||
+291:       typeof pause.rows[0].paused !== 'boolean' ||
+292:       (!options.settlement && pause.rows[0].paused)
+293:     )
+294:       publishedFenceError()
+295:   }
+296:   const recheck = async (): Promise<Date> => {
+297:     if (options.signal?.aborted) publishedFenceError()
+298:     const now = await publishedDbNow(client)
+299:     for (const value of [
+300:       parent.lease_until,
+301:       queue.lease_until,
+302:       event.lease_until
+303:     ]) {
+304:       if (
+305:         (typeof value !== 'string' && !(value instanceof Date)) ||
+306:         Date.parse(publishedIso(value)) <= now.getTime()
+307:       )
+308:         publishedFenceError()
+309:     }
+310:     if (
+311:       !options.settlement &&
+312:       binding.expires_at !== null &&
+313:       Date.parse(publishedIso(binding.expires_at)) <= now.getTime()
+314:     )
+315:       publishedFenceError()
+316:     if (options.signal?.aborted) publishedFenceError()
+317:     return now
+318:   }
+319:   const now = await recheck()
+320:   await setPublishedWriteContext(
+321:     client,
+322:     fence,
+323:     options.settlement ? 'settlement' : 'active'
+324:   )
+325:   await recheck()
+326:   const leaseUntil = new Date(
+327:     Math.min(
+328:       ...[
+329:         parent.lease_until,
+330:         queue.lease_until,
+331:         event.lease_until,
+332:         ...(binding.expires_at === null ? [] : [binding.expires_at])
+333:       ].map((value) => new Date(value as string | Date).getTime())
+334:     )
+335:   ).toISOString()
+336:   return { binding, now, recheck, leaseUntil }
+337: }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/operational-step-postgres.ts
+82: const checkpointColumns = `
+83:   tenant_id, execution_id, checkpoint_id, checkpoint_version, runtime_profile,
+84:   runtime_version, orchestrator_version, step_number, state, budget_usage,
+85:   digest, created_at`
+86: 
+87: // CASE suppresses oversized JSONB before node-postgres invokes its JSON parser.
+88: // octet_length uses expanded text size, not compressed pg_column_size.
+89: const boundedCheckpointColumns = checkpointColumns.replace(
+90:   'state, budget_usage',
+91:   `
+92:   CASE WHEN checkpoint_version <> 2 OR
+93:     (octet_length(state::text) <= ${COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES}
+94:      AND length(state->>'data') <= ${COMPLETE_CHECKPOINT_DATA_MAX_CHARS})
+95:     THEN state ELSE NULL END AS state,
+96:   CASE WHEN checkpoint_version <> 2 OR octet_length(budget_usage::text) <= 4096
+97:     THEN budget_usage ELSE NULL END AS budget_usage`
+98: )
+99: 
+100: function text(value: unknown, label: string, max = 200): string {
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts
+192:     })
+193:   // Observational wrappers call the native methods unchanged and rethrow native failures.
+194:   for (const method of [
+195:     'reserve',
+196:     'markStarted',
+197:     'confirm',
+198:     'fail',
+199:     'markUncertain',
+200:     'get'
+201:   ] as const) {
+202:     const original = journal[method].bind(journal)
+203:     Object.defineProperty(journal, method, {
+204:       value: async (...args: unknown[]) => {
+205:         try {
+206:           const result = await (
+207:             original as (...a: unknown[]) => Promise<unknown>
+208:           )(...args)
+209:           journalTrace.push({ method, args, result })
+210:           await trace()
+211:           if (
+212:             childRole === 'writer' &&
+213:             input.name === 'json-null-value' &&
+214:             method === 'confirm'
+215:           ) {
+216:             await save(join(dir, 'committed.json'), {
+217:               pid: process.pid,
+218:               phase: 'CONFIRMED_JOURNAL_BEFORE_RESULT_CHECKPOINT',
+219:               checkpoint: await store.loadCheckpoint(
+220:                 tenantId,
+221:                 input.executionId
+222:               ),
+223:               result
+224:             })
+225:             process.stdout.write('PUBLIC224_READY CONFIRMED_JOURNAL\n')
+226:             await new Promise(() => {
+227:               setInterval(() => {}, 1000)
+228:             })
+229:           }
+230:           return result
+231:         } catch (e) {
+232:           journalTrace.push({ method, args, error: errorInfo(e) })
+233:           await trace()
+234:           throw e
+235:         }
+236:       }
+237:     })
+238:   }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts
+280:     )
+281:     const { pool, store } = await connect()
+282:     try {
+283:       if (role === 'writer') {
+284:         const checkpoint = fixture(input.executionId)
+285:         expect(
+286:           (
+287:             await store.compareAndSwapCheckpoint({
+288:               tenantId,
+289:               executionId: input.executionId,
+290:               expected: null,
+291:               next: checkpoint
+292:             })
+293:           ).status
+294:         ).toBe('APPLIED')
+295:         await writeFile(
+296:           join(dir, 'before.json'),
+297:           JSON.stringify({ pid: process.pid, checkpoint })
+298:         )
+299:         process.stdout.write('PG224_READY COMMITTED\n')
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/docs/architecture/adrs/ADR-010-harness-product-isolation.md
+1: # ADR-010 — Operational Harness e produtos consumidores isolados
+2: 
+3: - Data: 03/10/2026.
+4: - Direção: **confirmada pelo pedido atual do usuário** — “esse repositorio é do operational harness”, com o programa acoplado mantido isolado.
+5: - Layout e execução: **extração estrutural implementada conforme SPEC0178**, por pedido posterior de implementação integral. O aceite de isolamento permanece pendente: a segunda crítica T2 reproduziu dois caminhos de dependência proibida aceitos pelo gate. SPEC0179/0180 aguardam revisão humana antes de BUILD T3.
+6: - Fontes: [ADR-001](ADR-001-harness-independent-products.md), [ADR-009](ADR-009-assistente-de-plantao.md), [AUD0594](../../04_audit/0594_repository_score_audit_2026-10-02.md), [roadmap 0369](../../03_build/0369_harness_product_isolation_roadmap.md) e [backlog 0370](../../03_build/0370_harness_product_isolation_backlog.md).
+7: 
+8: ## Decisão de direção
+9: 
+10: O `cvg-operational-harness` é a infraestrutura reutilizável: contratos, orquestração, execução governada e adapters compartilhados. O Assistente de Plantão é um **produto consumidor**, com domínio, configuração, estado, testes, operação e liberação próprios.
+11: 
+12: Esta decisão substitui a identificação do repositório inteiro com o Assistente de Plantão na ADR-009. As decisões D1–D4, o princípio de confirmação humana, a SPEC 0177 e a barra 0368 continuam aplicáveis **ao produto**. A separação não autoriza dado real, integração externa, piloto ou release do harness, nem reabre automaticamente UP91/0356/0367.
+13: 
+14: ## Fronteira implementada em verificação
+15: 
+16: ```text
+17: cvg-operational-harness/
+18:   packages/                      contratos/runtime/adapters reutilizáveis
+19:   apps/api/                      host do harness existente
+20:   apps/worker/                   worker operacional existente
+21:   products/shift-assistant/
+22:     package.json                 workspace privado consumidor
+23:     src/                         domínio, comandos, composição e entrypoint
+24:     tests/ ou src/__tests__/      testes próprios e sondas de regressão
+25:     sandbox/ ou src/sandbox/      simuladores e demos somente sintéticos
+26:     deploy/                      Dockerfile, compose e exemplo de env próprios
+27:     docs/                        SPEC, guia, operação, barra e backlog do produto
+28:   docs/                          arquitetura e continuidade do harness
+29: ```
+30: 
+31: Os testes e simuladores estão em `src/__tests__` e `src/sandbox`, conforme SPEC0178. Dezessete arquivos TypeScript foram movidos preservando seus bytes; deploy, workspace, docs e backlog agora têm caminhos próprios. Os dados e volumes existentes foram preservados. Criar outro repositório ou publicar pacotes não faz parte desta entrega.
+32: 
+33: Direção permitida: **produto → exports públicos de contratos/runtime/adapters suportados → dependências de infraestrutura**. O harness e seus hosts não importam o produto, não carregam suas variáveis `SHIFT_*`, não montam seus webhooks e não iniciam seu agendador. Hospedar tudo no mesmo monorepo não concede acesso de um processo aos dados ou segredos do outro.
+34: 
+35: O consumidor atual importa `@cvg/model-gateway` e `zod`; não compõe `createOperationalHarness` nem `ModelGateway.complete`. A extração não deve fingir que essa integração já existe. A SPEC deve decidir quais exports do adapter são suportados e se o organizador precisa atravessar o gateway de budgets/telemetria, observando a ADR-004; mudança observável nesse caminho exige gate T3. Não adicionar loop autônomo ou ferramentas clínicas para tornar o consumidor artificialmente “genérico”.
+36: 
+37: ## Critérios de isolamento
+38: 
+39: 1. Domínio, prompts, comandos, identidade de pacientes, regras de lembrete e retenção do assistente ficam no produto.
+40: 2. Imports estáticos, dinâmicos, relativos, por alias e dependências transitivas do harness para o produto são recusados por gate executável com caso negativo conhecido.
+41: 3. Harness compila e executa uma jornada sintética sem arquivos, variáveis, volume, simuladores ou processo do produto; isolamento é comprovado em cópia descartável.
+42: 4. Consumidor tem entrypoint, comandos, configuração, imagem e volume próprios. Um não importa, inicializa ou precisa parar o processo do outro.

@@ -1,0 +1,13 @@
+from pathlib import Path
+import sys,os,subprocess,json,hashlib,datetime
+D=Path(__file__).parent;W=D.parents[2]/'worktree'
+name=sys.argv[1];argv=sys.argv[2:];src=W/'packages/harness/src/__tests__/complete-response-path-public.test.ts';sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest();before=sha(src);env=os.environ.copy();env['PATH']='/home/ricardo/.nvm/versions/node/v22.23.2/bin:'+env.get('PATH','');env['SPEC0224_RESPONSE_EVIDENCE']=str(D/(name+'-trace-private.json'));env['TMPDIR']=str(D/'tmp');env['NODE_COMPILE_CACHE']=str(D/'nodecache');(D/'tmp').mkdir(exist_ok=True);(D/'nodecache').mkdir(exist_ok=True)
+nativePaths=['packages/harness/src/iterative-runtime.ts','packages/harness/src/iterative-dispatch.ts','packages/harness/src/__tests__/complete-response-path-public.test.ts']; nativeBefore={rel:sha(W/rel) for rel in nativePaths}
+for suffix in ['.stdout.log','.stderr.log','.command.json','-trace-private.json']:
+    if (D/(name+suffix)).exists(): raise RuntimeError('Refusing overwrite of prior command output: '+name+suffix)
+if env.get('I1_REVIEW') and (Path(env['I1_REVIEW'])/'run/independent-private.json').exists():
+    raise RuntimeError('Refusing overwrite of prior independent probe output; assign a fresh review-output tree')
+p=subprocess.run(argv,cwd=W,env=env,capture_output=True)
+nativeAfter={rel:sha(W/rel) for rel in nativePaths}
+for kind,raw in [('stdout',p.stdout),('stderr',p.stderr)]: (D/(name+'.'+kind+'.log')).write_bytes(raw)
+record={'argv':argv,'cwd':str(W),'exit':p.returncode,'nativeBeforeSHA256':nativeBefore,'nativeAfterSHA256':nativeAfter,'sourceBeforeSHA256':before,'sourceAfterSHA256':sha(src),'finishedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()};(D/(name+'.command.json')).write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record));sys.exit(p.returncode)

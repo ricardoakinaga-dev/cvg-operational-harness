@@ -1,0 +1,45 @@
+import pathlib,json,hashlib,stat,datetime,os
+R=pathlib.Path(__file__).parent
+H=lambda b:hashlib.sha256(b).hexdigest()
+def write(n,v):
+ with (R/n).open('x') as f:json.dump(v,f,indent=2)
+# Keep the previous report bytes; correct a broad source anchor in the canonical report.
+p=R/'report-final.md';b=p.read_text();p.rename(R/'report-before-anchor-correction.md')
+with p.open('x') as f:f.write(b.replace('fixture lines 481–545 and 692–767','fixture lines 481–575 and 692–767'))
+original=json.loads((R/'inputs-before.json').read_text());checks=[]
+for x in original:
+ p=pathlib.Path(x['path']);s=p.stat();checks.append(dict(path=str(p),bytes=s.st_size,sha256=H(p.read_bytes()),mtime_ns=s.st_mtime_ns,unchanged=s.st_size==x['bytes'] and H(p.read_bytes())==x['sha256'] and s.st_mtime_ns==x['mtime_ns']))
+assert all(x['unchanged'] for x in checks)
+write('final-input-integrity.json',dict(entries=len(checks),allUnchanged=True,checks=checks,reportAnchorCorrection='Canonical report corrected 481–545 to481–575 to include CAS-return at555. Previous report bytes preserved. No candidate change.'))
+index=[]
+for d in sorted((R/'commands').iterdir()):
+ meta=json.loads((d/'meta.json').read_text());ex=json.loads((d/'exit.json').read_text())['exit'] if (d/'exit.json').exists() else meta['exit']
+ index.append(dict(name=d.name,argv=meta['argv'],cwd=meta['cwd'],environmentNames=meta.get('env_names',[]),exit=ex,streams={n:dict(path=str((d/n).relative_to(R)),bytes=(d/n).stat().st_size,sha256=H((d/n).read_bytes())) for n in ['stdout','stderr']}))
+assert next(x for x in index if x['name']=='vitest-r1')['exit']==0
+assert next(x for x in index if x['name']=='finalize-review')['exit']==1
+assert all(x['exit']==0 for x in index if x['name']!='finalize-review')
+write('commands-final-index.json',dict(commands=index,allExecutionErrorsPreserved=True,onlyNonzeroCommand='finalize-review: packaging literal-match assertion; no native fixture failure',bootstrapLimitation='Initial manifest/source read-only bootstrap calls and script creation heredocs remain in tool transcript. Not falsely represented as disk-captured raw streams.'))
+exclusions=json.loads((R/'credential-exclusion-check.json').read_text());priv=set(exclusions['credentialFiles'])|{x['path'] for x in exclusions['additionalLiteralMatchExclusions']}
+primaries={'report-final.md','decision-final.json','cleanup-proof.json','reconstruction-results.json','live-sql-verification.json','transform-binding.json','inputs-before.json','inputs-after.json','final-input-integrity.json','observed-read-inputs.json','dependency-input-inventory.json','runtime-binaries.json','commands-final-index.json','credential-exclusion-check.json','private-prototype-verification.json','resource-prepared.json','environment-before.json','environment-after.json'}
+files=[];private=[];empty=[];dirs=[]
+for p in sorted(R.rglob('*')):
+ rel=str(p.relative_to(R))
+ if p.is_dir():
+  dirs.append(dict(path=rel,mode=oct(stat.S_IMODE(p.stat().st_mode)),empty=not any(p.iterdir())));continue
+ assert p.is_file() and not p.is_symlink(),rel
+ raw=p.read_bytes();record=dict(path=rel,bytes=len(raw),sha256=H(raw),mode=oct(stat.S_IMODE(p.stat().st_mode)))
+ if rel in priv:
+  record.update(category='private-credential-exclusion',publication='EXCLUDE_PRESERVE_PRIVATE',reason='Credential resource' if rel in exclusions['credentialFiles'] else 'Password literal collides with synthetic policy label in original raw input');private.append(record)
+ else:
+  category='primary' if rel in primaries or rel.startswith(('runs/','live-sql/')) else 'raw-command' if rel.startswith('commands/') else 'copied-input' if rel.startswith('packet-proof/') or rel in ['trace-reads.cjs','vitest.i1.mjs','manifest-snapshot.json'] else 'cache-derived' if rel.startswith(('cache/','tmp/','homecache/','nodecache/')) else 'derived-or-review-tool'
+  record.update(category=category,publication='PRIVATE_UNTIL_CURATED_LEAD_AUTHENTICATION');files.append(record)
+ if not raw:empty.append(rel)
+manifest=dict(createdAt=datetime.datetime.now(datetime.timezone.utc).isoformat(),reviewRoot=str(R),decision='APPROVE_SCOPED_PG_ADMISSION_PROOF',canonicalReport='report-final.md',canonicalDecision='decision-final.json',executedFixtureSha256='0ad83ddab6016ee21e9601a8dd4db013814420bc71a9dab67cf6221f6f84e2c2',allArtifactsPrivateUntilCuratedPublication=True,outputs=files,privateCredentialExclusions=private,emptyFiles=empty,directories=dirs,scope=dict(authorizedWrites='REVIEW/** only',candidateChanges=False,fixtureRuns=1,freshNamespace='pare224_admission_i1_r1',retry=False,originalOrOtherContainerInspection=False,independentInstrumentation='User-space read/transform tracing plus explicit immutable-copy pre/post hashes; not kernel or during-execution attestation',leadAuthenticationRequired=True),self=dict(path='artifact-manifest.json',bytes=0,sha256=None,reason='Self SHA excluded to avoid recursive hashing. Exact self bytes embedded; SHA256 returned in final sealing tool output. All other output files, including empty/cache/private exclusions, are listed with exact bytes/SHA.'))
+for _ in range(5):
+ encoded=(json.dumps(manifest,indent=2)+'\n').encode();n=len(encoded)
+ if manifest['self']['bytes']==n:break
+ manifest['self']['bytes']=n
+encoded=(json.dumps(manifest,indent=2)+'\n').encode();assert len(encoded)==manifest['self']['bytes']
+with (R/'artifact-manifest.json').open('xb') as f:f.write(encoded)
+assert len(private)==14
+print(json.dumps(dict(decision=manifest['decision'],outputFiles=len(files),privateExcludedFiles=len(private),emptyFiles=len(empty),commandRecords=len(index),artifactManifestBytes=len(encoded),artifactManifestSha256=H(encoded),executedSourceSha256=manifest['executedFixtureSha256'],modifiedPaths=str(R)+'/**')))

@@ -1,0 +1,99 @@
+"""Replay independent evidence checkers against isolated known-bad artifacts.
+
+The coherent late-state mutation has valid hashes/codec: only scenario
+semantics reject it. No candidate, database or producer artifact is modified.
+"""
+import base64
+import hashlib
+import json
+import subprocess
+from pathlib import Path
+
+base = Path(__file__).parent
+run = base / 'builder-r1/runs/r1'
+out = base / 'scenario-controls-r2'
+out.mkdir(exist_ok=True)
+sha = lambda raw: hashlib.sha256(raw).hexdigest()
+canonical = lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+sources = {str(p.relative_to(run)): p.read_bytes() for p in run.rglob('*.json')}
+results = []
+
+
+def write(path, value):
+    path.write_text(json.dumps(value, indent=2) + '\n')
+
+
+def execute(name, mutation=None):
+    root = out / name
+    root.mkdir(exist_ok=False)
+    for relative, raw in sources.items():
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(raw.replace(str(run).encode(), str(root).encode()))
+    if mutation:
+        mutation(root)
+    record = {'name': name}
+    for family in ['core', 'scenarios']:
+        argv = ['python3', str(base / ('recompute-' + family + '.py')), str(root)]
+        p = subprocess.run(argv, capture_output=True)
+        (out / (name + '-' + family + '.stdout.log')).write_bytes(p.stdout)
+        (out / (name + '-' + family + '.stderr.log')).write_bytes(p.stderr)
+        expected = family == 'core' or mutation is None
+        assert (p.returncode == 0) == expected, (name, family, p.returncode, p.stderr[-2000:])
+        record[family] = {'argv': argv, 'exit': p.returncode, 'expectedAcceptance': expected,
+                          'stdoutSHA256': sha(p.stdout), 'stderrSHA256': sha(p.stderr)}
+    record['inputManifest'] = [{'path': str(p.relative_to(root)), 'bytes': p.stat().st_size,
+                                'sha256': sha(p.read_bytes())} for p in sorted(root.rglob('*.json'))]
+    results.append(record)
+
+
+def late_mutation(root):
+    path = next((root / 'SP10').rglob('late-after.json'))
+    data = json.loads(path.read_text())
+    cp = data['checkpoint']
+    cp['state']['toolResultContext']['deliveredThroughStep'] = 1
+    cp['digest'] = sha(b'cvg.checkpoint.v2\n' + canonical({k: v for k, v in cp.items()
+                                                        if k not in ['checkpointId', 'createdAt', 'digest']}))
+    row = data['row']
+    raw = canonical(cp['state'])
+    row['digest'] = cp['digest']
+    row['state'].update(decodedBytes=len(raw), decodedSha256=sha(raw), data=base64.b64encode(raw).decode())
+    row['physical_state_text'] = canonical(row['state']).decode()
+    write(path, data)
+
+
+def lease_mutation(root):
+    path = next((root / 'SP12').rglob('takeover-native-claims.json'))
+    data = json.loads(path.read_text())
+    data['lease']['slept'][0]['after_expiry'] = data['lease']['observed']['observed_at']
+    write(path, data)
+
+
+def foreign_mutation(root):
+    path = next((root / 'SP04').rglob('foreign-receipt-origin.json'))
+    data = json.loads(path.read_text())
+    data['actualAArgs']['admissionId'] = 'invented_not_actual_native_A'
+    write(path, data)
+
+
+def qualification_mutation(root):
+    path = root / 'case-summary-index.json'
+    data = json.loads(path.read_text())
+    next(v for v in data['cases'] if v['id'] == 'SP06')['functionalQualification'] = 'PASS'
+    write(path, data)
+
+
+execute('positive')
+execute('coherent-late-state', late_mutation)
+execute('takeover-before-expiry', lease_mutation)
+execute('invented-foreign-receipt', foreign_mutation)
+execute('invalid-pair-promoted', qualification_mutation)
+for relative, raw in sources.items():
+    assert (run / relative).read_bytes() == raw, 'Original mutated'
+record = {'status': 'PASS_EVIDENCE_CONTROLS_NOT_NATIVE_IMPLEMENTATION_PROOF',
+          'positiveAccepted': 1, 'knownBadRejected': 4, 'coreValidForAllControls': True,
+          'checkerHashes': {name: sha((base / name).read_bytes()) for name in ['recompute-core.py', 'recompute-scenarios.py']},
+          'controls': results,
+          'limits': 'Controls qualify evidence reconstruction only. Fresh independent execution and exact source integrity remain necessary.'}
+write(base / 'scenario-qualification-r2.json', record)
+print(json.dumps({k: v for k, v in record.items() if k != 'controls'}))

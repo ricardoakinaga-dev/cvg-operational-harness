@@ -1,0 +1,195 @@
+{
+  "formatVersion": 1,
+  "definitions": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\u0000]+$"
+    },
+    "text": { "type": "string", "x-maxUtf8Bytes": 65536 },
+    "count": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["values", "sourceIds", "capturedAt"],
+      "properties": {
+        "values": { "type": "object" },
+        "sourceIds": { "type": "array", "items": { "type": "string" } },
+        "capturedAt": { "type": "string" }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxSteps",
+        "maxModelCalls",
+        "maxToolCalls",
+        "maxDurationMs",
+        "maxCostUsd",
+        "maxTokens"
+      ],
+      "properties": {
+        "maxSteps": { "$ref": "#/definitions/count" },
+        "maxModelCalls": { "$ref": "#/definitions/count" },
+        "maxToolCalls": { "$ref": "#/definitions/count" },
+        "maxDurationMs": { "type": "number", "minimum": 0 },
+        "maxCostUsd": { "type": "number", "minimum": 0 },
+        "maxTokens": { "$ref": "#/definitions/count" },
+        "maxKnowledgeCalls": { "$ref": "#/definitions/count" },
+        "maxReplans": { "$ref": "#/definitions/count" },
+        "maxVerificationCalls": { "$ref": "#/definitions/count" },
+        "maxDecisionRepairs": { "$ref": "#/definitions/count" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["messages", "context", "budget", "correlationId"],
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "content"],
+            "properties": {
+              "role": { "enum": ["system", "user", "assistant", "tool"] },
+              "content": { "type": "string" }
+            }
+          }
+        },
+        "context": { "$ref": "#/definitions/context" },
+        "budget": { "$ref": "#/definitions/budget" },
+        "correlationId": { "$ref": "#/definitions/id" },
+        "purpose": {
+          "enum": ["ORCHESTRATION", "RESPONSE", "EVALUATION", "REPAIR"]
+        }
+      }
+    }
+  },
+  "events": {
+    "turn/start": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId"],
+      "properties": { "correlationId": { "$ref": "#/definitions/id" } }
+    },
+    "model/request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "request"],
+      "properties": {
+        "correlationId": { "$ref": "#/definitions/id" },
+        "request": { "$ref": "#/definitions/request" }
+      }
+    },
+    "model/result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "provider", "inputTokens", "outputTokens"],
+      "properties": {
+        "correlationId": { "$ref": "#/definitions/id" },
+        "provider": { "$ref": "#/definitions/id" },
+        "inputTokens": { "$ref": "#/definitions/count" },
+        "outputTokens": { "$ref": "#/definitions/count" }
+      }
+    },
+    "tool/call": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "toolId", "operationKey", "input"],
+      "properties": {
+        "correlationId": { "$ref": "#/definitions/id" },
+        "toolId": { "$ref": "#/definitions/id" },
+        "operationKey": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "input": {}
+      }
+    },
+    "tool/result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "toolId", "outcome"],
+      "properties": {
+        "correlationId": { "$ref": "#/definitions/id" },
+        "toolId": { "$ref": "#/definitions/id" },
+        "outcome": {
+          "enum": [
+            "not_started",
+            "deadline",
+            "cancelled",
+            "threw",
+            "failed",
+            "succeeded",
+            "confirm_failed"
+          ]
+        }
+      }
+    },
+    "turn/end": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "stopReason"],
+      "properties": {
+        "correlationId": { "$ref": "#/definitions/id" },
+        "stopReason": {
+          "enum": [
+            "COMPLETED",
+            "NEEDS_USER_INPUT",
+            "APPROVAL_REQUIRED",
+            "HUMAN_TAKEOVER",
+            "POLICY_DENIED",
+            "INSUFFICIENT_EVIDENCE",
+            "MAX_STEPS",
+            "MAX_COST",
+            "MAX_DURATION",
+            "MAX_TOKENS",
+            "MAX_MODEL_CALLS",
+            "MAX_TOOL_CALLS",
+            "MAX_REPLANS",
+            "MAX_KNOWLEDGE_CALLS",
+            "MAX_VERIFICATION_CALLS",
+            "VERIFICATION_FAILED",
+            "LOOP_DETECTED",
+            "TOOL_FAILURE",
+            "MODEL_FAILURE",
+            "INTERNAL_FAILURE",
+            "STATE_CONFLICT",
+            "CANCELLED",
+            "UNSAFE_REQUEST"
+          ]
+        }
+      }
+    },
+    "message/user": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": { "text": { "$ref": "#/definitions/text" } }
+    },
+    "message/assistant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": { "text": { "$ref": "#/definitions/text" } }
+    },
+    "context/compacted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "throughSequence",
+        "summary",
+        "sourceDigest",
+        "strategyVersion"
+      ],
+      "properties": {
+        "throughSequence": { "$ref": "#/definitions/count" },
+        "summary": { "$ref": "#/definitions/text" },
+        "sourceDigest": { "$ref": "#/definitions/hash" },
+        "strategyVersion": { "$ref": "#/definitions/id" }
+      }
+    }
+  }
+}

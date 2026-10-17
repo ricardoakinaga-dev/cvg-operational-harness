@@ -1,0 +1,37 @@
+import pathlib,json,subprocess,os,urllib.parse,time,hashlib
+R=pathlib.Path(__file__).parent
+ID='0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c'
+def cmd(name,argv):
+ c=subprocess.run(argv,capture_output=True);d=R/'commands'/name;d.mkdir()
+ for n,b in [('stdout',c.stdout),('stderr',c.stderr)]:
+  with (d/n).open('xb') as f:f.write(b)
+ with (d/'meta.json').open('x') as f:json.dump(dict(argv=argv,cwd=os.getcwd(),env_names=sorted(os.environ),exit=c.returncode),f,indent=2)
+ return c
+fmt='{{json .Id}} {{json .Name}} {{json .Config.Image}} {{json .Image}} {{json .State.Status}} {{json .NetworkSettings.Ports}}'
+def inspect(name):
+ c=cmd(name,['docker','inspect','--format',fmt,ID]);assert c.returncode==0
+ # JSON sequence fields separated by spaces
+ decoder=json.JSONDecoder();vals=[];s=c.stdout.decode().strip()
+ while s:
+  v,i=decoder.raw_decode(s);vals.append(v);s=s[i:].lstrip()
+ assert vals[:4]==[ID,'/cvg-pare100-224-pg','postgres:16.4-alpine','sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c']
+ return vals
+before=inspect('container-before');assert before[4]=='exited'
+c=cmd('container-start',['docker','start',ID]);assert c.returncode==0
+after=inspect('container-after-start');assert after[4]=='running'
+ports=after[5]['5432/tcp'];assert len(ports)==1 and ports[0]['HostIp']=='127.0.0.1'
+p=R/'resource-private.json';private=json.loads(p.read_text());assert private['containerId']==ID and private['imageId']==after[3]
+u=urllib.parse.urlsplit(private['test_database_url']);assert u.hostname=='127.0.0.1'
+netloc=u.netloc.rsplit('@',1)[0]+'@127.0.0.1:'+ports[0]['HostPort']
+private.update(schemaName='pare224_admission_i1_r1',roleName='pare224_admission_i1_r1_service',hostPort=ports[0],test_database_url=urllib.parse.urlunsplit(u._replace(netloc=netloc)))
+p.rename(R/'resource-prototype-private.json')
+with os.fdopen(os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'w') as f:json.dump(private,f,indent=2)
+ready=False
+for i in range(20):
+ c=cmd('readiness-%02d'%i,['docker','exec',ID,'pg_isready','-U','pare224','-d','pare224_synthetic','-t','1'])
+ if c.returncode==0:ready=True;break
+ time.sleep(1)
+with (R/'resource-prepared.json').open('x') as f:json.dump(dict(containerId=ID,before=before,after=after,ready=ready,readinessProbes=i+1,schema=private['schemaName'],role=private['roleName'],resourceMode=oct(p.stat().st_mode&0o777)),f,indent=2)
+assert ready
+(R/'runs/r1').mkdir(parents=True)
+print('Own224 started, identity/image verified, mapped localhost port rediscovered, readiness succeeded; fresh namespace configured; credentials private.')

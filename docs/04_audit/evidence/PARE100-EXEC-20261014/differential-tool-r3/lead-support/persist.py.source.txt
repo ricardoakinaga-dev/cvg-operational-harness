@@ -1,0 +1,49 @@
+import hashlib,json,re,shutil
+from pathlib import Path
+P=Path(__file__).parent;W=P.parent/'worktree';R=Path('/home/ricardo/Área de trabalho/cvg-operational-harness');B=Path('docs/04_audit/evidence/PARE100-EXEC-20261014');O=R/B/'differential-tool-r3'
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def write(p,v):p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(v,indent=2,ensure_ascii=False)+'\n')
+def copy(s,d):d.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(s,d)
+freeze=json.loads((P/'source-freeze.json').read_text());before=json.loads((P/'source-before.json').read_text());changed=[]
+for row,old in zip(freeze,before):
+ assert row['path']==old['path'];assert sha(W/row['path'])==row['sha256']
+ if row['sha256']!=old['sha256']:changed.append(row['path'])
+ copy(W/row['path'],O/'source-snapshots'/(row['path']+'.source.txt'))
+assert set(changed)=={'tests/differential/capture-port-data.mjs','tests/differential/tool-case.mjs','tests/differential/cvg-tool.ts','tests/differential/tool-turn-differential.test.ts'}
+packet=P/'review-packet';pairs=json.loads((packet/'source-manifest.json').read_text());rows=json.loads((packet/'packet-manifest.json').read_text())
+assert len(pairs)==149 and len(rows)==198
+assert all(sha(Path(x['live']))==x['sha256']==sha(packet/x['copy']) for x in pairs)
+assert all(sha(packet/x['path'])==x['sha256'] for x in rows)
+frozen=json.loads((P.parent/'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json').read_text());pins=frozen['newGroups'][0]['pins'];assert len(pins)==465 and all(sha(W/rel)==h for rel,h in pins.items())
+allowed={'docs/99_runtime_state.md','docs/20_master_execution_log.md','docs/30_backlog_master.md','docs/08_runtime/agent_coordination.md'}
+drift=[rel for rel,h in frozen['inputs'].items() if sha(W/rel)!=h];assert set(drift)<=allowed
+protected={}
+for rel,h in [('docs/02_spec/0217_pare100_durable_kernel_composition.md','1e5df50255e1634c06e09b46e2fc40da3a51a6e15be10ae4856e092bf910a905'),('docs/02_spec/0220_pare100_durable_kernel_boundary_qualification.md','211d341fed2bb70d07ab525e5e23279803d9fe387295bb14d4669ad22aa4d9a5'),('docs/02_spec/0221_pare100_public_session_persistence.md','1f9490ccee25f246e57a7c9c096c41c2572818c60e2c7bae5a4d315ad8e170e4')]:
+ assert sha(W/rel)==sha(R/rel)==h;protected[rel]=h
+prior=json.loads((R/B/'spec0221/revision-r2/program-scope-retention.json').read_text());backlog=R/'docs/03_build/0378_backlog_paridade_integral.md';parts=re.split(r'^#{2,3} (P100-\d+) — .*$',backlog.read_text(),flags=re.M);tasks={}
+for i in range(1,len(parts),2):
+ ident,body=parts[i:i+2];state=re.search(r'^- Estado: `([^`]+)`',body,re.M);criterion=re.search(r'^- Pronto: (.+)$',body,re.M);assert state and criterion;tasks[ident]={'state':state[1],'criterion':criterion[1]}
+assert tasks==prior['tasks'];bar=json.loads((W/'.gauntlet/bar.json').read_text());bh=hashlib.sha256(json.dumps(bar,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest();assert bh==prior['barCanonicalSHA256']
+write(O/'lead-integrity.json',{'sourceFiles':14,'changedSourceFiles':changed,'sourcePairs':149,'packetFiles':199,'pinCount':465,'pinDrift':[],'nonledgerInputDrift':[],'ledgerDrift':drift,'protectedSpecs':protected,'notParityEvidence':True})
+write(O/'program-scope-retention.json',{'cards':36,'phases':8,'doneLocal':2,'open':34,'tasks':tasks,'barCanonicalSHA256':bh,'currentBacklogSHA256':sha(backlog),'allCriteriaRetained':True,'parity':'NOT_MEASURED','fullGoalComplete':False})
+empty=[]
+for src in P.iterdir():
+ if src.is_file() and src.name!='persist.py':
+  dst=O/('lead-support' if src.suffix in ['.py','.mjs','.mts'] else 'commands' if src.suffix=='.log' or src.name.endswith('-command.json') else '')/src.name
+  if src.suffix in ['.py','.mjs','.mts']:dst=dst.with_name(dst.name+'.source.txt')
+  if src.stat().st_size:copy(src,dst)
+  else:empty.append(str(src.relative_to(P)))
+for directory in ['observed','raw']:
+ for src in (P/directory).rglob('*'):
+  if src.is_file():
+   if src.stat().st_size:copy(src,O/'native-runs'/src.relative_to(P))
+   else:empty.append(str(src.relative_to(P)))
+for directory in ['checks']:
+ for src in (P/directory).rglob('*'):
+  if src.is_file() and src.stat().st_size:copy(src,O/src.relative_to(P))
+write(O/'empty-streams-omitted.json',{'privateRawRetained':True,'emptyFiles':empty,'status':'expected_empty; command metadata retains exit and stream information'})
+copy(P/'persist.py',O/'lead-support/persist.py.source.txt')
+manifest=[{'path':str(s.relative_to(O)),'sha256':sha(s),'bytes':s.stat().st_size} for s in O.rglob('*') if s.is_file() and s.name!='evidence-manifest.json'];write(O/'evidence-manifest.json',manifest)
+for s in O.rglob('*'):
+ if s.is_file():copy(s,W/s.relative_to(R))
+print(json.dumps({'sources':14,'changed':4,'pairs':149,'packetFiles':199,'pins':465,'cards':36,'open':34,'archived':len(manifest),'scope':'test-support only','review':json.loads((P/'status.json').read_text())['status']}))

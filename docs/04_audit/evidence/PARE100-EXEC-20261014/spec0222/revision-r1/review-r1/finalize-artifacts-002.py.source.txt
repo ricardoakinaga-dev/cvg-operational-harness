@@ -1,0 +1,44 @@
+"""Finalize an honest metadata-origin integrity exception; preserve attempt 001."""
+from pathlib import Path
+import json,hashlib,datetime
+base=Path.cwd(); packet=base.parent/'review-packet'
+def digest(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+pre=json.loads(Path('integrity-pre.json').read_text()); post=json.loads(Path('integrity-post.json').read_text())
+primary_unchanged=all(pre[k]==post[k] for k in ['pairs','packet','membership_exact'])
+changed_extras=[{'pre':a,'post':b} for a,b in zip(pre['extras'],post['extras']) if a!=b]
+source_specs_unchanged=all(a==b and b['actual']==b['sha256'] for a,b in zip(pre['extras'][:3],post['extras'][:3]))
+checks={'forty_pair_hashes_match':len(post['pairs'])==40 and all(r['matches'] for r in post['pairs']),
+ 'forty_five_packet_hashes_match':len(post['packet'])==45 and post['packet_hashes_match'],
+ 'manifest_membership_exact_44_plus_self':post['manifest_entries']==44 and post['membership_exact'],
+ 'primary_pairs_and_packet_unchanged':primary_unchanged,
+ 'source_specs_217_220_221_unchanged':source_specs_unchanged,
+ 'all_constraint_origin_hashes_match':post['extras_match'],
+ 'full_before_after_integrity':post['unchanged_since_pre']}
+assert primary_unchanged and source_specs_unchanged
+assert len(changed_extras)==1 and changed_extras[0]['post']['live'].endswith('/0378_backlog_paridade_integral.md')
+result={'status':'CONSTRAINT_METADATA_ORIGIN_DRIFT','qualification':'NOT_FULLY_HASH_BOUND',
+ 'sealed_primary_status':'40/40 pairs and 45/45 packet files match authoritative hashes and are unchanged',
+ 'source_specs_status':'217/220/221 hashes unchanged and match constraints',
+ 'checks':checks,'pre':pre,'post':post,'changed_extras':changed_extras,'technical_primary_extras':[],
+ 'exception_handling':'No changed-origin contents or diff were read; no histories were inspected. Supplied requirements.md and its packet hash remained fixed. Earlier failed finalization retained, no green rescan substituted.',
+ 'baseline_timing':'Initial supplied-contract/manifests/spec read preceded the successful python3 baseline after python was unavailable; baseline preceded primary code/source-test inspection.',
+ 'containment':{'first_and_all_shell_workdir':str(base),'only_writable_scope':str(base)+'/**','repository_edits':False,'git_history':False,'forbidden_history_content_read':False,'descendants_or_redelegation':False,'network_install_services_providers_pg':False,'candidate_or_engine_execution':False,'tests':'NOT_RUN'},
+ 'process_guidance_only':['/home/ricardo/.codex/skills/backend-patterns/SKILL.md','/home/ricardo/.codex/skills/backend-patterns/references/pattern-index.md','/home/ricardo/.codex/skills/backend-patterns/references/concurrency-patterns.md','/home/ricardo/.codex/skills/backend-patterns/references/idempotency.md']}
+Path('source-integrity.json').open('x').write(json.dumps(result,indent=2)+'\n')
+report=Path('report-draft-001.md').read_text()
+report=report.replace('All citations below refer to numbered lines in the sealed packet copies.', 'All citations below refer to numbered lines in the sealed packet copies. An additional final integrity exception prevents treating the complete constraint package as unchanged: see the integrity paragraph below.')
+report=report.replace('Both successful endpoint scans are compared to the supplied authoritative hashes. No mismatch was suppressed or overwritten.', 'Both successful endpoint scans are compared to the supplied authoritative hashes. The primary pairs and packet matched, but a constraint metadata origin drifted at the final scan. No mismatch was suppressed or overwritten; `terminal-validation-failed-001.json` and the original finalizer preserve that failure. The initial report/verdict drafts are retained separately.')
+report=report.replace('`source-integrity.json` includes both 40-pair/45-packet scans, exact packet membership (44 manifest entries plus packet-manifest.json), the before/after digest of the manifest itself, and hash-only constraints.', '`source-integrity.json` includes both 40-pair/45-packet scans, exact packet membership (44 manifest entries plus packet-manifest.json), the before/after digest of the manifest itself, and hash-only constraints. All 40 source/live pairs and all 45 packet files remained unchanged and matched; SPEC217/220/221 and the D12 metadata origin also matched. **Integrity exception:** the hash-only origin of the P100012 extract, `worktree/docs/03_build/0378_backlog_paridade_integral.md`, changed from `2a1cff39ad0c2d5dcfdefa03c289e0d9f888fad38c406eee9d7585880d4bcaf5` to `1177c3c9b3c495262c08da5a8475b5bb3325dcba0a85d61d89adc62f9b0cc7e0`. Its changed contents/diff were not read. The supplied requirements.md extract remains hash-identical, but this review cannot certify all constraint origins as frozen. Lead must resolve/reseal this provenance exception; it is separate from the five technical material findings and does not change their count. No green endpoint was substituted.')
+Path('report.md').open('x').write(report)
+v=json.loads(Path('verdict-draft-001.json').read_text())
+v['integrity_status']='CONSTRAINT_METADATA_ORIGIN_DRIFT'
+v['qualification']='NOT_FULLY_HASH_BOUND; 40 pairs / 45 packet files and sourceSpecs unchanged'
+v['integrity_exception_count']=1
+v['integrity_exception']='Hash-only P100012 metadata origin changed during review; contents not inspected; requires Lead resolution/reseal'
+Path('verdict.json').open('x').write(json.dumps(v,indent=2)+'\n')
+validation={'status':'COMPLETED_WITH_RECORDED_INTEGRITY_EXCEPTION','checks':checks,'finding_counts':v['finding_counts'],'integrity_exception_count':1,'verdict':'REVISE','all_ML_PL':'NOT_RUN','source_lib':'NOT_VERIFIED','native_runtime_evidence':False,'earlier_failure':'terminal-validation-failed-001.json'}
+Path('terminal-validation-002.json').open('x').write(json.dumps(validation,indent=2)+'\n')
+files=sorted(p for p in base.rglob('*') if p.is_file())
+manifest={'schema':'independent-design-review-artifacts-v1','review':'SPEC0222-R1-I1','created_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'root':str(base),'verdict':'REVISE','integrity_status':result['status'],'binding':'Exact bytes of all authored outputs, drafts, failed attempts, diagnostics and scripts. This manifest excludes itself; terminal response supplies its SHA-256.','excludes':['artifact-manifest.json'],'artifacts':[{'path':str(p.relative_to(base)),'bytes':p.stat().st_size,'sha256':digest(p)} for p in files]}
+Path('artifact-manifest.json').open('x').write(json.dumps(manifest,indent=2)+'\n')
+print(json.dumps({'status':validation['status'],'sealed_primary_unchanged':primary_unchanged,'constraints_origin_drift':len(changed_extras),'authored_files_bound':len(files),'manifestSHA256':digest('artifact-manifest.json')},indent=2))

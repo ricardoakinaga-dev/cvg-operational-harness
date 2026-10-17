@@ -1,0 +1,46 @@
+}
+
+/** Package-internal; used by the atomic snapshot/checkpoint seal. */
+export async function saveOperationalCheckpointOnClient(
+  client: PostgresQueryable,
+  tenant: TenantId,
+  checkpoint: ExecutionCheckpoint
+): Promise<void> {
+  validateCheckpointIntegrity(checkpoint, {
+    tenantId: tenant,
+    executionId: checkpoint.executionId
+  })
+  await client.query(
+    `INSERT INTO operational_execution_checkpoints
+     (tenant_id, execution_id, checkpoint_id, checkpoint_version,
+      runtime_profile, runtime_version, orchestrator_version,
+      step_number, state, budget_usage, digest, created_at)
+   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb,
+           $11, $12)
+   ON CONFLICT (tenant_id, execution_id) DO UPDATE
+     SET checkpoint_id = EXCLUDED.checkpoint_id,
+         checkpoint_version = EXCLUDED.checkpoint_version,
+         runtime_profile = EXCLUDED.runtime_profile,
+         runtime_version = EXCLUDED.runtime_version,
+         orchestrator_version = EXCLUDED.orchestrator_version,
+         step_number = EXCLUDED.step_number,
+         state = EXCLUDED.state,
+         budget_usage = EXCLUDED.budget_usage,
+         digest = EXCLUDED.digest,
+         created_at = EXCLUDED.created_at`,
+    [
+      tenant,
+      checkpoint.executionId,
+      checkpoint.checkpointId,
+      checkpoint.checkpointVersion,
+      checkpoint.runtimeProfile,
+      checkpoint.runtimeVersion,
+      checkpoint.orchestratorVersion,
+      checkpoint.stepNumber,
+      jsonText(checkpoint.state, 'checkpoint state'),
+      jsonText(checkpoint.budgetUsage, 'checkpoint budget usage'),
+      checkpoint.digest,
+      checkpoint.createdAt
+    ]
+  )
+}

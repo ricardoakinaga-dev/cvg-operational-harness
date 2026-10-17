@@ -1,0 +1,29 @@
+from pathlib import Path
+import json,hashlib,sys
+r=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4')
+def measure(p):
+ b=p.read_bytes();return {'path':str(p.relative_to(r)),'sha256':hashlib.sha256(b).hexdigest(),'bytes':len(b)}
+if '--verify' in sys.argv:
+ m=json.loads((r/'artifact-manifest.json').read_text());errors=[]
+ for x in m['entries']:
+  if measure(r/x['path'])!=x:errors.append(x['path'])
+ excluded=json.loads((r/'exclusions.json').read_text());allowed={x['path'] for x in m['entries']}|{x['path'] for x in excluded['entries']}
+ for p in r.rglob('*'):
+  if p.is_file() and str(p.relative_to(r)) not in allowed:errors.append('unindexed:'+str(p.relative_to(r)))
+ print(json.dumps({'verifiedEntries':len(m['entries']),'errors':errors}));sys.exit(bool(errors))
+excluded=[{'path':'artifact-manifest.json','reason':'Manifest excludes itself to avoid a self-referential hash.'}]
+for p in sorted(r.rglob('*')):
+ if not p.is_file():continue
+ rel=str(p.relative_to(r))
+ if rel=='artifact-manifest.json':continue
+ if rel.split('/')[0] in ['cache','tmp']:
+  excluded.append({'path':rel,'reason':'Execution cache/temp; not a primary evidence artifact. Original retained.'})
+ elif p.stat().st_size==0:
+  excluded.append({'path':rel,'reason':'Zero-byte stream/file; original retained; the command record and report.json record the empty stream.'})
+(r/'exclusions.json').write_text(json.dumps({'excludedDirectoryRoots':[{'path':'cache','reason':'Private test/compiler caches'},{'path':'tmp','reason':'Private temporary files'}],'entries':excluded},indent=2)+'\n')
+excludedPaths={x['path'] for x in excluded};entries=[]
+for p in sorted(r.rglob('*')):
+ if p.is_file() and str(p.relative_to(r)) not in excludedPaths:
+  value=measure(p);assert value['bytes']>0;entries.append(value)
+(r/'artifact-manifest.json').write_text(json.dumps({'scope':'I1 SPEC0224 bounded recovery review artifacts','entries':entries,'exclusionsIndex':'exclusions.json'},indent=2)+'\n')
+print(json.dumps({'entries':len(entries),'excludedFiles':len(excluded),'manifestSha256':hashlib.sha256((r/'artifact-manifest.json').read_bytes()).hexdigest()}))

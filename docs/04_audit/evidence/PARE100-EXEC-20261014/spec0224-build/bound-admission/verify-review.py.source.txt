@@ -1,0 +1,52 @@
+from pathlib import Path
+import json,hashlib,urllib.parse,collections,datetime
+base=Path(__file__).parent;b=base.parent;r=base/'review-r1';packet=base/'review-packet-r1';sha=lambda raw:hashlib.sha256(raw).hexdigest();m=json.loads((r/'seal-manifest.json').read_text());pm=json.loads((packet/'manifest.json').read_text());detached=(r/'seal-manifest.sha256').read_text().split();assert detached[0]==sha((r/'seal-manifest.json').read_bytes()) and detached[1]=='seal-manifest.json'
+for e in m['files']:
+ p=r/e['path'];assert p.resolve().is_relative_to(r.resolve());raw=p.read_bytes();assert len(raw)==e['bytes'] and sha(raw)==e['sha256'],e['path']
+for name in m['empty']:assert (r/name).stat().st_size==0
+for e in m['privateCredentialExclusions']:
+ raw=(r/e['path']).read_bytes();assert len(raw)==e['bytes'] and sha(raw)==e['sha256'];assert e['excludePublication'] is True
+pre=json.loads((r/'source-pre.json').read_text());post=json.loads((r/'source-post.json').read_text())
+for e in pre+post:
+ raw=Path(e['path']).read_bytes();assert len(raw)==e['bytes'] and sha(raw)==e['sha256'];assert e['ok']
+for e in pm['inputs']:
+ raw=Path(e['original']).read_bytes();assert raw==Path(e['copy']).read_bytes() and len(raw)==e['bytes'] and sha(raw)==e['sha256']
+expected={e['copy']:e for e in pm['inputs']};trans=[json.loads(line) for line in (r/'transforms.jsonl').read_text().splitlines()];assert len(trans)==565
+for e in trans:assert e['id'] in expected and e['sha256']==expected[e['id']]['sha256']
+rawReads=[json.loads(line) for line in (r/'reads.jsonl').read_text().splitlines()];groups=collections.defaultdict(list)
+for e in rawReads:groups[e['path']].append(e)
+immutable=mutable=unhashed=0;prohibited=[];rows=[]
+roots=[pm['artifactRoot']+'/',str(r)+'/',pm['externalReadOnlyDependencies']+'/',pm['allowedDependencyMirror']+'/','/home/ricardo/.nvm/versions/node/v22.23.2/'];exact={pm['allowedScopeMetadata']['path']}
+for path,entries in groups.items():
+ if (path.startswith('/tmp/cvg-') or path.startswith('/home/ricardo/')) and path not in exact and not any(path.startswith(prefix) for prefix in roots):prohibited.append(path)
+ metadata=[e for e in entries if 'sha256' in e];pids=sorted({e['pid'] for e in entries if 'pid' in e});item={'path':path,'pids':pids,'records':len(entries),'hashedRecords':len(metadata)}
+ if path.startswith(str(r)+'/'):mutable+=bool(metadata);item['scope']='OWN_MUTABLE_REVIEW_OUTPUT'
+ elif metadata and Path(path).is_file():
+  raw=Path(path).read_bytes();assert all(sha(raw)==e['sha256'] and len(raw)==e['bytes'] for e in metadata),path;immutable+=1;item.update(scope='IMMUTABLE_READ_CURRENT_HASH_VERIFIED',sha256=sha(raw),bytes=len(raw))
+ else:unhashed+=1;item['scope']='UNHASHED_OR_OS_DYNAMIC_NO_IMMUTABILITY_CLAIM'
+ rows.append(item)
+assert not prohibited,prohibited
+fixturePath=str(packet/'artifact/packages/persistence/src/__tests__/complete-bound-admission-postgres.integration.ts');fixtureRows=groups[fixturePath];assert len(fixtureRows)==5 and len({e['pid'] for e in fixtureRows})==5;assert all(e['sha256']=='f81562fd0086739296cccab0f10f0befa4b367cb22edd9b385f1ad2976dcb8c9' for e in fixtureRows)
+expectedPids={json.loads((r/'runs/r1/BA01/positive/result.json').read_text())['pid']}
+for kind in ['initial','reserve']:
+ for side in ['left','right']:
+  expectedPids.add(json.loads((r/('runs/r1/race-'+kind+'/'+side+'/result.json')).read_text())['pid'])
+assert {e['pid'] for e in fixtureRows}==expectedPids
+for e in json.loads((r/'input-inventory.json').read_text())['postrunStaticManifestInventory']:
+ raw=Path(e['path']).read_bytes();assert len(raw)==e['bytes'] and sha(raw)==e['sha256']
+sourceIDs={e['path'] for e in pre};postIDs={e['path'] for e in post};assert postIDs.issubset(sourceIDs)
+inv=json.loads((r/'input-inventory.json').read_text());assert all(not e['pids'] and not e['readTimeMetadata'] for e in inv['observedReads'])
+reconcile={'status':'PASS_RECONSTRUCTED_FROM_PRIMARY_FLAT_LOG','source':'review-r1/reads.jsonl','sourceSHA256':sha((r/'reads.jsonl').read_bytes()),'rawRecords':len(rawReads),'uniquePaths':len(groups),'immutablePathsCurrentHashVerified':immutable,'ownMutableReviewPathsWithReadHash':mutable,'unhashedOrOSDynamicPaths':unhashed,'forbiddenObservedReads':prohibited,'fixtureReadPids':[e['pid'] for e in fixtureRows],'actorSummaryDefect':'input-inventory.json has empty pids/readTimeMetadata for every group despite primary flat records containing pid/bytes/sha256. Original summary preserved; Lead reconstruction separate. Transform rows have no pid; actual fixture PID binding derived from primary read log, not guessed from transform count.','limits':'Wrapped Node fs and pre-transform observations only; no kernel attestation or exhaustive read/write capture. Dynamic own outputs not treated as immutableinputs.','paths':rows};(base/'review-raw-read-reconciliation.json').write_text(json.dumps(reconcile,indent=2)+'\n')
+secrets=[]
+for name in ['resource-private.json','service-connection-private.json']:
+ d=json.loads((r/name).read_text());assert (r/name).stat().st_mode&0o777==0o600
+ if 'test_database_url' in d:
+  u=d['test_database_url'];secrets.extend([u,urllib.parse.unquote(urllib.parse.urlparse(u).password or '')])
+ if 'password' in d:secrets.append(d['password'])
+secrets=[v.encode() for v in secrets if len(v)>=8];curated=[]
+for e in m['files']:
+ if e['private'] or e['category']=='cachederived' or not e['bytes']:continue
+ raw=(r/e['path']).read_bytes();assert not any(v in raw for v in secrets),e['path'];curated.append(e)
+assert not any(v in (r/'seal-manifest.json').read_bytes() for v in secrets)
+delivery=json.loads((r/'delivery.json').read_text());status=json.loads((r/'execution-status.json').read_text());assert delivery['decision']=='APPROVE_SCOPED_BOUND_ADMISSION_PROOF' and delivery['parentCasesPassed']==6;assert status['vitestExit']==status['cleanupClientsExit']==status['stopExit']==0
+result={'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'status':'PASS_SCOPED_REVIEW_AUTHENTICATED_WITH_SUMMARY_CORRECTION','decision':delivery['decision'],'actor':'Kepler01a145c0_CLOSED_I1','sealManifestSHA256':sha((r/'seal-manifest.json').read_bytes()),'filesVerified':len(m['files']),'emptyFilesVerified':len(m['empty']),'privateExclusions':len(m['privateCredentialExclusions']),'curatedNoncacheNonempty':len(curated),'preInputs':len(pre),'postInputs':len(post),'preMinusPost':len(sourceIDs-postIDs),'sourceOriginalCopyChecks':len(pm['inputs'])*2,'preTransformRecords':len(trans),'uniqueTransformedSources':len({e['id'] for e in trans}),'readRawRecords':len(rawReads),'immutableReadPathsCurrentVerified':immutable,'staticManifestInventory':373,'readReconciliation':'review-raw-read-reconciliation.json','scopeLimits':delivery['findings'],'sourceSHA256':delivery['source']['sha256'],'candidateSHA256':pm['candidateManifestSha256'],'independentLeadI1Recompute':'integration/bound-admission-i1-recompute-01.json','publicationEntries':curated,'cleanup':{'own224Stopped':True,'ownServiceClients':0,'dataPreserved':delivery['namespacePreserved']},'acceptance':'NOT_FULL_TR05_GLOBAL_CONSUMER_ROUTE_OR_BILLING'};(base/'review-lead-verification-r1.json').write_text(json.dumps(result,indent=2)+'\n');print({k:v for k,v in result.items() if k not in ['publicationEntries','scopeLimits']})

@@ -1,0 +1,54 @@
+from pathlib import Path
+import json,hashlib,datetime
+base=Path.cwd()
+packet=base.parent/'review-packet'
+def digest(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+pre=json.loads(Path('integrity-pre.json').read_text())
+post=json.loads(Path('integrity-post.json').read_text())
+sm=json.loads((packet/'source-manifest.json').read_text())
+pm=json.loads((packet/'packet-manifest.json').read_text())
+checks={
+ 'pair_count_40':len(pre['pairs'])==len(post['pairs'])==40,
+ 'packet_count_45':len(pre['packet'])==len(post['packet'])==45,
+ 'manifest_count_44_unique':len(pm)==len({r['path'] for r in pm})==44,
+ 'source_pairs_unique':len(sm)==len({r['copy'] for r in sm})==len({r['live'] for r in sm})==40,
+ 'all_pair_hashes_match':all(r['matches'] for s in (pre,post) for r in s['pairs']),
+ 'packet_hashes_match':pre['packet_hashes_match'] and post['packet_hashes_match'],
+ 'packet_membership_exact':pre['membership_exact'] and post['membership_exact'],
+ 'source_and_packet_unchanged':post['unchanged_since_pre'],
+ 'constraint_hashes_match':pre['extras_match'] and post['extras_match'],
+ 'excerpt_sources_unchanged':all(digest(r['path'])==r['sha256'] for r in json.loads(Path('evidence-index.json').read_text())),
+ 'required_artifacts_present':all(Path(n).is_file() for n in ['report.md','verdict.json','primary-excerpts.txt','attempt-001-python-unavailable.txt'])
+}
+if not all(checks.values()):
+ Path('terminal-validation-failed-001.json').open('x').write(json.dumps(checks,indent=2)+'\n')
+ raise SystemExit('Integrity validation failed; preserved failure and not issuing a green manifest')
+result={
+ 'status':'MATCH_UNCHANGED',
+ 'scope':'Static hash and manifest comparison; no runtime or semantic qualification',
+ 'pre':pre,'post':post,'checks':checks,
+ 'technical_primary_extras':[],
+ 'hash_only_extra_origins':'The five constraint-bound sourceSpecs/metadataExtracts are listed with pre/post hashes in each scan; their historical contents were not inspected.',
+ 'baseline_timing':'Initial supplied-contract/manifests/spec reading preceded the successful baseline after python was unavailable. Baseline was taken before primary code/source-test inspection. Both endpoints match all authoritative sealed hashes.',
+ 'containment':{
+  'first_shell_workdir':str(base),'all_shell_workdirs':str(base),'only_writable_scope':str(base)+'/**',
+  'repository_edits':False,'git_history':False,'forbidden_history_content_read':False,
+  'descendants_or_redelegation':False,'network_install_services_providers_pg':False,
+  'candidate_or_engine_execution':False,'tests':'NOT_RUN',
+  'process_guidance_only':['/home/ricardo/.codex/skills/backend-patterns/SKILL.md','/home/ricardo/.codex/skills/backend-patterns/references/pattern-index.md','/home/ricardo/.codex/skills/backend-patterns/references/concurrency-patterns.md','/home/ricardo/.codex/skills/backend-patterns/references/idempotency.md']
+ }
+}
+Path('source-integrity.json').open('x').write(json.dumps(result,indent=2)+'\n')
+validation={'status':'PASS_STATIC_ARTIFACT_INTEGRITY_ONLY','checks':checks,'material_findings':{'P1':2,'P2':3},'verdict':'REVISE','all_ML_PL':'NOT_RUN','source_lib':'NOT_VERIFIED','native_runtime_evidence':False}
+Path('terminal-validation.json').open('x').write(json.dumps(validation,indent=2)+'\n')
+files=sorted(p for p in base.rglob('*') if p.is_file())
+manifest={
+ 'schema':'independent-design-review-artifacts-v1',
+ 'review':'SPEC0222-R1-I1', 'created_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+ 'root':str(base),'verdict':'REVISE',
+ 'binding':'SHA-256 of exact bytes for every authored file except this manifest; manifest SHA-256 is supplied in the terminal response to avoid self-reference.',
+ 'excludes':['artifact-manifest.json'],
+ 'artifacts':[{'path':str(p.relative_to(base)),'bytes':p.stat().st_size,'sha256':digest(p)} for p in files]
+}
+Path('artifact-manifest.json').open('x').write(json.dumps(manifest,indent=2)+'\n')
+print(json.dumps({'integrity':result['status'],'checks':checks,'authored_files_bound':len(files),'manifestSHA256':digest('artifact-manifest.json')},indent=2))

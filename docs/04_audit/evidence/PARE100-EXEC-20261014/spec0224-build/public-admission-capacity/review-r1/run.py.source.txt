@@ -1,0 +1,11 @@
+import subprocess,pathlib,os,json,datetime,time,sys
+B=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay');W=B/'worktree';R=B/'spec0224-build/public-admission-capacity/review-r1'
+name=sys.argv[1] if len(sys.argv)>1 else 'frozen';config='vitest.i1.mjs' if name=='frozen' else 'vitest.control.mjs'
+cmd=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',str(W/'node_modules/vitest/vitest.mjs'),'run','packages/harness/src/__tests__/complete-admission-capacity-public.test.ts','--no-file-parallelism','--maxWorkers=1','--config',str(R/config)]
+if name!='frozen': cmd.extend(['--testNamePattern','refuses'])
+env=os.environ.copy();env.update({'CVG_COMPLETE_ADMISSION_CAPACITY_EVIDENCE':str(R/(name+'-observations.json')),'I1_LOADED_FILES':str(R/(name+'-loaded-files.ndjson')),'NODE_OPTIONS':'--require='+str(R/'observe-loads.cjs'),'TMPDIR':str(R/'tmp')});(R/'tmp').mkdir(exist_ok=True)
+start=time.monotonic();at=datetime.datetime.now(datetime.timezone.utc).isoformat()
+with (R/(name+'.stdout.log')).open('w') as out,(R/(name+'.stderr.log')).open('w') as err:
+ p=subprocess.run(cmd,cwd=W,env=env,stdout=out,stderr=err)
+d={'name':name,'command':cmd,'cwd':str(W),'environmentOverrides':{k:env[k] for k in ['CVG_COMPLETE_ADMISSION_CAPACITY_EVIDENCE','I1_LOADED_FILES','NODE_OPTIONS','TMPDIR']},'startedAt':at,'elapsedSeconds':time.monotonic()-start,'exitCode':p.returncode,'stdout':str(R/(name+'.stdout.log')),'stderr':str(R/(name+'.stderr.log'))}
+(R/(name+'-execution.json')).write_text(json.dumps(d,indent=2)+'\n');print(json.dumps(d));print((R/(name+'.stdout.log')).read_text());print((R/(name+'.stderr.log')).read_text());sys.exit(p.returncode)

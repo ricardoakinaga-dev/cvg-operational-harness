@@ -1,0 +1,481 @@
+470:         policyControl(this.options.policy),
+471:         approvalsControl(
+472:           this.options.approvals,
+473:           this.options.capabilityFingerprint
+474:             ? { capabilityFingerprint: this.options.capabilityFingerprint }
+475:             : {}
+476:         ),
+477:         auditControl(this.options.audit, { action: 'harness.iterative' }),
+478:         modelCapability(this.options.modelGateway),
+479:         toolsCapability(this.options.tools),
+480:         telemetryCapability(this.options.telemetry, {
+481:           name: 'harness.iterative'
+482:         })
+483:       ],
+484:       ITERATIVE_REQUIRED_SERVICES
+485:     )
+486:     return this.#kernel
+487:   }
+488: 
+489:   private kernelFor(run: LoopRun): KernelHost {
+490:     const entry = this.#turns.get(run)
+491:     /* v8 ignore next -- defensive: the loop only asks for its own bound run */
+492:     if (!entry) throw new Error('Kernel turn is not bound to this run.')
+493:     return entry.host
+494:   }
+495: 
+496:   /**
+497:    * Kernel view of the current run: the iterative active-duration budget and
+498:    * the caller's cancel signal drive the shared pipelines.
+499:    */
+500:   private turnFor(run: LoopRun): TurnState {
+501:     const entry = this.#turns.get(run)
+502:     /* v8 ignore next -- defensive: the loop only asks for its own bound run */
+503:     if (!entry) throw new Error('Kernel turn is not bound to this run.')
+504:     return createTurnState(
+505:       run.input,
+506:       run.startedAtMs,
+507:       {
+508:         remainingMs: () => this.remainingDuration(run),
+509:         withDeadline: async (operation, ms = this.remainingDuration(run)) => {
+510:           const outcome = await this.withDeadline(
+511:             ms <= 0 ? new Promise<never>(() => undefined) : operation(),
+512:             ms
+513:           )
+514:           return outcome === DEADLINE_EXCEEDED ? DEADLINE : outcome
+515:         },
+516:         beginModelRequest: () => {
+517:           // Single pre-model gate (PDSH-004 / I11): consume one slot.
+518:           if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
+519:             return {
+520:               kind: 'stop',
+521:               stopReason: 'MAX_MODEL_CALLS',
+522:               response:
+523:                 'Model-call budget exhausted before the call was started.'
+524:             }
+525:           }
+526:           this.accountUsage(run, {
+527:             modelCalls: 1,
+528:             inputTokens: 0,
+529:             outputTokens: 0,
+530:             costUsd: 0
+531:           })
+532:           return undefined
+533:         },
+534:         recordModelResult: (result) => {
+535:           // Single post-result accounting site (PDSH-004).
+536:           this.accountUsage(run, {
+537:             modelCalls: 0,
+538:             inputTokens: result.inputTokens,
+539:             outputTokens: result.outputTokens,
+540:             costUsd: result.costUsd
+541:           })
+542:           if (
+543:             run.usage.inputTokens + run.usage.outputTokens >
+544:             run.input.budget.maxTokens
+545:           ) {
+546:             return {
+547:               kind: 'stop',
+548:               stopReason: 'MAX_TOKENS',
+549:               response:
+550:                 'Token budget exhausted before a response could be completed.'
+551:             }
+552:           }
+553:           if (run.usage.costUsd > run.input.budget.maxCostUsd) {
+554:             return {
+555:               kind: 'stop',
+556:               stopReason: 'MAX_COST',
+557:               response:
+558:                 'Cost budget exhausted before a response could be completed.'
+559:             }
+560:           }
+561:           return undefined
+562:         }
+563:       },
+564:       entry.signal
+565:     )
+566:   }
+567: 
+568:   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
+569:     const startedAtMs = Date.now()
+570:     const executionId = input.executionId ?? `execution_${input.correlationId}`
+571: 
+572:     if (!hasValidBoundaryInput(input)) {
+573:       return this.earlyFinish(
+574:         input,
+575:         'Runtime identity or execution budget is invalid.',
+576:         'UNSAFE_REQUEST',
+577:         startedAtMs
+578:       )
+579:     }
+580:     if (
+581:       this.options.capabilityFingerprint &&
+582:       input.capabilityFingerprint !== this.options.capabilityFingerprint
+583:     ) {
+584:       return this.earlyFinish(
+585:         input,
+586:         'Capability composition fingerprint does not match the runtime.',
+587:         'STATE_CONFLICT',
+588:         startedAtMs
+589:       )
+590:     }
+591:     if (input.budget.maxSteps < 1) {
+592:       return this.earlyFinish(
+593:         input,
+594:         'Execution budget exhausted before the first step.',
+595:         'MAX_STEPS',
+596:         startedAtMs
+597:       )
+598:     }
+599:     if (input.budget.maxDurationMs < 1) {
+600:       return this.earlyFinish(
+601:         input,
+602:         'Execution duration budget is not available.',
+603:         'MAX_DURATION',
+604:         startedAtMs
+605:       )
+606:     }
+607: 
+608:     let host: KernelHost
+609:     try {
+610:       host = await this.bootKernel()
+611:     } catch (error) {
+612:       /* v8 ignore start -- defensive: the fixed plugin list always satisfies the boot contract */
+613:       return this.earlyFinish(
+614:         input,
+615:         `Kernel could not start: ${errorMessage(error)}.`,
+616:         'INTERNAL_FAILURE',
+617:         startedAtMs
+618:       )
+619:       /* v8 ignore stop */
+620:     }
+621: 
+622:     let checkpoint: ExecutionCheckpoint | null = null
+623:     try {
+624:       checkpoint = await this.options.stepStore.loadCheckpoint(
+625:         input.tenantId,
+626:         executionId
+627:       )
+628:     } catch (error) {
+629:       return this.earlyFinish(
+630:         input,
+631:         `Execution checkpoint could not be trusted: ${errorMessage(error)}.`,
+632:         'STATE_CONFLICT',
+633:         startedAtMs
+634:       )
+635:     }
+636: 
+637:     if (checkpoint) {
+638:       if (
+639:         this.options.toolResultContext &&
+640:         checkpoint.checkpointVersion === 1 &&
+641:         checkpoint.state.observations.some(
+642:           (value) => value.type === 'TOOL_RESULT'
+643:         )
+644:       ) {
+645:         return this.earlyFinish(
+646:           input,
+647:           'LEGACY_RESULT_UNKNOWN: old tool results cannot be promoted to complete.',
+648:           'INSUFFICIENT_EVIDENCE',
+649:           startedAtMs
+650:         )
+651:       }
+652:       const rejection = this.rejectCheckpoint(checkpoint, input)
+653:       if (rejection) {
+654:         return this.earlyFinish(input, rejection, 'STATE_CONFLICT', startedAtMs)
+655:       }
+656:     }
+657: 
+658:     const run: LoopRun = {
+659:       checkpointToken: checkpoint
+660:         ? { checkpointId: checkpoint.checkpointId, digest: checkpoint.digest }
+661:         : null,
+662:       input,
+663:       executionId,
+664:       startedAtMs,
+665:       stepNumber: checkpoint?.state.stepNumber ?? 0,
+666:       state: checkpoint
+667:         ? {
+668:             ...checkpoint.state,
+669:             observations: [...checkpoint.state.observations],
+670:             openQuestions: [...checkpoint.state.openQuestions],
+671:             resolvedInputs: { ...checkpoint.state.resolvedInputs },
+672:             loopSignatures: [...checkpoint.state.loopSignatures]
+673:           }
+674:         : {
+675:             goal: input.agent.objective,
+676:             ...(this.options.capabilityFingerprint
+677:               ? { capabilityFingerprint: this.options.capabilityFingerprint }
+678:               : {}),
+679:             stepNumber: 0,
+680:             observations: [],
+681:             openQuestions: [],
+682:             resolvedInputs: {},
+683:             loopSignatures: []
+684:           },
+685:       usage: checkpoint
+686:         ? { ...checkpoint.budgetUsage }
+687:         : { ...EMPTY_BUDGET_USAGE },
+688:       observations: checkpoint ? [...checkpoint.state.observations] : [],
+689:       responseText: null,
+690:       lastDecision: null,
+691:       lastEvaluation: null,
+692:       lastToolObservation: null,
+693:       lastSufficiency: null,
+694:       lastDecisionErrors: [],
+695:       skipEvaluationOnce: false,
+696:       countedSteps: new Set<number>(),
+697:       inFlightCounted: Boolean(
+698:         checkpoint?.state.pendingDecision && !checkpoint.state.stopReason
+699:       )
+700:     }
+701:     run.state.observations = run.observations
+702:     if (this.options.toolResultContext) {
+703:       run.state.toolResultContext ??= {
+704:         version: 1,
+705:         deliveredThroughStep: 0,
+706:         pendingDecisionAdmission: null,
+707:         decisionAdmissions: []
+708:       }
+709:     }
+710:     const controller = new AbortController()
+711:     if (input.signal?.aborted) controller.abort()
+712:     input.signal?.addEventListener('abort', () => controller.abort(), {
+713:       once: true
+714:     })
+715:     this.#turns.set(run, { host, signal: controller.signal })
+716: 
+717:     // Payloads and summaries are bounded, untrusted presentation. The step
+718:     // store owns the lossless governed outcome of the pending dispatch,
+719:     // including the exact settlement failure cause. Generic TOOL_FAILURE or
+720:     // unknown_effect records alone do not prove that this ledger failed.
+721:     if (
+722:       checkpoint?.state.pendingStepNumber &&
+723:       (checkpoint.state.pendingDecision?.decisionType === 'CALL_TOOL' ||
+724:         checkpoint.state.pendingDecision?.decisionType === 'REQUEST_APPROVAL')
+725:     ) {
+726:       let steps: readonly ExecutionStep[]
+727:       try {
+728:         steps = await this.options.stepStore.listSteps(
+729:           input.tenantId,
+730:           executionId
+731:         )
+732:       } catch {
+733:         return this.finalize(
+734:           run,
+735:           {
+736:             kind: 'stop',
+737:             stopReason: 'INSUFFICIENT_EVIDENCE',
+738:             response:
+739:               'Pending tool outcome could not be read; reconciliation is required.',
+740:             preserveCheckpoint: true
+741:           },
+742:           startedAtMs
+743:         )
+744:       }
+745:       if (
+746:         steps.some(
+747:           (step) =>
+748:             step.tenantId === input.tenantId &&
+749:             step.executionId === executionId &&
+750:             step.stepNumber === checkpoint.state.pendingStepNumber &&
+751:             step.stepType === 'TOOL' &&
+752:             step.status === 'FAILED' &&
+753:             step.errorCode === 'unknown_effect: effect_settlement_failed'
+754:         )
+755:       ) {
+756:         return this.finalize(
+757:           run,
+758:           {
+759:             kind: 'stop',
+760:             stopReason: 'TOOL_FAILURE',
+761:             response: 'unknown_effect: effect_settlement_failed',
+762:             preserveCheckpoint: true
+763:           },
+764:           startedAtMs
+765:         )
+766:       }
+767:       if (
+768:         this.options.toolResultContext &&
+769:         checkpoint.state.pendingStepNumber
+770:       ) {
+771:         const pendingStep = checkpoint.state.pendingStepNumber
+772:         const settledStep = steps.find(
+773:           (step) =>
+774:             step.tenantId === input.tenantId &&
+775:             step.executionId === executionId &&
+776:             step.stepNumber === pendingStep &&
+777:             step.stepType === 'TOOL' &&
+778:             step.status === 'SUCCEEDED'
+779:         )
+780:         const savedResult = checkpoint.state.observations.find(
+781:           (observation) =>
+782:             observation.type === 'TOOL_RESULT' &&
+783:             observation.stepNumber === pendingStep
+784:         )
+785:         if (
+786:           !settledStep &&
+787:           steps.some(
+788:             (step) =>
+789:               step.tenantId === input.tenantId &&
+790:               step.executionId === executionId &&
+791:               step.stepNumber === pendingStep &&
+792:               step.stepType === 'TOOL' &&
+793:               (step.status === 'RUNNING' || step.status === 'FAILED')
+794:           )
+795:         ) {
+796:           let hasReservation = false
+797:           try {
+798:             const pending = checkpoint.state.pendingDecision!
+799:             const proof = await this.withDeadline(
+800:               hasNativeEffectReservation(
+801:                 this.options.tools.resolve(
+802:                   pending.toolId!,
+803:                   pending.toolVersion
+804:                 ),
+805:                 input.tenantId,
+806:                 this.operationKey(run, pendingStep, pending.toolId!)
+807:               ),
+808:               this.remainingDuration(run)
+809:             )
+810:             hasReservation = proof === true
+811:           } catch {
+812:             // An unreadable journal cannot prove a prior effect reservation.
+813:           }
+814:           if (!hasReservation) {
+815:             return this.finalize(
+816:               run,
+817:               {
+818:                 kind: 'stop',
+819:                 stopReason: 'TOOL_FAILURE',
+820:                 preserveCheckpoint: true,
+821:                 response:
+822:                   'unknown_effect: pending tool dispatch has no prior native journal reservation; explicit reconciliation is required.'
+823:               },
+824:               startedAtMs
+825:             )
+826:           }
+827:         }
+828:         if (
+829:           settledStep &&
+830:           (!savedResult ||
+831:             (savedResult.payload as { completion?: string }).completion !==
+832:               'COMPLETE')
+833:         ) {
+834:           return this.finalize(
+835:             run,
+836:             {
+837:               kind: 'stop',
+838:               stopReason: 'INSUFFICIENT_EVIDENCE',
+839:               preserveCheckpoint: true,
+840:               response:
+841:                 'RESULT_UNAVAILABLE: a settled tool step has no complete saved result; reconciliation is required.'
+842:             },
+843:             startedAtMs
+844:           )
+845:         }
+846:         if (settledStep && savedResult) {
+847:           const pending = checkpoint.state.pendingDecision!
+848:           if (
+849:             savedResult.stepId !== settledStep.stepId ||
+850:             !settledStep.observationRefs.includes(savedResult.observationId) ||
+851:             savedResult.provenance.sourceId !== pending.toolId ||
+852:             savedResult.provenance.sourceVersion !== pending.toolVersion ||
+853:             savedResult.provenance.operationKey !==
+854:               this.operationKey(run, pendingStep, pending.toolId!)
+855:           ) {
+856:             return this.finalize(
+857:               run,
+858:               {
+859:                 kind: 'stop',
+860:                 stopReason: 'STATE_CONFLICT',
+861:                 preserveCheckpoint: true,
+862:                 response:
+863:                   'Saved tool result does not match the settled native step.'
+864:               },
+865:               startedAtMs
+866:             )
+867:           }
+868:           // The acknowledged result and successful step complete this dispatch.
+869:           // Never reopen it or call its journal/tool again on process recreation.
+870:           run.stepNumber = pendingStep
+871:           run.inFlightCounted = false
+872:           run.countedSteps.add(pendingStep)
+873:           run.lastToolObservation = savedResult
+874:           run.state = {
+875:             ...run.state,
+876:             stepNumber: pendingStep,
+877:             pendingDecision: undefined,
+878:             pendingStepNumber: undefined,
+879:             pendingApprovalId: undefined,
+880:             selectedCapability: pending.toolId,
+881:             loopSignatures: [
+882:               ...run.state.loopSignatures,
+883:               decisionSignature(pending)
+884:             ].slice(-this.maxSignatures),
+885:             toolResultContext: {
+886:               ...run.state.toolResultContext!,
+887:               acceptedDecision: undefined
+888:             }
+889:           }
+890:         }
+891:       }
+892:     }
+893: 
+894:     const resumeOutcome = this.applyResume(run, checkpoint)
+895:     if (resumeOutcome) {
+896:       return this.finalize(run, resumeOutcome, startedAtMs)
+897:     }
+898:     run.lastDecision = run.state.pendingDecision ?? null
+899:     run.lastEvaluation = run.state.lastEvaluation ?? null
+900: 
+901:     try {
+902:       if (this.options.toolResultContext) {
+903:         const state = run.state.toolResultContext!
+904:         const orphaned = state.decisionAdmissions.filter(
+905:           (value) =>
+906:             value.status === 'RESERVED' ||
+907:             (value.status === 'SETTLED' &&
+908:               value.stepNumber > run.state.stepNumber &&
+909:               !state.acceptedDecision &&
+910:               !run.state.pendingDecision)
+911:         )
+912:         if (
+913:           orphaned.length > 0 ||
+914:           state.decisionAdmissions.some((value) => value.status === 'UNKNOWN')
+915:         ) {
+916:           const ids = new Set(
+917:             orphaned
+918:               .filter((value) => value.status === 'RESERVED')
+919:               .map((value) => value.admissionId)
+920:           )
+921:           for (const record of orphaned) {
+922:             if (record.status === 'SETTLED' && record.actual) {
+923:               run.usage.inputTokens +=
+924:                 Math.max(
+925:                   record.reserved.inputTokens,
+926:                   record.actual.inputTokens
+927:                 ) - record.actual.inputTokens
+928:               run.usage.outputTokens +=
+929:                 Math.max(
+930:                   record.reserved.outputTokens,
+931:                   record.actual.outputTokens
+932:                 ) - record.actual.outputTokens
+933:               run.usage.costUsd +=
+934:                 Math.max(record.reserved.costUsd, record.actual.costUsd) -
+935:                 record.actual.costUsd
+936:             }
+937:           }
+938:           run.state.toolResultContext = {
+939:             ...state,
+940:             pendingDecisionAdmission: null,
+941:             decisionAdmissions: state.decisionAdmissions.map((value) =>
+942:               ids.has(value.admissionId)
+943:                 ? {
+944:                     ...value,
+945:                     status: 'UNKNOWN',
+946:                     unknownReason: 'process_lost_before_decision'
+947:                   }
+948:                 : value
+949:             )
+950:           }

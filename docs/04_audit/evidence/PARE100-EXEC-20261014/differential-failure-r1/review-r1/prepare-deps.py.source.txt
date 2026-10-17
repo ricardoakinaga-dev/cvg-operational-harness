@@ -1,0 +1,27 @@
+from pathlib import Path
+import os,json,hashlib,shutil,time
+R=Path(__file__).resolve().parent;W=R.parent.parent/'worktree';Q=R/'private';N=W/'node_modules';D=Q/'node_modules';D.mkdir(exist_ok=True)
+queue=['vitest','@cvg/sdk','@cvg/harness','@cvg/policy-engine','@cvg/approval-engine'];seen=set();entries=[]
+def copy_file(src,dst):
+ data=src.read_bytes();s=src.stat();entries.append({'path':str(src),'sha256':hashlib.sha256(data).hexdigest(),'size':s.st_size,'mtimeNs':s.st_mtime_ns,'nlink':s.st_nlink});dst.parent.mkdir(parents=True,exist_ok=True);dst.write_bytes(data);dst.chmod(s.st_mode & 0o777)
+while queue:
+ name=queue.pop(0)
+ if name in seen:continue
+ seen.add(name);src=(N/name).resolve();dst=D/name
+ if not (src/'package.json').is_file():continue
+ meta=json.loads((src/'package.json').read_text());queue+=list(meta.get('dependencies',{}))+list(meta.get('optionalDependencies',{}))
+ if name.startswith('@cvg/'):
+  copy_file(src/'package.json',dst/'package.json')
+  if (src/'dist').exists():
+   for f in (src/'dist').rglob('*'):
+    if f.is_file():copy_file(f,dst/f.relative_to(src))
+ else:
+  for root,dirs,files in os.walk(src,followlinks=True):
+   dirs[:]=[d for d in dirs if d not in ['.git','.cache']]
+   for n in files:
+    f=Path(root)/n
+    if f.is_file():copy_file(f,dst/f.relative_to(src))
+node=Path('/home/ricardo/.nvm/versions/node/v22.23.2/bin/node');entries.append({'path':str(node),'sha256':hashlib.sha256(node.read_bytes()).hexdigest(),'size':node.stat().st_size})
+(R/'dependency-pre-sentinels.json').write_text(json.dumps({'at':time.time(),'inputs':entries},indent=2));(Q/'package.json').write_text(json.dumps({'type':'module','private':True}))
+(Q/'vitest.config.mjs').write_text("export default { cacheDir: './.cache/vite', test: { environment: 'node', include: ['tests/differential/*.test.ts'], fileParallelism: false, maxWorkers: 1 } }\n")
+print(json.dumps({'packages':len(seen),'files':len(entries),'bytes':sum(e['size'] for e in entries),'missing':[n for n in seen if not (N/n).exists()]}))

@@ -1,0 +1,90 @@
+      run.countedSteps.add(input.stepNumber)
+      run.usage.steps += 1
+    }
+    await this.safeAudit(
+      run,
+      input.status === 'RUNNING' ? 'step.started' : 'step.completed',
+      { result: `${input.stepType}:${input.status}`, tool: null }
+    )
+  }
+
+  private checkpointFor(
+    run: LoopRun,
+    state: LoopRun['state'] = run.state,
+    usage: LoopRun['usage'] = run.usage
+  ): UnsignedCheckpoint {
+    return {
+      executionId: run.executionId,
+      tenantId: run.input.tenantId,
+      checkpointVersion: this.options.toolResultContext ? 2 : 1,
+      runtimeProfile: 'iterative',
+      runtimeVersion: RUNTIME_V2_VERSION,
+      orchestratorVersion: this.orchestratorVersion,
+      stepNumber: state.stepNumber,
+      state: {
+        ...state,
+        observations: this.options.toolResultContext
+          ? retainCompleteObservations(run.observations)
+          : run.observations.slice(-MAX_CHECKPOINT_OBSERVATIONS)
+      },
+      budgetUsage: { ...usage }
+    }
+  }
+
+  private preflightDecisionReceipt(
+    run: LoopRun,
+    state: CompleteToolContextState,
+    usage: LoopRun['usage']
+  ): void {
+    try {
+      checkpointDigest(
+        this.checkpointFor(
+          run,
+          { ...run.state, toolResultContext: state },
+          usage
+        )
+      )
+    } catch (error) {
+      if (
+        (error instanceof CheckpointError &&
+          error.message === 'Checkpoint byte limit') ||
+        (error instanceof CompleteJsonError &&
+          error.code === 'RESULT_TOO_LARGE')
+      ) {
+        throw new ToolResultContextError(
+          'CONTEXT_OVERFLOW',
+          'No checkpoint space for the decision receipt.'
+        )
+      }
+      throw error
+    }
+  }
+
+  private async persistCheckpoint(run: LoopRun): Promise<void> {
+    const checkpoint = sealCheckpoint(this.checkpointFor(run))
+    if (this.options.toolResultContext) {
+      const result = await this.options.stepStore.compareAndSwapCheckpoint!({
+        tenantId: run.input.tenantId,
+        executionId: run.executionId,
+        expected: run.checkpointToken ?? null,
+        next: checkpoint
+      })
+      if (
+        result.status !== 'APPLIED' ||
+        result.token.checkpointId !== checkpoint.checkpointId ||
+        result.token.digest !== checkpoint.digest
+      ) {
+        run.checkpointConflict = true
+        throw new ToolResultContextError(
+          'STATE_CONFLICT',
+          'Checkpoint compare-and-swap did not commit this writer.',
+          'STATE_CONFLICT'
+        )
+      }
+      run.checkpointToken = result.token
+    } else {
+      await this.options.stepStore.saveCheckpoint(checkpoint)
+    }
+  }
+
+  private preflightCompleteTool(

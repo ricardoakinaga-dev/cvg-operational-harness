@@ -89,6 +89,8 @@ export function createOperationalHarness(
     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
     audit: options.audit,
     telemetry: options.telemetry,
+    ...(options.pause ? { pause: options.pause } : {}),
+    ...(options.effects ? { effects: options.effects } : {}),
     ...(options.log ? { log: options.log } : {}),
     ...(options.sandbox ? { sandbox: options.sandbox } : {})
   })
@@ -104,6 +106,9 @@ export function createOperationalHarness(
           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
           audit: options.audit,
           telemetry: options.telemetry,
+          ...(options.pause ? { pause: options.pause } : {}),
+          ...(options.effects ? { effects: options.effects } : {}),
+          ...(options.sandbox ? { sandbox: options.sandbox } : {}),
           ...(options.log ? { log: options.log } : {}),
           stepStore: options.stepStore,
           ...(options.contextEngine

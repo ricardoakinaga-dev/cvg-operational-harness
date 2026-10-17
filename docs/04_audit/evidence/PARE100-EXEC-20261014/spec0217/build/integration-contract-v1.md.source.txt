@@ -1,0 +1,37 @@
+# SPEC0217 integration contract V1 — semantic scope stays approved SPEC1e5df502
+
+## Lane A: external fenced outbox + renewal transaction seam
+
+Own outbox.ts, postgres-outbox.ts, postgres.ts, tenant-scoped-postgres.ts, outbox-content-hash.ts if needed; new tests named pare217-fenced-outbox / pare217-renewal-transaction. No index.ts edits (Lead exports). Existing unbound API unchanged.
+
+New exported supported types in outbox.ts:
+- FencedOuterClaimRef {tenantId:TenantId,eventId:string,processWorkerId:string,expectedOuterAttempt:number,expectedAttemptRowId:string} (positive decimal bigint identity string, no lossy Number).
+- FencedClaimedEvent {event:OutboxEventRecord,claimRef:FencedOuterClaimRef,dbClaimedAt:string}.
+- FencedRenewalControl {signal:AbortSignal,assertActive:()=>void}; guards before/after every await and before COMMIT after tenant cleanup.
+- FencedClaimRenewal {claimRef:FencedOuterClaimRef,dbNow:string,leaseUntil:string}.
+- FencedOutboxClaimAdapter extends DurableOutboxAdapter with claimNextFenced(input:OutboxClaimInput):Promise<FencedClaimedEvent|null>; renewOutboxClaim(ref:FencedOuterClaimRef,control:FencedRenewalControl):Promise<FencedClaimRenewal>; ackClaim(input:OutboxAckInput & {claimRef:FencedOuterClaimRef,beforeFinalAck:()=>Promise<void>,signal?:AbortSignal}):Promise<OutboxEventRecord>; failClaim(input:OutboxFailInput & {claimRef:FencedOuterClaimRef}):Promise<OutboxEventRecord>.
+- FencedRenewalStoppedError extends Error with signal:AbortSignal; only thrown for own guard/signal invalidation, never relabel SQL/cleanup/commit errors. Registry ignores expected stop only with exact signal identity and verified cleanup, not arbitrary rejection.
+
+New internal helpers: renewOutboxClaimOnClient(client,ref,control?) returns FencedClaimRenewal, no BEGIN/COMMIT/checkout; runFencedRenewalTransaction(pool,tenantId,control,operation) in tenant-scoped-postgres.ts with queryRenewal helper checks before/after awaits. Exact parameters exported for package-internal consumers; public withTenantTransaction delegates same internal body unguarded. Bound helpers do DBclock after lock waits, exact attempt-row identity, no lease resurrection. A should promptly publish types and helper signatures then continue implementation.
+
+Normative TTL=10000ms, tick2000ms. New fenced path cannot take test-only TTL. ACK preserves preparation tx -> effect outside tx -> hook outside locks -> final tx, same client retained, then cleanup. fail/ACK/takeover all recheck exact ref and DBtime. Existing unbound signatures/clock remain unchanged.
+
+## Lane B: worker registry/lifecycle + shared jobs (depends on above frozen shapes)
+
+Own claimed-execution-lifecycle.ts (new), jobs/process-outbox-event.ts, controlled-worker.ts, continuous-worker.ts; new tests pare217-claimed-lifecycle and pare217-fenced-job. No main.ts/postgres-controlled.ts/published-kernel-composition.ts/index.ts edits (Lead).
+
+Define local exported InnerExecutionFence {tenantId:string,executionId:string,workerId:string,attempt:number}; equivalent structural platform fence will match this. Registry constructor options: {tenantId:TenantId,workerId:string,adapter:FencedOutboxClaimAdapter,renewPaired:(outer:FencedOuterClaimRef,inner:InnerExecutionFence,control:FencedRenewalControl)=>Promise<FencedClaimRenewal>,buildEffect:(context:ClaimedEventExecution)=>OutboxEffect}. Option claimExecutions?:ClaimExecutionRegistry in both workers and shared job input; no second execution factory flag.
+
+Registry methods reserveClaimSlot,bindClaim,releaseClaimSlot,stopClaims,stopAndDrain plus readonly acceptingClaims. Reserve synchronously BEFORE claim await; max one slot, shutdown also tracks pending acquisitions. Slot lifecycle promise resolves only after full job/fail/cleanup release. bind must validate actual event/ref/process identity and preserve a stopped handle if shutdown won. No slot lost even if claim returns late. Method return details may be chosen internally without changing frozen outbox types; document final signatures to Lead.
+
+Handle exposes immutable claimRef,event,signal; startOuter():Promise<void>,attachInner(fence):Promise<void>,requestStop(reason):void,stopAndJoin():Promise<void>,assertActive():void. One timer2000ms, one real inFlight promise, renewalController distinct from attemptController. Watchdog1500ms aborts attempt; must still join underlying SQL and cleanup, never detached/race-success. Outer-only before attach, paired after; attach joins earlier tick then initial paired renewal before dispatch. Finalizing closes admission but preserves healthy attempt result; error/shutdown/renewfailure abort attempt. Reattach forbidden. Expected guarded cancellation distinguished from SQL/owner/cleanup/ambiguous errors.
+
+Job helper claimNextForExecution does reserve -> adapter.claimNextFenced -> bind. No-claim/acquisition failure release slot. completeClaimed receives slot, validates identity and effect is only invoked through actual ackClaim. startOuter before ACK preparation; buildEffect(handle) closes actual trusted dispatch. beforeFinalAck -> stopAndJoin before final transaction. Error -> stop/join then one failClaim; never fail parallel with handler/tick. Release slot after settled whole job. S3/marker no effect still stops in hook. New continuous branch skips old heartbeat and old shutdown fail loops. Default paths remain unchanged.
+
+## Lead and later C
+
+Lead owns platform continuation types/validator and platform runtime/adapters/command rehydration; agent-core forwarding; worker postgres-controlled/main/preflight/published composition; all index/public docs/pins. C later owns inner controlled store/migration, operational execution/step adapters and capability0002 helper, disjoint A/B. No harness/contracts changes, new dependencies/lock, generic checker exceptions or default enable.
+
+## Validation / reporting
+
+Use Node22.23.2. Focused synthetic unit tests allowed with own evidence under spec217-build/lane-a or lane-b. No broad certify/E2E/SBOM/licenses/PG until own resource assigned. No root/frozenR3-R6 writes. Evidence is IMPLEMENTED, not independent acceptance; return paths, exact commands/exits/logs/hashes and limitations. No descendants. Packet candidates and K01-K12/N1 remain original bar, real process+PG proof later cannot be replaced by mocks.

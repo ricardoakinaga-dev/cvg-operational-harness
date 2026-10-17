@@ -1,0 +1,108 @@
+import { afterAll, it, expect } from 'vitest'
+import { createHash } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
+import { createCapabilityRegistry, createOperationalHarness, DefaultContextEngine, InMemoryEffectJournal, InMemoryExecutionStepStore } from '@cvg/harness'
+import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+import { phase3RuntimeInput, phase3AgentProfile, ScriptedPolicyEngine, InMemoryApprovalEngine, RecordingAuditSink, RecordingTelemetrySink } from '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-packet-r5/artifact/packages/harness/src/__tests__/fixtures/phase3-fixtures.ts'
+const records:any[]=[]
+afterAll(()=>writeFileSync(process.env.I1_CASES!,JSON.stringify({pid:process.pid,records},null,2)))
+const cp=(x:any)=>structuredClone(x)
+const sorted=(x:any):any=>Array.isArray(x)?x.map(sorted):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,sorted(x[k])])):x
+const hash=(x:any)=>createHash('sha256').update(JSON.stringify(sorted(x))).digest('hex')
+function toolFrom(request:any){const frame=JSON.parse(request.messages[1].content);return frame.items.filter((x:any)=>x.priority==='FRESH_TOOL_RESULTS').map((x:any)=>x.value)}
+const faultCases = [
+ 'healthy','empty','whitespace','selector-throw','selector-drop','selector-alias','model-throw','model-deadline',
+ 'cp-pre-before','cp-pre-lostack','cp-pre-persistent','cp-post-transient','cp-post-persistent','cp-post-lostack',
+ 'step-start-before','step-start-lostack','step-start-persistent','step-end-before','step-end-lostack','step-end-persistent',
+ 'audit-start','audit-step','audit-terminal','log-request','log-result','model-throw+cp-post-transient','model-throw+cp-post-lostack',
+ 'empty+cp-post-transient','log-result+cp-post-transient'
+]
+async function lane(fault:string,maxCalls=5,legacy=false,continuation?:'user'|'approval'|'active'|'generic'){
+ const steps=new InMemoryExecutionStepStore(), journal=new InMemoryEffectJournal(), audit=new RecordingAuditSink(), approvals=new InMemoryApprovalEngine()
+ const requests:any[]=[], entries:any[]=[], saves:any[]=[], stepWrites:any[]=[], faults:any[]=[], log:any[]=[],ops:string[]=[]
+ let bodies=0,enabled=true,cpHits=0,stepHits=0,contextBuilds=0,auditHits=0,logHits=0,allowResume=false
+ const resultOutput={escaped:'\u0000"\\\n\t',unicode:'ação 🧪 漢字 '.repeat(360),marker:'UNTRUSTED_TOOL_AUTHORITY'}
+ const tool='synthetic.i1.echo';const caps=createCapabilityRegistry([{descriptor:{id:tool,version:'1',description:'I1 synthetic echo',inputSchema:{type:'object'},outputSchema:{},risk:'LOW',sideEffect:'READ',idempotent:true,requiresApproval:continuation==='approval',origin:'core',providerId:'i1',providerVersion:'1'},implementation:{validateInput:()=>true,validateOutput:()=>true,execute:async (_:any,c:any)=>{bodies++;ops.push(c.operationKey);return {status:'SUCCEEDED',output:resultOutput}}}}])
+ const nativeCAS=steps.compareAndSwapCheckpoint.bind(steps),nativeRecord=steps.recordStep.bind(steps),nativeAudit=audit.append.bind(audit)
+ steps.compareAndSwapCheckpoint=async x=>{
+  saves.push(cp(x));const pre=fault.includes('cp-pre')&&requests.length===0&&x.next.budgetUsage.modelCalls===1
+  const post=fault.includes('cp-post')&&requests.length>0
+  if(enabled&&(pre||post)&&(cpHits===0||fault.includes('persistent'))){cpHits++;if(fault.includes('lostack'))await nativeCAS(x);faults.push({type:'checkpoint',commit:fault.includes('lostack'),next:cp(x.next)});throw new Error('I1_NATIVE_CHECKPOINT_ACK_MISSING')}
+  return nativeCAS(x)
+ }
+ steps.recordStep=async s=>{
+  stepWrites.push(cp(s));const relevant=s.stepType==='RESPOND'&&((fault.includes('step-start')&&s.status==='RUNNING')||(fault.includes('step-end')&&s.status==='SUCCEEDED')||(fault==='step-end-persistent'&&s.status==='FAILED'))
+  if(enabled&&relevant&&(stepHits===0||fault.includes('persistent'))){stepHits++;if(fault.includes('lostack'))await nativeRecord(s);faults.push({type:'step',commit:fault.includes('lostack'),step:cp(s)});throw new Error('I1_NATIVE_STEP_ACK_MISSING')}
+  return nativeRecord(s)
+ }
+ audit.append=async e=>{if(enabled&&auditHits===0&&((fault==='audit-start'&&e.result==='RESPOND:RUNNING')||(fault==='audit-step'&&e.result==='RESPOND:SUCCEEDED')||(fault==='audit-terminal'&&e.action==='runtime.completed'))){auditHits++;faults.push({type:'audit',event:cp(e)});throw new Error('I1_AUDIT_VETO')}return nativeAudit(e)}
+ const nativeContext=new DefaultContextEngine({tokenBudget:5000})
+ const contextEngine={build:async(x:any)=>{
+  contextBuilds++;const c=await nativeContext.build(x)
+  if(enabled&&contextBuilds===3){
+   if(fault==='selector-throw')throw new Error('I1_SELECTOR_THROW')
+   if(fault==='selector-drop')return {...c,contextItems:c.contextItems.filter((i:any)=>i.priority!=='FRESH_TOOL_RESULTS')}
+   if(fault==='selector-alias'){let mutate=(n:number)=>queueMicrotask(()=>{if(n)return mutate(n-1);c.instructions.push('I1_LATE_HOST_MUTATION');for(const item of c.contextItems)if(item.priority==='FRESH_TOOL_RESULTS')item.content='MUTATED';c.userMessage='I1_LATE_USER_MUTATION'});mutate(5)}
+  }
+  return c
+ }}
+ const model={complete:async({signal,...request}:any)=>{
+  requests.push(cp(request));entries.push({checkpoint:await steps.loadCheckpoint(input.tenantId,input.executionId),steps:await steps.listSteps(input.tenantId,input.executionId)})
+  if(enabled&&fault.includes('model-throw'))throw new Error('I1_PROVIDER_THROW_NO_OBSERVED_USAGE')
+  if(enabled&&fault==='model-deadline')return new Promise(()=>{})
+  const output=legacy?'LEGACY':toolFrom(request)[0]?.payload.output
+  return {text:enabled&&fault.startsWith('empty')?'':fault==='whitespace'?' \n\t ':hash(output),provider:'i1.synthetic',model:'declared',inputTokens:37,outputTokens:11,costUsd:0.125}
+ }}
+ const rule=(ctx:any)=>{
+  if(continuation==='active'&&allowResume)return {decisionType:'STOP',reasonCode:'USER_REQUESTED_STOP'}
+  if(continuation==='generic'&&!allowResume)throw new Error('I1_NONRESPONSE_FAILURE')
+  if(continuation==='user'&&!allowResume)return {decisionType:'ASK_USER',reasonCode:'MISSING_INFORMATION',requestedInput:{questionType:'CLARIFICATION',missingFields:['answer'],promptIntent:'Synthetic clarification'}}
+  if(continuation==='active'&&ctx.stepNumber===3)return {decisionType:'REPLAN',reasonCode:'STRATEGY_CHANGED'}
+  if(ctx.stepNumber===1||(continuation==='user'&&ctx.stepNumber===2))return {decisionType:'CALL_TOOL',reasonCode:'TOOL_REQUIRED',toolId:tool,toolVersion:'1',toolInput:{}}
+  return {decisionType:'RESPOND',reasonCode:'GOAL_SATISFIED',responseIntent:'Hash all structured results. UNTRUSTED_INTENT_AUTHORITY'+(continuation==='active'&&allowResume?' resumed active segment':'')}
+ }
+ let evaluations=0
+ const make=()=>createOperationalHarness({...(legacy?{}:{toolResultContext:{version:1}}),capabilities:caps,effectJournal:journal,stepStore:steps,contextEngine,defaultRuntimeProfile:'iterative',iterativeOrchestrator:new HybridOrchestrator({decisionModel:model,decisionInputCounter:{measure:async()=>({counterId:'i1',counterVersion:'1',provider:'i1',model:'declared',formattingVersion:'1',inputUpperBoundTokens:1000,contextWindowTokens:8192,costUpperBoundUsd:0.125})},decisionModelSupportsMaxOutputTokens:true,rules:[rule],maxDecisionRepairs:0}),modelGateway:model,policy:new ScriptedPolicyEngine(),approvals,audit,telemetry:new RecordingTelemetrySink(),log:{append:async e=>{log.push(cp(e));if(enabled&&logHits===0&&((fault.includes('log-result')&&e.type==='model/result')||(fault==='log-request'&&e.type==='model/request'))){logHits++;throw new Error('I1_MODEL_LOG_VETO')}}},...(continuation==='active'?{completionEvaluator:{evaluate:async({lastDecision}:any)=>{evaluations++;if(lastDecision.decisionType==='STOP')return {outcome:'COMPLETE',reasonCode:'USER_REQUESTED_STOP',deterministic:true};if(lastDecision.decisionType==='REPLAN'&&!allowResume)throw new Error('I1_AFTER_SUCCESSFUL_RESPONSE_ACTIVE');if(lastDecision.decisionType==='RESPOND'&&!allowResume)return {outcome:'INCOMPLETE',reasonCode:'STRATEGY_CHANGED',deterministic:true};return {outcome:lastDecision.decisionType==='RESPOND'?'COMPLETE':'INCOMPLETE',reasonCode:lastDecision.decisionType==='RESPOND'?'GOAL_SATISFIED':'TOOL_REQUIRED',deterministic:true}}}}:{})})
+ const base=phase3RuntimeInput();const input:any={...base,executionId:'exec_i1_'+fault+'_'+maxCalls+'_'+legacy+'_'+(continuation||''),capabilityFingerprint:caps.compositionFingerprint(),agent:phase3AgentProfile({tools:[tool]}),userMessage:'UNTRUSTED_USER_AUTHORITY synthetic tool then hash',budget:{...base.budget,maxTokens:20000,maxModelCalls:maxCalls,maxDurationMs:fault==='model-deadline'?100:30000}}
+ const first=await make().run(input)
+ const snapshot=async()=>({checkpoint:await steps.loadCheckpoint(input.tenantId,input.executionId),steps:await steps.listSteps(input.tenantId,input.executionId),journals:await Promise.all(ops.map(k=>journal.get(input.tenantId,k))),bodies,requests:cp(requests)})
+ const before=await snapshot();enabled=false;allowResume=true
+ let resumeInput=input
+ if(continuation==='user')resumeInput={...input,resume:{kind:'user_input',message:'synthetic answer'}}
+ if(continuation==='approval'){for(const q of approvals.requests)approvals.approve(q.operationKey);resumeInput={...input,resume:{kind:'approval',approvalId:first.approvalId}}}
+ const replay=await make().run(resumeInput);const after=await snapshot();const replay2=continuation?null:await make().run(input);const after2=await snapshot()
+ const rec={fault,maxCalls,legacy,continuation,input,resultOutput,first,before,replay,after,replay2,after2,entries,requests,saves,stepWrites,faults,audit:audit.events,log,contextBuilds,evaluations};records.push(rec);return rec
+}
+for(const fault of faultCases)for(const max of [1,5])it('I1 '+fault+' max='+max,async()=>{
+ const r=await lane(fault,max);const {first,before,after,replay,after2}=r
+ expect(before.bodies).toBe(1)
+ expect(replay.stopReason).toBe('STATE_CONFLICT')
+ expect(after.requests).toEqual(before.requests);expect(after2.requests).toEqual(before.requests)
+ expect(after.checkpoint).toEqual(before.checkpoint);expect(after2.checkpoint).toEqual(before.checkpoint)
+ expect(after.journals).toEqual(before.journals);expect(after2.journals).toEqual(before.journals)
+ const zero=['selector-throw','selector-drop','cp-pre-before','cp-pre-lostack','cp-pre-persistent','step-start-before','step-start-lostack','step-start-persistent','audit-start','log-request'].includes(fault)
+ expect(before.requests.length).toBe(zero?0:1)
+ for(const e of r.entries){expect(e.checkpoint.budgetUsage.modelCalls).toBe(1);expect(e.steps.some((s:any)=>s.stepType==='RESPOND'&&s.status==='RUNNING')).toBe(true)}
+ if(!zero&&!fault.includes('model-throw')&&fault!=='model-deadline'){
+  expect(first.usage).toEqual({inputTokens:37,outputTokens:11,costUsd:0.125})
+  if(fault!=='cp-post-persistent')expect(before.checkpoint.budgetUsage).toMatchObject({modelCalls:1,inputTokens:37,outputTokens:11,costUsd:0.125})
+ }
+ if(fault==='cp-post-persistent'){expect(before.checkpoint.budgetUsage).toMatchObject({modelCalls:1,inputTokens:0,outputTokens:0,costUsd:0});expect(replay.response).toMatch(/uncertain.*reconciliation/)}
+ if(fault.includes('model-throw')){expect(first.response).toContain('I1_PROVIDER_THROW_NO_OBSERVED_USAGE');if(!fault.includes('lostack'))expect(before.checkpoint.state.stopReason).toBe('MODEL_FAILURE')}
+ if(fault==='model-deadline')expect(first.stopReason).toBe('MAX_DURATION')
+ if(fault==='healthy'||fault==='selector-alias'){
+  expect(first.stopReason).toBe('COMPLETED');expect(first.response).toBe(hash(r.resultOutput))
+  const req=before.requests[0];expect(req.messages[0].content).not.toMatch(/UNTRUSTED_|I1_LATE_/);expect(req.messages[1].content).not.toContain('I1_LATE_')
+  expect(toolFrom(req)[0].payload.output).toEqual(r.resultOutput)
+  expect(req.messages[0].content.length).toBeLessThanOrEqual(8192);expect(req.messages[1].content.length).toBeLessThanOrEqual(32768);expect(Buffer.byteLength(JSON.stringify(req))).toBeLessThanOrEqual(131072)
+  expect(before.checkpoint.state.toolResultContext.decisionAdmissions).toEqual([])
+ }
+ if(fault==='audit-step'||fault==='audit-terminal'||fault==='step-end-lostack')expect(before.steps.find((s:any)=>s.stepType==='RESPOND').status).toBe('SUCCEEDED')
+ if(fault==='step-end-persistent')expect(before.steps.find((s:any)=>s.stepType==='RESPOND').status).toBe('RUNNING')
+})
+it('I1 explicit user pause resumes',async()=>{const r=await lane('healthy',5,false,'user');expect(r.first.stopReason).toBe('NEEDS_USER_INPUT');expect(r.replay.stopReason).toBe('COMPLETED');expect(r.after.bodies).toBe(1)})
+it('I1 explicit approval pause resumes',async()=>{const r=await lane('healthy',5,false,'approval');expect(r.first.stopReason).toBe('APPROVAL_REQUIRED');expect(r.replay.stopReason).toBe('COMPLETED');expect(r.after.bodies).toBe(1)})
+it('I1 unrelated complete INTERNAL failure remains resumable',async()=>{const r=await lane('healthy',5,false,'generic');expect(r.first.stopReason).toBe('INTERNAL_FAILURE');expect(r.replay.stopReason).toBe('COMPLETED')})
+it('I1 prior successful response with active later failure remains resumable',async()=>{const r=await lane('healthy',5,false,'active');expect(r.first.stopReason).toBe('INTERNAL_FAILURE');expect(r.replay.stopReason).toBe('COMPLETED')})
+it('I1 legacy model failure retains existing resumability',async()=>{const r=await lane('model-throw',5,true);expect(r.first.stopReason).toBe('MODEL_FAILURE');expect(r.replay.stopReason).toBe('COMPLETED');expect(r.after.requests.length).toBe(2)})
+it('I1 legacy healthy request retains old wire',async()=>{const r=await lane('healthy',5,true);expect(r.first.stopReason).toBe('COMPLETED');expect(r.before.requests[0].messages[1].content).toBe(r.input.userMessage);expect(r.before.checkpoint.checkpointVersion).toBe(1)})

@@ -1,0 +1,165 @@
+
+SPEC criteria
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TR01 | Fábrica pública com capabilities e HybridOrchestrator reais, porta de modelo/counter sintéticos e eco puro: três fixtures anteriores +ASCII4096 +Unicode4096bytes +escapes. Provider deriva resposta somente do frame realmente recebido; valor/bytes/hash/provenance/output final exatos. Qualquer fixture externa usada para fabricar resposta rejeita.                                                                                                                                     |
+| TR02 | JSON admissível nas fronteiras: null/boolean/número/objeto/array/string vazia; byte32768/32769, profundidade32/33, nós10000/10001, surrogate, -0, cycle, hole, accessor/toJSON. Valor transformado silenciosamente, getter executado ou envelope truncado rejeitam.                                                                                                                                                                                                                           |
+| TR03 | System/usuário/catálogo/histórico/reparo grandes e múltiplos resultados: pedido real igual ao snapshot admitido; zero chamadas se obrigatório não cabe; opcionais removidos inteiros. Limites exato/mais um, contador inválido/ausente, janela e saída insuficientes. A17KiB entregue, decisão pedindo B17KiB e pedido posterior dependente de A+B: conservar ambos e recusar o pedido combinado; jamais admitir sóB por avanço do cursor.                                                    |
+| TR04 | Alterar output, summary, hash, IDs, cursor, set obrigatório ou payload no ContextEngine customizado. O runtime deve rejeitar adulteração antes de modelo/corpo; JSON com instrução/approval forjados não concede autoridade. Modelo sintético não prova robustez semântica de LLM real.                                                                                                                                                                                                       |
+| TR05 | Reserva antes do modelo, uma cobrança por tentativa e reparo, settlement idempotente e sem débito duplo; timeout/throw/cancel/uso inválido/falha de save/cross-tenant/late result. Falha de pre-save implica zero chamadas; UNKNOWN conserva limites e impede avanço. Disputar CAS inicial e reserva com dois processos, perder fence, repetir token antigo e tentar saveCheckpoint2 simples: um único receipt/call e nenhum bypass de CAS.                                                   |
+| TR06 | Checkpoint2 com resultado completo: store memória e PostgreSQL sintético real, perda/recriação do processo e retomada sem novo corpo. Checkpoint1 legado e com/sem TOOL_RESULT, reader antigo, mudança de modo, digest/tenant/version/reserva corrompidos. Comparar valor/bytes/usage/settlement antes/depois, não apenas exit0. Incluir4096U+0000 e chaves comU+0000 no codec V2, base64/padding/hash/UTF-8/JSON inválidos, wrapper/dados grandes e retorno lógico idêntico nos dois stores. |
+| TR07 | Efeito sintético confirmado seguido de overflow ou falha de save: um único corpo, operationKey/settlement conservados, objetivo não declarado completo e nenhum replay na retomada. Falha nativa do journal continua incerta. Sem efeito externo real.                                                                                                                                                                                                                                        |
+| TR08 | Mais de50observações, várias ferramentas por regras antes do modelo e reserva de espaço próxima8MiB: nenhum TOOL_RESULT, entregue ou não, expulso; recusa pré-corpo quando não cabe; checkpoint jamais truncado.                                                                                                                                                                                                                                                                              |
+| TR09 | Modo legado e single_pass, custom ports, SDK/worker consumidores: regressão explícita; opção incompatível falha cedo. Schema de gateway governado aceita a representação comum quando testada diretamente, sem alegar integração de rota que não foi implementada.                                                                                                                                                                                                                            |
+| TR10 | Reexecutar diferencial real de dois motores para os novos casos e controles de admissão quando a infra qualificada permitir; preservar testemunho vermelho original. Prova CVG isolada não satisfaz equivalência dos dois motores nem os36cartões.                                                                                                                                                                                                                                            |
+
+FILE packages/harness/src/iterative-dispatch.ts
+162: export function applyResume(
+163:   ctx: IterativeDispatchContext,
+164:   run: LoopRun,
+165:   checkpoint: ExecutionCheckpoint | null
+166: ): Extract<DispatchOutcome, { kind: 'stop' }> | null {
+167:   const resume = run.input.resume
+168:   if (!resume) return null
+169:   if (!checkpoint) {
+170:     return {
+171:       kind: 'stop',
+172:       stopReason: 'STATE_CONFLICT',
+173:       response: 'Resume input arrived without a durable checkpoint.'
+174:     }
+175:   }
+176:   if (resume.kind === 'approval') {
+177:     if (run.state.pendingQuestion) {
+178:       // Wrong-kind resume: the execution is paused for an answer, not for an
+179:       // approval. Never let this open the loop with a question unresolved.
+180:       return {
+181:         kind: 'stop',
+182:         stopReason: 'STATE_CONFLICT',
+183:         response: 'Approval resume arrived while a user question is pending.',
+184:         preserveCheckpoint: true
+185:       }
+186:     }
+187:     if (!run.state.pendingApprovalId) {
+188:       if (run.state.stopReason === 'APPROVAL_REQUIRED') {
+189:         return {
+190:           kind: 'stop',
+191:           stopReason: 'STATE_CONFLICT',
+192:           response: 'The paused approval binding is missing.',
+193:           preserveCheckpoint: true
+194:         }
+195:       }
+196:       // The approval was already consumed and the checkpoint cleared the
+197:       // binding; a retry of the same attempt is a safe no-op.
+198:       return null
+199:     }
+200:     if (run.state.pendingApprovalId !== resume.approvalId) {
+201:       return {
+202:         kind: 'stop',
+203:         stopReason: 'STATE_CONFLICT',
+204:         response: 'Approval does not match the paused execution binding.',
+205:         preserveCheckpoint: true
+206:       }
+207:     }
+208:     return null
+209:   }
+210:   if (run.state.pendingApprovalId) {
+211:     return {
+212:       kind: 'stop',
+213:       stopReason: 'STATE_CONFLICT',
+214:       response: 'User input arrived while an approval is pending.',
+215:       preserveCheckpoint: true
+216:     }
+217:   }
+218:   if (!run.state.pendingQuestion) {
+219:     const alreadyResolved = Object.values(run.state.resolvedInputs).includes(
+220:       resume.message
+221:     )
+222:     if (alreadyResolved) return null
+223:     return {
+224:       kind: 'stop',
+225:       stopReason: 'STATE_CONFLICT',
+226:       response: 'User input arrived without a pending question.',
+227:       preserveCheckpoint: true
+228:     }
+229:   }
+230:   const stepNumber = Math.max(1, run.state.stepNumber)
+231:   const observation = ctx.makeObservation(run, {
+232:     stepId: `step_${run.executionId}_${stepNumber}_user_input`,
+233:     stepNumber,
+234:     type: 'USER_MESSAGE',
+235:     source: 'USER',
+236:     trust: 'UNTRUSTED',
+237:     payload: { message: resume.message },
+238:     summary: 'User answered the pending question.',
+239:     provenance: { sourceId: 'user' }
+240:   })
+241:   run.observations = [...run.observations, observation].slice(
+242:     -MAX_CHECKPOINT_OBSERVATIONS
+243:   )
+244:   const pendingQuestion = run.state.pendingQuestion
+245:   run.state = {
+246:     ...run.state,
+247:     pendingQuestion: undefined,
+
+TESTS packages/harness/src/__tests__/complete-checkpoint.test.ts
+2: import { describe, expect, it } from 'vitest'
+139: describe('complete checkpoint codec and memory CAS', () => {
+140:   it('uses domain-separated logical digest, schema optional normalization and legacy digest', () => {
+182:   it('round trips NUL keys and 4096 NULs with ASCII physical wrapper', () => {
+201:   it('rejects malformed physical wrappers, UTF8, JSON, noncanonical JSON and tamper', () => {
+239:   it('rejects invalid result hashes, cursor, receipts, external NUL and unsigned size', () => {
+268:   it('has one winner for initial and same-token races; refuses simple V2 and V1 overwrite', async () => {
+333:   it('retains 60 full TOOL_RESULT observations, validates result integrity and immutable receipts across CAS', async () => {
+458:   it('rejects corrupt native receipt bindings, budget, enum, pending pointer and missing state fields', () => {
+533:   it('enforces exact 8MiB logical bytes and total depth/node limits before decoding', () => {
+618:   it('retains observed UNKNOWN breach usage and requires componentwise conservative budget coverage', () => {
+698:   it('preserves accepted decision separately from counted pendingDecision and binds all settled step receipts', async () => {
+811:   it('permits a V1 upgrade only without legacy results and refuses downgrade/old token replay', async () => {
+878:   it('preserves legacy hashing, simple saves, step transition fences and defensive copies', async () => {
+
+TESTS packages/orchestrator/src/__tests__/complete-tool-context.test.ts
+3: import { afterAll, describe, expect, it, vi } from 'vitest'
+308: describe('SPEC0224 complete-tool-v1 orchestrator lane (synthetic ports)', () => {
+309:   it('advertises support and returns rules-only empty receipts without qualification or aggregate usage', async () => {
+323:   it('returns existing native settled receipts from rules without another model call or usage charge', async () => {
+354:   it('prefixes reentered same-step repair receipts with all prior native settled IDs without mutating or charging them', async () => {
+397:   it.each([
+471:   it.each(['model', 'counter', 'cap', 'admission'])(
+497:   it.each([
+519:   it('never substitutes a character estimator if the counter throws', async () => {
+530:   it('refuses counter mutation of the detached snapshot and preserves caller values', async () => {
+544:   it('retains trusted governance and profile while placing other selected content only in the user frame', async () => {
+591:   it('trims an oversized optional item before counting without slicing its contents', async () => {
+605:   it('trims optional items whole by priority, recounts the entire request, and retains every tool result', async () => {
+637:   it('does not evict an earlier delivered tool result when two required 17KiB values overflow', async () => {
+651:   it.each(['system', 'user', 'request'] as const)(
+707:   it.each(['input', 'window', 'tokens', 'cost', 'calls', 'duration'])(
+734:   it('accepts exact token/window/cost balances and defaults an absent tokenBudget to 4000', async () => {
+747:   it.each([
+793:   it('preserves native decision validation and returns every settled repair receipt with no aggregate usage', async () => {
+843:   it('honors external context.decisionRepair and accepts the native receipt attempt ordinal', async () => {
+862:   it('lets native live balance veto repair after the first call has settled', async () => {
+876:   it('never calls model when durable reservation fails', async () => {
+886:   it.each(['request', 'tenant', 'measurement', 'reserved'])(
+912:   it.each([
+953:   it('settles UNKNOWN on model throw and never repairs it', async () => {
+963:   it('propagates cancellation and ignores a late result after UNKNOWN', async () => {
+987:   it('does not start a model call if cancellation arrives during reserve', async () => {
+1006:   it('does not count, reserve or call a model when already cancelled', async () => {
+1021:   it('times out a counter with no reserve, and an in-flight model as UNKNOWN without late settlement', async () => {
+1043:   it('fails closed on settlement save failure or conflicting result hash', async () => {
+1061:   it('exhausts native decision validation and allowed-type repairs without converting rejection to output', async () => {
+1078:   it('preserves legacy request, rules, repair prompts and aggregate usage without new qualification', async () => {
+
+TESTS packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts
+6: import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+151: describe.skipIf(!resourcePath)(
+211:     it('has exactly one initial winner and one winner for competing reservation snapshots; reloads on a fresh adapter', async () => {
+279:     it('returns bounded SQL projections, refuses corrupt wrappers and oversized state before driver JSON parsing', async () => {
+
+TESTS packages/persistence/src/__tests__/complete-tool-process-restart.test.ts
+7: import { describe, expect, it } from 'vitest'
+276:   it(`synthetic PG child ${role}`, async () => {
+340:   describe.skipIf(!resourcePath)(
+343:       it('preserves exact NUL output, bytes, usage and SETTLED receipt after writer SIGKILL and reader recreation', async () => {
+425:       it('allows exactly one initial CAS and one reservation CAS across two real processes; refuses stale token and simple V2 save', async () => {
+

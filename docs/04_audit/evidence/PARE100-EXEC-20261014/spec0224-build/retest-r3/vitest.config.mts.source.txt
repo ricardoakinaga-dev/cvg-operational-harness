@@ -1,0 +1,11 @@
+import { readFileSync, appendFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+const root='/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree';
+const own='/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/retest-r3';
+export default {
+ root,cacheDir:own+'/cache/vite',
+ plugins:[{name:'private-source-sentinel',transform(_code,id){const path=id.split('?')[0];if(path.startsWith(root+'/')&&!path.includes('/node_modules/')&&/\.[cm]?[jt]sx?$/.test(path)){const bytes=readFileSync(path);const hash=createHash('sha256').update(bytes).digest('hex');appendFileSync(own+'/transitive-loads.jsonl',JSON.stringify({path,sha256:hash,bytes:bytes.length,phase:'transform-before'})+'\n');const after=createHash('sha256').update(readFileSync(path)).digest('hex');appendFileSync(own+'/transitive-loads.jsonl',JSON.stringify({path,sha256:after,phase:'transform-after'})+'\n');if(hash!==after)throw Error('source changed');}return null;}}],
+ resolve:{alias:{'@cvg/harness-contracts':root+'/packages/contracts/src/index.ts','@cvg/harness-orchestrator':root+'/packages/orchestrator/src/index.ts','@cvg/harness':root+'/packages/harness/src/index.ts'}},
+ ssr:{noExternal:[/^@cvg\//]},
+ test:{environment:'node',testTimeout:15000,maxWorkers:1,fileParallelism:false,server:{deps:{inline:[/^@cvg\//]}},include:['packages/contracts/src/__tests__/complete-json.test.ts','packages/harness/src/__tests__/complete-tool-public.test.ts','packages/harness/src/__tests__/complete-checkpoint.test.ts','packages/orchestrator/src/__tests__/complete-tool-context.test.ts',own+'/*.test.ts']}
+};

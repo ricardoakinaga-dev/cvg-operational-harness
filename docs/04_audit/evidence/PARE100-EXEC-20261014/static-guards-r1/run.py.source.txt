@@ -1,0 +1,21 @@
+from pathlib import Path
+import os, sys, json, subprocess, time, datetime, hashlib
+base=Path(__file__).parent
+worktree=base.parent/'worktree'
+label=sys.argv[1]; argv=sys.argv[2:]
+assert '/' not in label and not (base/(label+'.json')).exists()
+for name in ['home','tmp','cache','config','state']:(base/name).mkdir(exist_ok=True)
+env={'PATH':'/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin',
+     'LANG':'C.UTF-8','TZ':'UTC','NODE_ENV':'test','CI':'1','NO_COLOR':'1',
+     'HOME':str(base/'home'),'TMPDIR':str(base/'tmp'),'XDG_CACHE_HOME':str(base/'cache'),
+     'XDG_CONFIG_HOME':str(base/'config'),'XDG_STATE_HOME':str(base/'state')}
+started=datetime.datetime.now(datetime.timezone.utc).isoformat(); t=time.monotonic()
+result=subprocess.run(argv,cwd=worktree,env=env,capture_output=True,timeout=180)
+streams={}
+for name,data in [('stdout',result.stdout),('stderr',result.stderr)]:
+    target=base/(label+'.'+name+'.log');target.write_bytes(data)
+    streams[name]={'path':target.name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+record={'argv':argv,'cwd':str(worktree),'startedAt':started,'finishedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'durationSeconds':time.monotonic()-t,'exit':result.returncode,'environment':env,'streams':streams}
+(base/(label+'.json')).write_text(json.dumps(record,indent=2)+'\n')
+print(json.dumps(record));sys.exit(result.returncode)

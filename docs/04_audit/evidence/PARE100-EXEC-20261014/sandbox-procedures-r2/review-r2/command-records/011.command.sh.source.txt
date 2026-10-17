@@ -1,0 +1,35 @@
+python3 - <<'PY'
+import pathlib,json,hashlib,collections
+P=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-procedures-r2/review-packet');O=pathlib.Path.cwd()
+def rd(n):return json.load(open(P/n))
+orig=rd('original-leaf-bindings.json');sel=rd('selected-catalog-contracts.json');prop=rd('semantic-proposals.json');pending=rd('pending-bindings.json');proc=rd('procedures.json');clauses=rd('observation-clauses.json');ret=rd('retained-base.json');ids={x['id'] for x in orig};oi={x['id']:x for x in orig};si={x['id']:x for x in sel};ci={x['id']:x for x in clauses}
+external=rd('external-inputs.json');catalog=json.load(open(external[0]['path']));found={}
+def filterids(v):
+ if isinstance(v,dict):
+  if isinstance(v.get('id'),str) and v['id'] in ids:found[v['id']]=v
+  for x in v.values():
+   if isinstance(x,(dict,list)):filterids(x)
+ elif isinstance(v,list):
+  for x in v:filterids(x)
+filterids(catalog)
+rows=[];denom=0
+with open(external[1]['path']) as f:
+ for line in f:
+  if not line.strip():continue
+  denom+=1;r=json.loads(line)
+  if r.get('owner_task')=='P100-024' or r.get('id') in ids:rows.append(r)
+print('CATALOG_MATCHED',len(found),'MATRIX',len(rows),'DENOM',denom)
+print('RAW_TARGET_SAMPLE',json.dumps(found[sel[0]['id']],ensure_ascii=False))
+print('MATRIX_TARGET_SAMPLE',json.dumps(rows[0],ensure_ascii=False))
+print('CANONICAL',[(label,hashlib.sha256(json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest(),expected) for label,v,expected in [('procedures',proc[:4],ret['oldProceduresCanonicalSHA256']),('bindings',prop[:32],ret['oldBindingsCanonicalSHA256'])]])
+print('ROW_EXACT',rows==orig,'ID_EXACT',{r['id'] for r in rows}==ids)
+print('CLAUSE_DUPLICATION',all(p.get('observationClauses',[])==[x for x in clauses if x['procedure']==p['id']] for p in proc[4:]))
+compact=[]
+print('BINDINGS_COMPACT_FIRST70')
+for i,p in enumerate(prop):
+ c=p['catalogContract'];compact.append({'index':i,'id':p['leafId'],'symbol':c['symbol'],'kind':c['kind'],'source':c['source'],'procedure':p['primaryProcedure'],'related':p.get('relatedProcedures'),'clauses':p.get('observationClauses'),'facet':p['individualFacet']})
+ if i<70:print(i,c['source'].split('/sandbox/')[-1],c['symbol'],c['kind'],p['primaryProcedure'],p.get('observationClauses'),p.get('relatedProcedures'))
+(O/'bindings-compact.json').write_text(json.dumps(compact,ensure_ascii=False,indent=2)+'\n')
+(O/'filtered-catalog-427.json').write_text(json.dumps(found,ensure_ascii=False,indent=2)+'\n');(O/'filtered-matrix-427.json').write_text(json.dumps(rows,ensure_ascii=False,indent=2)+'\n')
+PY
+

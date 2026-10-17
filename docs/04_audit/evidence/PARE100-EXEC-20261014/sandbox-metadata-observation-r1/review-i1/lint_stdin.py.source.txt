@@ -1,0 +1,22 @@
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+D = Path(__file__).resolve().parent
+P = D.parent
+W = P.parent / 'worktree'
+config = D / 'eslint.i1-r3.config.cjs'
+config.write_text("const { createRequire } = require('node:module');\nconst request = createRequire(" + json.dumps(str(W / 'eslint.config.js')) + ");\nconst tseslint = request('typescript-eslint');\nmodule.exports = tseslint.config(...tseslint.configs.recommended);\n")
+env = json.loads((D / 'quality.json').read_text())[0]['env']
+argv = ['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node', str(W / 'node_modules/eslint/bin/eslint.js'), '--no-cache', '--max-warnings', '0', '--config', str(config), '--stdin', '--stdin-filename', str(D / 'observe.mts')]
+raw = (P / 'observe.mts').read_bytes()
+result = subprocess.run(argv, cwd=D, env=env, input=raw, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+(D / 'lint-r3.stdout').write_bytes(result.stdout)
+(D / 'lint-r3.stderr').write_bytes(result.stderr)
+(D / 'lint-r3.stdin').write_bytes(raw)
+record = {'argv': argv, 'cwd': str(D), 'env': env, 'exitCode': result.returncode, 'stdout': str(D / 'lint-r3.stdout'), 'stderr': str(D / 'lint-r3.stderr'), 'stdin': str(D / 'lint-r3.stdin'), 'stdinSha256': hashlib.sha256(raw).hexdigest(), 'stdoutBytes': len(result.stdout), 'stderrBytes': len(result.stderr), 'truncated': False, 'reason': 'ESLint virtual path in D with exact authenticated observe.mts bytes; preserve resolution and outside-base failures.'}
+(D / 'lint-r3.command.json').write_text(json.dumps(record, indent=2) + '\n')
+print(json.dumps(record)); print(result.stdout.decode()); print(result.stderr.decode(), file=sys.stderr)
+sys.exit(result.returncode)

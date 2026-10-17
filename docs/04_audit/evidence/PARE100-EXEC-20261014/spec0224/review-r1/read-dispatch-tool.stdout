@@ -1,0 +1,456 @@
+        reasonCode: 'POLICY_REQUIRED',
+        errorCode
+      }
+    default:
+      return {
+        stepNumber,
+        stepType: 'TOOL',
+        status: 'FAILED',
+        sideEffecting: true,
+        reasonCode,
+        errorCode
+      }
+  }
+}
+
+export async function dispatchTool(
+  ctx: IterativeDispatchContext,
+  run: LoopRun,
+  decision: LoopDecision,
+  stepNumber: number,
+  forceApproval: boolean
+): Promise<DispatchOutcome> {
+  // A previous successful dispatch is trajectory evidence, not the result
+  // of this attempt. Only this dispatch's success may populate toolResult.
+  run.lastToolObservation = null
+  // A resumed in-flight step was already counted when it reached dispatch.
+  const alreadyCounted =
+    run.inFlightCounted && run.state.pendingStepNumber === stepNumber
+  if (
+    !alreadyCounted &&
+    run.usage.toolCalls + 1 > run.input.budget.maxToolCalls
+  ) {
+    return ctx.stop(
+      'MAX_TOOL_CALLS',
+      'Tool-call budget exhausted before the tool could run.'
+    )
+  }
+  const tool = ctx.options.tools.resolve(
+    decision.toolId as string,
+    decision.toolVersion
+  )
+  if (!tool) {
+    return ctx.stop(
+      'STATE_CONFLICT',
+      `Tool "${decision.toolId}" is unavailable.`
+    )
+  }
+  const operationKey = ctx.operationKey(run, stepNumber, tool.id)
+  const invocation = {
+    toolId: tool.id,
+    ...(tool.version ? { toolVersion: tool.version } : {}),
+    input: decision.toolInput ?? {},
+    operationKey
+  }
+  if (ctx.remainingDuration(run) <= 0) {
+    return ctx.stop(
+      'MAX_DURATION',
+      'Duration budget exhausted before tool execution.'
+    )
+  }
+
+  const stepId = `step_${run.executionId}_${stepNumber}_tool`
+  // A resumed step already holds this step number as a tool step (waiting for
+  // approval or in flight), and the dispatch checkpoint opens it as RUNNING;
+  // a control that then blocks the call closes that same step instead of
+  // recording a second one under the same number, or leaving it open while
+  // the checkpoint ends (AUD-0599 F02).
+  let stepOpen = run.state.pendingStepNumber === stepNumber
+  // Opened as RUNNING by this invocation's dispatch checkpoint.
+  let openedHere = false
+  // An operator pause proves that nothing ran and nothing stays reserved: the
+  // step waits for the resume instead of looking in flight, so a later
+  // terminal stop can close it as not executed (AUD-0600 F02).
+  const parkForResume = async (): Promise<void> => {
+    if (!openedHere) return
+    await ctx.recordStep(run, {
+      stepNumber,
+      stepType: 'TOOL',
+      status: 'WAITING',
+      sideEffecting: true,
+      reasonCode: decision.reasonCode
+    })
+  }
+  const recordDenial = (record: StepRecord): Promise<void> =>
+    ctx.recordStep(
+      run,
+      stepOpen
+        ? {
+            stepNumber,
+            stepType: 'TOOL',
+            status: 'FAILED',
+            sideEffecting: true,
+            reasonCode: decision.reasonCode,
+            errorCode: record.errorCode
+          }
+        : record
+    )
+  const call: ToolCallState = {
+    turn: ctx.turn(run),
+    tool,
+    invocation,
+    needsApproval: forceApproval,
+    executionRef: run.executionId
+  }
+  let policyRecorded = false
+  const recordPolicy = async (): Promise<void> => {
+    if (policyRecorded || !call.policyDecision) return
+    policyRecorded = true
+    await ctx.recordObservation(
+      run,
+      ctx.makeObservation(run, {
+        stepId,
+        stepNumber,
+        type: 'POLICY_DECISION',
+        source: 'POLICY',
+        trust: 'TRUSTED',
+        payload: {
+          outcome: call.policyDecision.outcome,
+          policyVersion: call.policyDecision.policyVersion
+        },
+        summary: `Policy outcome ${call.policyDecision.outcome}.`,
+        provenance: { sourceId: 'policy-engine' }
+      })
+    )
+  }
+
+  // Policy, approval, guards (pause) and cancellation run in the kernel
+  // pipeline (SPEC 0181); this loop only adds its checkpoint and its steps.
+  const pipeline = await runToolCall(ctx.kernel(run), call, {
+    beforeDispatch: async () => {
+      await recordPolicy()
+      const approvalId = call.grant?.approvalId
+      if (
+        approvalId &&
+        run.state.pendingApprovalId &&
+        run.state.pendingApprovalId !== approvalId
+      ) {
+        return {
+          kind: 'stop',
+          stopReason: 'STATE_CONFLICT',
+          response: 'Approval identity changed while resuming the execution.'
+        }
+      }
+      // Budget accounting is committed with the in-flight decision so a crash
+      // cannot replay the same step against an unconsumed counter; the
+      // approval is only reserved after this checkpoint.
+      if (!alreadyCounted) run.usage.toolCalls += 1
+      run.inFlightCounted = false
+      // The step is in flight from here: a stop reason left by an earlier
+      // approval wait would hide that this call is already counted when the
+      // execution resumes (AUD-0598 R02).
+      run.state = {
+        ...run.state,
+        pendingDecision: decision,
+        pendingStepNumber: stepNumber,
+        ...(approvalId ? { pendingApprovalId: approvalId } : {}),
+        stopReason: undefined
+      }
+      await ctx.persistCheckpoint(run)
+      await ctx.recordStep(run, {
+        stepNumber,
+        stepType: 'TOOL',
+        status: 'RUNNING',
+        sideEffecting: true,
+        reasonCode: decision.reasonCode
+      })
+      stepOpen = true
+      openedHere = true
+      return undefined
+    }
+  })
+
+  const recordUnsupported = (): Promise<void> =>
+    ctx.recordObservation(
+      run,
+      ctx.makeObservation(run, {
+        stepId,
+        stepNumber,
+        type: 'POLICY_DECISION',
+        source: 'POLICY',
+        trust: 'TRUSTED',
+        payload: { outcome: 'UNSUPPORTED' },
+        summary: 'Policy returned an unsupported outcome.',
+        provenance: { sourceId: 'policy-engine' }
+      })
+    )
+
+  if (pipeline.kind === 'stopped') {
+    const gate = pipeline.gate
+    const blockedStep = (decided: KernelStop): Promise<void> =>
+      recordDenial(blockedStepRecord(decided, stepNumber, decision.reasonCode))
+    if (pipeline.blocked) {
+      // The closing record was lost: this is neither a clean pause, handoff
+      // nor denial, although nothing ran. The step is still closed for the
+      // control's own decision, and the turn ends on the missing evidence
+      // with that decision in its response (AUD-0599 F02).
+      const blocked = pipeline.blocked
+      if (blocked.cause === 'policy_unsupported') await recordUnsupported()
+      else await recordPolicy()
+      await blockedStep(blocked)
+      return ctx.stop(gate.stopReason, gate.response)
+    }
+    if (gate.cause === 'operator_paused') {
+      // Nothing ran and nothing is reserved: keep the step resumable (F03).
+      await parkForResume()
+      return {
+        ...ctx.stop(gate.stopReason, gate.response),
+        preserveCheckpoint: true
+      }
+    }
+    if (gate.cause === 'policy_unsupported') {
+      await recordUnsupported()
+      await blockedStep(gate)
+      return ctx.stop(gate.stopReason, gate.response)
+    }
+    await recordPolicy()
+    switch (gate.cause) {
+      case 'policy_handoff':
+        if (stepOpen) {
+          await blockedStep(gate)
+          break
+        }
+        await ctx.recordStep(run, {
+          stepNumber,
+          stepType: 'HANDOFF',
+          status: 'SUCCEEDED',
+          sideEffecting: false,
+          reasonCode: 'HANDOFF_REQUIRED'
+        })
+        break
+      case 'approval_pending':
+        return {
+          kind: 'pause',
+          pausedKind: 'APPROVAL_REQUIRED',
+          decision,
+          ...(gate.approvalId ? { approvalId: gate.approvalId } : {}),
+          pauseStepNumber: stepNumber
+        }
+      case 'policy_denied':
+      case 'approval_denied':
+        await blockedStep(gate)
+        break
+      default:
+        // Any other block (a guard, cancellation, a conflicting resume) ends
+        // the run, so a step it left open is closed with it.
+        if (stepOpen) await blockedStep(gate)
+        break
+    }
+    return ctx.stop(gate.stopReason, gate.response)
+  }
+
+  const outcome = pipeline.outcome
+  const reserved = call.approval !== undefined
+  const failStep = (errorCode: string) =>
+    ctx.recordStep(run, {
+      stepNumber,
+      stepType: 'TOOL',
+      status: 'FAILED',
+      sideEffecting: true,
+      reasonCode: decision.reasonCode,
+      errorCode
+    })
+
+  switch (outcome.kind) {
+    case 'not_started': {
+      const gate = outcome.gate
+      if (pipeline.logFailure) {
+        // The closing record was lost: this is neither a clean pause nor a
+        // clean denial, although nothing ran (AUD-0598 R04, AUD-0599 F02).
+        await failStep(blockedErrorCode(gate))
+        const lost = unrecordedBlock(pipeline.logFailure, gate)
+        return ctx.stop(lost.stopReason, lost.response)
+      }
+      if (gate.cause === 'operator_paused') {
+        // The reservation was released as certain; the step resumes later.
+        await parkForResume()
+        return {
+          ...ctx.stop(gate.stopReason, gate.response),
+          preserveCheckpoint: true
+        }
+      }
+      await failStep(blockedErrorCode(gate))
+      return ctx.stop(gate.stopReason, gate.response)
+    }
+    case 'deadline':
+      await failStep(reserved ? 'unknown_effect' : 'deadline')
+      return ctx.stop(
+        reserved ? 'TOOL_FAILURE' : 'MAX_DURATION',
+        reserved
+          ? 'unknown_effect: duration budget exhausted during tool execution.'
+          : 'Duration budget exhausted during tool execution.'
+      )
+    case 'cancelled':
+      await failStep(reserved ? 'unknown_effect' : 'cancelled')
+      return ctx.stop(
+        reserved ? 'TOOL_FAILURE' : 'CANCELLED',
+        reserved ? `unknown_effect: ${CANCELLED_RESPONSE}` : CANCELLED_RESPONSE
+      )
+    case 'threw':
+    case 'failed': {
+      const toolError =
+        outcome.kind === 'threw' ? outcome.error : outcome.result.error
+      const unknownEffect =
+        outcome.kind === 'threw' ||
+        toolError?.startsWith('unknown_effect:') === true
+      // `unknownEffect` is false only for a settled failure, so the fallback
+      // status is unreachable for a thrown outcome.
+      const failureStatus =
+        outcome.kind === 'failed' ? outcome.result.status : undefined
+      await ctx.recordObservation(
+        run,
+        ctx.makeObservation(run, {
+          stepId,
+          stepNumber,
+          type: 'TOOL_RESULT',
+          source: 'TOOL',
+          trust: 'UNTRUSTED',
+          payload: {
+            status: unknownEffect ? 'REJECTED' : (failureStatus as string),
+            error: toolError ?? 'tool execution failed'
+          },
+          summary: unknownEffect
+            ? 'Tool outcome is uncertain and requires reconciliation.'
+            : 'Tool execution failed.',
+          provenance: {
+            sourceId: tool.id,
+            ...(tool.version ? { sourceVersion: tool.version } : {}),
+            operationKey,
+            ...(unknownEffect ? { effectRef: operationKey } : {})
+          }
+        })
+      )
+      // Preserve this kernel settlement cause losslessly in the step's error
+      // field. Bounded observations cannot carry restart control evidence.
+      await failStep(
+        outcome.kind === 'threw' &&
+          toolError === 'unknown_effect: effect_settlement_failed'
+          ? toolError
+          : unknownEffect
+            ? 'unknown_effect'
+            : 'tool_failed'
+      )
+      return ctx.stop(
+        'TOOL_FAILURE',
+        unknownEffect
+          ? `unknown_effect: ${toolError as string}`
+          : (toolError ?? 'Tool execution failed.')
+      )
+    }
+    case 'confirm_failed':
+      await ctx.recordObservation(
+        run,
+        ctx.makeObservation(run, {
+          stepId,
+          stepNumber,
+          type: 'TOOL_RESULT',
+          source: 'TOOL',
+          trust: 'UNTRUSTED',
+          payload: {
+            status: 'REJECTED',
+            error: 'approval_confirmation_failed'
+          },
+          summary: 'Approval confirmation failed after the effect.',
+          provenance: {
+            sourceId: tool.id,
+            operationKey,
+            effectRef: operationKey
+          }
+        })
+      )
+      await failStep('unknown_effect')
+      return ctx.stop(
+        'TOOL_FAILURE',
+        `unknown_effect: approval confirmation failed: ${outcome.error}.`
+      )
+    case 'succeeded': {
+      const observation = ctx.makeObservation(run, {
+        stepId,
+        stepNumber,
+        type: 'TOOL_RESULT',
+        source: 'TOOL',
+        trust: 'UNTRUSTED',
+        payload: {
+          status: 'SUCCEEDED',
+          sideEffect: tool.sideEffect,
+          output: boundedPayload(
+            outcome.result.output,
+            ctx.maxObservationPayloadChars
+          )
+        },
+        summary: stringifySummary(
+          outcome.result.output,
+          'Tool completed successfully.'
+        ),
+        provenance: {
+          sourceId: tool.id,
+          ...(tool.version ? { sourceVersion: tool.version } : {}),
+          operationKey,
+          effectRef: operationKey
+        }
+      })
+      await ctx.recordObservation(run, observation)
+      run.lastToolObservation = observation
+      run.state = { ...run.state, pendingApprovalId: undefined }
+      await ctx.recordStep(run, {
+        stepNumber,
+        stepType: 'TOOL',
+        status: 'SUCCEEDED',
+        sideEffecting: true,
+        reasonCode: decision.reasonCode,
+        observationRefs: [observation.observationId]
+      })
+      if (pipeline.logFailure) {
+        // F04: the effect is recorded as done (no replay), but the run stops
+        // terminally instead of continuing on an unlogged result.
+        return ctx.stop('INSUFFICIENT_EVIDENCE', pipeline.logFailure.response)
+      }
+      return { kind: 'continue' }
+    }
+  }
+}
+
+export async function dispatchKnowledge(
+  ctx: IterativeDispatchContext,
+  run: LoopRun,
+  decision: LoopDecision,
+  stepNumber: number
+): Promise<DispatchOutcome> {
+  const knowledgeLimit =
+    run.input.budget.maxKnowledgeCalls ?? run.input.budget.maxSteps
+  if (run.usage.knowledgeCalls + 1 > knowledgeLimit) {
+    return ctx.stop('MAX_KNOWLEDGE_CALLS', 'Knowledge-call budget exhausted.')
+  }
+  const remaining = ctx.remainingDuration(run)
+  if (remaining <= 0) {
+    return ctx.stop(
+      'MAX_DURATION',
+      'Duration budget exhausted before knowledge search.'
+    )
+  }
+  const provider = ctx.options.knowledge
+  if (!provider) {
+    return ctx.stop('STATE_CONFLICT', 'No knowledge provider is configured.')
+  }
+  const query = decision.query as string
+  run.usage.knowledgeCalls += 1
+  await ctx.persistCheckpoint(run)
+  let result: KnowledgeSearchResult
+  try {
+    const searchOrDeadline = await ctx.withDeadline(
+      provider.search({
+        query,
+        ...(decision.knowledgeCategories
+          ? { categories: decision.knowledgeCategories }
+          : {}),
+        context: run.input.context,

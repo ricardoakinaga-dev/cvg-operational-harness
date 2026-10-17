@@ -1,0 +1,291 @@
+450:       })
+451:     )
+452:   }
+453: 
+454:   // Policy, approval, guards (pause) and cancellation run in the kernel
+455:   // pipeline (SPEC 0181); this loop only adds its checkpoint and its steps.
+456:   const pipeline = await runToolCall(ctx.kernel(run), call, {
+457:     beforeDispatch: async () => {
+458:       await recordPolicy()
+459:       const approvalId = call.grant?.approvalId
+460:       if (
+461:         approvalId &&
+462:         run.state.pendingApprovalId &&
+463:         run.state.pendingApprovalId !== approvalId
+464:       ) {
+465:         return {
+466:           kind: 'stop',
+467:           stopReason: 'STATE_CONFLICT',
+468:           response: 'Approval identity changed while resuming the execution.'
+469:         }
+470:       }
+471:       // Budget accounting is committed with the in-flight decision so a crash
+472:       // cannot replay the same step against an unconsumed counter; the
+473:       // approval is only reserved after this checkpoint.
+474:       if (!alreadyCounted) run.usage.toolCalls += 1
+475:       run.inFlightCounted = false
+476:       // The step is in flight from here: a stop reason left by an earlier
+477:       // approval wait would hide that this call is already counted when the
+478:       // execution resumes (AUD-0598 R02).
+479:       run.state = {
+480:         ...run.state,
+481:         pendingDecision: decision,
+482:         pendingStepNumber: stepNumber,
+483:         ...(approvalId ? { pendingApprovalId: approvalId } : {}),
+484:         stopReason: undefined
+485:       }
+486:       await ctx.persistCheckpoint(run)
+487:       await ctx.recordStep(run, {
+488:         stepNumber,
+489:         stepType: 'TOOL',
+490:         status: 'RUNNING',
+491:         sideEffecting: true,
+492:         reasonCode: decision.reasonCode
+493:       })
+494:       stepOpen = true
+495:       openedHere = true
+496:       return undefined
+497:     }
+498:   })
+499: 
+500:   const recordUnsupported = (): Promise<void> =>
+501:     ctx.recordObservation(
+502:       run,
+503:       ctx.makeObservation(run, {
+504:         stepId,
+505:         stepNumber,
+506:         type: 'POLICY_DECISION',
+507:         source: 'POLICY',
+508:         trust: 'TRUSTED',
+509:         payload: { outcome: 'UNSUPPORTED' },
+510:         summary: 'Policy returned an unsupported outcome.',
+511:         provenance: { sourceId: 'policy-engine' }
+512:       })
+513:     )
+514: 
+515:   if (pipeline.kind === 'stopped') {
+516:     const gate = pipeline.gate
+517:     const blockedStep = (decided: KernelStop): Promise<void> =>
+518:       recordDenial(blockedStepRecord(decided, stepNumber, decision.reasonCode))
+519:     if (pipeline.blocked) {
+520:       // The closing record was lost: this is neither a clean pause, handoff
+521:       // nor denial, although nothing ran. The step is still closed for the
+522:       // control's own decision, and the turn ends on the missing evidence
+523:       // with that decision in its response (AUD-0599 F02).
+524:       const blocked = pipeline.blocked
+525:       if (blocked.cause === 'policy_unsupported') await recordUnsupported()
+526:       else await recordPolicy()
+527:       await blockedStep(blocked)
+528:       return ctx.stop(gate.stopReason, gate.response)
+529:     }
+530:     if (gate.cause === 'operator_paused') {
+531:       // Nothing ran and nothing is reserved: keep the step resumable (F03).
+532:       await parkForResume()
+533:       return {
+534:         ...ctx.stop(gate.stopReason, gate.response),
+535:         preserveCheckpoint: true
+536:       }
+537:     }
+538:     if (gate.cause === 'policy_unsupported') {
+539:       await recordUnsupported()
+540:       await blockedStep(gate)
+541:       return ctx.stop(gate.stopReason, gate.response)
+542:     }
+543:     await recordPolicy()
+544:     switch (gate.cause) {
+545:       case 'policy_handoff':
+546:         if (stepOpen) {
+547:           await blockedStep(gate)
+548:           break
+549:         }
+550:         await ctx.recordStep(run, {
+551:           stepNumber,
+552:           stepType: 'HANDOFF',
+553:           status: 'SUCCEEDED',
+554:           sideEffecting: false,
+555:           reasonCode: 'HANDOFF_REQUIRED'
+556:         })
+557:         break
+558:       case 'approval_pending':
+559:         return {
+560:           kind: 'pause',
+561:           pausedKind: 'APPROVAL_REQUIRED',
+562:           decision,
+563:           ...(gate.approvalId ? { approvalId: gate.approvalId } : {}),
+564:           pauseStepNumber: stepNumber
+565:         }
+566:       case 'policy_denied':
+567:       case 'approval_denied':
+568:         await blockedStep(gate)
+569:         break
+570:       default:
+571:         // Any other block (a guard, cancellation, a conflicting resume) ends
+572:         // the run, so a step it left open is closed with it.
+573:         if (stepOpen) await blockedStep(gate)
+574:         break
+575:     }
+576:     return ctx.stop(gate.stopReason, gate.response)
+577:   }
+578: 
+579:   const outcome = pipeline.outcome
+580:   const reserved = call.approval !== undefined
+581:   const failStep = (errorCode: string) =>
+582:     ctx.recordStep(run, {
+583:       stepNumber,
+584:       stepType: 'TOOL',
+585:       status: 'FAILED',
+586:       sideEffecting: true,
+587:       reasonCode: decision.reasonCode,
+588:       errorCode
+589:     })
+590: 
+591:   switch (outcome.kind) {
+592:     case 'not_started': {
+593:       const gate = outcome.gate
+594:       if (pipeline.logFailure) {
+595:         // The closing record was lost: this is neither a clean pause nor a
+596:         // clean denial, although nothing ran (AUD-0598 R04, AUD-0599 F02).
+597:         await failStep(blockedErrorCode(gate))
+598:         const lost = unrecordedBlock(pipeline.logFailure, gate)
+599:         return ctx.stop(lost.stopReason, lost.response)
+600:       }
+601:       if (gate.cause === 'operator_paused') {
+602:         // The reservation was released as certain; the step resumes later.
+603:         await parkForResume()
+604:         return {
+605:           ...ctx.stop(gate.stopReason, gate.response),
+606:           preserveCheckpoint: true
+607:         }
+608:       }
+609:       await failStep(blockedErrorCode(gate))
+610:       return ctx.stop(gate.stopReason, gate.response)
+611:     }
+612:     case 'deadline':
+613:       await failStep(reserved ? 'unknown_effect' : 'deadline')
+614:       return ctx.stop(
+615:         reserved ? 'TOOL_FAILURE' : 'MAX_DURATION',
+616:         reserved
+617:           ? 'unknown_effect: duration budget exhausted during tool execution.'
+618:           : 'Duration budget exhausted during tool execution.'
+619:       )
+620:     case 'cancelled':
+621:       await failStep(reserved ? 'unknown_effect' : 'cancelled')
+622:       return ctx.stop(
+623:         reserved ? 'TOOL_FAILURE' : 'CANCELLED',
+624:         reserved ? `unknown_effect: ${CANCELLED_RESPONSE}` : CANCELLED_RESPONSE
+625:       )
+626:     case 'threw':
+627:     case 'failed': {
+628:       const toolError =
+629:         outcome.kind === 'threw' ? outcome.error : outcome.result.error
+630:       const unknownEffect =
+631:         outcome.kind === 'threw' ||
+632:         toolError?.startsWith('unknown_effect:') === true
+633:       // `unknownEffect` is false only for a settled failure, so the fallback
+634:       // status is unreachable for a thrown outcome.
+635:       const failureStatus =
+636:         outcome.kind === 'failed' ? outcome.result.status : undefined
+637:       await ctx.recordObservation(
+638:         run,
+639:         ctx.makeObservation(run, {
+640:           stepId,
+641:           stepNumber,
+642:           type: 'TOOL_RESULT',
+643:           source: 'TOOL',
+644:           trust: 'UNTRUSTED',
+645:           payload: {
+646:             status: unknownEffect ? 'REJECTED' : (failureStatus as string),
+647:             error: toolError ?? 'tool execution failed'
+648:           },
+649:           summary: unknownEffect
+650:             ? 'Tool outcome is uncertain and requires reconciliation.'
+651:             : 'Tool execution failed.',
+652:           provenance: {
+653:             sourceId: tool.id,
+654:             ...(tool.version ? { sourceVersion: tool.version } : {}),
+655:             operationKey,
+656:             ...(unknownEffect ? { effectRef: operationKey } : {})
+657:           }
+658:         })
+659:       )
+660:       // Preserve this kernel settlement cause losslessly in the step's error
+661:       // field. Bounded observations cannot carry restart control evidence.
+662:       await failStep(
+663:         outcome.kind === 'threw' &&
+664:           toolError === 'unknown_effect: effect_settlement_failed'
+665:           ? toolError
+666:           : unknownEffect
+667:             ? 'unknown_effect'
+668:             : 'tool_failed'
+669:       )
+670:       return ctx.stop(
+671:         'TOOL_FAILURE',
+672:         unknownEffect
+673:           ? `unknown_effect: ${toolError as string}`
+674:           : (toolError ?? 'Tool execution failed.')
+675:       )
+676:     }
+677:     case 'confirm_failed':
+678:       await ctx.recordObservation(
+679:         run,
+680:         ctx.makeObservation(run, {
+681:           stepId,
+682:           stepNumber,
+683:           type: 'TOOL_RESULT',
+684:           source: 'TOOL',
+685:           trust: 'UNTRUSTED',
+686:           payload: {
+687:             status: 'REJECTED',
+688:             error: 'approval_confirmation_failed'
+689:           },
+690:           summary: 'Approval confirmation failed after the effect.',
+691:           provenance: {
+692:             sourceId: tool.id,
+693:             operationKey,
+694:             effectRef: operationKey
+695:           }
+696:         })
+697:       )
+698:       await failStep('unknown_effect')
+699:       return ctx.stop(
+700:         'TOOL_FAILURE',
+701:         `unknown_effect: approval confirmation failed: ${outcome.error}.`
+702:       )
+703:     case 'succeeded': {
+704:       const observation = ctx.makeObservation(run, {
+705:         stepId,
+706:         stepNumber,
+707:         type: 'TOOL_RESULT',
+708:         source: 'TOOL',
+709:         trust: 'UNTRUSTED',
+710:         payload: {
+711:           status: 'SUCCEEDED',
+712:           sideEffect: tool.sideEffect,
+713:           output: ctx.options.toolResultContext
+714:             ? outcome.result.output
+715:             : boundedPayload(
+716:                 outcome.result.output,
+717:                 ctx.maxObservationPayloadChars
+718:               )
+719:         },
+720:         summary: ctx.options.toolResultContext
+721:           ? 'Tool result captured for governed context.'
+722:           : stringifySummary(
+723:               outcome.result.output,
+724:               'Tool completed successfully.'
+725:             ),
+726:         provenance: {
+727:           sourceId: tool.id,
+728:           ...(tool.version ? { sourceVersion: tool.version } : {}),
+729:           operationKey,
+730:           effectRef: operationKey
+731:         }
+732:       })
+733:       await ctx.recordObservation(run, observation)
+734:       run.lastToolObservation = observation
+735:       run.state = { ...run.state, pendingApprovalId: undefined }
+736:       await ctx.recordStep(run, {
+737:         stepNumber,
+738:         stepType: 'TOOL',
+739:         status: 'SUCCEEDED',
+740:         sideEffecting: true,

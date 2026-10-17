@@ -1,0 +1,69 @@
+   278       }
+   279       const script = resolve('tests/differential/reference-tool-driver.mjs')
+   280       try {
+   281         const file = join(home, 'fixture.json')
+   282         writeFileSync(file, JSON.stringify(fixture))
+   283         const environment = {
+   284           PATH: [dirname(process.execPath), '/usr/bin', '/bin'].join(delimiter),
+   285           HOME: home,
+   286           TMPDIR: home,
+   287           TMP: home,
+   288           TEMP: home,
+   289           XDG_CONFIG_HOME: join(home, 'config'),
+   290           XDG_CACHE_HOME: join(home, 'cache'),
+   291           XDG_DATA_HOME: join(home, 'data'),
+   292           XDG_STATE_HOME: join(home, 'state'),
+   293           DSH_HOME: join(home, 'dsh'),
+   294           NODE_ENV: 'test',
+   295           LANG: 'C.UTF-8'
+   296         }
+   297         const child = spawnSync(process.execPath, [script, file], {
+   298           cwd: home,
+   299           env: environment,
+   300           encoding: 'utf8',
+   301           timeout: 5000,
+   302           maxBuffer: 1048576,
+   303           killSignal: 'SIGKILL'
+   304         })
+   305         const command = {
+   306           argv: [process.execPath, script, file],
+   307           cwd: home,
+   308           environment,
+   309           pid: child.pid,
+   310           exit: child.status,
+   311           signal: child.signal,
+   312           error: child.error?.message ?? null,
+   313           stdout: child.stdout,
+   314           stderr: child.stderr
+   315         }
+   316         traces.push({ name, command })
+   317         expect(child.error, child.stderr).toBeUndefined()
+   318         expect(child.signal, child.stderr).toBeNull()
+   319         expect(child.status, child.stderr).toBe(0)
+   320         const reference = JSON.parse(child.stdout)
+   321         const l = lane(undefined, { echoText: text })
+   322         const result = await l.harness.run(l.input)
+   323         traces.push({
+   324           name,
+   325           reference,
+   326           cvg: { result, requests: l.requests, toolBodies: l.toolBodies }
+   327         })
+   328         // Limited observable equivalence. Native names/events/usage remain raw.
+   329         const projection = (bodies: { input: unknown; output: unknown }[]) =>
+   330           bodies.map(({ input, output }) => ({ input, output }))
+   331         expect(
+   332           projection(l.toolBodies as { input: unknown; output: unknown }[])
+   333         ).toEqual(projection(reference.native.toolBodies))
+   334         expect(reference.native.finalText).toBe(text)
+   335         expect(result.response).toBe(reference.native.finalText)
+   336         expect(result.stopReason).toBe('COMPLETED')
+   337         expect(l.requests).toHaveLength(2)
+   338         expect(l.bodies()).toBe(1)
+   339       } finally {
+   340         rmSync(home, { recursive: true, force: true })
+   341       }
+   342     }
+   343   )
+   344 
+   345   it.each([
+   346     ['ascii4096', 'x'.repeat(4096)],

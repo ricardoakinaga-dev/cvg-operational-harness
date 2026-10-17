@@ -1,0 +1,115 @@
+"""Lead curation of authenticated synthetic evidence; never publish credentials.
+
+Actor outputs remain private until explicitly selected here. Generated caches,
+credential inputs, raw private database cuts and SQL wire remain private.
+"""
+import hashlib
+import json
+import urllib.parse
+from pathlib import Path
+
+base = Path(__file__).parent
+b = base.parent
+sha = lambda raw: hashlib.sha256(raw).hexdigest()
+secret_values = set()
+
+
+def secrets(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(item, str) and 'password' in key.lower() and len(item) >= 8:
+                secret_values.add(item.encode())
+            secrets(item)
+    elif isinstance(value, list):
+        for item in value:
+            secrets(item)
+    elif isinstance(value, str) and value.startswith(('postgres:', 'postgresql:')):
+        secret_values.add(value.encode())
+        password = urllib.parse.urlparse(value).password
+        if password and len(password) >= 8:
+            secret_values.add(urllib.parse.unquote(password).encode())
+
+
+secrets(json.loads((b / 'public-json-boundaries/assigned-i1-resource-prototype-private.json').read_text()))
+for actor in [base / 'builder-r1', base / 'review-r1']:
+    if not actor.exists():
+        continue
+    for path in actor.rglob('*.json'):
+        if 'private' in path.name or 'private' in path.relative_to(actor).parts:
+            try:
+                secrets(json.loads(path.read_text()))
+            except (ValueError, UnicodeError):
+                pass
+entries = {}
+omissions = []
+
+
+def select(path, reason, forced_private=False):
+    raw = path.read_bytes()
+    relative = str(path.relative_to(base))
+    record = {'path': relative, 'bytes': len(raw), 'sha256': sha(raw), 'selection': reason}
+    private = forced_private or 'private' in path.name or 'private' in path.relative_to(base).parts
+    if not raw:
+        record['category'] = 'EMPTY'
+    elif private:
+        record['category'] = 'PRIVATE_RAW_OR_CREDENTIAL'
+    elif any(value in raw for value in secret_values):
+        record['category'] = 'PRIVATE_CREDENTIAL_LITERAL_COLLISION'
+    else:
+        record.update(private=False, category='LEAD_CURATED_AUTHENTICATED')
+        entries[relative] = record
+        return
+    omissions.append(record)
+
+
+# Lead metadata/checkers: no recursive inclusion of active actor/control outputs.
+for path in sorted(base.iterdir()):
+    if path.is_file() and path.name != 'publication-clearance.json':
+        select(path, 'Lead owned contract, verifier, failed checks and metadata')
+for folder in ['verifier-controls', 'scenario-controls', 'scenario-controls-r2']:
+    for path in sorted((base / folder).glob('*.log')):
+        select(path, 'Lead known-bad control command streams, raw mutants remain private')
+
+verified = json.loads((base / 'builder-lead-verification.json').read_text())
+actor = base / 'builder-r1'
+manifest = actor / 'artifact-manifest-final.json'
+assert sha(manifest.read_bytes()) == verified['manifestSHA256']
+for entry in json.loads(manifest.read_text())['allBuilderFiles']:
+    path = Path(entry['path'])
+    raw = path.read_bytes()
+    assert len(raw) == entry['bytes'] and sha(raw) == entry['sha256']
+    if entry['class'] in ['PRIMARY_RAW', 'BUILDER_TOOL_OR_VERIFICATION']:
+        select(path, 'Lead authenticated producer primary/tool output; default-private lifted only after scan')
+select(manifest, 'Authenticated final producer manifest')
+
+packet = base / 'review-packet-r1'
+pm = json.loads((packet / 'manifest.json').read_text())
+for path in [packet / 'manifest.json', packet / 'manifest-initial-before-private-proof.json',
+             packet / 'candidate-manifest.json', packet / 'package.json']:
+    select(path, 'Frozen packet metadata')
+for family in ['inputs', 'proofs', 'environmentTemplates']:
+    for entry in pm[family]:
+        path = Path(entry['copy'])
+        raw = path.read_bytes()
+        assert len(raw) == entry['bytes'] and sha(raw) == entry['sha256']
+        select(path, 'Frozen readonly packet input/proof/template', entry.get('private', False))
+
+review_verification = base / 'review-lead-verification-r1.json'
+if review_verification.exists():
+    verification = json.loads(review_verification.read_text())
+    actor = base / 'review-r1'
+    assert sha((actor / 'seal-manifest.json').read_bytes()) == verification['sealManifestSHA256']
+    for entry in verification['publicationEntries']:
+        path = actor / entry['path']
+        assert path.resolve().is_relative_to(actor.resolve())
+        raw = path.read_bytes()
+        assert len(raw) == entry['bytes'] and sha(raw) == entry['sha256'] and not entry['private']
+        select(path, 'Lead authenticated and individually curated I1 output')
+    select(actor / 'seal-manifest.json', 'Authenticated I1 seal')
+    select(actor / 'seal-manifest.sha256', 'Detached I1 seal hash')
+report = {'status': 'LEAD_PUBLICATION_CLEARANCE_NOT_ACCEPTANCE', 'entries': list(entries.values()),
+          'omissions': omissions, 'credentialValuesComparedWithoutDisclosure': len(secret_values),
+          'limits': 'Private originals retained and hash-bound. No whole-directory actor publication. This clearance is not acceptance/global/release.'}
+(base / 'publication-clearance.json').write_text(json.dumps(report, indent=2) + '\n')
+print(json.dumps({'entries': len(entries), 'omissions': len(omissions),
+                  'manifestSHA256': sha((base / 'publication-clearance.json').read_bytes())}))

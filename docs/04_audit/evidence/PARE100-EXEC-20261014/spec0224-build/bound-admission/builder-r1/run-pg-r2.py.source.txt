@@ -1,0 +1,34 @@
+import json,subprocess,os,hashlib,datetime,time,urllib.parse
+from pathlib import Path
+base=Path(__file__).parent;b=base.parents[1];w=b.parent/'worktree';node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node';container='0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c'
+source=w/'packages/persistence/src/__tests__/complete-bound-admission-postgres.integration.ts';artifacts=base/'attempt-r2';artifacts.mkdir(exist_ok=False);run=base/'runs/r2';run.mkdir(parents=True,exist_ok=True)
+def save(name,value): (artifacts/name).write_text(json.dumps(value,indent=2)+'\n')
+def inspect():
+ d=json.loads(subprocess.run(['docker','inspect',container],capture_output=True,check=True).stdout)[0]
+ assert d['Id']==container and d['Config']['Image']=='postgres:16.4-alpine' and d['Image']=='sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c'
+ return {'id':d['Id'],'status':d['State']['Status'],'imageId':d['Image'],'image':d['Config']['Image'],'ports':d['NetworkSettings']['Ports']}
+old=inspect();assert old['status']=='exited';save('container-before.json',old);raw=source.read_bytes();(artifacts/'source-before-pg-r2.ts').write_bytes(raw);before=hashlib.sha256(raw).hexdigest();save('source-before-pg-r2.json',{'sha256':before,'bytes':len(raw)})
+record={'startedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'sourceBeforeSHA256':before};started=False
+try:
+ subprocess.run(['docker','start',container],capture_output=True,check=True);started=True;live=inspect();save('container-running.json',live);port=live['ports']['5432/tcp'];assert len(port)==1 and port[0]['HostIp']=='127.0.0.1'
+ prototype=b/'public-json-boundaries/assigned-i1-resource-prototype-private.json';r=json.loads(prototype.read_text());url=urllib.parse.urlparse(r['test_database_url']);assert url.hostname=='127.0.0.1' and url.username=='pare224' and url.path=='/pare224_synthetic';r['test_database_url']=urllib.parse.urlunparse(url._replace(netloc=url.netloc.rsplit(':',1)[0]+':'+port[0]['HostPort']));r['schemaName']='pare224_bound_admission_r2';r['roleName']='pare224_bound_admission_r2_service';r['hostPort']=port[0];r['exclusiveClaim']='Lead boundadmissionr1 only own224, freshschema/roleafterabsence; preserveoldresources';private=artifacts/'resource-private.json';save(private.name,r);private.chmod(0o600)
+ probes=[]
+ for i in range(20):
+  p=subprocess.run(['docker','exec',container,'pg_isready','-U','pare224','-d','pare224_synthetic'],capture_output=True);probes.append({'attempt':i,'exit':p.returncode,'stdout':p.stdout.decode(),'stderr':p.stderr.decode()})
+  if p.returncode==0:break
+  time.sleep(1)
+ save('readiness.json',probes);assert probes[-1]['exit']==0
+ for folder in ['tmp','cache','nodecache']:(base/folder).mkdir(exist_ok=True)
+ env=os.environ.copy();env.update(PATH=str(Path(node).parent)+':'+env.get('PATH',''),TMPDIR=str(base/'tmp'),TMP=str(base/'tmp'),TEMP=str(base/'tmp'),NODE_COMPILE_CACHE=str(base/'nodecache'),SPEC0224_BOUND_ASSIGNED_ROOT=str(base),SPEC0224_BOUND_RESOURCE=str(private),SPEC0224_BOUND_SERVICE_RESOURCE=str(artifacts/'service-connection-private.json'),SPEC0224_BOUND_EVIDENCE=str(run),SPEC0224_BOUND_CHILD_CONFIG=str(base/'vitest.config.mjs'))
+ argv=[node,str(w/'node_modules/vitest/vitest.mjs'),'run','--config',str(base/'vitest.config.mjs'),'--configLoader','native'];record.update(argv=argv,cwd=str(w),environmentNames=sorted(env))
+ with (artifacts/'pg-r2.stdout.log').open('wb') as out,(artifacts/'pg-r2.stderr.log').open('wb') as err:p=subprocess.run(argv,cwd=w,env=env,stdout=out,stderr=err)
+ record['exit']=p.returncode
+ env.update(BOUND_WORKTREE=str(w),BOUND_PRIVATE_RESOURCE=str(private),BOUND_CONNECTION_PROOF=str(artifacts/'connection-close-proof.json'))
+ p=subprocess.run([node,str(base/'connection-check.mjs')],cwd=w,env=env,capture_output=True);record['connectionCheckExit']=p.returncode
+ (artifacts/'connection-check.stdout.log').write_bytes(p.stdout);(artifacts/'connection-check.stderr.log').write_bytes(p.stderr)
+except Exception as error:
+ record['runnerError']={'type':type(error).__name__,'message':'Resource/runner failure; see credential-safe phase artifacts, not a functional verdict'}
+finally:
+ if started:
+  p=subprocess.run(['docker','stop',container],capture_output=True);save('container-stopped.json',{'stopExit':p.returncode,'stdout':p.stdout.decode(),'observed':inspect()})
+ record['sourceAfterSHA256']=hashlib.sha256(source.read_bytes()).hexdigest();record['sourceUnchanged']=record['sourceAfterSHA256']==before;record['finishedAt']=datetime.datetime.now(datetime.timezone.utc).isoformat();save('pg-r2.command.json',record);(artifacts/'source-after-pg-r2.ts').write_bytes(source.read_bytes());print(json.dumps(record));

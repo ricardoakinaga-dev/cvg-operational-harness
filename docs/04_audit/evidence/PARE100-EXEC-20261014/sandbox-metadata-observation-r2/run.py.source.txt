@@ -1,0 +1,52 @@
+from pathlib import Path
+import argparse
+import sys
+from common import P, authority, digest, env_for, put, snapshot, source_paths
+from launcher import execute
+
+def run(folder, authority_path, expected_sha, snapshot_fault=False, capture_driver=execute):
+    folder.mkdir(parents=True, exist_ok=False)
+    streams = {'stdout': b'', 'stderr': b''}
+    before = None
+    after = None
+    record = {'schema': 'sandbox-observer-process-v2', 'authoritySHA256': expected_sha,
+              'capture': None, 'snapshotErrors': [], 'sourceCount': 0, 'sourcesUnchanged': False}
+    try:
+        trusted = authority(authority_path, expected_sha)
+        before = snapshot(source_paths())
+        record['sourceCount'] = len(before)
+        for directory in ['home', 'tmp', 'cache', 'config', 'data']:
+            (folder / directory).mkdir()
+        record['capture'], streams = capture_driver(trusted['argv'], P, env_for(folder))
+    except Exception as error:
+        record['snapshotErrors'].append({'stage': 'before_or_capture', 'type': type(error).__name__, 'message': str(error)})
+    finally:
+        # Capture outcome persists even if the post-run source snapshot fails.
+        try:
+            if snapshot_fault:
+                raise OSError('synthetic_after_snapshot_error')
+            after = snapshot(source_paths())
+            record['sourcesUnchanged'] = before is not None and before == after
+        except Exception as error:
+            record['snapshotErrors'].append({'stage': 'after', 'type': type(error).__name__, 'message': str(error)})
+        for name, data in streams.items():
+            (folder / (name + '.txt')).write_bytes(data)
+        put(folder / 'sources-before.json', before)
+        put(folder / 'sources-after.json', after)
+        put(folder / 'process.json', record)
+    capture = record['capture']
+    good = (capture is not None and capture['exitCode'] == 0 and capture['joined']
+            and capture['remainingProcessGroup'] is False and not capture['errors']
+            and not record['snapshotErrors'] and record['sourcesUnchanged'])
+    return good, record
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--run', required=True, type=Path)
+    parser.add_argument('--authority', required=True, type=Path)
+    parser.add_argument('--authority-sha', required=True)
+    args = parser.parse_args()
+    good, result = run(args.run.resolve(), args.authority, args.authority_sha)
+    print({'measurementProcessValid': good, 'exitCode': result['capture']['exitCode'] if result['capture'] else None,
+           'sourceCount': result['sourceCount'], 'record': str(args.run / 'process.json')})
+    sys.exit(0 if good else 1)

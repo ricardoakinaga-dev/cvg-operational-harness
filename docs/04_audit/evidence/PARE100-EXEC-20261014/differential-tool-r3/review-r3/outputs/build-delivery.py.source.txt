@@ -1,0 +1,17 @@
+import pathlib,json,hashlib,os
+r=pathlib.Path.cwd(); command_files=sorted((r/'outputs/commands').glob('*/metadata.json'))+sorted((r/'outputs').glob('fault-*/metadata.json')); metadata={'executions':[{'metadataPath':str(p.relative_to(r)),**json.loads(p.read_text())}for p in command_files],'rawStreams':'stdout.log and stderr.log exist beside every execution metadata; empty streams are explicitly identified in metadata.','nativeChildMetadata':'outputs/independent/*/metadata.json and boundary-followup/*/observed.json; raw stdout/stderr beside each.','inspectionNote':'Initial source inspection commands were read-only; their shell results remain in conversation tool output. No supplied raw-current log contents were read.'};(r/'execution-metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
+entries=[]
+def add(p):
+ rel=str(p.relative_to(r))
+ if rel=='outputs/artifact-manifest.json':return
+ if p.is_symlink():
+  s=os.readlink(p);entries.append({'path':rel,'kind':'symlink-link-text','target':s,'sha256':hashlib.sha256(os.fsencode(s)).hexdigest()});return
+ if p.is_file():entries.append({'path':rel,'kind':'file','bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
+for base in ['outputs','tests','packages','node_modules']:
+ for root,dirs,files in os.walk(r/base,followlinks=False):
+  for d in list(dirs):
+   p=pathlib.Path(root)/d
+   if p.is_symlink():add(p);dirs.remove(d)
+  for f in files:add(pathlib.Path(root)/f)
+for n in ['report.md','verdict.json','source-integrity.json','execution-metadata.json','vitest.config.mts','package.json','package-lock.json','tsconfig.base.json','tsconfig.typecheck.json']:add(r/n)
+manifest={'version':1,'root':str(r),'hash':'SHA256','selfExcluded':'outputs/artifact-manifest.json; hash supplied externally in final response','symlinkPolicy':'Hash link text without following dependency targets. Dependencies are not transitively snapshotted.','scope':'All authored outputs, raw logs, metadata, probes and cache artifacts; private runnable tests/packages/configs; private dependency-entry symlinks. Empty provisioned directories contain no artifacts.','files':sorted(entries,key=lambda e:e['path'])};p=r/'outputs/artifact-manifest.json';p.write_text(json.dumps(manifest,indent=2)+'\n');print(json.dumps({'manifest':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'entries':len(entries)},indent=2))

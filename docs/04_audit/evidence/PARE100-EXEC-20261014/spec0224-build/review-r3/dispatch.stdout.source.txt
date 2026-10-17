@@ -1,0 +1,2599 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/iterative-dispatch.ts SHA256 0a496a62bfe3f1bef26c17b956e52a071dfd177531fe4a763bca2dcc9923c9d9
+     1 import type {
+     2   ClaimValidation,
+     3   CompletionEvaluator,
+     4   DecisionValidationResult,
+     5   ExecutionCheckpoint,
+     6   ExecutionStep,
+     7   KnowledgeSearchResult,
+     8   LoopDecision,
+     9   Observation,
+    10   StopReason
+    11 } from '@cvg/harness-contracts'
+    12 import {
+    13   MAX_CHECKPOINT_OBSERVATIONS,
+    14   validateLoopDecision
+    15 } from '@cvg/harness-contracts'
+    16 import {
+    17   DEADLINE_EXCEEDED,
+    18   boundedPayload,
+    19   errorMessage,
+    20   mapEvaluationToStopReason,
+    21   stringifySummary,
+    22   type DispatchOutcome,
+    23   type IterativeGovernedRuntimeOptions,
+    24   type LoopRun
+    25 } from './iterative-runtime.ts'
+    26 import { agentExposesTool } from './runtime.ts'
+    27 import { retainCompleteObservations } from './complete-tool-results.ts'
+    28 import type { KernelHost } from './kernel/host.ts'
+    29 import {
+    30   CANCELLED_RESPONSE,
+    31   runModelCall,
+    32   runToolCall,
+    33   unrecordedBlock
+    34 } from './kernel/pipeline.ts'
+    35 import type { KernelStop, ToolCallState, TurnState } from './kernel/types.ts'
+    36 
+    37 /**
+    38  * Explicit dependency surface for the extracted dispatch domain. The runtime
+    39  * builds it from its own private members, so no visibility changes are needed
+    40  * on the exported class and the public contract stays identical.
+    41  */
+    42 export interface IterativeDispatchContext {
+    43   readonly options: IterativeGovernedRuntimeOptions
+    44   readonly maxObservationPayloadChars: number
+    45   stop(
+    46     stopReason: StopReason,
+    47     response: string
+    48   ): Extract<DispatchOutcome, { kind: 'stop' }>
+    49   operationKey(run: LoopRun, stepNumber: number, toolId: string): string
+    50   remainingDuration(run: LoopRun): number
+    51   makeObservation(
+    52     run: LoopRun,
+    53     input: {
+    54       stepId: string
+    55       stepNumber: number
+    56       type: Observation['type']
+    57       source: Observation['source']
+    58       trust: Observation['trust']
+    59       payload: unknown
+    60       summary: string
+    61       provenance: Observation['provenance']
+    62     }
+    63   ): Observation
+    64   checkAfterUsage(run: LoopRun): { reason: StopReason; response: string } | null
+    65   allowedDecisionTypes(run: LoopRun): LoopDecision['decisionType'][]
+    66   evaluatorFor(run: LoopRun): CompletionEvaluator
+    67   validateClaims(run: LoopRun, responseText: string): ClaimValidation
+    68   withDeadline<T>(
+    69     operation: Promise<T>,
+    70     remainingMs: number
+    71   ): Promise<T | typeof DEADLINE_EXCEEDED>
+    72   recordObservation(run: LoopRun, observation: Observation): Promise<void>
+    73   recordStep(
+    74     run: LoopRun,
+    75     input: {
+    76       stepNumber: number
+    77       stepType: ExecutionStep['stepType']
+    78       status: ExecutionStep['status']
+    79       sideEffecting: boolean
+    80       decisionType?: ExecutionStep['decisionType']
+    81       reasonCode?: ExecutionStep['reasonCode']
+    82       errorCode?: string
+    83       observationRefs?: readonly string[]
+    84     }
+    85   ): Promise<void>
+    86   persistCheckpoint(run: LoopRun): Promise<void>
+    87   preflightCompleteTool?(
+    88     run: LoopRun,
+    89     decision: LoopDecision,
+    90     stepNumber: number
+    91   ): void
+    92   safeAudit(
+    93     run: LoopRun,
+    94     action: string,
+    95     extras: { result: string; tool?: string | null }
+    96   ): Promise<void>
+    97   composeResponse(
+    98     run: LoopRun,
+    99     decision: LoopDecision
+   100   ): Promise<
+   101     { response: string } | { stopReason: StopReason; response: string }
+   102   >
+   103   /** Kernel host and turn view for the shared governed pipelines. */
+   104   kernel(run: LoopRun): KernelHost
+   105   turn(run: LoopRun): TurnState
+   106 }
+   107 
+   108 export function validateDecision(
+   109   ctx: IterativeDispatchContext,
+   110   run: LoopRun,
+   111   decision: LoopDecision
+   112 ): DecisionValidationResult {
+   113   const allowed = ctx.allowedDecisionTypes(run)
+   114   if (!allowed.includes(decision.decisionType)) {
+   115     return {
+   116       valid: false,
+   117       errors: [
+   118         `capability: decision ${decision.decisionType} is not available in this state`
+   119       ]
+   120     }
+   121   }
+   122   const validation = validateLoopDecision(decision)
+   123   if (!validation.valid) return validation
+   124   if (
+   125     decision.decisionType === 'CALL_TOOL' ||
+   126     decision.decisionType === 'REQUEST_APPROVAL'
+   127   ) {
+   128     if (!decision.toolId) {
+   129       return {
+   130         valid: false,
+   131         errors: ['capability: tool selection requires a toolId']
+   132       }
+   133     }
+   134     const tool = ctx.options.tools.resolve(
+   135       decision.toolId,
+   136       decision.toolVersion
+   137     )
+   138     if (!tool) {
+   139       return {
+   140         valid: false,
+   141         errors: [`capability: tool "${decision.toolId}" is not in the catalog`]
+   142       }
+   143     }
+   144     const profileTools = run.input.agent.tools
+   145     if (!agentExposesTool(profileTools, tool.id)) {
+   146       return {
+   147         valid: false,
+   148         errors: [
+   149           `capability: tool "${tool.id}" is not exposed to this agent profile`
+   150         ]
+   151       }
+   152     }
+   153   }
+   154   if (decision.decisionType === 'SEARCH_KNOWLEDGE' && !ctx.options.knowledge) {
+   155     return {
+   156       valid: false,
+   157       errors: ['capability: no knowledge provider is configured']
+   158     }
+   159   }
+   160   return { valid: true, errors: [] }
+   161 }
+   162 
+   163 export function applyResume(
+   164   ctx: IterativeDispatchContext,
+   165   run: LoopRun,
+   166   checkpoint: ExecutionCheckpoint | null
+   167 ): Extract<DispatchOutcome, { kind: 'stop' }> | null {
+   168   const resume = run.input.resume
+   169   if (!resume) return null
+   170   if (!checkpoint) {
+   171     return {
+   172       kind: 'stop',
+   173       stopReason: 'STATE_CONFLICT',
+   174       response: 'Resume input arrived without a durable checkpoint.'
+   175     }
+   176   }
+   177   if (resume.kind === 'approval') {
+   178     if (run.state.pendingQuestion) {
+   179       // Wrong-kind resume: the execution is paused for an answer, not for an
+   180       // approval. Never let this open the loop with a question unresolved.
+   181       return {
+   182         kind: 'stop',
+   183         stopReason: 'STATE_CONFLICT',
+   184         response: 'Approval resume arrived while a user question is pending.',
+   185         preserveCheckpoint: true
+   186       }
+   187     }
+   188     if (!run.state.pendingApprovalId) {
+   189       if (run.state.stopReason === 'APPROVAL_REQUIRED') {
+   190         return {
+   191           kind: 'stop',
+   192           stopReason: 'STATE_CONFLICT',
+   193           response: 'The paused approval binding is missing.',
+   194           preserveCheckpoint: true
+   195         }
+   196       }
+   197       // The approval was already consumed and the checkpoint cleared the
+   198       // binding; a retry of the same attempt is a safe no-op.
+   199       return null
+   200     }
+   201     if (run.state.pendingApprovalId !== resume.approvalId) {
+   202       return {
+   203         kind: 'stop',
+   204         stopReason: 'STATE_CONFLICT',
+   205         response: 'Approval does not match the paused execution binding.',
+   206         preserveCheckpoint: true
+   207       }
+   208     }
+   209     return null
+   210   }
+   211   if (run.state.pendingApprovalId) {
+   212     return {
+   213       kind: 'stop',
+   214       stopReason: 'STATE_CONFLICT',
+   215       response: 'User input arrived while an approval is pending.',
+   216       preserveCheckpoint: true
+   217     }
+   218   }
+   219   if (!run.state.pendingQuestion) {
+   220     const alreadyResolved = Object.values(run.state.resolvedInputs).includes(
+   221       resume.message
+   222     )
+   223     if (alreadyResolved) {
+   224       if (ctx.options.toolResultContext)
+   225         run.resumeObservation = userResumeObservation(ctx, run, resume.message)
+   226       return null
+   227     }
+   228     return {
+   229       kind: 'stop',
+   230       stopReason: 'STATE_CONFLICT',
+   231       response: 'User input arrived without a pending question.',
+   232       preserveCheckpoint: true
+   233     }
+   234   }
+   235   const stepNumber = Math.max(1, run.state.stepNumber)
+   236   const observation = userResumeObservation(ctx, run, resume.message)
+   237   if (ctx.options.toolResultContext) run.resumeObservation = observation
+   238   run.observations = ctx.options.toolResultContext
+   239     ? retainCompleteObservations([...run.observations, observation])
+   240     : [...run.observations, observation].slice(-MAX_CHECKPOINT_OBSERVATIONS)
+   241   const pendingQuestion = run.state.pendingQuestion
+   242   run.state = {
+   243     ...run.state,
+   244     pendingQuestion: undefined,
+   245     openQuestions: run.state.openQuestions.filter(
+   246       (question) => question !== pendingQuestion.promptIntent
+   247     ),
+   248     resolvedInputs: {
+   249       ...run.state.resolvedInputs,
+   250       [`answer_${stepNumber}`]: resume.message
+   251     }
+   252   }
+   253   return null
+   254 }
+   255 
+   256 function userResumeObservation(
+   257   ctx: IterativeDispatchContext,
+   258   run: LoopRun,
+   259   message: string
+   260 ): Observation {
+   261   const stepNumber = Math.max(1, run.state.stepNumber)
+   262   return ctx.makeObservation(run, {
+   263     stepId: `step_${run.executionId}_${stepNumber}_user_input`,
+   264     stepNumber,
+   265     type: 'USER_MESSAGE',
+   266     source: 'USER',
+   267     trust: 'UNTRUSTED',
+   268     payload: { message },
+   269     summary: 'User answered the pending question.',
+   270     provenance: { sourceId: 'user' }
+   271   })
+   272 }
+   273 
+   274 type StepRecord = Parameters<IterativeDispatchContext['recordStep']>[1] & {
+   275   errorCode: string
+   276 }
+   277 
+   278 /** The error code a step carries when a control blocked its call. */
+   279 function blockedErrorCode(gate: KernelStop): string {
+   280   switch (gate.cause) {
+   281     case 'policy_denied':
+   282     case 'policy_handoff':
+   283     case 'approval_denied':
+   284       return gate.cause
+   285     case 'policy_unsupported':
+   286       return 'policy_outcome_invalid'
+   287     default:
+   288       return gate.stopReason === 'MAX_DURATION'
+   289         ? 'deadline'
+   290         : gate.stopReason === 'CANCELLED'
+   291           ? 'cancelled'
+   292           : 'not_started'
+   293   }
+   294 }
+   295 
+   296 /** The step recorded for a blocked call, by the control that decided. */
+   297 function blockedStepRecord(
+   298   gate: KernelStop,
+   299   stepNumber: number,
+   300   reasonCode: ExecutionStep['reasonCode']
+   301 ): StepRecord {
+   302   const errorCode = blockedErrorCode(gate)
+   303   switch (gate.cause) {
+   304     case 'policy_denied':
+   305     case 'policy_unsupported':
+   306       return {
+   307         stepNumber,
+   308         stepType: 'POLICY',
+   309         status: 'FAILED',
+   310         sideEffecting: false,
+   311         reasonCode: 'POLICY_REQUIRED',
+   312         errorCode
+   313       }
+   314     case 'approval_denied':
+   315       return {
+   316         stepNumber,
+   317         stepType: 'APPROVAL',
+   318         status: 'FAILED',
+   319         sideEffecting: false,
+   320         reasonCode: 'POLICY_REQUIRED',
+   321         errorCode
+   322       }
+   323     default:
+   324       return {
+   325         stepNumber,
+   326         stepType: 'TOOL',
+   327         status: 'FAILED',
+   328         sideEffecting: true,
+   329         reasonCode,
+   330         errorCode
+   331       }
+   332   }
+   333 }
+   334 
+   335 export async function dispatchTool(
+   336   ctx: IterativeDispatchContext,
+   337   run: LoopRun,
+   338   decision: LoopDecision,
+   339   stepNumber: number,
+   340   forceApproval: boolean
+   341 ): Promise<DispatchOutcome> {
+   342   // A previous successful dispatch is trajectory evidence, not the result
+   343   // of this attempt. Only this dispatch's success may populate toolResult.
+   344   run.lastToolObservation = null
+   345   // A resumed in-flight step was already counted when it reached dispatch.
+   346   const alreadyCounted =
+   347     run.inFlightCounted && run.state.pendingStepNumber === stepNumber
+   348   if (
+   349     !alreadyCounted &&
+   350     run.usage.toolCalls + 1 > run.input.budget.maxToolCalls
+   351   ) {
+   352     return ctx.stop(
+   353       'MAX_TOOL_CALLS',
+   354       'Tool-call budget exhausted before the tool could run.'
+   355     )
+   356   }
+   357   const tool = ctx.options.tools.resolve(
+   358     decision.toolId as string,
+   359     decision.toolVersion
+   360   )
+   361   if (!tool) {
+   362     return ctx.stop(
+   363       'STATE_CONFLICT',
+   364       `Tool "${decision.toolId}" is unavailable.`
+   365     )
+   366   }
+   367   const operationKey = ctx.operationKey(run, stepNumber, tool.id)
+   368   if (ctx.options.toolResultContext) {
+   369     if (!ctx.preflightCompleteTool)
+   370       return ctx.stop(
+   371         'STATE_CONFLICT',
+   372         'Complete tool dispatch requires its native capacity guard.'
+   373       )
+   374     ctx.preflightCompleteTool(run, decision, stepNumber)
+   375   }
+   376   const invocation = {
+   377     toolId: tool.id,
+   378     ...(tool.version ? { toolVersion: tool.version } : {}),
+   379     input: decision.toolInput ?? {},
+   380     operationKey
+   381   }
+   382   if (ctx.remainingDuration(run) <= 0) {
+   383     return ctx.stop(
+   384       'MAX_DURATION',
+   385       'Duration budget exhausted before tool execution.'
+   386     )
+   387   }
+   388 
+   389   const stepId = `step_${run.executionId}_${stepNumber}_tool`
+   390   // A resumed step already holds this step number as a tool step (waiting for
+   391   // approval or in flight), and the dispatch checkpoint opens it as RUNNING;
+   392   // a control that then blocks the call closes that same step instead of
+   393   // recording a second one under the same number, or leaving it open while
+   394   // the checkpoint ends (AUD-0599 F02).
+   395   let stepOpen = run.state.pendingStepNumber === stepNumber
+   396   // Opened as RUNNING by this invocation's dispatch checkpoint.
+   397   let openedHere = false
+   398   // An operator pause proves that nothing ran and nothing stays reserved: the
+   399   // step waits for the resume instead of looking in flight, so a later
+   400   // terminal stop can close it as not executed (AUD-0600 F02).
+   401   const parkForResume = async (): Promise<void> => {
+   402     if (!openedHere) return
+   403     await ctx.recordStep(run, {
+   404       stepNumber,
+   405       stepType: 'TOOL',
+   406       status: 'WAITING',
+   407       sideEffecting: true,
+   408       reasonCode: decision.reasonCode
+   409     })
+   410   }
+   411   const recordDenial = (record: StepRecord): Promise<void> =>
+   412     ctx.recordStep(
+   413       run,
+   414       stepOpen
+   415         ? {
+   416             stepNumber,
+   417             stepType: 'TOOL',
+   418             status: 'FAILED',
+   419             sideEffecting: true,
+   420             reasonCode: decision.reasonCode,
+   421             errorCode: record.errorCode
+   422           }
+   423         : record
+   424     )
+   425   const call: ToolCallState = {
+   426     turn: ctx.turn(run),
+   427     tool,
+   428     invocation,
+   429     needsApproval: forceApproval,
+   430     executionRef: run.executionId
+   431   }
+   432   let policyRecorded = false
+   433   const recordPolicy = async (): Promise<void> => {
+   434     if (policyRecorded || !call.policyDecision) return
+   435     policyRecorded = true
+   436     await ctx.recordObservation(
+   437       run,
+   438       ctx.makeObservation(run, {
+   439         stepId,
+   440         stepNumber,
+   441         type: 'POLICY_DECISION',
+   442         source: 'POLICY',
+   443         trust: 'TRUSTED',
+   444         payload: {
+   445           outcome: call.policyDecision.outcome,
+   446           policyVersion: call.policyDecision.policyVersion
+   447         },
+   448         summary: `Policy outcome ${call.policyDecision.outcome}.`,
+   449         provenance: { sourceId: 'policy-engine' }
+   450       })
+   451     )
+   452   }
+   453 
+   454   // Policy, approval, guards (pause) and cancellation run in the kernel
+   455   // pipeline (SPEC 0181); this loop only adds its checkpoint and its steps.
+   456   const pipeline = await runToolCall(ctx.kernel(run), call, {
+   457     beforeDispatch: async () => {
+   458       await recordPolicy()
+   459       const approvalId = call.grant?.approvalId
+   460       if (
+   461         approvalId &&
+   462         run.state.pendingApprovalId &&
+   463         run.state.pendingApprovalId !== approvalId
+   464       ) {
+   465         return {
+   466           kind: 'stop',
+   467           stopReason: 'STATE_CONFLICT',
+   468           response: 'Approval identity changed while resuming the execution.'
+   469         }
+   470       }
+   471       // Budget accounting is committed with the in-flight decision so a crash
+   472       // cannot replay the same step against an unconsumed counter; the
+   473       // approval is only reserved after this checkpoint.
+   474       if (!alreadyCounted) run.usage.toolCalls += 1
+   475       run.inFlightCounted = false
+   476       // The step is in flight from here: a stop reason left by an earlier
+   477       // approval wait would hide that this call is already counted when the
+   478       // execution resumes (AUD-0598 R02).
+   479       run.state = {
+   480         ...run.state,
+   481         pendingDecision: decision,
+   482         pendingStepNumber: stepNumber,
+   483         ...(approvalId ? { pendingApprovalId: approvalId } : {}),
+   484         stopReason: undefined
+   485       }
+   486       await ctx.persistCheckpoint(run)
+   487       await ctx.recordStep(run, {
+   488         stepNumber,
+   489         stepType: 'TOOL',
+   490         status: 'RUNNING',
+   491         sideEffecting: true,
+   492         reasonCode: decision.reasonCode
+   493       })
+   494       stepOpen = true
+   495       openedHere = true
+   496       return undefined
+   497     }
+   498   })
+   499 
+   500   const recordUnsupported = (): Promise<void> =>
+   501     ctx.recordObservation(
+   502       run,
+   503       ctx.makeObservation(run, {
+   504         stepId,
+   505         stepNumber,
+   506         type: 'POLICY_DECISION',
+   507         source: 'POLICY',
+   508         trust: 'TRUSTED',
+   509         payload: { outcome: 'UNSUPPORTED' },
+   510         summary: 'Policy returned an unsupported outcome.',
+   511         provenance: { sourceId: 'policy-engine' }
+   512       })
+   513     )
+   514 
+   515   if (pipeline.kind === 'stopped') {
+   516     const gate = pipeline.gate
+   517     const blockedStep = (decided: KernelStop): Promise<void> =>
+   518       recordDenial(blockedStepRecord(decided, stepNumber, decision.reasonCode))
+   519     if (pipeline.blocked) {
+   520       // The closing record was lost: this is neither a clean pause, handoff
+   521       // nor denial, although nothing ran. The step is still closed for the
+   522       // control's own decision, and the turn ends on the missing evidence
+   523       // with that decision in its response (AUD-0599 F02).
+   524       const blocked = pipeline.blocked
+   525       if (blocked.cause === 'policy_unsupported') await recordUnsupported()
+   526       else await recordPolicy()
+   527       await blockedStep(blocked)
+   528       return ctx.stop(gate.stopReason, gate.response)
+   529     }
+   530     if (gate.cause === 'operator_paused') {
+   531       // Nothing ran and nothing is reserved: keep the step resumable (F03).
+   532       await parkForResume()
+   533       return {
+   534         ...ctx.stop(gate.stopReason, gate.response),
+   535         preserveCheckpoint: true
+   536       }
+   537     }
+   538     if (gate.cause === 'policy_unsupported') {
+   539       await recordUnsupported()
+   540       await blockedStep(gate)
+   541       return ctx.stop(gate.stopReason, gate.response)
+   542     }
+   543     await recordPolicy()
+   544     switch (gate.cause) {
+   545       case 'policy_handoff':
+   546         if (stepOpen) {
+   547           await blockedStep(gate)
+   548           break
+   549         }
+   550         await ctx.recordStep(run, {
+   551           stepNumber,
+   552           stepType: 'HANDOFF',
+   553           status: 'SUCCEEDED',
+   554           sideEffecting: false,
+   555           reasonCode: 'HANDOFF_REQUIRED'
+   556         })
+   557         break
+   558       case 'approval_pending':
+   559         return {
+   560           kind: 'pause',
+   561           pausedKind: 'APPROVAL_REQUIRED',
+   562           decision,
+   563           ...(gate.approvalId ? { approvalId: gate.approvalId } : {}),
+   564           pauseStepNumber: stepNumber
+   565         }
+   566       case 'policy_denied':
+   567       case 'approval_denied':
+   568         await blockedStep(gate)
+   569         break
+   570       default:
+   571         // Any other block (a guard, cancellation, a conflicting resume) ends
+   572         // the run, so a step it left open is closed with it.
+   573         if (stepOpen) await blockedStep(gate)
+   574         break
+   575     }
+   576     return ctx.stop(gate.stopReason, gate.response)
+   577   }
+   578 
+   579   const outcome = pipeline.outcome
+   580   const reserved = call.approval !== undefined
+   581   const failStep = (errorCode: string) =>
+   582     ctx.recordStep(run, {
+   583       stepNumber,
+   584       stepType: 'TOOL',
+   585       status: 'FAILED',
+   586       sideEffecting: true,
+   587       reasonCode: decision.reasonCode,
+   588       errorCode
+   589     })
+   590 
+   591   switch (outcome.kind) {
+   592     case 'not_started': {
+   593       const gate = outcome.gate
+   594       if (pipeline.logFailure) {
+   595         // The closing record was lost: this is neither a clean pause nor a
+   596         // clean denial, although nothing ran (AUD-0598 R04, AUD-0599 F02).
+   597         await failStep(blockedErrorCode(gate))
+   598         const lost = unrecordedBlock(pipeline.logFailure, gate)
+   599         return ctx.stop(lost.stopReason, lost.response)
+   600       }
+   601       if (gate.cause === 'operator_paused') {
+   602         // The reservation was released as certain; the step resumes later.
+   603         await parkForResume()
+   604         return {
+   605           ...ctx.stop(gate.stopReason, gate.response),
+   606           preserveCheckpoint: true
+   607         }
+   608       }
+   609       await failStep(blockedErrorCode(gate))
+   610       return ctx.stop(gate.stopReason, gate.response)
+   611     }
+   612     case 'deadline':
+   613       await failStep(reserved ? 'unknown_effect' : 'deadline')
+   614       return ctx.stop(
+   615         reserved ? 'TOOL_FAILURE' : 'MAX_DURATION',
+   616         reserved
+   617           ? 'unknown_effect: duration budget exhausted during tool execution.'
+   618           : 'Duration budget exhausted during tool execution.'
+   619       )
+   620     case 'cancelled':
+   621       await failStep(reserved ? 'unknown_effect' : 'cancelled')
+   622       return ctx.stop(
+   623         reserved ? 'TOOL_FAILURE' : 'CANCELLED',
+   624         reserved ? `unknown_effect: ${CANCELLED_RESPONSE}` : CANCELLED_RESPONSE
+   625       )
+   626     case 'threw':
+   627     case 'failed': {
+   628       const toolError =
+   629         outcome.kind === 'threw' ? outcome.error : outcome.result.error
+   630       const unknownEffect =
+   631         outcome.kind === 'threw' ||
+   632         toolError?.startsWith('unknown_effect:') === true
+   633       // `unknownEffect` is false only for a settled failure, so the fallback
+   634       // status is unreachable for a thrown outcome.
+   635       const failureStatus =
+   636         outcome.kind === 'failed' ? outcome.result.status : undefined
+   637       await ctx.recordObservation(
+   638         run,
+   639         ctx.makeObservation(run, {
+   640           stepId,
+   641           stepNumber,
+   642           type: 'TOOL_RESULT',
+   643           source: 'TOOL',
+   644           trust: 'UNTRUSTED',
+   645           payload: {
+   646             status: unknownEffect ? 'REJECTED' : (failureStatus as string),
+   647             error: toolError ?? 'tool execution failed'
+   648           },
+   649           summary: unknownEffect
+   650             ? 'Tool outcome is uncertain and requires reconciliation.'
+   651             : 'Tool execution failed.',
+   652           provenance: {
+   653             sourceId: tool.id,
+   654             ...(tool.version ? { sourceVersion: tool.version } : {}),
+   655             operationKey,
+   656             ...(unknownEffect ? { effectRef: operationKey } : {})
+   657           }
+   658         })
+   659       )
+   660       // Preserve this kernel settlement cause losslessly in the step's error
+   661       // field. Bounded observations cannot carry restart control evidence.
+   662       await failStep(
+   663         outcome.kind === 'threw' &&
+   664           toolError === 'unknown_effect: effect_settlement_failed'
+   665           ? toolError
+   666           : unknownEffect
+   667             ? 'unknown_effect'
+   668             : 'tool_failed'
+   669       )
+   670       return ctx.stop(
+   671         'TOOL_FAILURE',
+   672         unknownEffect
+   673           ? `unknown_effect: ${toolError as string}`
+   674           : (toolError ?? 'Tool execution failed.')
+   675       )
+   676     }
+   677     case 'confirm_failed':
+   678       await ctx.recordObservation(
+   679         run,
+   680         ctx.makeObservation(run, {
+   681           stepId,
+   682           stepNumber,
+   683           type: 'TOOL_RESULT',
+   684           source: 'TOOL',
+   685           trust: 'UNTRUSTED',
+   686           payload: {
+   687             status: 'REJECTED',
+   688             error: 'approval_confirmation_failed'
+   689           },
+   690           summary: 'Approval confirmation failed after the effect.',
+   691           provenance: {
+   692             sourceId: tool.id,
+   693             operationKey,
+   694             effectRef: operationKey
+   695           }
+   696         })
+   697       )
+   698       await failStep('unknown_effect')
+   699       return ctx.stop(
+   700         'TOOL_FAILURE',
+   701         `unknown_effect: approval confirmation failed: ${outcome.error}.`
+   702       )
+   703     case 'succeeded': {
+   704       const observation = ctx.makeObservation(run, {
+   705         stepId,
+   706         stepNumber,
+   707         type: 'TOOL_RESULT',
+   708         source: 'TOOL',
+   709         trust: 'UNTRUSTED',
+   710         payload: {
+   711           status: 'SUCCEEDED',
+   712           sideEffect: tool.sideEffect,
+   713           output: ctx.options.toolResultContext
+   714             ? outcome.result.output
+   715             : boundedPayload(
+   716                 outcome.result.output,
+   717                 ctx.maxObservationPayloadChars
+   718               )
+   719         },
+   720         summary: ctx.options.toolResultContext
+   721           ? 'Tool result captured for governed context.'
+   722           : stringifySummary(
+   723               outcome.result.output,
+   724               'Tool completed successfully.'
+   725             ),
+   726         provenance: {
+   727           sourceId: tool.id,
+   728           ...(tool.version ? { sourceVersion: tool.version } : {}),
+   729           operationKey,
+   730           effectRef: operationKey
+   731         }
+   732       })
+   733       await ctx.recordObservation(run, observation)
+   734       run.lastToolObservation = observation
+   735       run.state = { ...run.state, pendingApprovalId: undefined }
+   736       await ctx.recordStep(run, {
+   737         stepNumber,
+   738         stepType: 'TOOL',
+   739         status: 'SUCCEEDED',
+   740         sideEffecting: true,
+   741         reasonCode: decision.reasonCode,
+   742         observationRefs: [observation.observationId]
+   743       })
+   744       if (ctx.options.toolResultContext) {
+   745         await ctx.persistCheckpoint(run)
+   746         if (
+   747           (observation.payload as { completion: string }).completion ===
+   748           'UNAVAILABLE'
+   749         ) {
+   750           return ctx.stop(
+   751             'INSUFFICIENT_EVIDENCE',
+   752             'RESULT_UNAVAILABLE: confirmed tool result cannot be delivered completely.'
+   753           )
+   754         }
+   755       }
+   756       if (pipeline.logFailure) {
+   757         // F04: the effect is recorded as done (no replay), but the run stops
+   758         // terminally instead of continuing on an unlogged result.
+   759         return ctx.stop('INSUFFICIENT_EVIDENCE', pipeline.logFailure.response)
+   760       }
+   761       return { kind: 'continue' }
+   762     }
+   763   }
+   764 }
+   765 
+   766 export async function dispatchKnowledge(
+   767   ctx: IterativeDispatchContext,
+   768   run: LoopRun,
+   769   decision: LoopDecision,
+   770   stepNumber: number
+   771 ): Promise<DispatchOutcome> {
+   772   const knowledgeLimit =
+   773     run.input.budget.maxKnowledgeCalls ?? run.input.budget.maxSteps
+   774   if (run.usage.knowledgeCalls + 1 > knowledgeLimit) {
+   775     return ctx.stop('MAX_KNOWLEDGE_CALLS', 'Knowledge-call budget exhausted.')
+   776   }
+   777   const remaining = ctx.remainingDuration(run)
+   778   if (remaining <= 0) {
+   779     return ctx.stop(
+   780       'MAX_DURATION',
+   781       'Duration budget exhausted before knowledge search.'
+   782     )
+   783   }
+   784   const provider = ctx.options.knowledge
+   785   if (!provider) {
+   786     return ctx.stop('STATE_CONFLICT', 'No knowledge provider is configured.')
+   787   }
+   788   const query = decision.query as string
+   789   run.usage.knowledgeCalls += 1
+   790   await ctx.persistCheckpoint(run)
+   791   let result: KnowledgeSearchResult
+   792   try {
+   793     const searchOrDeadline = await ctx.withDeadline(
+   794       provider.search({
+   795         query,
+   796         ...(decision.knowledgeCategories
+   797           ? { categories: decision.knowledgeCategories }
+   798           : {}),
+   799         context: run.input.context,
+   800         correlationId: run.input.correlationId
+   801       }),
+   802       remaining
+   803     )
+   804     if (searchOrDeadline === DEADLINE_EXCEEDED) {
+   805       return ctx.stop(
+   806         'MAX_DURATION',
+   807         'Duration budget exhausted during knowledge search.'
+   808       )
+   809     }
+   810     result = searchOrDeadline
+   811   } catch (error) {
+   812     await ctx.recordStep(run, {
+   813       stepNumber,
+   814       stepType: 'KNOWLEDGE',
+   815       status: 'FAILED',
+   816       sideEffecting: false,
+   817       reasonCode: decision.reasonCode,
+   818       errorCode: 'knowledge_failure'
+   819     })
+   820     return ctx.stop(
+   821       'INSUFFICIENT_EVIDENCE',
+   822       `Knowledge search failed: ${errorMessage(error)}.`
+   823     )
+   824   }
+   825   const observation = ctx.makeObservation(run, {
+   826     stepId: `step_${run.executionId}_${stepNumber}_knowledge`,
+   827     stepNumber,
+   828     type: 'KNOWLEDGE_RESULT',
+   829     source: 'KNOWLEDGE',
+   830     trust: 'UNTRUSTED',
+   831     payload: {
+   832       query,
+   833       items: boundedPayload(result.items, ctx.maxObservationPayloadChars)
+   834     },
+   835     summary: `Knowledge search returned ${result.items.length} item(s) for "${query}".`,
+   836     provenance: {
+   837       sourceId: 'knowledge-provider',
+   838       ...(result.provenance[0]?.sourceVersion
+   839         ? { sourceVersion: result.provenance[0].sourceVersion }
+   840         : {})
+   841     }
+   842   })
+   843   await ctx.recordObservation(run, observation)
+   844   await ctx.recordStep(run, {
+   845     stepNumber,
+   846     stepType: 'KNOWLEDGE',
+   847     status: 'SUCCEEDED',
+   848     sideEffecting: false,
+   849     reasonCode: decision.reasonCode,
+   850     observationRefs: [observation.observationId]
+   851   })
+   852 
+   853   if (ctx.options.sufficiencyEvaluator) {
+   854     const sufficiency = await ctx.options.sufficiencyEvaluator.evaluate({
+   855       query,
+   856       requestedCategories: decision.knowledgeCategories ?? [],
+   857       observations: run.observations.filter(
+   858         (entry) => entry.type === 'KNOWLEDGE_RESULT'
+   859       )
+   860     })
+   861     run.lastSufficiency = sufficiency.level
+   862     await ctx.recordObservation(
+   863       run,
+   864       ctx.makeObservation(run, {
+   865         stepId: `step_${run.executionId}_${stepNumber}_knowledge`,
+   866         stepNumber,
+   867         type: 'SUFFICIENCY',
+   868         source: 'SYSTEM',
+   869         trust: 'TRUSTED',
+   870         payload: sufficiency,
+   871         summary: `Evidence sufficiency is ${sufficiency.level}.`,
+   872         provenance: { sourceId: 'sufficiency-evaluator' }
+   873       })
+   874     )
+   875   }
+   876   return { kind: 'continue' }
+   877 }
+   878 
+   879 export async function dispatchRespond(
+   880   ctx: IterativeDispatchContext,
+   881   run: LoopRun,
+   882   decision: LoopDecision,
+   883   stepNumber: number
+   884 ): Promise<DispatchOutcome> {
+   885   let response = decision.responseText?.trim() ?? ''
+   886   if (!response && decision.responseIntent?.trim()) {
+   887     const composed = await ctx.composeResponse(run, decision)
+   888     if ('stopReason' in composed) {
+   889       return ctx.stop(composed.stopReason, composed.response)
+   890     }
+   891     response = composed.response
+   892   }
+   893   if (!response) {
+   894     return ctx.stop(
+   895       'INSUFFICIENT_EVIDENCE',
+   896       'The orchestrator attempted to respond without content.'
+   897     )
+   898   }
+   899   run.responseText = response
+   900 
+   901   const implicitVerification = ctx.validateClaims(run, response)
+   902   if (!implicitVerification.valid) {
+   903     const limit =
+   904       run.input.budget.maxVerificationCalls ?? run.input.budget.maxSteps
+   905     if (run.usage.verificationCalls + 1 > limit) {
+   906       await ctx.recordStep(run, {
+   907         stepNumber,
+   908         stepType: 'RESPOND',
+   909         status: 'FAILED',
+   910         sideEffecting: false,
+   911         reasonCode: decision.reasonCode,
+   912         errorCode: 'verification_failed'
+   913       })
+   914       return ctx.stop(
+   915         'VERIFICATION_FAILED',
+   916         `Response claims are not supported by evidence: ${implicitVerification.unsupportedClaims.join('; ')}`
+   917       )
+   918     }
+   919     run.usage.verificationCalls += 1
+   920     await ctx.persistCheckpoint(run)
+   921     await ctx.recordObservation(
+   922       run,
+   923       ctx.makeObservation(run, {
+   924         stepId: `step_${run.executionId}_${stepNumber}_respond`,
+   925         stepNumber,
+   926         type: 'VERIFICATION',
+   927         source: 'SYSTEM',
+   928         trust: 'TRUSTED',
+   929         payload: {
+   930           target: 'response-claims',
+   931           valid: false,
+   932           unsupportedClaims: implicitVerification.unsupportedClaims
+   933         },
+   934         summary: 'Response contains claims without evidence references.',
+   935         provenance: { sourceId: 'runtime-verifier' }
+   936       })
+   937     )
+   938     await ctx.recordStep(run, {
+   939       stepNumber,
+   940       stepType: 'RESPOND',
+   941       status: 'FAILED',
+   942       sideEffecting: false,
+   943       reasonCode: decision.reasonCode,
+   944       errorCode: 'verification_failed'
+   945     })
+   946     const revisionEvaluation = {
+   947       outcome: 'INCOMPLETE' as const,
+   948       reasonCode: 'VERIFICATION_FAILED' as const,
+   949       deterministic: true,
+   950       detail: 'The response must be revised with grounded claims.'
+   951     }
+   952     run.state = { ...run.state, lastEvaluation: revisionEvaluation }
+   953     run.lastEvaluation = revisionEvaluation
+   954     run.skipEvaluationOnce = true
+   955     return { kind: 'continue' }
+   956   }
+   957 
+   958   await ctx.recordStep(run, {
+   959     stepNumber,
+   960     stepType: 'RESPOND',
+   961     status: 'SUCCEEDED',
+   962     sideEffecting: false,
+   963     reasonCode: decision.reasonCode
+   964   })
+   965   return { kind: 'continue' }
+   966 }
+   967 
+   968 export async function composeResponse(
+   969   ctx: IterativeDispatchContext,
+   970   run: LoopRun,
+   971   decision: LoopDecision
+   972 ): Promise<
+   973   { response: string } | { stopReason: StopReason; response: string }
+   974 > {
+   975   const remaining = ctx.remainingDuration(run)
+   976   if (remaining <= 0) {
+   977     return {
+   978       stopReason: 'MAX_DURATION',
+   979       response: 'Duration budget exhausted before the response was composed.'
+   980     }
+   981   }
+   982   const turn = ctx.turn(run)
+   983   const outcome = await runModelCall(ctx.kernel(run), turn, {
+   984     messages: [
+   985       {
+   986         role: 'system',
+   987         content: [
+   988           'Compose the final user-facing answer.',
+   989           'Use only the structured observations as facts.',
+   990           'Never claim an external action succeeded without an effect observation.',
+   991           `Response intent: ${decision.responseIntent ?? ''}`
+   992         ].join(' ')
+   993       },
+   994       { role: 'user', content: run.input.userMessage }
+   995     ],
+   996     context: run.input.context,
+   997     budget: run.input.budget,
+   998     correlationId: run.input.correlationId,
+   999     purpose: 'RESPONSE'
+  1000   })
+  1001   switch (outcome.kind) {
+  1002     case 'stopped':
+  1003       return {
+  1004         stopReason: outcome.gate.stopReason,
+  1005         response: outcome.gate.response
+  1006       }
+  1007     case 'deadline':
+  1008       return {
+  1009         stopReason: 'MAX_DURATION',
+  1010         response: 'Duration budget exhausted during response composition.'
+  1011       }
+  1012     case 'cancelled':
+  1013       return { stopReason: 'CANCELLED', response: CANCELLED_RESPONSE }
+  1014     case 'failed':
+  1015       return {
+  1016         stopReason: 'MODEL_FAILURE',
+  1017         response: `Response composition failed: ${outcome.error}.`
+  1018       }
+  1019     case 'unrecorded':
+  1020       // F04: the call happened; count it, but never treat it as an answer.
+  1021       run.usage.modelCalls += 1
+  1022       run.usage.inputTokens += outcome.result.inputTokens
+  1023       run.usage.outputTokens += outcome.result.outputTokens
+  1024       run.usage.costUsd += outcome.result.costUsd
+  1025       return {
+  1026         stopReason: outcome.gate.stopReason,
+  1027         response: outcome.gate.response
+  1028       }
+  1029     case 'completed':
+  1030       return { response: outcome.result.text }
+  1031   }
+  1032 }
+  1033 
+  1034 export async function evaluate(
+  1035   ctx: IterativeDispatchContext,
+  1036   run: LoopRun,
+  1037   decision: LoopDecision
+  1038 ): Promise<Extract<DispatchOutcome, { kind: 'stop' }> | null> {
+  1039   const evaluation = await ctx.evaluatorFor(run).evaluate({
+  1040     goal: run.state.goal,
+  1041     state: { ...run.state, observations: run.observations },
+  1042     observations: run.observations,
+  1043     lastDecision: decision,
+  1044     ...(run.responseText ? { result: run.responseText } : {})
+  1045   })
+  1046   if (evaluation.usage) {
+  1047     run.usage.modelCalls += evaluation.usage.modelCalls
+  1048     run.usage.inputTokens += evaluation.usage.inputTokens
+  1049     run.usage.outputTokens += evaluation.usage.outputTokens
+  1050     run.usage.costUsd += evaluation.usage.costUsd
+  1051   }
+  1052   run.lastEvaluation = evaluation
+  1053   run.state = { ...run.state, lastEvaluation: evaluation }
+  1054   await ctx.safeAudit(run, 'evaluation.completed', {
+  1055     result: `${evaluation.outcome}:${evaluation.reasonCode}`
+  1056   })
+  1057   if (evaluation.usage) {
+  1058     const afterEvaluation = ctx.checkAfterUsage(run)
+  1059     if (afterEvaluation) {
+  1060       return ctx.stop(afterEvaluation.reason, afterEvaluation.response)
+  1061     }
+  1062   }
+  1063 
+  1064   if (evaluation.outcome === 'COMPLETE') {
+  1065     if (decision.decisionType === 'RESPOND') {
+  1066       return ctx.stop('COMPLETED', run.responseText ?? 'Execution completed.')
+  1067     }
+  1068     if (
+  1069       decision.decisionType === 'STOP' &&
+  1070       decision.reasonCode === 'USER_REQUESTED_STOP'
+  1071     ) {
+  1072       return ctx.stop('COMPLETED', 'Execution stopped at the user request.')
+  1073     }
+  1074     // Completion requires an explicit RESPOND step.
+  1075     return null
+  1076   }
+  1077   if (evaluation.outcome === 'FAILED') {
+  1078     return ctx.stop(
+  1079       mapEvaluationToStopReason(evaluation),
+  1080       run.responseText ??
+  1081         `Completion evaluation failed: ${evaluation.detail ?? evaluation.reasonCode}.`
+  1082     )
+  1083   }
+  1084   if (evaluation.outcome === 'INSUFFICIENT_EVIDENCE') {
+  1085     if (
+  1086       decision.decisionType === 'RESPOND' ||
+  1087       decision.decisionType === 'STOP'
+  1088     ) {
+  1089       return ctx.stop(
+  1090         'INSUFFICIENT_EVIDENCE',
+  1091         run.responseText ??
+  1092           'The available evidence is insufficient for a complete answer.'
+  1093       )
+  1094     }
+  1095   }
+  1096   // A finalising decision with incomplete evidence is terminal: the agent
+  1097   // tried to answer and the runtime will not let it keep improvising.
+  1098   if (
+  1099     evaluation.outcome === 'INCOMPLETE' &&
+  1100     evaluation.reasonCode === 'EVIDENCE_INCOMPLETE' &&
+  1101     (decision.decisionType === 'RESPOND' || decision.decisionType === 'STOP')
+  1102   ) {
+  1103     return ctx.stop(
+  1104       'INSUFFICIENT_EVIDENCE',
+  1105       'The available evidence is incomplete for a final answer.'
+  1106     )
+  1107   }
+  1108   return null
+  1109 }
+  1110 
+  1111 export async function pause(
+  1112   ctx: IterativeDispatchContext,
+  1113   run: LoopRun,
+  1114   stepNumber: number,
+  1115   outcome: Extract<DispatchOutcome, { kind: 'pause' }>
+  1116 ): Promise<Extract<DispatchOutcome, { kind: 'stop' }>> {
+  1117   const decision = outcome.decision
+  1118   if (outcome.pausedKind === 'NEEDS_USER_INPUT') {
+  1119     const requested = decision?.requestedInput
+  1120     const promptIntent =
+  1121       requested?.promptIntent ??
+  1122       decision?.responseIntent ??
+  1123       'More information is required.'
+  1124     run.state = {
+  1125       ...run.state,
+  1126       ...(run.state.toolResultContext
+  1127         ? {
+  1128             toolResultContext: {
+  1129               ...run.state.toolResultContext,
+  1130               acceptedDecision: undefined
+  1131             }
+  1132           }
+  1133         : {}),
+  1134       stepNumber,
+  1135       pendingQuestion: requested ?? {
+  1136         questionType: 'CLARIFICATION',
+  1137         missingFields: [],
+  1138         promptIntent
+  1139       },
+  1140       openQuestions: [...run.state.openQuestions, promptIntent],
+  1141       stopReason: 'NEEDS_USER_INPUT'
+  1142     }
+  1143     run.stepNumber = stepNumber
+  1144     await ctx.recordStep(run, {
+  1145       stepNumber,
+  1146       stepType: 'USER_INPUT',
+  1147       status: 'WAITING',
+  1148       sideEffecting: false,
+  1149       reasonCode: decision?.reasonCode ?? 'MISSING_INFORMATION'
+  1150     })
+  1151     await ctx.persistCheckpoint(run)
+  1152     await ctx.safeAudit(run, 'runtime.paused', {
+  1153       result: 'NEEDS_USER_INPUT'
+  1154     })
+  1155     return {
+  1156       kind: 'stop',
+  1157       stopReason: 'NEEDS_USER_INPUT',
+  1158       response: promptIntent
+  1159     }
+  1160   }
+  1161 
+  1162   const pauseStepNumber = outcome.pauseStepNumber ?? stepNumber
+  1163   run.state = {
+  1164     ...run.state,
+  1165     ...(run.state.toolResultContext
+  1166       ? {
+  1167           toolResultContext: {
+  1168             ...run.state.toolResultContext,
+  1169             acceptedDecision: undefined
+  1170           }
+  1171         }
+  1172       : {}),
+  1173     stepNumber: pauseStepNumber,
+  1174     pendingDecision: decision ?? undefined,
+  1175     pendingStepNumber: pauseStepNumber,
+  1176     ...(outcome.approvalId ? { pendingApprovalId: outcome.approvalId } : {}),
+  1177     stopReason: 'APPROVAL_REQUIRED'
+  1178   }
+  1179   run.stepNumber = pauseStepNumber
+  1180   await ctx.recordStep(run, {
+  1181     stepNumber: pauseStepNumber,
+  1182     stepType: 'TOOL',
+  1183     status: 'WAITING',
+  1184     sideEffecting: true,
+  1185     reasonCode: 'POLICY_REQUIRED'
+  1186   })
+  1187   await ctx.persistCheckpoint(run)
+  1188   await ctx.safeAudit(run, 'runtime.paused', { result: 'APPROVAL_REQUIRED' })
+  1189   return {
+  1190     kind: 'stop',
+  1191     stopReason: 'APPROVAL_REQUIRED',
+  1192     ...(outcome.approvalId ? { approvalId: outcome.approvalId } : {}),
+  1193     response:
+  1194       decision?.responseIntent ?? 'Approval is required before continuing.'
+  1195   }
+  1196 }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/completion.ts SHA256 e19008feec232c530475049c032a8c559893d25c8addf39e0794b1472b2f606f
+     1 import type {
+     2   CompletionEvaluation,
+     3   CompletionEvaluationInput,
+     4   CompletionEvaluator,
+     5   CompletionStrategy,
+     6   Observation,
+     7   SufficiencyEvaluation
+     8 } from '@cvg/harness-contracts'
+     9 
+    10 export interface SemanticCompletionJudge {
+    11   judge(input: CompletionEvaluationInput): Promise<CompletionEvaluation>
+    12 }
+    13 
+    14 export interface CompletionEvaluatorOptions {
+    15   readonly strategy?: CompletionStrategy
+    16   /**
+    17    * Optional bounded semantic judge used only by the HYBRID strategy and only
+    18    * after deterministic checks already returned COMPLETE.
+    19    */
+    20   readonly semanticJudge?: SemanticCompletionJudge
+    21 }
+    22 
+    23 function lastOfType(
+    24   observations: readonly Observation[],
+    25   type: Observation['type']
+    26 ): Observation | undefined {
+    27   for (let index = observations.length - 1; index >= 0; index -= 1) {
+    28     const observation = observations[index]
+    29     if (observation?.type === type) return observation
+    30   }
+    31   return undefined
+    32 }
+    33 
+    34 function lastToolObservation(
+    35   observations: readonly Observation[]
+    36 ): Observation | undefined {
+    37   return lastOfType(observations, 'TOOL_RESULT')
+    38 }
+    39 
+    40 function toolObservationIsEffect(observation: Observation): boolean {
+    41   const payload = observation.payload as {
+    42     status?: unknown
+    43     sideEffect?: unknown
+    44   } | null
+    45   if (!payload || typeof payload !== 'object') return false
+    46   if (payload.status !== 'SUCCEEDED') return false
+    47   return payload.sideEffect === 'WRITE' || payload.sideEffect === 'EXTERNAL'
+    48 }
+    49 
+    50 /**
+    51  * A confirmed action must be grounded in the claimed effect: either the exact
+    52  * tool named by the decision succeeded with a side effect, or (when no tool is
+    53  * named) at least one side-effecting tool succeeded. A previous successful
+    54  * read never satisfies an action-confirmation claim.
+    55  */
+    56 function hasConfirmedEffect(
+    57   decision: { readonly toolId?: string },
+    58   observations: readonly Observation[]
+    59 ): boolean {
+    60   const effects = observations.filter(
+    61     (observation) =>
+    62       observation.type === 'TOOL_RESULT' && toolObservationIsEffect(observation)
+    63   )
+    64   if (decision.toolId) {
+    65     return effects.some(
+    66       (observation) => observation.provenance.sourceId === decision.toolId
+    67     )
+    68   }
+    69   return effects.length > 0
+    70 }
+    71 
+    72 function toolObservationFailed(observation: Observation): boolean {
+    73   const payload = observation.payload as { status?: unknown } | null
+    74   if (!payload || typeof payload !== 'object') return false
+    75   return payload.status === 'FAILED' || payload.status === 'REJECTED'
+    76 }
+    77 
+    78 function sufficiencyFromObservation(
+    79   observation: Observation | undefined
+    80 ): SufficiencyEvaluation | undefined {
+    81   if (!observation) return undefined
+    82   const payload = observation.payload as SufficiencyEvaluation | null
+    83   if (!payload || typeof payload.level !== 'string') return undefined
+    84   return payload
+    85 }
+    86 
+    87 function failed(
+    88   detail: string,
+    89   reasonCode: CompletionEvaluation['reasonCode'] = 'VERIFICATION_FAILED'
+    90 ): CompletionEvaluation {
+    91   return { outcome: 'FAILED', reasonCode, deterministic: true, detail }
+    92 }
+    93 
+    94 /**
+    95  * Deterministic completion. `COMPLETED` never means "the model wanted to
+    96  * stop"; it means the configured completion strategy accepted structured
+    97  * evidence. Model-based judgement is optional and always bounded by the
+    98  * caller's verification budget.
+    99  */
+   100 export class DeterministicCompletionEvaluator implements CompletionEvaluator {
+   101   private readonly strategy: CompletionStrategy
+   102   private readonly semanticJudge: SemanticCompletionJudge | undefined
+   103 
+   104   public constructor(options: CompletionEvaluatorOptions = {}) {
+   105     this.strategy = options.strategy ?? 'DETERMINISTIC'
+   106     this.semanticJudge = options.semanticJudge
+   107   }
+   108 
+   109   public async evaluate(
+   110     input: CompletionEvaluationInput
+   111   ): Promise<CompletionEvaluation> {
+   112     const deterministic = this.evaluateDeterministic(input)
+   113     if (deterministic.outcome !== 'COMPLETE') {
+   114       return deterministic
+   115     }
+   116     if (this.strategy !== 'HYBRID' || !this.semanticJudge) {
+   117       return deterministic
+   118     }
+   119     try {
+   120       const judged = await this.semanticJudge.judge(input)
+   121       return judged
+   122     } catch {
+   123       return {
+   124         ...deterministic,
+   125         // Unreachable: every deterministic COMPLETE carries a detail.
+   126         /* v8 ignore next 2 */
+   127         detail:
+   128           `${deterministic.detail ?? ''} semantic_judge_unavailable`.trim(),
+   129         reasonCode: 'EVALUATOR_UNAVAILABLE'
+   130       }
+   131     }
+   132   }
+   133 
+   134   private evaluateDeterministic(
+   135     input: CompletionEvaluationInput
+   136   ): CompletionEvaluation {
+   137     if (
+   138       input.state.toolResultContext &&
+   139       input.observations.some(
+   140         (observation) =>
+   141           observation.type === 'TOOL_RESULT' &&
+   142           (observation.payload as { resultAvailability?: unknown } | null)
+   143             ?.resultAvailability === 'UNAVAILABLE'
+   144       )
+   145     ) {
+   146       return {
+   147         outcome: 'INSUFFICIENT_EVIDENCE',
+   148         reasonCode: 'EVIDENCE_INCOMPLETE',
+   149         deterministic: true,
+   150         detail: 'A complete tool result is unavailable; handoff is required.'
+   151       }
+   152     }
+   153     const lastTool = lastToolObservation(input.observations)
+   154     const lastSufficiency = sufficiencyFromObservation(
+   155       lastOfType(input.observations, 'SUFFICIENCY')
+   156     )
+   157 
+   158     if (input.state.pendingQuestion) {
+   159       return {
+   160         outcome: 'NEEDS_USER',
+   161         reasonCode: 'MISSING_INFORMATION',
+   162         deterministic: true,
+   163         detail: 'A clarification question is still pending.'
+   164       }
+   165     }
+   166     if (input.state.pendingApprovalId) {
+   167       return {
+   168         outcome: 'WAITING_APPROVAL',
+   169         reasonCode: 'POLICY_REQUIRED',
+   170         deterministic: true,
+   171         detail: 'An approval decision is still pending.'
+   172       }
+   173     }
+   174 
+   175     const decision = input.lastDecision
+   176     if (!decision) {
+   177       return {
+   178         outcome: 'INCOMPLETE',
+   179         reasonCode: 'EVIDENCE_INCOMPLETE',
+   180         deterministic: true,
+   181         detail: 'No orchestrator decision has been made yet.'
+   182       }
+   183     }
+   184 
+   185     if (
+   186       decision.reasonCode === 'ACTION_CONFIRMED' &&
+   187       !hasConfirmedEffect(decision, input.observations)
+   188     ) {
+   189       return failed(
+   190         'The agent claimed a confirmed action without the claimed effect observation.',
+   191         'ACTION_CONFIRMED'
+   192       )
+   193     }
+   194 
+   195     if (decision.decisionType === 'REPLAN') {
+   196       return {
+   197         outcome: 'INCOMPLETE',
+   198         reasonCode: 'STRATEGY_CHANGED',
+   199         deterministic: true,
+   200         detail: 'A replan was requested; the loop continues.'
+   201       }
+   202     }
+   203 
+   204     if (
+   205       decision.decisionType !== 'RESPOND' &&
+   206       decision.decisionType !== 'STOP'
+   207     ) {
+   208       return {
+   209         outcome: 'INCOMPLETE',
+   210         reasonCode: 'EVIDENCE_INCOMPLETE',
+   211         deterministic: true,
+   212         detail: `Decision ${decision.decisionType} requires another loop step.`
+   213       }
+   214     }
+   215 
+   216     if (decision.decisionType === 'STOP') {
+   217       if (decision.reasonCode === 'USER_REQUESTED_STOP') {
+   218         return {
+   219           outcome: 'COMPLETE',
+   220           reasonCode: 'COMPLETION_CONFIRMED',
+   221           deterministic: true,
+   222           detail: 'The user requested a stop.'
+   223         }
+   224       }
+   225       if (decision.reasonCode === 'HANDOFF_REQUIRED') {
+   226         return {
+   227           outcome: 'FAILED',
+   228           reasonCode: 'HANDOFF_REQUIRED',
+   229           deterministic: true,
+   230           detail: 'The orchestrator requested a human handoff.'
+   231         }
+   232       }
+   233     }
+   234 
+   235     if (lastTool && toolObservationFailed(lastTool)) {
+   236       return failed(
+   237         'The most recent tool outcome failed and no later success was recorded.',
+   238         'TOOL_REQUIRED'
+   239       )
+   240     }
+   241 
+   242     if (this.strategy === 'EVIDENCE_BASED') {
+   243       if (!lastSufficiency) {
+   244         return {
+   245           outcome: 'INSUFFICIENT_EVIDENCE',
+   246           reasonCode: 'EVIDENCE_INCOMPLETE',
+   247           deterministic: true,
+   248           detail: 'No sufficiency evaluation was recorded for the answer.'
+   249         }
+   250       }
+   251       switch (lastSufficiency.level) {
+   252         case 'SUFFICIENT':
+   253           return {
+   254             outcome: 'COMPLETE',
+   255             reasonCode: 'COMPLETION_CONFIRMED',
+   256             deterministic: true,
+   257             detail: 'Evidence coverage is sufficient.'
+   258           }
+   259         case 'PARTIAL':
+   260           return {
+   261             outcome: 'INCOMPLETE',
+   262             reasonCode: 'EVIDENCE_INCOMPLETE',
+   263             deterministic: true,
+   264             detail: 'Evidence coverage is partial; more search is required.'
+   265           }
+   266         case 'INSUFFICIENT':
+   267           return {
+   268             outcome: 'INSUFFICIENT_EVIDENCE',
+   269             reasonCode: 'EVIDENCE_INCOMPLETE',
+   270             deterministic: true,
+   271             detail: 'Evidence coverage is insufficient for the answer.'
+   272           }
+   273         case 'CONFLICTING':
+   274           return {
+   275             outcome: 'INSUFFICIENT_EVIDENCE',
+   276             reasonCode: 'EVIDENCE_INCOMPLETE',
+   277             deterministic: true,
+   278             detail: 'Evidence sources conflict; the answer must be qualified.'
+   279           }
+   280       }
+   281     }
+   282 
+   283     if (
+   284       decision.decisionType === 'RESPOND' &&
+   285       !decision.responseText?.trim() &&
+   286       !decision.responseIntent?.trim()
+   287     ) {
+   288       return {
+   289         outcome: 'INCOMPLETE',
+   290         reasonCode: 'EVIDENCE_INCOMPLETE',
+   291         deterministic: true,
+   292         detail: 'The RESPOND decision carries no response content or intent.'
+   293       }
+   294     }
+   295 
+   296     return {
+   297       outcome: 'COMPLETE',
+   298       reasonCode: 'COMPLETION_CONFIRMED',
+   299       deterministic: true,
+   300       detail:
+   301         this.strategy === 'DETERMINISTIC'
+   302           ? 'Structured completion accepted by the deterministic strategy.'
+   303           : 'Structured completion accepted.'
+   304     }
+   305   }
+   306 }
+   307 
+   308 export function createCompletionEvaluator(
+   309   options: CompletionEvaluatorOptions = {}
+   310 ): CompletionEvaluator {
+   311   return new DeterministicCompletionEvaluator(options)
+   312 }
+   313 
+   314 /**
+   315  * Bounded model-based judge for hybrid profiles. It only ever sees structured
+   316  * state and observation summaries; it never receives hidden reasoning and it
+   317  * cannot execute tools or authorize actions.
+   318  */
+   319 export function createModelCompletionJudge(
+   320   judge: (input: {
+   321     readonly goal: string
+   322     readonly stateSummary: string
+   323     readonly observationSummaries: readonly string[]
+   324   }) => Promise<'COMPLETE' | 'INCOMPLETE' | 'INSUFFICIENT_EVIDENCE'>
+   325 ): SemanticCompletionJudge {
+   326   return {
+   327     judge: async (input) => {
+   328       const verdict = await judge({
+   329         goal: input.goal,
+   330         stateSummary: `step=${input.state.stepNumber} observations=${input.observations.length}`,
+   331         observationSummaries: input.observations.map(
+   332           (observation) => observation.summary
+   333         )
+   334       })
+   335       if (verdict === 'COMPLETE') {
+   336         return {
+   337           outcome: 'COMPLETE',
+   338           reasonCode: 'COMPLETION_CONFIRMED',
+   339           deterministic: false,
+   340           detail: 'Semantic judge accepted the result.'
+   341         }
+   342       }
+   343       if (verdict === 'INSUFFICIENT_EVIDENCE') {
+   344         return {
+   345           outcome: 'INSUFFICIENT_EVIDENCE',
+   346           reasonCode: 'EVIDENCE_INCOMPLETE',
+   347           deterministic: false,
+   348           detail: 'Semantic judge reported insufficient evidence.'
+   349         }
+   350       }
+   351       return {
+   352         outcome: 'INCOMPLETE',
+   353         reasonCode: 'EVIDENCE_INCOMPLETE',
+   354         deterministic: false,
+   355         detail: 'Semantic judge requested another step.'
+   356       }
+   357     }
+   358   }
+   359 }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/effect-journal.ts SHA256 84b93f31838433588f4a07fc1ba541657b7bba256fe2ef6c010730ea7742ccf4
+     1 import { createHash, randomUUID } from 'node:crypto'
+     2 import type {
+     3   ToolDefinition,
+     4   ToolExecutionContext,
+     5   ToolRegistry,
+     6   ToolResult
+     7 } from '@cvg/harness-contracts'
+     8 
+     9 export type EffectJournalState =
+    10   | 'RESERVED'
+    11   | 'EFFECT_STARTED'
+    12   | 'CONFIRMED'
+    13   | 'FAILED'
+    14   | 'UNCERTAIN'
+    15 
+    16 export interface EffectJournalRecord {
+    17   readonly tenantId: string
+    18   readonly operationKey: string
+    19   readonly proposalHash: string
+    20   readonly state: EffectJournalState
+    21   readonly attemptId: string
+    22   readonly result?: unknown
+    23   readonly error?: string
+    24   readonly createdAt: string
+    25   readonly updatedAt: string
+    26 }
+    27 
+    28 export interface EffectJournal {
+    29   reserve(input: {
+    30     tenantId: string
+    31     operationKey: string
+    32     proposalHash: string
+    33     attemptId: string
+    34   }): Promise<EffectJournalRecord>
+    35   markStarted(input: {
+    36     tenantId: string
+    37     operationKey: string
+    38     attemptId: string
+    39   }): Promise<EffectJournalRecord>
+    40   confirm(input: {
+    41     tenantId: string
+    42     operationKey: string
+    43     attemptId: string
+    44     result: unknown
+    45   }): Promise<EffectJournalRecord>
+    46   fail(input: {
+    47     tenantId: string
+    48     operationKey: string
+    49     attemptId: string
+    50     error: string
+    51   }): Promise<EffectJournalRecord>
+    52   markUncertain(input: {
+    53     tenantId: string
+    54     operationKey: string
+    55     attemptId: string
+    56     reason: string
+    57   }): Promise<EffectJournalRecord>
+    58   get(
+    59     tenantId: string,
+    60     operationKey: string
+    61   ): Promise<EffectJournalRecord | null>
+    62 }
+    63 
+    64 export class EffectJournalError extends Error {
+    65   public constructor(message: string) {
+    66     super(message)
+    67     this.name = 'EffectJournalError'
+    68   }
+    69 }
+    70 
+    71 function key(tenantId: string, operationKey: string): string {
+    72   return `${tenantId}\u0000${operationKey}`
+    73 }
+    74 
+    75 function now(): string {
+    76   return new Date().toISOString()
+    77 }
+    78 
+    79 function bounded(value: string, label: string): string {
+    80   if (typeof value !== 'string' || value.trim().length === 0) {
+    81     throw new EffectJournalError(`${label} is required`)
+    82   }
+    83   if (value.length > 500) throw new EffectJournalError(`${label} is too long`)
+    84   return value.trim()
+    85 }
+    86 
+    87 export type EffectAttemptIdFactory = () => string
+    88 
+    89 /**
+    90  * Generates the fencing identity for one effect attempt. The factory seam is
+    91  * intentionally explicit so synthetic tests can be deterministic; production
+    92  * callers use the node:crypto default and never a weak fallback.
+    93  */
+    94 export function createEffectAttemptId(
+    95   factory: EffectAttemptIdFactory = randomUUID
+    96 ): string {
+    97   const token = bounded(factory(), 'attemptId token')
+    98   return bounded(`attempt_${token}`, 'attemptId')
+    99 }
+   100 
+   101 function clone<T>(value: T): T {
+   102   return structuredClone(value)
+   103 }
+   104 
+   105 /** Process-local journal for synthetic crash/replay proofs. */
+   106 export class InMemoryEffectJournal implements EffectJournal {
+   107   private readonly records = new Map<string, EffectJournalRecord>()
+   108 
+   109   public async reserve(input: {
+   110     tenantId: string
+   111     operationKey: string
+   112     proposalHash: string
+   113     attemptId: string
+   114   }): Promise<EffectJournalRecord> {
+   115     const tenantId = bounded(input.tenantId, 'tenantId')
+   116     const operationKey = bounded(input.operationKey, 'operationKey')
+   117     const proposalHash = bounded(input.proposalHash, 'proposalHash')
+   118     const attemptId = bounded(input.attemptId, 'attemptId')
+   119     const identity = key(tenantId, operationKey)
+   120     const existing = this.records.get(identity)
+   121     if (existing) {
+   122       if (existing.proposalHash !== proposalHash) {
+   123         throw new EffectJournalError(
+   124           'Operation key is bound to a different proposal'
+   125         )
+   126       }
+   127       if (existing.state === 'FAILED') {
+   128         const timestamp = now()
+   129         const retried: EffectJournalRecord = {
+   130           tenantId: existing.tenantId,
+   131           operationKey: existing.operationKey,
+   132           proposalHash: existing.proposalHash,
+   133           state: 'RESERVED',
+   134           attemptId,
+   135           createdAt: existing.createdAt,
+   136           updatedAt: timestamp
+   137         }
+   138         this.records.set(identity, retried)
+   139         return clone(retried)
+   140       }
+   141       return clone(existing)
+   142     }
+   143     const timestamp = now()
+   144     const record: EffectJournalRecord = {
+   145       tenantId,
+   146       operationKey,
+   147       proposalHash,
+   148       state: 'RESERVED',
+   149       attemptId,
+   150       createdAt: timestamp,
+   151       updatedAt: timestamp
+   152     }
+   153     this.records.set(identity, record)
+   154     return clone(record)
+   155   }
+   156 
+   157   public markStarted(input: {
+   158     tenantId: string
+   159     operationKey: string
+   160     attemptId: string
+   161   }): Promise<EffectJournalRecord> {
+   162     return this.transition(input, 'EFFECT_STARTED')
+   163   }
+   164 
+   165   public confirm(input: {
+   166     tenantId: string
+   167     operationKey: string
+   168     attemptId: string
+   169     result: unknown
+   170   }): Promise<EffectJournalRecord> {
+   171     return this.transition(input, 'CONFIRMED', { result: clone(input.result) })
+   172   }
+   173 
+   174   public fail(input: {
+   175     tenantId: string
+   176     operationKey: string
+   177     attemptId: string
+   178     error: string
+   179   }): Promise<EffectJournalRecord> {
+   180     return this.transition(input, 'FAILED', {
+   181       error: bounded(input.error, 'error')
+   182     })
+   183   }
+   184 
+   185   public markUncertain(input: {
+   186     tenantId: string
+   187     operationKey: string
+   188     attemptId: string
+   189     reason: string
+   190   }): Promise<EffectJournalRecord> {
+   191     return this.transition(input, 'UNCERTAIN', {
+   192       error: bounded(input.reason, 'reason')
+   193     })
+   194   }
+   195 
+   196   public async get(
+   197     tenantId: string,
+   198     operationKey: string
+   199   ): Promise<EffectJournalRecord | null> {
+   200     const record = this.records.get(key(tenantId, operationKey))
+   201     return record ? clone(record) : null
+   202   }
+   203 
+   204   private async transition(
+   205     input: {
+   206       tenantId: string
+   207       operationKey: string
+   208       attemptId: string
+   209     },
+   210     state: EffectJournalState,
+   211     values: { result?: unknown; error?: string } = {}
+   212   ): Promise<EffectJournalRecord> {
+   213     const identity = key(input.tenantId, input.operationKey)
+   214     const current = this.records.get(identity)
+   215     if (!current) throw new EffectJournalError('Effect reservation is missing')
+   216     if (current.attemptId !== input.attemptId) {
+   217       throw new EffectJournalError('Effect attempt is fenced')
+   218     }
+   219     if (state === 'EFFECT_STARTED' && current.state !== 'RESERVED') {
+   220       throw new EffectJournalError('Effect cannot start from its current state')
+   221     }
+   222     if (
+   223       (state === 'CONFIRMED' || state === 'FAILED' || state === 'UNCERTAIN') &&
+   224       current.state !== 'EFFECT_STARTED'
+   225     ) {
+   226       if (current.state === state) return clone(current)
+   227       throw new EffectJournalError(
+   228         'Effect outcome is not valid for its current state'
+   229       )
+   230     }
+   231     const next: EffectJournalRecord = {
+   232       ...current,
+   233       state,
+   234       ...(values.result !== undefined ? { result: values.result } : {}),
+   235       ...(values.error !== undefined ? { error: values.error } : {}),
+   236       updatedAt: now()
+   237     }
+   238     this.records.set(identity, next)
+   239     return clone(next)
+   240   }
+   241 }
+   242 
+   243 export interface JournaledToolRegistryOptions {
+   244   readonly crashAfterEffectBeforeConfirm?: boolean
+   245   /** Binds effect replay to the exact capability composition. */
+   246   readonly compositionFingerprint?: string
+   247   /** Deterministic seam for synthetic tests; defaults to node:crypto UUIDs. */
+   248   readonly attemptIdFactory?: EffectAttemptIdFactory
+   249 }
+   250 
+   251 function proposalHash(
+   252   tool: ToolDefinition,
+   253   input: unknown,
+   254   compositionFingerprint: string | undefined
+   255 ): string {
+   256   return createHash('sha256')
+   257     .update(
+   258       JSON.stringify({
+   259         schemaVersion: 'effect-proposal-v2',
+   260         compositionFingerprint: compositionFingerprint ?? null,
+   261         tool: {
+   262           id: tool.id,
+   263           version: tool.version,
+   264           sideEffect: tool.sideEffect,
+   265           idempotent: tool.idempotent,
+   266           providerId:
+   267             'providerId' in tool
+   268               ? (tool as { providerId?: unknown }).providerId
+   269               : undefined,
+   270           providerVersion:
+   271             'providerVersion' in tool
+   272               ? (tool as { providerVersion?: unknown }).providerVersion
+   273               : undefined
+   274         },
+   275         input
+   276       })
+   277     )
+   278     .digest('hex')
+   279 }
+   280 
+   281 /**
+   282  * Wraps only the executor side of a registry. Descriptors remain unchanged,
+   283  * policy and approval still run in the harness before this wrapper is called.
+   284  */
+   285 export function createJournaledToolRegistry(
+   286   registry: ToolRegistry,
+   287   journal: EffectJournal,
+   288   options: JournaledToolRegistryOptions = {}
+   289 ): ToolRegistry {
+   290   return {
+   291     list: () => registry.list(),
+   292     resolve: (toolId, version) => {
+   293       const tool = registry.resolve(toolId, version)
+   294       if (!tool) return undefined
+   295       return journaledTool(tool, journal, options)
+   296     }
+   297   }
+   298 }
+   299 
+   300 function journaledTool(
+   301   tool: ToolDefinition,
+   302   journal: EffectJournal,
+   303   options: JournaledToolRegistryOptions
+   304 ): ToolDefinition {
+   305   const compositionFingerprint = options.compositionFingerprint
+   306     ? bounded(options.compositionFingerprint, 'compositionFingerprint')
+   307     : undefined
+   308   return {
+   309     ...tool,
+   310     execute: async (
+   311       input: unknown,
+   312       context: ToolExecutionContext
+   313     ): Promise<ToolResult> => {
+   314       const operationKey = bounded(context.operationKey ?? '', 'operationKey')
+   315       const attemptId = createEffectAttemptId(options.attemptIdFactory)
+   316       const reservation = await journal.reserve({
+   317         tenantId: context.tenantId,
+   318         operationKey,
+   319         proposalHash: proposalHash(tool, input, compositionFingerprint),
+   320         attemptId
+   321       })
+   322       if (reservation.state === 'CONFIRMED') {
+   323         return { status: 'SUCCEEDED', output: reservation.result }
+   324       }
+   325       if (
+   326         reservation.state === 'UNCERTAIN' ||
+   327         reservation.state === 'EFFECT_STARTED'
+   328       ) {
+   329         return {
+   330           status: 'REJECTED',
+   331           error:
+   332             'unknown_effect: explicit reconciliation is required before retry'
+   333         }
+   334       }
+   335       if (reservation.attemptId !== attemptId) {
+   336         return {
+   337           status: 'REJECTED',
+   338           error:
+   339             'unknown_effect: an existing reservation requires reconciliation'
+   340         }
+   341       }
+   342       await journal.markStarted({
+   343         tenantId: context.tenantId,
+   344         operationKey,
+   345         attemptId
+   346       })
+   347       try {
+   348         const result = await tool.execute(input, context)
+   349         if (
+   350           options.crashAfterEffectBeforeConfirm &&
+   351           result.status === 'SUCCEEDED'
+   352         ) {
+   353           await journal.markUncertain({
+   354             tenantId: context.tenantId,
+   355             operationKey,
+   356             attemptId,
+   357             reason: 'synthetic crash after effect before confirmation'
+   358           })
+   359           return {
+   360             status: 'REJECTED',
+   361             error:
+   362               'unknown_effect: synthetic crash after effect before confirmation'
+   363           }
+   364         }
+   365         if (result.status === 'SUCCEEDED') {
+   366           await journal.confirm({
+   367             tenantId: context.tenantId,
+   368             operationKey,
+   369             attemptId,
+   370             result: result.output
+   371           })
+   372         } else {
+   373           await journal.fail({
+   374             tenantId: context.tenantId,
+   375             operationKey,
+   376             attemptId,
+   377             error: result.error ?? 'tool failed'
+   378           })
+   379         }
+   380         return result
+   381       } catch (error) {
+   382         const message =
+   383           error instanceof Error ? error.message : 'tool execution failed'
+   384         await journal.markUncertain({
+   385           tenantId: context.tenantId,
+   386           operationKey,
+   387           attemptId,
+   388           reason: `unknown effect after executor failure: ${message}`
+   389         })
+   390         return {
+   391           status: 'REJECTED',
+   392           error: 'unknown_effect: executor outcome is uncertain'
+   393         }
+   394       }
+   395     }
+   396   }
+   397 }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/capability-boundary.ts SHA256 411e31926da56c8c6b99a63a6afc29c3aca826ef1b15c3c7e84d1c3f069c70f6
+     1 import { createHash } from 'node:crypto'
+     2 import type {
+     3   CapabilityDescriptor,
+     4   CapabilityImplementation,
+     5   CapabilityOrigin,
+     6   CapabilityRegistration,
+     7   CapabilityRegistry as CapabilityRegistryPort,
+     8   ToolDefinition,
+     9   ToolExecutionContext,
+    10   ToolRegistry,
+    11   ToolResult
+    12 } from '@cvg/harness-contracts'
+    13 
+    14 const CAPABILITY_ID_PATTERN = /^[A-Za-z0-9._:-]+$/
+    15 const MAX_ID_LENGTH = 120
+    16 const MAX_VERSION_LENGTH = 80
+    17 const MAX_DESCRIPTION_LENGTH = 4000
+    18 const MAX_JSON_DEPTH = 64
+    19 const MAX_JSON_NODES = 20_000
+    20 const MAX_JSON_STRING_LENGTH = 16_384
+    21 const MAX_JSON_KEY_LENGTH = 512
+    22 const MAX_JSON_KEYS = 512
+    23 const MAX_JSON_ARRAY_LENGTH = 512
+    24 const MAX_JSON_BYTES = 256 * 1024
+    25 const UNSAFE_JSON_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+    26 const AUTHORITY_FIELDS = [
+    27   'tenantId',
+    28   'agentId',
+    29   'correlationId',
+    30   'traceId'
+    31 ] as const
+    32 const ORIGINS: readonly CapabilityOrigin[] = [
+    33   'core',
+    34   'skill',
+    35   'plugin',
+    36   'knowledge',
+    37   'mcp'
+    38 ]
+    39 
+    40 export type CapabilityRegistryErrorCode =
+    41   | 'invalid_descriptor'
+    42   | 'invalid_implementation'
+    43   | 'duplicate_capability'
+    44 
+    45 export class CapabilityRegistryError extends Error {
+    46   public readonly code: CapabilityRegistryErrorCode
+    47 
+    48   public constructor(code: CapabilityRegistryErrorCode, message: string) {
+    49     super(message)
+    50     this.name = 'CapabilityRegistryError'
+    51     this.code = code
+    52   }
+    53 }
+    54 
+    55 interface StoredRegistration {
+    56   readonly descriptor: CapabilityDescriptor
+    57   readonly implementation: CapabilityImplementation
+    58 }
+    59 
+    60 const registrationsByRegistry = new WeakMap<
+    61   object,
+    62   readonly StoredRegistration[]
+    63 >()
+    64 
+    65 /**
+    66  * Explicit, immutable capability composition for the neutral harness.
+    67  * Implementations are retained in a private module-owned store. The
+    68  * executable adapter is only reachable from the composition root.
+    69  */
+    70 export class CapabilityRegistry implements CapabilityRegistryPort {
+    71   public constructor(registrations: readonly CapabilityRegistration[] = []) {
+    72     const stored: StoredRegistration[] = []
+    73     for (const registration of registrations) {
+    74       const normalized = normalizeRegistration(registration)
+    75       if (
+    76         stored.some(
+    77           (candidate) =>
+    78             candidate.descriptor.id === normalized.descriptor.id &&
+    79             candidate.descriptor.version === normalized.descriptor.version
+    80         )
+    81       ) {
+    82         throw new CapabilityRegistryError(
+    83           'duplicate_capability',
+    84           `Capability already registered: ${normalized.descriptor.id}@${normalized.descriptor.version}`
+    85         )
+    86       }
+    87       stored.push(normalized)
+    88     }
+    89     registrationsByRegistry.set(this, Object.freeze(stored))
+    90   }
+    91 
+    92   public register(registration: CapabilityRegistration): CapabilityRegistry {
+    93     const normalized = normalizeRegistration(registration)
+    94     if (
+    95       getRegistrations(this).some(
+    96         (candidate) =>
+    97           candidate.descriptor.id === normalized.descriptor.id &&
+    98           candidate.descriptor.version === normalized.descriptor.version
+    99       )
+   100     ) {
+   101       throw new CapabilityRegistryError(
+   102         'duplicate_capability',
+   103         `Capability already registered: ${normalized.descriptor.id}@${normalized.descriptor.version}`
+   104       )
+   105     }
+   106 
+   107     return CapabilityRegistry.fromStored([
+   108       ...getRegistrations(this),
+   109       normalized
+   110     ])
+   111   }
+   112 
+   113   public listDescriptors(): readonly CapabilityDescriptor[] {
+   114     return sorted(getRegistrations(this)).map(({ descriptor }) =>
+   115       cloneDescriptor(descriptor)
+   116     )
+   117   }
+   118 
+   119   public resolveDescriptor(
+   120     capabilityId: string,
+   121     version: string
+   122   ): CapabilityDescriptor | undefined {
+   123     if (!isBoundedIdentifier(capabilityId, MAX_ID_LENGTH)) return undefined
+   124     if (!isBoundedVersion(version)) return undefined
+   125     const registration = getRegistrations(this).find(
+   126       (candidate) =>
+   127         candidate.descriptor.id === capabilityId &&
+   128         candidate.descriptor.version === version
+   129     )
+   130     return registration ? cloneDescriptor(registration.descriptor) : undefined
+   131   }
+   132 
+   133   public compositionFingerprint(): string {
+   134     const descriptors = sorted(getRegistrations(this)).map(
+   135       ({ descriptor }) => descriptor
+   136     )
+   137     return createHash('sha256')
+   138       .update(
+   139         stableSerialize({
+   140           schemaVersion: 'capability-composition-v1',
+   141           descriptors
+   142         })
+   143       )
+   144       .digest('hex')
+   145   }
+   146 
+   147   private static fromStored(
+   148     registrations: readonly StoredRegistration[]
+   149   ): CapabilityRegistry {
+   150     const registry = Object.create(
+   151       CapabilityRegistry.prototype
+   152     ) as CapabilityRegistry
+   153     registrationsByRegistry.set(registry, Object.freeze([...registrations]))
+   154     return registry
+   155   }
+   156 }
+   157 
+   158 /** Creates an empty registry without requiring callers to know the class. */
+   159 export function createCapabilityRegistry(
+   160   registrations: readonly CapabilityRegistration[] = []
+   161 ): CapabilityRegistry {
+   162   return new CapabilityRegistry(registrations)
+   163 }
+   164 
+   165 export interface CapabilityComposition {
+   166   readonly registry: CapabilityRegistry
+   167   readonly fingerprint: string
+   168 }
+   169 
+   170 export function composeCapabilities(
+   171   registrations: readonly CapabilityRegistration[] = []
+   172 ): CapabilityComposition {
+   173   const registry = createCapabilityRegistry(registrations)
+   174   return {
+   175     registry,
+   176     fingerprint: registry.compositionFingerprint()
+   177   }
+   178 }
+   179 
+   180 /**
+   181  * Internal executable bridge for the public harness composition root. This is
+   182  * deliberately not re-exported from the package entrypoint.
+   183  */
+   184 export function createCapabilityToolRegistry(
+   185   registry: CapabilityRegistryPort,
+   186   prepareResult?: (result: unknown) => ToolResult
+   187 ): ToolRegistry {
+   188   const snapshot = sorted(getRegistrations(registry))
+   189   return {
+   190     list: () =>
+   191       snapshot.map((registration) => toTool(registration, prepareResult)),
+   192     resolve: (capabilityId, version) => {
+   193       if (
+   194         !isBoundedIdentifier(capabilityId, MAX_ID_LENGTH) ||
+   195         !isBoundedVersion(version)
+   196       ) {
+   197         return undefined
+   198       }
+   199       const registration = snapshot.find(
+   200         (candidate) =>
+   201           candidate.descriptor.id === capabilityId &&
+   202           candidate.descriptor.version === version
+   203       )
+   204       return registration ? toTool(registration, prepareResult) : undefined
+   205     }
+   206   }
+   207 }
+   208 
+   209 function normalizeDescriptor(value: unknown): CapabilityDescriptor {
+   210   if (!isPlainRecord(value)) {
+   211     throw new CapabilityRegistryError(
+   212       'invalid_descriptor',
+   213       'Capability descriptor must be a plain object'
+   214     )
+   215   }
+   216 
+   217   const descriptor = value as Record<string, unknown>
+   218   if (!isBoundedIdentifier(descriptor.id, MAX_ID_LENGTH)) {
+   219     throw invalidDescriptor('Capability id is invalid')
+   220   }
+   221   if (!isBoundedVersion(descriptor.version)) {
+   222     throw invalidDescriptor('Capability version must be exact and bounded')
+   223   }
+   224   if (
+   225     typeof descriptor.description !== 'string' ||
+   226     descriptor.description.trim().length === 0 ||
+   227     descriptor.description.length > MAX_DESCRIPTION_LENGTH
+   228   ) {
+   229     throw invalidDescriptor('Capability description is invalid')
+   230   }
+   231   if (!ORIGINS.includes(descriptor.origin as CapabilityOrigin)) {
+   232     throw invalidDescriptor('Capability origin is invalid')
+   233   }
+   234   if (!isBoundedIdentifier(descriptor.providerId, MAX_ID_LENGTH)) {
+   235     throw invalidDescriptor('Capability provider id is invalid')
+   236   }
+   237   if (!isBoundedVersion(descriptor.providerVersion)) {
+   238     throw invalidDescriptor('Capability provider version is invalid')
+   239   }
+   240   if (
+   241     !isRisk(descriptor.risk) ||
+   242     !isSideEffect(descriptor.sideEffect) ||
+   243     typeof descriptor.idempotent !== 'boolean' ||
+   244     typeof descriptor.requiresApproval !== 'boolean'
+   245   ) {
+   246     throw invalidDescriptor('Capability governance metadata is invalid')
+   247   }
+   248 
+   249   const inputSchema = cloneJsonValue(descriptor.inputSchema)
+   250   const outputSchema = cloneJsonValue(descriptor.outputSchema)
+   251   return deepFreeze({
+   252     id: descriptor.id,
+   253     version: descriptor.version,
+   254     description: descriptor.description.trim(),
+   255     inputSchema,
+   256     outputSchema,
+   257     risk: descriptor.risk,
+   258     sideEffect: descriptor.sideEffect,
+   259     idempotent: descriptor.idempotent,
+   260     requiresApproval: descriptor.requiresApproval,
+   261     origin: descriptor.origin,
+   262     providerId: descriptor.providerId,
+   263     providerVersion: descriptor.providerVersion
+   264   }) as CapabilityDescriptor
+   265 }
+   266 
+   267 function normalizeRegistration(value: unknown): StoredRegistration {
+   268   try {
+   269     if (!isPlainRecord(value)) {
+   270       throw new CapabilityRegistryError(
+   271         'invalid_descriptor',
+   272         'Capability registration must be a plain object'
+   273       )
+   274     }
+   275     const registration = value as Record<string, unknown>
+   276     return {
+   277       descriptor: normalizeDescriptor(registration.descriptor),
+   278       implementation: normalizeImplementation(registration.implementation)
+   279     }
+   280   } catch (error) {
+   281     if (error instanceof CapabilityRegistryError) throw error
+   282     throw new CapabilityRegistryError(
+   283       'invalid_descriptor',
+   284       'Capability registration contains unsupported data'
+   285     )
+   286   }
+   287 }
+   288 
+   289 function getRegistrations(
+   290   registry: CapabilityRegistryPort
+   291 ): readonly StoredRegistration[] {
+   292   const registrations = registrationsByRegistry.get(registry as object)
+   293   if (!registrations) {
+   294     throw new CapabilityRegistryError(
+   295       'invalid_descriptor',
+   296       'Capability registry was not created by the neutral registry factory'
+   297     )
+   298   }
+   299   return registrations
+   300 }
+   301 
+   302 function normalizeImplementation(value: unknown): CapabilityImplementation {
+   303   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+   304     throw new CapabilityRegistryError(
+   305       'invalid_implementation',
+   306       'Capability implementation requires input validation, execution, and output validation'
+   307     )
+   308   }
+   309 
+   310   let validateInput: CapabilityImplementation['validateInput']
+   311   let execute: CapabilityImplementation['execute']
+   312   let validateOutput: CapabilityImplementation['validateOutput']
+   313   try {
+   314     const implementation = value as Record<string, unknown>
+   315     if (
+   316       typeof implementation.validateInput !== 'function' ||
+   317       typeof implementation.execute !== 'function' ||
+   318       typeof implementation.validateOutput !== 'function'
+   319     ) {
+   320       throw new Error('missing implementation method')
+   321     }
+   322     validateInput = (
+   323       implementation.validateInput as CapabilityImplementation['validateInput']
+   324     ).bind(value)
+   325     execute = (
+   326       implementation.execute as CapabilityImplementation['execute']
+   327     ).bind(value)
+   328     validateOutput = (
+   329       implementation.validateOutput as CapabilityImplementation['validateOutput']
+   330     ).bind(value)
+   331   } catch {
+   332     throw new CapabilityRegistryError(
+   333       'invalid_implementation',
+   334       'Capability implementation requires input validation, execution, and output validation'
+   335     )
+   336   }
+   337   return Object.freeze({
+   338     validateInput,
+   339     execute,
+   340     validateOutput
+   341   }) as CapabilityImplementation
+   342 }
+   343 
+   344 function toTool(
+   345   registration: StoredRegistration,
+   346   prepareResult?: (result: unknown) => ToolResult
+   347 ): ToolDefinition {
+   348   const descriptor = cloneDescriptor(registration.descriptor)
+   349   return {
+   350     ...descriptor,
+   351     execute: (input: unknown, context: ToolExecutionContext) =>
+   352       executeBound(registration.implementation, input, context, prepareResult)
+   353   }
+   354 }
+   355 
+   356 async function executeBound(
+   357   implementation: CapabilityImplementation,
+   358   input: unknown,
+   359   context: ToolExecutionContext,
+   360   prepareResult?: (result: unknown) => ToolResult
+   361 ): Promise<ToolResult> {
+   362   let safeInput: unknown
+   363   try {
+   364     safeInput = cloneJsonValue(input)
+   365     if (!inputMatchesExecutionContext(safeInput, context)) {
+   366       return { status: 'REJECTED', error: 'capability_input_invalid' }
+   367     }
+   368     if (implementation.validateInput(safeInput) !== true) {
+   369       return { status: 'REJECTED', error: 'capability_input_invalid' }
+   370     }
+   371   } catch {
+   372     return { status: 'REJECTED', error: 'capability_input_invalid' }
+   373   }
+   374 
+   375   let result: ToolResult
+   376   let preparing = false
+   377   try {
+   378     const safeContext = Object.freeze({ ...context }) as ToolExecutionContext
+   379     const rawResult = await implementation.execute(safeInput, safeContext)
+   380     preparing = Boolean(prepareResult)
+   381     const normalizedResult = prepareResult
+   382       ? prepareResult(rawResult)
+   383       : normalizeToolResult(rawResult)
+   384     preparing = false
+   385     if (!normalizedResult) {
+   386       return { status: 'REJECTED', error: 'capability_result_invalid' }
+   387     }
+   388     result = normalizedResult
+   389   } catch {
+   390     if (preparing)
+   391       throw new Error('unknown_effect: complete_result_not_representable')
+   392     return { status: 'FAILED', error: 'capability_execution_failed' }
+   393   }
+   394 
+   395   if (result.status === 'SUCCEEDED') {
+   396     try {
+   397       if (implementation.validateOutput(result.output) !== true) {
+   398         return { status: 'REJECTED', error: 'capability_output_invalid' }
+   399       }
+   400     } catch {
+   401       return { status: 'REJECTED', error: 'capability_output_invalid' }
+   402     }
+   403   }
+   404 
+   405   try {
+   406     if (prepareResult) return prepareResult(result)
+   407     return {
+   408       status: result.status,
+   409       ...(result.output !== undefined
+   410         ? { output: cloneJsonValue(result.output) }
+   411         : {}),
+   412       ...(result.error !== undefined ? { error: result.error } : {})
+   413     }
+   414   } catch {
+   415     return { status: 'REJECTED', error: 'capability_result_invalid' }
+   416   }
+   417 }
+   418 
+   419 function cloneDescriptor(
+   420   descriptor: CapabilityDescriptor
+   421 ): CapabilityDescriptor {
+   422   return deepFreeze({
+   423     ...descriptor,
+   424     inputSchema: cloneJsonValue(descriptor.inputSchema),
+   425     outputSchema: cloneJsonValue(descriptor.outputSchema)
+   426   }) as CapabilityDescriptor
+   427 }
+   428 
+   429 function sorted(
+   430   registrations: readonly StoredRegistration[]
+   431 ): readonly StoredRegistration[] {
+   432   return [...registrations].sort((left, right) => {
+   433     const idOrder = compareCodeUnits(left.descriptor.id, right.descriptor.id)
+   434     if (idOrder !== 0) return idOrder
+   435     return compareCodeUnits(left.descriptor.version, right.descriptor.version)
+   436   })
+   437 }
+   438 
+   439 function compareCodeUnits(left: string, right: string): number {
+   440   return left < right ? -1 : left > right ? 1 : 0
+   441 }
+   442 
+   443 function inputMatchesExecutionContext(
+   444   value: unknown,
+   445   context: ToolExecutionContext
+   446 ): boolean {
+   447   if (Array.isArray(value)) {
+   448     return value.every((child) => inputMatchesExecutionContext(child, context))
+   449   }
+   450   if (!isPlainRecord(value)) return true
+   451 
+   452   for (const [key, child] of Object.entries(value)) {
+   453     if (
+   454       (AUTHORITY_FIELDS as readonly string[]).includes(key) &&
+   455       child !== context[key as (typeof AUTHORITY_FIELDS)[number]]
+   456     ) {
+   457       return false
+   458     }
+   459     if (!inputMatchesExecutionContext(child, context)) return false
+   460   }
+   461   return true
+   462 }
+   463 
+   464 function invalidDescriptor(message: string): CapabilityRegistryError {
+   465   return new CapabilityRegistryError('invalid_descriptor', message)
+   466 }
+   467 
+   468 function isBoundedIdentifier(
+   469   value: unknown,
+   470   maxLength: number
+   471 ): value is string {
+   472   return (
+   473     typeof value === 'string' &&
+   474     value.trim() === value &&
+   475     value.length > 0 &&
+   476     value.length <= maxLength &&
+   477     CAPABILITY_ID_PATTERN.test(value)
+   478   )
+   479 }
+   480 
+   481 function isBoundedVersion(value: unknown): value is string {
+   482   return (
+   483     isBoundedIdentifier(value, MAX_VERSION_LENGTH) &&
+   484     value.toLowerCase() !== 'latest'
+   485   )
+   486 }
+   487 
+   488 function isRisk(value: unknown): boolean {
+   489   return (
+   490     value === 'LOW' ||
+   491     value === 'MEDIUM' ||
+   492     value === 'HIGH' ||
+   493     value === 'CRITICAL'
+   494   )
+   495 }
+   496 
+   497 function isSideEffect(value: unknown): boolean {
+   498   return (
+   499     value === 'NONE' ||
+   500     value === 'READ' ||
+   501     value === 'WRITE' ||
+   502     value === 'EXTERNAL'
+   503   )
+   504 }
+   505 
+   506 function normalizeToolResult(value: unknown): ToolResult | undefined {
+   507   try {
+   508     const safeValue = cloneJsonValue(value)
+   509     if (!isPlainRecord(safeValue)) return undefined
+   510     const status = safeValue.status
+   511     if (!isToolStatus(status)) return undefined
+   512     const error = safeValue.error
+   513     if (
+   514       error !== undefined &&
+   515       (typeof error !== 'string' || error.length > 240)
+   516     ) {
+   517       return undefined
+   518     }
+   519     const output = safeValue.output
+   520     return {
+   521       status,
+   522       ...(output !== undefined ? { output } : {}),
+   523       ...(error !== undefined ? { error } : {})
+   524     }
+   525   } catch {
+   526     return undefined
+   527   }
+   528 }
+   529 
+   530 function isToolStatus(value: unknown): value is ToolResult['status'] {
+   531   return value === 'SUCCEEDED' || value === 'FAILED' || value === 'REJECTED'
+   532 }
+   533 
+   534 function cloneJsonValue(value: unknown): unknown {
+   535   return JSON.parse(stableSerialize(value)) as unknown
+   536 }
+   537 
+   538 interface SerializationState {
+   539   readonly seen: WeakSet<object>
+   540   nodes: number
+   541 }
+   542 
+   543 function stableSerialize(
+   544   value: unknown,
+   545   state: SerializationState = { seen: new WeakSet<object>(), nodes: 0 },
+   546   depth = 0
+   547 ): string {
+   548   state.nodes += 1
+   549   if (state.nodes > MAX_JSON_NODES) {
+   550     throw new Error('JSON node budget exceeded')
+   551   }
+   552   if (depth > MAX_JSON_DEPTH) {
+   553     throw new Error('JSON depth budget exceeded')
+   554   }
+   555 
+   556   if (value === null) return 'null'
+   557   if (typeof value === 'string') {
+   558     if (value.length > MAX_JSON_STRING_LENGTH) {
+   559       throw new Error('JSON string budget exceeded')
+   560     }
+   561     return JSON.stringify(value)
+   562   }
+   563   if (typeof value === 'boolean') return value ? 'true' : 'false'
+   564   if (typeof value === 'number') {
+   565     if (!Number.isFinite(value)) throw new Error('Non-finite value')
+   566     return JSON.stringify(value)
+   567   }
+   568   if (typeof value !== 'object' || value === undefined) {
+   569     throw new Error('Value is not JSON serializable')
+   570   }
+   571   if (state.seen.has(value)) throw new Error('Value contains a cycle')
+   572   state.seen.add(value)
+   573   try {
+   574     if (Array.isArray(value)) {
+   575       if (value.length > MAX_JSON_ARRAY_LENGTH) {
+   576         throw new Error('JSON array budget exceeded')
+   577       }
+   578       const items: string[] = []
+   579       for (let index = 0; index < value.length; index += 1) {
+   580         if (!Object.prototype.hasOwnProperty.call(value, index)) {
+   581           throw new Error('Sparse arrays are not supported')
+   582         }
+   583         items.push(stableSerialize(value[index], state, depth + 1))
+   584       }
+   585       return boundedSerialized(`[${items.join(',')}]`)
+   586     }
+   587     if (!isPlainRecord(value)) throw new Error('Value is not a plain object')
+   588     const keys = Object.keys(value)
+   589     if (
+   590       keys.length > MAX_JSON_KEYS ||
+   591       Object.getOwnPropertySymbols(value).length > 0 ||
+   592       Object.getOwnPropertyNames(value).length !== keys.length
+   593     ) {
+   594       throw new Error('JSON object budget or shape exceeded')
+   595     }
+   596     const parts: string[] = []
+   597     for (const key of keys.sort()) {
+   598       if (key.length > MAX_JSON_KEY_LENGTH || UNSAFE_JSON_KEYS.has(key)) {
+   599         throw new Error('Unsafe JSON object key')
+   600       }
+   601       const property = Object.getOwnPropertyDescriptor(value, key)
+   602       if (!property || !('value' in property)) {
+   603         throw new Error('Accessor properties are not supported')
+   604       }
+   605       parts.push(
+   606         `${JSON.stringify(key)}:${stableSerialize(property.value, state, depth + 1)}`
+   607       )
+   608     }
+   609     return boundedSerialized(`{${parts.join(',')}}`)
+   610   } finally {
+   611     state.seen.delete(value)
+   612   }
+   613 }
+   614 
+   615 function boundedSerialized(value: string): string {
+   616   if (value.length > MAX_JSON_BYTES) {
+   617     throw new Error('JSON byte budget exceeded')
+   618   }
+   619   return value
+   620 }
+   621 
+   622 function deepFreeze<T>(value: T): T {
+   623   if (typeof value !== 'object' || value === null) return value
+   624   Object.freeze(value)
+   625   for (const child of Object.values(value)) deepFreeze(child)
+   626   return value
+   627 }
+   628 
+   629 function isPlainRecord(value: unknown): value is Record<string, unknown> {
+   630   try {
+   631     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+   632       return false
+   633     }
+   634     const prototype = Object.getPrototypeOf(value)
+   635     return prototype === Object.prototype || prototype === null
+   636   } catch {
+   637     return false
+   638   }
+   639 }
+

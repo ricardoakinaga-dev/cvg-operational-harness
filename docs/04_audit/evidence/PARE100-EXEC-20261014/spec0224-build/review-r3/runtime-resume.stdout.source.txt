@@ -1,0 +1,373 @@
+   604       )
+   605     }
+   606 
+   607     let host: KernelHost
+   608     try {
+   609       host = await this.bootKernel()
+   610     } catch (error) {
+   611       /* v8 ignore start -- defensive: the fixed plugin list always satisfies the boot contract */
+   612       return this.earlyFinish(
+   613         input,
+   614         `Kernel could not start: ${errorMessage(error)}.`,
+   615         'INTERNAL_FAILURE',
+   616         startedAtMs
+   617       )
+   618       /* v8 ignore stop */
+   619     }
+   620 
+   621     let checkpoint: ExecutionCheckpoint | null = null
+   622     try {
+   623       checkpoint = await this.options.stepStore.loadCheckpoint(
+   624         input.tenantId,
+   625         executionId
+   626       )
+   627     } catch (error) {
+   628       return this.earlyFinish(
+   629         input,
+   630         `Execution checkpoint could not be trusted: ${errorMessage(error)}.`,
+   631         'STATE_CONFLICT',
+   632         startedAtMs
+   633       )
+   634     }
+   635 
+   636     if (checkpoint) {
+   637       if (
+   638         this.options.toolResultContext &&
+   639         checkpoint.checkpointVersion === 1 &&
+   640         checkpoint.state.observations.some(
+   641           (value) => value.type === 'TOOL_RESULT'
+   642         )
+   643       ) {
+   644         return this.earlyFinish(
+   645           input,
+   646           'LEGACY_RESULT_UNKNOWN: old tool results cannot be promoted to complete.',
+   647           'INSUFFICIENT_EVIDENCE',
+   648           startedAtMs
+   649         )
+   650       }
+   651       const rejection = this.rejectCheckpoint(checkpoint, input)
+   652       if (rejection) {
+   653         return this.earlyFinish(input, rejection, 'STATE_CONFLICT', startedAtMs)
+   654       }
+   655     }
+   656 
+   657     const run: LoopRun = {
+   658       checkpointToken: checkpoint
+   659         ? { checkpointId: checkpoint.checkpointId, digest: checkpoint.digest }
+   660         : null,
+   661       input,
+   662       executionId,
+   663       startedAtMs,
+   664       stepNumber: checkpoint?.state.stepNumber ?? 0,
+   665       state: checkpoint
+   666         ? {
+   667             ...checkpoint.state,
+   668             observations: [...checkpoint.state.observations],
+   669             openQuestions: [...checkpoint.state.openQuestions],
+   670             resolvedInputs: { ...checkpoint.state.resolvedInputs },
+   671             loopSignatures: [...checkpoint.state.loopSignatures]
+   672           }
+   673         : {
+   674             goal: input.agent.objective,
+   675             ...(this.options.capabilityFingerprint
+   676               ? { capabilityFingerprint: this.options.capabilityFingerprint }
+   677               : {}),
+   678             stepNumber: 0,
+   679             observations: [],
+   680             openQuestions: [],
+   681             resolvedInputs: {},
+   682             loopSignatures: []
+   683           },
+   684       usage: checkpoint
+   685         ? { ...checkpoint.budgetUsage }
+   686         : { ...EMPTY_BUDGET_USAGE },
+   687       observations: checkpoint ? [...checkpoint.state.observations] : [],
+   688       responseText: null,
+   689       lastDecision: null,
+   690       lastEvaluation: null,
+   691       lastToolObservation: null,
+   692       lastSufficiency: null,
+   693       lastDecisionErrors: [],
+   694       skipEvaluationOnce: false,
+   695       countedSteps: new Set<number>(),
+   696       inFlightCounted: Boolean(
+   697         checkpoint?.state.pendingDecision && !checkpoint.state.stopReason
+   698       )
+   699     }
+   700     run.state.observations = run.observations
+   701     if (this.options.toolResultContext) {
+   702       run.state.toolResultContext ??= {
+   703         version: 1,
+   704         deliveredThroughStep: 0,
+   705         pendingDecisionAdmission: null,
+   706         decisionAdmissions: []
+   707       }
+   708     }
+   709     const controller = new AbortController()
+   710     if (input.signal?.aborted) controller.abort()
+   711     input.signal?.addEventListener('abort', () => controller.abort(), {
+   712       once: true
+   713     })
+   714     this.#turns.set(run, { host, signal: controller.signal })
+   715 
+   716     // Payloads and summaries are bounded, untrusted presentation. The step
+   717     // store owns the lossless governed outcome of the pending dispatch,
+   718     // including the exact settlement failure cause. Generic TOOL_FAILURE or
+   719     // unknown_effect records alone do not prove that this ledger failed.
+   720     if (
+   721       checkpoint?.state.pendingStepNumber &&
+   722       (checkpoint.state.pendingDecision?.decisionType === 'CALL_TOOL' ||
+   723         checkpoint.state.pendingDecision?.decisionType === 'REQUEST_APPROVAL')
+   724     ) {
+   725       let steps: readonly ExecutionStep[]
+   726       try {
+   727         steps = await this.options.stepStore.listSteps(
+   728           input.tenantId,
+   729           executionId
+   730         )
+   731       } catch {
+   732         return this.finalize(
+   733           run,
+   734           {
+   735             kind: 'stop',
+   736             stopReason: 'INSUFFICIENT_EVIDENCE',
+   737             response:
+   738               'Pending tool outcome could not be read; reconciliation is required.',
+   739             preserveCheckpoint: true
+   740           },
+   741           startedAtMs
+   742         )
+   743       }
+   744       if (
+   745         steps.some(
+   746           (step) =>
+   747             step.tenantId === input.tenantId &&
+   748             step.executionId === executionId &&
+   749             step.stepNumber === checkpoint.state.pendingStepNumber &&
+   750             step.stepType === 'TOOL' &&
+   751             step.status === 'FAILED' &&
+   752             step.errorCode === 'unknown_effect: effect_settlement_failed'
+   753         )
+   754       ) {
+   755         return this.finalize(
+   756           run,
+   757           {
+   758             kind: 'stop',
+   759             stopReason: 'TOOL_FAILURE',
+   760             response: 'unknown_effect: effect_settlement_failed',
+   761             preserveCheckpoint: true
+   762           },
+   763           startedAtMs
+   764         )
+   765       }
+   766       if (
+   767         this.options.toolResultContext &&
+   768         checkpoint.state.pendingStepNumber
+   769       ) {
+   770         const pendingStep = checkpoint.state.pendingStepNumber
+   771         const settledStep = steps.find(
+   772           (step) =>
+   773             step.tenantId === input.tenantId &&
+   774             step.executionId === executionId &&
+   775             step.stepNumber === pendingStep &&
+   776             step.stepType === 'TOOL' &&
+   777             step.status === 'SUCCEEDED'
+   778         )
+   779         const savedResult = checkpoint.state.observations.find(
+   780           (observation) =>
+   781             observation.type === 'TOOL_RESULT' &&
+   782             observation.stepNumber === pendingStep
+   783         )
+   784         if (
+   785           settledStep &&
+   786           (!savedResult ||
+   787             (savedResult.payload as { completion?: string }).completion !==
+   788               'COMPLETE')
+   789         ) {
+   790           return this.finalize(
+   791             run,
+   792             {
+   793               kind: 'stop',
+   794               stopReason: 'INSUFFICIENT_EVIDENCE',
+   795               preserveCheckpoint: true,
+   796               response:
+   797                 'RESULT_UNAVAILABLE: a settled tool step has no complete saved result; reconciliation is required.'
+   798             },
+   799             startedAtMs
+   800           )
+   801         }
+   802         if (settledStep && savedResult) {
+   803           const pending = checkpoint.state.pendingDecision!
+   804           if (
+   805             savedResult.stepId !== settledStep.stepId ||
+   806             !settledStep.observationRefs.includes(savedResult.observationId) ||
+   807             savedResult.provenance.sourceId !== pending.toolId ||
+   808             savedResult.provenance.sourceVersion !== pending.toolVersion ||
+   809             savedResult.provenance.operationKey !==
+   810               this.operationKey(run, pendingStep, pending.toolId!)
+   811           ) {
+   812             return this.finalize(
+   813               run,
+   814               {
+   815                 kind: 'stop',
+   816                 stopReason: 'STATE_CONFLICT',
+   817                 preserveCheckpoint: true,
+   818                 response:
+   819                   'Saved tool result does not match the settled native step.'
+   820               },
+   821               startedAtMs
+   822             )
+   823           }
+   824           // The acknowledged result and successful step complete this dispatch.
+   825           // Never reopen it or call its journal/tool again on process recreation.
+   826           run.stepNumber = pendingStep
+   827           run.inFlightCounted = false
+   828           run.countedSteps.add(pendingStep)
+   829           run.lastToolObservation = savedResult
+   830           run.state = {
+   831             ...run.state,
+   832             stepNumber: pendingStep,
+   833             pendingDecision: undefined,
+   834             pendingStepNumber: undefined,
+   835             pendingApprovalId: undefined,
+   836             selectedCapability: pending.toolId,
+   837             loopSignatures: [
+   838               ...run.state.loopSignatures,
+   839               decisionSignature(pending)
+   840             ].slice(-this.maxSignatures),
+   841             toolResultContext: {
+   842               ...run.state.toolResultContext!,
+   843               acceptedDecision: undefined
+   844             }
+   845           }
+   846         }
+   847       }
+   848     }
+   849 
+   850     const resumeOutcome = this.applyResume(run, checkpoint)
+   851     if (resumeOutcome) {
+   852       return this.finalize(run, resumeOutcome, startedAtMs)
+   853     }
+   854     run.lastDecision = run.state.pendingDecision ?? null
+   855     run.lastEvaluation = run.state.lastEvaluation ?? null
+   856 
+   857     try {
+   858       if (this.options.toolResultContext) {
+   859         const state = run.state.toolResultContext!
+   860         const orphaned = state.decisionAdmissions.filter(
+   861           (value) =>
+   862             value.status === 'RESERVED' ||
+   863             (value.status === 'SETTLED' &&
+   864               value.stepNumber > run.state.stepNumber &&
+   865               !state.acceptedDecision &&
+   866               !run.state.pendingDecision)
+   867         )
+   868         if (
+   869           orphaned.length > 0 ||
+   870           state.decisionAdmissions.some((value) => value.status === 'UNKNOWN')
+   871         ) {
+   872           const ids = new Set(
+   873             orphaned
+   874               .filter((value) => value.status === 'RESERVED')
+   875               .map((value) => value.admissionId)
+   876           )
+   877           for (const record of orphaned) {
+   878             if (record.status === 'SETTLED' && record.actual) {
+   879               run.usage.inputTokens +=
+   880                 Math.max(
+   881                   record.reserved.inputTokens,
+   882                   record.actual.inputTokens
+   883                 ) - record.actual.inputTokens
+   884               run.usage.outputTokens +=
+   885                 Math.max(
+   886                   record.reserved.outputTokens,
+   887                   record.actual.outputTokens
+   888                 ) - record.actual.outputTokens
+   889               run.usage.costUsd +=
+   890                 Math.max(record.reserved.costUsd, record.actual.costUsd) -
+   891                 record.actual.costUsd
+   892             }
+   893           }
+   894           run.state.toolResultContext = {
+   895             ...state,
+   896             pendingDecisionAdmission: null,
+   897             decisionAdmissions: state.decisionAdmissions.map((value) =>
+   898               ids.has(value.admissionId)
+   899                 ? {
+   900                     ...value,
+   901                     status: 'UNKNOWN',
+   902                     unknownReason: 'process_lost_before_decision'
+   903                   }
+   904                 : value
+   905             )
+   906           }
+   907           // A settled receipt is immutable: a crash before acceptedDecision is
+   908           // evidence of an unresolved decision, not permission to replay a model.
+   909           // Keep the acknowledged checkpoint and return conservative live usage.
+   910           return await this.finalize(
+   911             run,
+   912             {
+   913               ...this.stop(
+   914                 'INSUFFICIENT_EVIDENCE',
+   915                 'DECISION_USAGE_UNKNOWN: unresolved decision needs handoff.'
+   916               ),
+   917               ...(orphaned.some((value) => value.status === 'SETTLED')
+   918                 ? { preserveCheckpoint: true }
+   919                 : {})
+   920             },
+   921             startedAtMs
+   922           )
+   923         }
+   924         await this.persistCheckpoint(run)
+   925       }
+   926       await this.safeAudit(run, 'runtime_v2.started', {
+   927         result: checkpoint ? 'resumed' : 'started'
+   928       })
+   929       const outcome = await this.runLoop(run)
+   930       return await this.finalize(run, outcome, startedAtMs)
+   931     } catch (error) {
+   932       return await this.finalize(
+   933         run,
+   934         {
+   935           kind: 'stop',
+   936           stopReason:
+   937             error instanceof ToolResultContextError
+   938               ? error.stopReason
+   939               : 'INTERNAL_FAILURE',
+   940           response:
+   941             error instanceof ToolResultContextError
+   942               ? `${error.code}: ${error.message}`
+   943               : `Execution failed internally: ${errorMessage(error)}.`,
+   944           ...(run.checkpointConflict ? { preserveCheckpoint: true } : {})
+   945         },
+   946         startedAtMs
+   947       )
+   948     }
+   949   }
+   950 
+   951   private rejectCheckpoint(
+   952     checkpoint: ExecutionCheckpoint,
+   953     input: RuntimeInput
+   954   ): string | null {
+   955     if (checkpoint.checkpointVersion === 2 && !this.options.toolResultContext) {
+   956       return 'Complete checkpoint requires the explicitly configured complete-tool-v1 mode.'
+   957     }
+   958     if (checkpoint.runtimeProfile !== 'iterative') {
+   959       return 'Execution checkpoint belongs to a different runtime profile.'
+   960     }
+   961     if (checkpoint.runtimeVersion !== RUNTIME_V2_VERSION) {
+   962       return `Execution checkpoint requires runtime ${checkpoint.runtimeVersion}, this runtime is ${RUNTIME_V2_VERSION}.`
+   963     }
+   964     if (
+   965       this.options.toolResultContext &&
+   966       checkpoint.orchestratorVersion !== this.orchestratorVersion
+   967     ) {
+   968       return 'Execution checkpoint belongs to a different orchestrator version.'
+   969     }
+   970     if (input.runtimeProfile && input.runtimeProfile !== 'iterative') {
+   971       return 'Execution checkpoint conflicts with the requested runtime profile.'
+   972     }
+   973     if (
+   974       this.options.capabilityFingerprint &&
+   975       checkpoint.state.capabilityFingerprint !==
+   976         this.options.capabilityFingerprint

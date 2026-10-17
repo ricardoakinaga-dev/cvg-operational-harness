@@ -1,0 +1,15 @@
+import json
+from pathlib import Path
+
+D = Path(__file__).resolve().parent
+cache = D / 'quality-tmp/node-compile-cache'
+files = [f for f in cache.rglob('*') if f.is_file()]
+disclosure = {'path': str(cache), 'fileCount': len(files), 'kind': 'Node22 module bytecode compile cache under reviewer private TMPDIR', 'retained': True, 'typescriptSourceEmission': False, 'worktreeCacheWrite': False, 'limitation': 'Private quality tooling emitted Node bytecode cache despite noEmit/nonincremental TypeScript configuration. Do not claim an entirely cache-free quality invocation. No production/source cache remediation performed.'}
+(D / 'quality-cache-disclosure.json').write_text(json.dumps(disclosure, indent=2) + '\n')
+report = D / 'report.md'
+report.write_text(report.read_text() + '\nPost-seal inventory disclosure: focused quality tools created ' + str(len(files)) + ' Node22 module bytecode cache files under `review-i1/quality-tmp/node-compile-cache`, all inside the authorized reviewer directory and retained in the manifest. TypeScript used noEmit/nonincremental settings and emitted no source/build-info files; no worktree cache write was observed. Nevertheless, the quality invocations were not entirely cache-free, so the literal no-sourcecache constraint is not asserted as fully met. See `quality-cache-disclosure.json`. This additional reviewer procedure limitation does not change REVISE or the independently reproduced invariant.\n')
+verdict_path = D / 'verdict.json'
+verdict = json.loads(verdict_path.read_text())
+verdict['reviewProcedure']['privateNodeBytecodeCache'] = disclosure
+verdict_path.write_text(json.dumps(verdict, indent=2) + '\n')
+print(json.dumps(disclosure))

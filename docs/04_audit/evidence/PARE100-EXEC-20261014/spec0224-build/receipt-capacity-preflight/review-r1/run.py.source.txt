@@ -1,0 +1,15 @@
+import os,sys,time,json,subprocess,pathlib
+out=pathlib.Path(__file__).parent
+packet=out.parent/'review-packet-r1'
+name=sys.argv[1]; args=sys.argv[2:]
+env=os.environ.copy()
+(out/'tmp').mkdir(exist_ok=True)
+env.update(TMPDIR=str(out/'tmp'),TMP=str(out/'tmp'),TEMP=str(out/'tmp'))
+env.update(I1_REVIEW=str(out),I1_READ_LOG=str(out/(name+'.reads.jsonl')),I1_SCOPE_PACKAGE=str(packet/'package.json'),I1_PACKET_DEPS=str(packet/'node_modules'),CVG_COMPLETE_ADMISSION_CAPACITY_EVIDENCE=str(out/(name+'.observations.json')),NODE_OPTIONS='--require='+str(out/'trace-reads.cjs'))
+started=time.time()
+with (out/(name+'.stdout.log')).open('w') as stdout,(out/(name+'.stderr.log')).open('w') as stderr:
+ result=subprocess.run(args,cwd=packet/'artifact',env=env,stdout=stdout,stderr=stderr)
+record=dict(argv=args,cwd=str(packet/'artifact'),envOverrides={k:env[k] for k in ['I1_REVIEW','I1_READ_LOG','I1_SCOPE_PACKAGE','I1_PACKET_DEPS','CVG_COMPLETE_ADMISSION_CAPACITY_EVIDENCE','NODE_OPTIONS','TMPDIR','TMP','TEMP']},exit=result.returncode,seconds=time.time()-started)
+(out/(name+'.command.json')).write_text(json.dumps(record,indent=2)+'\n')
+print(json.dumps(record));print((out/(name+'.stdout.log')).read_text()[-10000:]);print((out/(name+'.stderr.log')).read_text()[-4000:])
+sys.exit(result.returncode)

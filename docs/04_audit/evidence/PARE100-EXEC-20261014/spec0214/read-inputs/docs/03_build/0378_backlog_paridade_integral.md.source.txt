@@ -1,0 +1,328 @@
+# 0378 — Backlog de paridade integral e remoção de legado
+
+- Task de programa: `PARE100-20261014`, solicitada pelo usuário em 14/10/2026.
+- Esta carteira registra os novos cartões; itens PDSH/ENG/HISO existentes serão referenciados por sua carteira original, sem duplicar status.
+- Estado vigente: execução integral solicitada; F0 e fatias T3 concretas em implementação no checkout isolado. SPEC0211/0212 aprovadas pelo usuário; nenhum cartão integral fechado nesta rodada. Produção `NO_GO`.
+
+## P100-001 — Remover emits obsoletos e órfãos de compilação
+
+- Estado: `VERIFY`, T2. Dono: Codex. Prioridade: P0 de higiene. Remoção executada; lint preexistente impede encerramento do gate.
+- O que: remover 348 arquivos ignorados de compilação sob `apps/*/src` e `packages/*/src`: 339 ao lado de fonte existente e nove órfãos legados de módulos já movidos.
+- Onde: lista exata em inventário de `PARE100-20261014`; SPEC [0207](../02_spec/0207_cleanup_orphaned_emits.md). Os nomes completos ficam no manifesto, sem expandir o escopo por wildcard de remoção.
+- Como: conferir tracked/ignore, consumidores e SHA-256; preservar backup; remover exclusivamente entradas do manifesto; executar os gates T2 em Node 22 com recursos descartáveis próprios.
+- Dependências: claim `PARE100-20261014`, SPEC curta pronta, comprovação de emit e ausência de consumidor exclusivo do JavaScript. Pedido atual autoriza a remoção reversível T2.
+- Pronto: zero candidatos remanescentes, TypeScript/contratos/migrations/dados intactos, typecheck/lint/unit/PG/E2E PASS e resultado registrado. Declaração autoral `apps/web/src/vite-env.d.ts` preservada. Falha em gate mantém o cartão aberto e explícita, sem enfraquecer testes.
+- Evidência atual: 348 paths ausentes; 983 fontes versionadas intactas; typecheck/unit/PG/E2E/fronteira PASS. Lint FAIL por `sleep` não usado em fonte de HEAD da PDSH-031; P100-002 trata a dívida. [0612](../04_audit/0612_parity_plan_cleanup_2026-10-14.md).
+
+## Regras da carteira
+
+Esta é a fonte de status dos novos IDs P100; PDSH/ENG/HISO e AUD0611-G01/G02/G03 conservam seus owners e estados nas carteiras originais. O plano amplia o escopo, sem encerrar cartões externos por referência. `TODO` significa planejado, sem execução autorizada de BUILD T3/T4. Antes de implementar, registrar SPEC concreta, claim e revisão exigida. Os paths descritos como propostos ainda não existem e não constituem implementação.
+
+Cada task tem evidência atual do próprio limite: wire, syscall, persistência, lifecycle, UI ou artefato. Tests/mock-only não certificam provider real ou plataforma diferente. Estados usados: TODO, READY, IN_PROGRESS, VERIFY, DONE_LOCAL, DONE, BLOCKED e DEFERRED. DONE depende do aceite correspondente, não de self-review. O denominador 100% é o escopo congelado pelo P100-003; métricas de tasks concluídas não substituem a matriz funcional.
+
+Estimativa inicial e owners são propostas do plano 0376. Refinar cada task em sprint/subtasks após SPEC; não abrir uma mega-task que altere simultaneamente kernel, segurança, UI e deploy. Os requisitos de T2/T3/T4 da constituição são cumulativos; um effect externo real não vira T2 porque está atrás de uma porta.
+
+## Cartões novos de execução
+
+### P100-002 — Fechar a baseline de qualidade
+
+- Estado: `VERIFY`; fase F0; prioridade P0; trilha T2; owner proposto: Integração/owner PDSH-031.
+- O que/onde: tests PDSH-031, vitest.config.mts e gates atuais.
+- Como: Resolver o helper sleep não usado com o owner; fechar PG/E2E/ledgers e a divergência dos thresholds na task original; reemitir baseline sem esconder skips.
+- Dependências: `PDSH-031`, `AUD0611-G03`; a dívida preexistente de lint pode ser corrigida sem aguardar DONE da limpeza.
+- Pronto: Lint/unit/PG/E2E atuais verdes, gate agregado e per-file realmente impostos, cleanup conferido; status de PDSH-031 permanece na carteira original.
+
+### P100-003 — Congelar a matriz funcional integral
+
+- Estado: `IN_PROGRESS`; fase F0; prioridade P0; trilha T1; owner proposto: Arquitetura/QA.
+- O que/onde: referência DeepSeek pinada; catálogo e evidência PARE100.
+- Como: Expandir 318 manifests/55 famílias, apps, Python/native/config em requisitos de tools, eventos, métodos, opções e jornadas; cada folha liga fonte hash, task, owner e procedimento.
+- Dependências: nenhuma task anterior; claim próprio e referência pinada.
+- Pronto: Nenhuma superfície sem classificação; denominador congelado e revisável; UNKNOWN continua visível. Não atribuir 100% pela contagem de pacotes.
+
+### P100-004 — Construir o comparador diferencial
+
+- Estado: `IN_PROGRESS`; fase F0; prioridade P0; trilha T2; owner proposto: QA.
+- O que/onde: test-support, fixtures/replay e homes sintéticas próprias.
+- Como: Executar a referência e o CVG com providers keyless; comparar transcripts, efeitos e estados; aceitar só normalizações declaradas de IDs/tempo.
+- Dependências: `P100-003`, `PDSH-032`.
+- Pronto: Caso conhecido-bom passa e fixtures com efeito extra, evento perdido e resultado indevido falham; nenhum uso de ~/.dsh ou dado real.
+
+### P100-010 — Migrar os consumidores legados
+
+- Estado: `TODO`; fase F1; prioridade P0; trilha T3; owner proposto: Integração/backend.
+- O que/onde: apps/api/src/legacy-composition.ts, server.ts; worker; consumidores mapeados.
+- Como: Caracterizar contratos e delegar cada jornada ativa ao kernel público por adaptador compatível; retirar a dependência de domínio do host genérico.
+- Dependências: `P100-003`, `PDSH-003b`.
+- Pronto: API/worker preservam contratos autorizados, passam pelo mesmo pipeline e continuam após restart; nenhum import de produto no núcleo.
+
+### P100-011 — Retirar as bibliotecas legadas ativas
+
+- Estado: `TODO`; fase F1; prioridade P0; trilha T3; owner proposto: Integração/backend.
+- O que/onde: legacy/packages/secretary-{evals,journeys,profile}, manifests/aliases/lock/build/CI.
+- Como: Depois de substituir os consumidores, retirar exports/rotas e workspaces, sincronizar lock com claim próprio e apagar exclusivamente arquivos executáveis aprovados.
+- Dependências: `P100-010`.
+- Pronto: Host compila/testa/empacota sem legacy; exports versionados e consumidores migrados; zero import ativo residual; dados, migrations e provas históricas preservados.
+
+### P100-012 — Completar composição e lifecycle de plugins
+
+- Estado: `IN_PROGRESS`; fase F1; prioridade P0; trilha T3; owner proposto: Runtime.
+- O que/onde: packages/harness/src/kernel, perfis/config e catálogos públicos.
+- Como: Serviços/hook/config completos, perfis/bundles, capabilities trocáveis com quiescência e rollback; controles imutáveis; decidir diferenças de HMR/auto-review em SPEC.
+- Dependências: `P100-003`, `PDSH-003b`.
+- Pronto: Boot/dependência/ciclo/erro/dispose/reload testados; negar unload/bypass de controle; diferenças funcionais de gestão de plugin não viram waiver implícito.
+
+### P100-014 — Completar a superfície de modelos
+
+- Estado: `TODO`; fase F2; prioridade P0; trilha T3/T4; owner proposto: Model gateway.
+- O que/onde: packages/model-gateway, providers e contratos.
+- Como: Streaming, multimodal, rotas e extensões de modelo da referência; budgets, retry/circuito, usage parcial e cancelamento; doubles antes de homologar provider.
+- Dependências: `P100-012`.
+- Pronto: Schemas/stream/usage/errors equivalentes nas rotas mapeadas; ausência de credencial falha fechada; provider real só com gate T4 próprio.
+
+### P100-015 — Completar backends de armazenamento
+
+- Estado: `TODO`; fase F2; prioridade P1; trilha T3; owner proposto: Persistência.
+- O que/onde: packages/persistence e adapters propostos JSON/SQLite/KV.
+- Como: Ports de storage/domain/KV e backends requeridos pelos perfis; PostgreSQL continua autoridade institucional; migração/recuperação e tenant definidos por backend.
+- Dependências: `P100-012`.
+- Pronto: Conformidade da mesma API em cada backend declarado; concorrência/restart/replay/isolation demonstrados; nenhum dual-write silencioso.
+
+### P100-020 — Sessão, forks, consulta e projeções completas
+
+- Estado: `TODO`; fase F3; prioridade P0; trilha T3; owner proposto: Runtime/persistência.
+- O que/onde: packages/harness/src/session, contracts, persistence; query/projection adapters propostos.
+- Como: Expandir vocabulário, branches/forks/resume, timelines, lookup/search/export e projeções; adapters de import/export da referência sem reescrever históricos CVG.
+- Dependências: `P100-012`, `P100-015`.
+- Pronto: Turno com tools/approvals pode ser retomado e consultado sem perder ordem/vínculos; sessão v1 real preservada; versões desconhecidas recusadas.
+
+### P100-021 — Contexto, compactação e pressão de tokens
+
+- Estado: `TODO`; fase F3; prioridade P0; trilha T3; owner proposto: Runtime/model gateway.
+- O que/onde: context-engine, compaction, token-meter, pruning/spill propostos.
+- Como: Usage por tentativa, pressão antes do dispatch, pruning de tool output, resumo preservando fatos, imagens/offload, workspace/skill context e compactação manual.
+- Dependências: `P100-014`, `P100-020`, `PDSH-024`, `PDSH-025`.
+- Pronto: Replay reconstrói pressão/usage; fatos/obrigações/aprovações preservados; overflow não chama provider; compaction cancelada não consome efeito.
+
+### P100-022 — Ferramentas de arquivo, skills e documentos
+
+- Estado: `TODO`; fase F2; prioridade P1; trilha T3; owner proposto: Ferramentas.
+- O que/onde: packages/sandbox, skills, attachments/doc/deliverables adapters propostos.
+- Como: Completar operações fs, leitura binária/anexos, documentos/previews/exports e registry de skills/dependências com limits e catálogo gerado.
+- Dependências: `P100-012`, `AUD0611-G02`.
+- Pronto: Jornadas e schemas da matriz PASS; traversal/symlink/tamanho/formato hostil negados; intenção/evidência registrada; conversão em ambiente contido.
+
+### P100-023 — Shell e terminais persistentes
+
+- Estado: `TODO`; fase F2; prioridade P0; trilha T3; owner proposto: Runtime/nativo.
+- O que/onde: shell-tool e adapters PTY/subprocess/terminal propostos.
+- Como: Execução persistente, stdin, recuperação de screen, jobs, kill de descendentes, bash/pwsh conforme perfis; budgets/approval em cada chamada.
+- Dependências: `P100-012`, `AUD0611-G02`.
+- Pronto: Terminal pertence ao tenant/session; reconexão não herda autoridade de outra sessão; cancelamento/timeout matam descendentes; network/file effects contidos.
+
+### P100-024 — Contenção nas plataformas suportadas
+
+- Estado: `TODO`; fase F2; prioridade P0; trilha T3; owner proposto: Nativo/segurança.
+- O que/onde: sandbox e backends Linux/macOS/Windows propostos; runners CI.
+- Como: Expandir o grant real Linux e implementar backends equivalentes Seatbelt/ACL ou execução isolada contratada; functional probe por ABI/mecanismo.
+- Dependências: `AUD0611-G02`, `P100-003`.
+- Pronto: Nenhum suporte inferido só de versão; grants negam efeitos proibidos em teste funcional nativo; indisponível/partial ficam explícitos e recusáveis.
+
+### P100-025 — SDK Python e projeções completas do protocolo
+
+- Estado: `IN_PROGRESS`; fase F3; prioridade P0; trilha T3; owner proposto: Integradores.
+- O que/onde: packages/sdk, Python SDK/carrier propostos; API streaming.
+- Como: Expandir cliente TS/wire já tratados em G01 com cliente Python, event notifications, turn controls, transportes e composição mínima/full contratados.
+- Dependências: `AUD0611-G01`, `P100-020`.
+- Pronto: Cliente em outro processo TS/Python executa/resume/cancela sessão com transcript coerente; ids/version/errors/backpressure e EOF/shutdown testados.
+
+### P100-026 — ACP e execução remota SSH
+
+- Estado: `TODO`; fase F3; prioridade P1; trilha T3/T4; owner proposto: Protocolos.
+- O que/onde: adapters ACP/SSH propostos; autenticação/host SDK.
+- Como: Implementar perfis de protocolo e carrier remoto, hosts aprovados, isolamento das credenciais, deadlines e reconexão sem repetir efeitos.
+- Dependências: `P100-025`, `P100-024`.
+- Pronto: Conformance wire e remote fixture controlada PASS; disconnect/retry não duplicam efeito; remoto real só no gate T4.
+
+### P100-030 — MCP e recursos externos
+
+- Estado: `TODO`; fase F4; prioridade P0; trilha T3/T4; owner proposto: Integrações.
+- O que/onde: MCP client/resource adapters propostos; tool/capability registry.
+- Como: Cliente MCP stdio/HTTP, tools/resources/templates, validação de schema, lifecycle, cancelamento e autenticação por servidor aprovado.
+- Dependências: `P100-025`, `P100-024`.
+- Pronto: Fixtures conhecidas reais do protocolo PASS; tool externo não pula policy/approval/journal; servidor desconhecido, schema hostil e timeout recusados.
+
+### P100-031 — Web fetch e search por provider
+
+- Estado: `TODO`; fase F4; prioridade P1; trilha T3/T4; owner proposto: Integrações.
+- O que/onde: web adapters propostos; SSRF/transports existentes.
+- Como: Seam de fetch/search com backends da matriz, DNS-bound/redirect/size limits, dados classificados e citações; fixtures antes de providers reais.
+- Dependências: `P100-014`, `P100-024`.
+- Pronto: Requests e resultados contratados PASS; SSRF/rebind/redirect/cap falham fechado; conhecimento hospitalar continua exigindo fonte institucional aprovada.
+
+### P100-032 — Ferramentas LSP
+
+- Estado: `TODO`; fase F4; prioridade P1; trilha T3; owner proposto: Integrações.
+- O que/onde: LSP/stdio adapters propostos.
+- Como: Serviço por linguagem e ferramenta read-only para definition/references/implementation/hover; workspace e lifecycle delimitados.
+- Dependências: `P100-023`.
+- Pronto: Servidores de fixture e casos por método PASS; timeout/EOF/arquivo fora do workspace recusados; subprocesso encerrado no dispose.
+
+### P100-033 — Subagentes e providers de delegação
+
+- Estado: `TODO`; fase F4; prioridade P0; trilha T3/T4; owner proposto: Orquestração.
+- O que/onde: subagent registry/drivers propostos; agent-runtime.
+- Como: Spawn/fork em processo e SDK/ACP/Codex/Claude conforme matriz; autoridade/budget herdados; continuation, mailbox, cancel e restart explícitos.
+- Dependências: `P100-025`, `P100-026`, `P100-024`.
+- Pronto: Filho não amplia tool/grant/tenant; ancestry/context corretos; provider ausente e falha parcial seguros; reais só homologados com T4.
+
+### P100-034 — PTC Node e Python
+
+- Estado: `TODO`; fase F4; prioridade P0; trilha T3; owner proposto: Orquestração/nativo.
+- O que/onde: PTC runtimes propostos e kernel tool pipeline.
+- Como: Run-code contido, subchamadas serializadas passando pelos mesmos controls, limits de output/processo e contabilidade por subcall.
+- Dependências: `P100-024`, `P100-030`.
+- Pronto: Código sintético e subcalls PASS em Node/Python; nenhuma chamada interna bypassa aprovação/log; escape/loop/output excessivo negados e processo terminado.
+
+### P100-035 — Workflows e loop Ralph
+
+- Estado: `TODO`; fase F4; prioridade P1; trilha T3; owner proposto: Orquestração.
+- O que/onde: workflow service/runner/ralph adapters propostos.
+- Como: Runs, child agents, checkpoints e limite de iteração; retomada durável e efeito idempotente; estado/sucesso não vêm de texto livre do modelo.
+- Dependências: `P100-033`, `P100-034`.
+- Pronto: Workflow interrompido retoma do checkpoint; execução repetida mantém um efeito; timeout/cancel/replan/error e ausência de provider cobertos.
+
+### P100-036 — Goals, planos e todos da sessão
+
+- Estado: `TODO`; fase F4; prioridade P1; trilha T3; owner proposto: Orquestração.
+- O que/onde: goal/plan/todo services e UI projections propostos.
+- Como: Lifecycle durável de objetivos, rounds e checklist com budgets, pause/resume/stop, fences e owner humano; desligamento não reabre goal encerrado.
+- Dependências: `P100-020`, `P100-035`.
+- Pronto: Corridas pause/stop/round e restart preservam intenção; objetivo não vira autorização sensível; projeções correspondem a fatos persistidos.
+
+### P100-037 — Jobs, schedule e webhooks governados
+
+- Estado: `TODO`; fase F4; prioridade P0; trilha T3/T4; owner proposto: Backend/persistência.
+- O que/onde: jobs/schedule/webhook adapters propostos; outbox/security existentes.
+- Como: Background start/list/read/kill, reminders por sessão, delivery idempotente e webhook autenticado; reenfileirar e cancelar com fences.
+- Dependências: `P100-020`, `P100-035`.
+- Pronto: Crash/retry/reorder/duplicate não criam efeito extra; agenda clínica real não é confirmada/cancelada/reagendada automaticamente; rede real só T4.
+
+### P100-038 — Agent Teams e task DAG
+
+- Estado: `TODO`; fase F4; prioridade P1; trilha T3; owner proposto: Orquestração.
+- O que/onde: team roster/mailbox/task-DAG services e projections propostos.
+- Como: Leads/teammates, mensagens persistidas, tasks e dependências, delivery/ack e interrupção com identidade/autoridade delimitadas.
+- Dependências: `P100-033`, `P100-035`.
+- Pronto: Mensagens/task DAG sobrevivem restart, duplicata não executa duas vezes e conflito de versão é explícito; sibling não assume autoridade de outro tenant.
+
+### P100-040 — Launch, perfis, settings e credenciais
+
+- Estado: `TODO`; fase F5; prioridade P0; trilha T3/T4; owner proposto: Hosts/integração.
+- O que/onde: CLI/host boot/API/settings/credentials/plugin-inventory propostos.
+- Como: Profiles/bundles/headless, config schemas/overlays, settings/accounts, gerenciamento revisado de plugins e reload de capabilities com quiescência.
+- Dependências: `P100-012`, `P100-025`.
+- Pronto: Startup/reset/reload/reconnect/error e configurações inválidas PASS; segredos não vazam; diferenças de gestão runtime seguem decisão T3, sem baixar controles.
+
+### P100-041 — Console Web com jornadas equivalentes
+
+- Estado: `TODO`; fase F5; prioridade P1; trilha T3; owner proposto: Frontend/host.
+- O que/onde: apps/web, API BFF e módulos UI propostos.
+- Como: Cobrir as 63 packages client por jornadas de chat/sessão/approval/trajectory/files/terminal/agents/goals/jobs/settings/plugins/attachments/deliverables/locale.
+- Dependências: `P100-025`, `P100-040`.
+- Pronto: Matriz de jornadas UI PASS com keyboard/accessibility, reconnect/error/approval e eventos reais do motor; console não fabrica sucesso nem libera efeito.
+
+### P100-042 — Desktop e integrações nativas de host
+
+- Estado: `TODO`; fase F5; prioridade P1; trilha T3; owner proposto: Frontend/nativo.
+- O que/onde: desktop/Electron e desktop-host propostos.
+- Como: Carrier desktop, launch/workspace picker/open-in-app/clipboard/deep links e distribuição por plataforma com contrato Host/Client explícito.
+- Dependências: `P100-041`, `P100-024`.
+- Pronto: Jornadas do carrier nas plataformas suportadas PASS; workspace selection não amplia grants; Electron preload/IPC sem execução arbitrária.
+
+### P100-043 — Browser use e computer use
+
+- Estado: `TODO`; fase F6; prioridade P1; trilha T3/T4; owner proposto: Interação/segurança.
+- O que/onde: browser/computer-use drivers propostos, MCP/native providers.
+- Como: Playwright/DevTools/Stagehand/Cua providers da matriz, resource lifecycle por sessão, screenshots e ações com destino autorizado e kill seguro.
+- Dependências: `P100-030`, `P100-024`, `P100-041`.
+- Pronto: Jornadas em app/site sintético e erros de provider PASS; cada ação sensível tem approval/handoff; recurso e processo não escapam de sessão/tenant.
+
+### P100-044 — Voz e transcrição editável
+
+- Estado: `TODO`; fase F6; prioridade P1; trilha T3/T4; owner proposto: Interação/modelos.
+- O que/onde: speech/transcription/voice-input adapters e UI propostos.
+- Como: Provider local SenseVoice ou equivalente contratado, assets versionados, captura/cancel, texto editável e recuperação antes de enviar.
+- Dependências: `P100-014`, `P100-041`.
+- Pronto: Fixtures de áudio e lifecycle PASS; texto incerto vira revisão humana; não enviar anotação/prontuário definitivo por transcrição automática; assets aprovados.
+
+### P100-045 — Guest Web Worker e extensões Host/Client
+
+- Estado: `TODO`; fase F6; prioridade P1; trilha T3; owner proposto: Runtime/frontend.
+- O que/onde: guest worker/VFS/packer/dual-half extensions propostos.
+- Como: Runtime browser com VFS, módulo/loader/postMessage e inspeção; execução de extensão com caps declaradas e control plane fora do código do agente.
+- Dependências: `P100-012`, `P100-025`, `P100-041`.
+- Pronto: Equivalência das jornadas guest/host mapeadas PASS; CSP/IPC/authority/cancel/resource limits testados; extensão nunca registra controle ou executa sem grant.
+
+### P100-046 — Diagnósticos, telemetry e feedback
+
+- Estado: `TODO`; fase F6; prioridade P1; trilha T3/T4; owner proposto: Observabilidade/host.
+- O que/onde: observability/exporters, diagnostics/inspector/feedback propostos.
+- Como: Trajetórias, metrics/traces, inspetor, diagnóstico de runtime e feedback de produto com schema, correlação e redação; backend OTEL delimitado.
+- Dependências: `P100-020`, `P100-040`.
+- Pronto: Reconstruir falha por correlation/trace sem payload sensível; exporter indisponível e inspector sem auth seguros; rede telemetry real exige T4.
+
+### P100-050 — Gates integrais de paridade no CI
+
+- Estado: `TODO`; fase F7; prioridade P0; trilha T2/T3; owner proposto: Integração/QA.
+- O que/onde: scripts/ci-bar\*, workflows, capability/matrix validator propostos.
+- Como: Além dos gates PDSH existentes, exigir coverage do denominador integral, catálogos/closure/matrix/diferenciais/UI/platform; candidate/run bound.
+- Dependências: `P100-004`, `PDSH-033`, `P100-011`, `P100-041`, `P100-045`.
+- Pronto: Known-bad source/catálogo/matriz/cert é rejeitado; nenhum requisito some; global/per-file/golden/platform têm evidência distinta e CI obrigatório.
+
+### P100-051 — Recuperação, concorrência e performance
+
+- Estado: `TODO`; fase F7; prioridade P0; trilha T3; owner proposto: QA/runtime.
+- O que/onde: chaos/load/recovery/concurrency suites e workloads propostos.
+- Como: Comparar workloads controlados e limites definidos na SPEC; crash-before/after-commit, lease/clock/retry/reorder/backpressure/tenant collision.
+- Dependências: `P100-035`, `P100-037`, `P100-038`, `P100-043`.
+- Pronto: SLIs e bounds aprovados medidos no mesmo ambiente; nenhuma duplicata/bypass/loss; restore e reconciliação verificam estado durável, não só logs.
+
+### P100-052 — Pacotes e builds reproduzíveis
+
+- Estado: `TODO`; fase F7; prioridade P0; trilha T3/T4; owner proposto: Distribuição/SRE.
+- O que/onde: build/public exports/pack/carriers/image/supply-chain propostos.
+- Como: Artefatos isolados por owner, TS/Python/native/frontend closure, instalação limpa e reprodutível, SBOM/licenses/hash/signature; sem publicar automaticamente.
+- Dependências: `P100-011`, `P100-025`, `P100-042`, `P100-045`.
+- Pronto: Instalação sintética de pacote/image sem fonte/legacy PASS; exports/types/assets/native sidecars íntegros; scan e licenses da candidata atuais.
+
+### P100-053 — Auditoria independente e aceite de 100%
+
+- Estado: `TODO`; fase F7; prioridade P0; trilha T4; owner proposto: Auditoria independente/usuário.
+- O que/onde: matriz congelada, evidência de cada requisito e candidato final.
+- Como: Recomputar cobertura, inspecionar artefato real, reexecutar negativos e diferenças por família; registrar limitações, residual risk e decisão.
+- Dependências: `P100-050`, `P100-051`, `P100-052`, `PDSH-026`.
+- Pronto: 100% de requisitos obrigatórios PASS_CURRENT, zero diferença/approval pendente; auditor independente aceita candidato; release continua separado no plano 0374.
+
+## Dependências externas e ausência de duplicação
+
+| ID existente  | Papel neste programa                                              | Fonte de status                 |
+| ------------- | ----------------------------------------------------------------- | ------------------------------- |
+| PDSH-003b     | Unificar CONTROLLED_RUNTIME no kernel antes do cutover            | plano 0375                      |
+| PDSH-021..025 | Base de sessão, formato, SDK, token meter e compaction            | plano 0375                      |
+| PDSH-026      | Consumo hospitalar no produto, com owner e gate próprios          | plano 0375 e backlog do produto |
+| PDSH-031      | Fechamento da cobertura do núcleo e seus gates pendentes          | plano 0375                      |
+| PDSH-032/033  | Replay inicial e gates PDSH no CI; P100-004/050 ampliam o alcance | plano 0375                      |
+| AUD0611-G01   | Transporte SDK entre processos e reconciliação do escopo          | backlog mestre                  |
+| AUD0611-G02   | Probe/grant real Landlock e fidelidade à SPEC 0196                | backlog mestre                  |
+| AUD0611-G03   | Agregado + per-file sem reduzir thresholds                        | backlog mestre                  |
+
+A referência antiga a “SPEC 0195” na linha PDSH-003b do plano 0375 não deve ser reutilizada como gate: a SPEC 0195 existente trata da seam de sandbox. Unificar CONTROLLED_RUNTIME requer SPEC nova com escopo e revisão próprios; a referência de numeração histórica não concede autorização.
+
+## Próxima ação
+
+P100-003: expandir e congelar a matriz integral. P100-002 trata a dívida preexistente de qualidade e o fechamento PDSH-031; P100-001 não é considerado DONE enquanto seu gate de lint estiver vermelho. A remoção segura já foi executada e será reportada separadamente dos gates.
+
+## Progresso PARE100-EXEC
+
+Gates iniciais e artefatos continuam em verificação; evidências/limites em `docs/04_audit/evidence/PARE100-EXEC-20261014/execution-state.json`. P100-012 trata controle correto nesta fatia, sem fechar lifecycle integral; P100-025 inicia stdio básico, com Python/HTTP/ACP ainda abertos. Catálogo e projection de reply não constituem 100% de paridade.

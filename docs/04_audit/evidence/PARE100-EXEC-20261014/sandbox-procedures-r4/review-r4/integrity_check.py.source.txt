@@ -1,0 +1,23 @@
+import pathlib,json,hashlib,sys
+D=pathlib.Path.cwd();Q=D.parent/'review-packet';phase=sys.argv[1]
+expected='ec679baafd8a8f3bfcd38d63e6365aa98c073d537e70a73f74b82398332310c2'
+checks=[]
+def check(kind,path,sha):
+ try: actual=hashlib.sha256(path.read_bytes()).hexdigest();error=None
+ except Exception as e: actual=None;error=repr(e)
+ checks.append(dict(kind=kind,path=str(path),expected=sha,actual=actual,ok=actual==sha,error=error))
+check('manifest',Q/'packet-manifest.json',expected)
+m=json.loads((Q/'packet-manifest.json').read_text())
+for e in m: check('packet',Q/e['path'],e['sha256'])
+sm=json.loads((Q/'source-manifest.json').read_text())
+for e in sm:
+ check('sourceLive',pathlib.Path(e['live']),e['sha256']);check('sourceCopy',Q/e['copy'],e['sha256'])
+ext=json.loads((Q/'external-inputs.json').read_text())
+for e in ext: check('external',pathlib.Path(e['path']),e['sha256'])
+c=json.loads((Q/'constraints.json').read_text())
+for e in [c['frozenD12Origin'],*c['sourceSpecs']]: check('constraintHashOnly',pathlib.Path(e['path']),e['sha256'])
+a=sorted(str(p.relative_to(Q)) for p in Q.rglob('*') if p.is_file());wanted=sorted([e['path'] for e in m]+['packet-manifest.json'])
+r=dict(phase=phase,checks=checks,checkCount=len(checks),passed=sum(e['ok'] for e in checks),membership=dict(actual=a,expected=wanted,ok=a==wanted,actualCount=len(a)),sourcePairs=len(sm),externalInputs=len(ext),constraintSentinels=5,mutableOriginBacklogUsedAsSentinel=False)
+(D/f'integrity-{phase}.json').write_text(json.dumps(r,indent=2)+'\n')
+print(json.dumps({k:v for k,v in r.items() if k not in ['checks','membership']},indent=2));print('membership',len(a),a==wanted)
+assert len(checks)==111 and all(e['ok'] for e in checks) and a==wanted

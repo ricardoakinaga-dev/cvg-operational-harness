@@ -4,13 +4,11 @@
  * This resolves the published/pinned agent version from the ControlPlaneStore
  * and DELEGATES execution to the platform's CONTROLLED_RUNTIME
  * (`executeConfiguredAgent` in `@cvg/platform`). It is a profile/delegation
- * layer, not a governed kernel turn: the CONTROLLED_RUNTIME is the dry-run
- * published path and does not run through `@cvg/harness`'s
- * `kernel/pipeline.ts`. Unifying the published path onto the governed kernel
- * (or justifying the CONTROLLED_RUNTIME as a distinct profile) is scoped as
- * PDSH-003b (SPEC 0195) and is intentionally out of scope here
- * (SPEC 0194). The public contract (`PublishedAgentExecutionResult`) is
- * unchanged.
+ * layer. The platform facade composes the public governed harness for the
+ * attested synthetic profile specified by SPEC0214. Public result envelopes
+ * remain those of PublishedAgentExecutionResult; a completed transport wrapper
+ * does not certify tool success or grant release. Local one-use execution does
+ * not close the durable migration/restart requirements of PDSH-003b/P100-010.
  */
 import {
   createControlledCapabilityGateway,

@@ -1,0 +1,88 @@
+from pathlib import Path
+import json, hashlib, os, time
+P=Path(__file__).resolve().parent;W=P.parent.parent/'worktree';T=P/'toolchain';S=P/'originals'
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def dump(p,v):p.write_text(json.dumps(v,indent=2)+'\n')
+def load(p):return json.loads(p.read_text())
+checks=[]
+def check(label,truth,detail=None):
+ checks.append({'check':label,'observed':bool(truth),'detail':detail})
+ if not truth:raise AssertionError((label,detail))
+ready=load(P/'READY.json')
+for d,h in ready.items():check('READY exact '+d,sha(W/'scripts'/d)==h and sha(P/'ready-artifacts/scripts'/d)==h)
+basepackage=load(S/'package.json'); configsha=sha(S/'vitest.config.mts')
+matrix=[]
+for D in sorted((P/'cases').iterdir()):
+ name=D.name
+ selected=name.startswith(('red-r2-','green-ci-','green-phase10-','green-r2-ci-certify-')) and not name.startswith('green-ci-certify-')
+ if not selected:continue
+ o=load(D/'observation.json');R=D/'fixture';path='ci-certify' if 'ci-certify' in name else 'phase10' if 'phase10' in name else 'ci';red=name.startswith('red-');good=o['variant']=='good';agg=o['variant']=='aggregatebad'
+ check(name+' completed bounded command',o['termination_reason'] is None and not o['live_descendants_after_exit_before_cleanup'])
+ check(name+' original config and lock',sha(R/'vitest.config.mts')==configsha and sha(R/'package-lock.json')==sha(S/'package-lock.json'))
+ pkg=load(R/'package.json');check(name+' production manifest fields retained',{k:v for k,v in pkg.items() if k!='scripts'}=={k:v for k,v in basepackage.items() if k!='scripts'})
+ for k in ['test:core','test:coverage','coverage:critical']:check(name+' real npm command '+k,pkg['scripts'][k]==basepackage['scripts'][k])
+ for f in (S/'scripts').rglob('*.mjs'):
+  rel=f.relative_to(S)
+  if f.name in ['ci-bar.mjs','phase10-certify.mjs']:continue
+  check(name+' unchanged helper '+str(rel),sha(R/rel)==sha(f))
+ expected=P/('preimages' if red else 'ready-artifacts')/'scripts'
+ for driver in ['ci-bar.mjs','phase10-certify.mjs']:check(name+' unmodified tested '+driver,sha(R/'scripts'/driver)==sha(expected/driver))
+ events=[json.loads(x) for x in (D/'child-env.jsonl').read_text().splitlines()]
+ coverageevent=next(e for e in events if e['event']=='pretest:'+('core' if path=='ci' else 'coverage'))
+ flag=coverageevent['env'].get('CVG_COVERAGE_PER_FILE');expectflag=('0' if o['flag']=='flag0' else None) if red else '1'
+ check(name+' real npm child env',flag==expectflag and coverageevent['node']=='v22.23.2' and coverageevent['env']['CVG_TEST_SCOPE']=='core' and 'NODE_OPTIONS' not in coverageevent['env'])
+ if path=='ci-certify':check(name+' CI -> npm certify forces1',next(e for e in events if e['event']=='precertify')['env'].get('CVG_COVERAGE_PER_FILE')=='1')
+ summary=o['summary'];check(name+' toy-only coverage denominator',len(summary)==3 and all(k=='total' or k.endswith('/packages/contracts/src/toy.ts') or k.endswith('/packages/observability/src/toy.ts') for k in summary))
+ metrics=['statements','branches','functions','lines']; neutral=next(v for k,v in summary.items() if k.endswith('/packages/contracts/src/toy.ts'))
+ check(name+' known input math',all(summary['total'][m]['pct']==(99.5 if red or o['variant']=='perfilebad' else 50.5 if agg else 100) for m in metrics) and all(neutral[m]['pct']==(99 if red or o['variant']=='perfilebad' else 100) for m in metrics))
+ gate=o.get('coverage_subgate',o['gate']);expectedpass=red or good
+ check(name+' coverage discrimination',(gate['status']=='PASS')==expectedpass)
+ if path=='ci':check(name+' CI terminal exit',o['exit']==(0 if expectedpass else 1))
+ else:check(name+' always nonqualifying terminal',o['exit']==1 and o['decision']=='NO_GO' and o['certification']=='NO_GO')
+ log=(D/'ci-artifacts/gates/coverage.log') if path=='ci' else R/'certification/logs/coverage.log';raw=log.read_text()
+ if not red and not good and not agg:check(name+' actual Vitest100 refusal','threshold (100%)' in raw and '99%' in raw and 'coverage:critical\n' not in raw)
+ if agg:
+  check(name+' child passed before aggregate refusal','1 passed' in raw and 'threshold (100%)' not in raw)
+  if path=='ci':check(name+' strict CI aggregate refusal',all('coverage below threshold: '+m in raw for m in metrics))
+  else:
+   critical=load(R/'certification/critical-coverage.json');check(name+' real critical global refusal',critical['critical']['pass'] and not critical['global']['pass'] and len(critical['global']['failures'])==4 and '> node scripts/safe-stub.mjs mutation' not in raw)
+ if path!='ci' and expectedpass:
+  critical=load(R/'certification/critical-coverage.json');check(name+' critical95 + global floors pass',critical['global']['pass'] and critical['critical']['pass'] and critical['critical']['threshold']==95 and 'DECLARED_SAFE_STUB' in raw and 'mutation' in raw)
+ matrix.append({'name':name,'path':path,'input_flag':o['flag'],'child_per_file_flag':flag,'variant':o['variant'],'global_pct':{m:summary['total'][m]['pct'] for m in metrics},'neutral_pct':{m:neutral[m]['pct'] for m in metrics},'coverage_gate_status':gate['status'],'coverage_gate_exit':gate['exitCode'],'driver_exit':o['exit'],'decision':o.get('decision'),'certification':o.get('certification'),'pid':o['pid'],'child_pids':[p['pid'] for p in o['children_observed']],'elapsed_seconds':o['elapsed_seconds'],'driver_sha256':o['driver_sha256'],'child_environment_record_sha256':sha(D/'child-env.jsonl'),'observation':str((D/'observation.json').relative_to(P)),'raw_coverage_log':str(log.relative_to(P)),'raw_driver_log':str((D/'driver.log').relative_to(P)),'coverage_summary':str((R/'coverage/coverage-summary.json').relative_to(P))})
+check('primary and CI-certify matrix size',len(matrix)==20,len(matrix))
+sentinels=load(P/'W-sentinels-before.json');drift=[x['path'] for x in sentinels if sha(W/x['path'])!=x['sha256']]
+check('825 W source/config/spec217/spec0220 sentinels remain intact',not drift,drift)
+dump(P/'W-sentinels-after.json',{'count':len(sentinels),'all_match':not drift,'drift':drift,'before_sha256':sha(P/'W-sentinels-before.json')})
+links=[]; envfiles=[]
+for d,ds,fs in os.walk(P,followlinks=False):
+ if '.git' in Path(d).parts:ds[:]=[];continue
+ for n in ds+fs:
+  f=Path(d)/n
+  if f.is_symlink():links.append({'path':str(f.relative_to(P)),'target':os.readlink(f),'confined':f.resolve().is_relative_to(P)})
+  if f.is_file() and n.startswith('.env') and n!='.env.example':envfiles.append(str(f.relative_to(P)))
+check('all surviving symlinks confined',all(x['confined'] for x in links));check('no private .env files copied',not envfiles,envfiles)
+dump(P/'isolation-audit.json',{'links':links,'env_files_except_example':envfiles,'source_write_paths':'native-proof only','W_readonly':True,'source_sentinels':len(sentinels),'app_sources_copied':False,'git_mutations':'git init/add -- package.json .gitignore/commit only inside exact case fixtures; no W/root git mutation','unrelated_gates':'npm safe-stub exit78; npx safe-stub exit79; direct e2e/sbom/licenses safe-stub exit78','mutation':'declared safe stub only, exit0; not mutation qualification','npm':'real npm10.9.8, offline, private configs/cache/home, original test scripts unchanged'})
+# Final physical toolchain and helpers are separately hash bound; include binaries
+# and all loaded installed dependencies without following confined symlinks.
+files=[f for f in T.rglob('*') if f.is_file() and not f.is_symlink()]
+dump(P/'toolchain-final-manifest.json',[{'path':str(f.relative_to(P)),'sha256':sha(f),'size':f.stat().st_size} for f in sorted(files)])
+sourcehashes={str(f.relative_to(P)):sha(f) for base in [P/'preimages',P/'ready-artifacts',S/'scripts'] for f in sorted(base.rglob('*')) if f.is_file()}
+sourcehashes.update({str(f.relative_to(P)):sha(f) for f in [S/'vitest.config.mts',S/'package.json',S/'package-lock.json',T/'bin/node',T/'npm/bin/npm-cli.js',T/'npm/package.json',T/'node_modules/vitest/vitest.mjs',T/'node_modules/vitest/package.json',T/'node_modules/@vitest/coverage-v8/package.json']})
+dump(P/'exact-source-tool-hashes.json',sourcehashes)
+dump(P/'matrix.json',matrix)
+dump(P/'verification.json',{'builder_observations_only':True,'not_self_acceptance':True,'checks':checks,'checks_observed_true':len(checks),'matrix_cases':len(matrix)})
+limitations=['Synthetic two-file toy denominator is NOT project coverage. Only contracts glob has a runtime representative; all four original neutral globs and include/exclude lists retained byte-identically in original config.','No whole W tests, final candidate certification, PG, E2E, application bodies, SBOM or licenses gates executed; unrelated entrypoints deliberately fail. Mutation is a named safe stub, not a real mutation test.','Fixture package.json retains all original nonscript fields/dependency/workspace declarations; only original coverage/core/critical script commands execute. Other commands are explicit stubs. Private critical manifest redirects original branch95 rule to actual toy neutral; global helper and its math are unchanged.','Initial four red-* fixtures lacked branch denominators; phase10 additionally hit null unit metrics schema failure. They remain raw attempts, superseded by red-r2 with both branches exercised and explicit failing synthetic unit metadata.','Initial four green-ci-certify-* attempts used synthetic mismatched candidateId; exact refusal retained. green-r2-ci-certify computes private candidateId with original helper and completes NO_GO.','The 90-second outer watchdog bounds driver descendants despite unchanged one-hour internal driver timeout; process commands, observed PIDs, enumerated env, output bounds, exits and joins are in *.command.json. No deadline/output limit fired; no live observed descendants remained.','No independent acceptance, approval, release qualification or 217/0220 authority granted. Lead owns integration, ledgers and independent review.']
+report={'status':'IMPLEMENTED','role':'Builder','task':'P100-050/F-COV-CI-001','acceptance':'NOT_SELF_APPROVED; Lead/I1 pending','candidate_certification':'NOT_THIS_PROOF; all synthetic certify outcomes NO_GO','node':'22.23.2','npm':'10.9.8','vitest':'4.1.11','source_hashes':ready,'config_sha256':configsha,'environment_base_sha256':sha(P/'environment-base.json'),'toolchain_final_manifest_sha256':sha(P/'toolchain-final-manifest.json'),'exact_source_tool_hashes_sha256':sha(P/'exact-source-tool-hashes.json'),'matrix_cases':len(matrix),'raw_attempt_cases':len(list((P/'cases').iterdir())),'source_sentinels':len(sentinels),'all_source_sentinels_match':not drift,'maximum_case_seconds':max(x['elapsed_seconds'] for x in matrix),'quality_bar_observed':{'RED_old_default_and_flag0_perfilebad_CI_and_phase10':True,'GREEN_current_default_and_flag0_perfilebad_refuses_CI_and_phase10':True,'GREEN_current_default_and_flag0_aggregatebad_refuses_CI_and_phase10':True,'GREEN_current_default_and_flag0_good_coverage_passes_CI_and_phase10':True,'GREEN_CI_to_certify_default_and_flag0_child_env1_bad_refusal_good_subgatepass_terminal_NO_GO':True},'matrix':'matrix.json','raw_evidence':'cases/<case>/{driver.log,driver.command.json,observation.json,child-env.jsonl,fixture/coverage/coverage-summary.json}; phase10 fixture/certification/logs/coverage.log + phase10-result.json; CI ci-artifacts/gates/coverage.log + state','limitations':limitations,'next_action':'Lead reviews private proof + independent critic; no self approval'}
+dump(P/'report.json',report)
+lines=['# Private real-CLI coverage proof — Builder handoff','', 'IMPLEMENTED; no self acceptance. Node22.23.2 / npm10.9.8 / real installed Vitest4.1.11.', '', '| Path | Driver | Neutral99 / global99.5 | Neutral100 / global50.5 | Both100 |', '|---|---|---|---|---|', '| CI coverage, default and inherited0 | preimage | coverage PASS (RED) | not run | not run |', '| Phase10 coverage, default and inherited0 | preimage | coverage PASS (RED), terminal NO_GO | not run | not run |', '| CI coverage, default and inherited0 | READY | Vitest100 refusal | real child succeeds; CI aggregate refuses | coverage PASS / exit0 |', '| Phase10 coverage, default and inherited0 | READY | Vitest100 refusal / NO_GO | critical global refuses / NO_GO | coverage PASS / terminal NO_GO |', '| CI → certify, default and inherited0 | READY | Vitest100 refusal / NO_GO | not run | coverage PASS / terminal NO_GO |', '', '20 primary/repaired observed cases; 8 preserved superseded fixture attempts. Every observed command stayed within90seconds and2MiB outer output bound. Both source drivers used verbatim with exact READY hashes. 825 W sentinels match, including217/0220 sources/specs and original policy/config/helper inputs.','', 'Artifacts: report.json (status/limits), matrix.json (per-case status/PIDs/hashes/log paths), exact-source-tool-hashes.json, verification.json, isolation-audit.json, toolchain-final-manifest.json, environment-base.json. Full parent and actual npm child environments retained privately. Each case has exact argv/env/cwd/PIDs/bounds/exits and unmodified raw Vitest json-summary plus driver logs.','', 'Commands (absolute working paths recorded for every invocation):', '```text', 'python3 native-proof/setup.py', 'python3 native-proof/prove.py versions', 'python3 native-proof/prove.py red', 'python3 native-proof/prove.py green', 'python3 native-proof/prove.py ci-certify', 'node scripts/ci-bar.mjs gate coverage', 'node scripts/phase10-certify.mjs', 'node scripts/ci-bar.mjs gate certify', '```','', 'READY ci-bar SHA256 '+ready['ci-bar.mjs'], 'READY phase10 SHA256 '+ready['phase10-certify.mjs'], 'Original Vitest config SHA256 '+configsha, '', 'Limitations:', *['- '+s for s in limitations], '']
+(P/'report.md').write_text('\n'.join(lines))
+dump(P/'status.json',{'status':'IMPLEMENTED','self_approved':False,'report':'report.json','review_pending':'Lead/I1','source_driver_hashes':ready,'observed_cases':len(matrix)})
+# Evidence manifest excludes itself, Git metadata and installed toolchain contents;
+# the full latter inventory has its own SHA-bound manifest included here.
+manifest=[]
+for f in sorted(P.rglob('*')):
+ if not f.is_file() or f.is_symlink() or f.name in ['manifest.json','manifest.sha256'] or '.git' in f.parts or f.is_relative_to(T):continue
+ manifest.append({'path':str(f.relative_to(P)),'sha256':sha(f),'size':f.stat().st_size})
+dump(P/'manifest.json',{'kind':'private-native-proof','files':manifest,'toolchain_manifest':'toolchain-final-manifest.json','toolchain_manifest_sha256':sha(P/'toolchain-final-manifest.json'),'excludes':['.git metadata','toolchain contents separately inventoried','manifest.json','manifest.sha256']})
+(P/'manifest.sha256').write_text(sha(P/'manifest.json')+'  manifest.json\n')
+print(json.dumps({'status':'IMPLEMENTED','matrix_cases':len(matrix),'checks':len(checks),'W_sentinels':len(sentinels),'manifest_sha256':sha(P/'manifest.json'),'report_sha256':sha(P/'report.json'),'toolchain_final_manifest_sha256':sha(P/'toolchain-final-manifest.json')}))

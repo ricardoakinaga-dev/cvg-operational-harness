@@ -1,0 +1,13 @@
+import { registerHooks, createRequire } from 'node:module'
+import fs from 'node:fs'
+import path from 'node:path'
+import crypto from 'node:crypto'
+import assert from 'node:assert/strict'
+const root='/home/ricardo/deepseek-harness-session-fixes';let loaded=[]
+registerHooks({load(url,context,next){if(url.startsWith('file://'+root+'/')) {loaded.push(url);throw new Error('reference code execution forbidden in inventory probe')}return next(url,context)}})
+const {readReferenceInventory}=await import('./project/tests/differential/reference-inventory.mjs')
+const inventory=readReferenceInventory();const req=createRequire(root+'/packages/test-support/agent-loop-testkit/package.json')
+const names=['cordis','dsh-agent-loop-testkit','dsh-llm','dsh-session','dsh-agent','dsh-agent-loop','dsh-session-projection','dsh-system-prompt','dsh-tools'].map(s=>'@deepseek-ai/'+s)
+assert.deepEqual(inventory.map(x=>x.package),names)
+for(let i=0;i<names.length;i++){const file=fs.realpathSync(req.resolve(names[i]));assert.equal(file,inventory[i].file);assert(fs.lstatSync(file).isFile());assert.equal(file,fs.realpathSync(file));assert.equal(crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),inventory[i].sha256)}
+assert.deepEqual(loaded,[]);fs.writeFileSync(new URL('./own-results/inventory-guard.json',import.meta.url),JSON.stringify({nineConstantNames:names,inventory,referenceModuleLoadAttempts:loaded,metadataOnly:true,transitiveRuntimeClosure:'NOT_VERIFIED',sourceLibEquivalence:'NOT_VERIFIED'},null,2));console.log('9 canonical regular export paths and disk SHA verified; zero reference module load attempts; no closure/build equivalence conclusion')
