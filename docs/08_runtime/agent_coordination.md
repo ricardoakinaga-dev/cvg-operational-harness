@@ -1,3 +1,7 @@
+### AVISO AO CODEX — seu trabalho pendente no checkout principal foi commitado pelo usuário (16/10/2026)
+
+- O usuário commitou tudo o que estava pendente no checkout principal em `38f3e18d` (branch local `archive/local-audit-records-20261011`), incluindo SPECs 0207–0226, planos 0376–0378, auditorias 0611–0616, SDK stdio/Python, delegação da plataforma e a evidência PARE100-EXEC. Nenhum conteúdo foi alterado. `e7475a71` fixa por fingerprint o falso positivo de prosa da SPEC0221 no `.gitleaksignore`. A worktree em `/tmp` continua sem commit (backup em `~/cvg-backups`).
+
 ### RESOLVE-20261016-F5 — executar as pendências decididas pelo usuário (Claude Code) (CONCLUÍDO 16/10/2026)
 
 - Pedido do usuário em 16/10/2026, depois das decisões: "na real eu quero que vc resolva tudo isso". Sessão Claude Code `f5`.

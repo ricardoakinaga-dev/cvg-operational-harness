@@ -1,3 +1,8 @@
+# COMMIT — checkout principal limpo: `38f3e18d` (usuário) e `e7475a71` — 16/10/2026
+
+- O usuário commitou pessoalmente todo o pendente do checkout principal em `38f3e18d` (27.559 arquivos, trabalho do PARE100-EXEC e ledgers), na branch local `archive/local-audit-records-20261011`. A sessão f5 fixou em `e7475a71` o falso positivo de prosa da SPEC0221 no `.gitleaksignore`; gitleaks v8.28.0 no histórico completo: 0 achados. Sem push.
+- `next_action`: commit da worktree do Codex em `/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree` (branch `codex/pare100-exec-20261014-6az3hlay`), pelo usuário ou pelo Codex; publicação só via branch candidata com os quatro checks.
+
 # COMMIT — arquivos da sessão Claude Code f5 commitados; trabalho do Codex bloqueado pela permissão — 16/10/2026
 
 - Pedido do usuário: "quero que vc faça o commit de tudo o que não estiver commitado". Commit `c2bdb684` na branch local `archive/local-audit-records-20261011`: roadmap 0379, backlog 0380, evidências PARE100-GAP, USER-DECISIONS e RESOLVE, deploy on-premises, receptor do Telegram e A2 (33 arquivos; gitleaks no stage: 0 achados). Sem push.
