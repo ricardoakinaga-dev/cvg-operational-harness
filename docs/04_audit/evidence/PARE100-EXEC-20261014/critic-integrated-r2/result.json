@@ -1,0 +1,566 @@
+{
+  "verdict": "FAIL",
+  "scope": [
+    "approved immutable SPEC0211 SDK stdio",
+    "approved immutable SPEC0212 public controls"
+  ],
+  "auditor_role": "fresh independent reliability/code critic; audit-only; no descendants",
+  "independence": {
+    "level": "I1 with disclosed governance exposure",
+    "detail": "No inherited builder context or builder report/history files opened. The explicitly permitted root coordination governance file includes embedded Lead/Builder status/remediation notes encountered during the initial governance read. These were not accepted as correctness evidence; findings are bound to packet source and independently executed logs. No review of the postfreeze six tests or live worktree source/history."
+  },
+  "frozen_packet": "/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-integrated-r2-packet",
+  "sentinel": {
+    "sentinel_sha256": "fcd9abb0bab366fc06348665c72878667718340183f86790b6a665152e008501",
+    "expected_sentinel_sha256": "fcd9abb0bab366fc06348665c72878667718340183f86790b6a665152e008501",
+    "file_count": 1112,
+    "match": true,
+    "checked_utc": "2026-10-15T03:12:35.493174+00:00"
+  },
+  "spec_sha256": {
+    "docs/02_spec/0211_pare100_sdk_stdio_transport.md": "ae109b33a8457869d0939bb3f32557b8f8d5e8d5054fa1e141ab5c896b508a7f",
+    "docs/02_spec/0212_pare100_public_control_wiring.md": "559e7da51d49f9e4ba7c1405a95d9ef2d61256e901d3b26c36f20276d551db4b"
+  },
+  "findings": [
+    {
+      "id": "SDK-R2-F01",
+      "severity": "P1",
+      "confidence": "high",
+      "classification": "PRODUCTION_RELIABILITY_DEFECT",
+      "name": "Lifetime exhaustion detaches input failure handling while accepted requests still run",
+      "source_lines": [
+        {
+          "path": "packages/sdk/src/stdio.ts",
+          "lines": [
+            536,
+            543
+          ],
+          "reason": "overflow sets exhausted and calls detachInput while leaving state OPEN"
+        },
+        {
+          "path": "packages/sdk/src/stdio.ts",
+          "lines": [
+            168,
+            181
+          ],
+          "reason": "detachInput removes end, close and error listeners as well as parser/data listener"
+        },
+        {
+          "path": "packages/sdk/src/stdio.ts",
+          "lines": [
+            471,
+            487
+          ],
+          "reason": "transport failure should finish immediately, but the OPEN pump dispatches the queued request if no failure is observed"
+        }
+      ],
+      "violated_criteria": [
+        "SDK-W04",
+        "SPEC0211 ownership/lifecycle items 5 and 7"
+      ],
+      "reproduction": {
+        "case": "maxLifetimeRequests=2, hold dispatch(1), queue request 2, send extra request 3 to trigger exhaustion; end/destroy/error the input, then resolve dispatch 1",
+        "expected": "transport closure observed immediately, late active result discarded, queued request 2 never dispatched",
+        "actual": "all three exhausted cases closedBeforeCompletion=false, dispatchIds=[1,2], responseIds=[1,2], onError reports only limit/-32084",
+        "controls": "same end/error/close cases without exhaustion closed immediately, dispatchIds=[1], no response writes",
+        "check": "necessary-lifetime-io-regression-configured",
+        "result": "3 failed, 3 passed; exit 1"
+      },
+      "impact": "A disconnected/failed input can start queued work that the transport contract requires discarding. A never-settling active dispatch can also leave this exhausted server open until the host explicitly closes it; this latter consequence is static inference, not an executed indefinite-hang test.",
+      "recommended_action": "Separate stopping frame admission from input end/error/close observation. Retain failure listeners through accepted-work drain, with terminal cleanup on I/O loss. Preserve the passing slow-drain and explicit-close tests and add this regression matrix."
+    },
+    {
+      "id": "QA-R2-F02",
+      "severity": "P2",
+      "confidence": "high",
+      "classification": "ACCEPTANCE_GATE_INCOMPLETE_NOT_A_PROVEN_SECURITY_BYPASS",
+      "name": "Shipped boundary gate does not qualify the stdio addition and generated public closure",
+      "source_lines": [
+        {
+          "path": "examples/consumers/sdk-stdio/index.mts",
+          "lines": [
+            56,
+            66,
+            67,
+            71,
+            76,
+            77,
+            94
+          ],
+          "reason": "new example sites listed by the actual boundary diagnostics"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/stdio.test.ts",
+          "lines": [
+            148,
+            156,
+            158,
+            159,
+            161,
+            163,
+            164,
+            166,
+            168,
+            169,
+            170,
+            172
+          ],
+          "reason": "new SDK test sites listed by the actual boundary diagnostics"
+        },
+        {
+          "path": "scripts/check-product-boundary.mjs",
+          "lines": [
+            1724,
+            1786
+          ],
+          "reason": "exception application and pin validation remain fail-closed"
+        }
+      ],
+      "violated_criteria": [
+        "SDK-W07"
+      ],
+      "actual": "product-boundary exit 1, status INCOMPLETE, passed=false, violations=[], 36 UNVERIFIED_DYNAMIC_CODE_EXECUTION diagnostics (14 stdio-test, 9 stdio-example, 13 generated-public-closure); two unused compiled-canonical reflection sites with pinsHold=false; installedLockDrift=[]",
+      "evidence": "checks/product-boundary/stdout.log",
+      "limits": "Run occurred after the authorized public SDK build in scratch. Generated diagnostics belong to that build projection; this review does not attribute all diagnostics to a production code regression. No source-only boundary baseline was run. The 23 source diagnostics are reported separately from the generated diagnostics.",
+      "recommended_action": "Review the exact new host-owned child/example sites and generated projection pins through the established gate process, then rerun the unchanged gate. Do not treat opaque-code diagnostics as proof of a security bypass or waive them silently."
+    },
+    {
+      "id": "QA-R2-L01",
+      "severity": "P2",
+      "confidence": "high",
+      "classification": "FROZEN_PACKET_COMPLETENESS_LIMIT",
+      "name": "Frozen packet omits the catalog required by four shipped regression tests",
+      "source_lines": [
+        {
+          "path": "packages/harness/src/__tests__/pdsh-014-tool-catalog.test.ts",
+          "lines": [
+            16,
+            45,
+            52,
+            70,
+            91
+          ],
+          "reason": "tests require docs/architecture/TOOL_CATALOG.md before asserting catalog generation/drift behavior"
+        }
+      ],
+      "actual": "controls-shell-regression exit 1: 636 passed, 4 failed. All four failures are the catalog test file and ENOENT/missing catalog. The catalog path is absent from the exact sentinel/packet.",
+      "evidence": "checks/controls-shell-regression/stderr.log",
+      "limits": "No live catalog read, regeneration, exclusion, or silent retry was used to fabricate a passing suite. This is not evidence that the omitted live catalog is incorrect.",
+      "recommended_action": "Provide a separately frozen catalog supplement or a complete future candidate and rerun this regression gate."
+    }
+  ],
+  "criteria": {
+    "SDK-W01": {
+      "status": "PASS",
+      "evidence": [
+        "focused-sdk",
+        "sdk-public-closure",
+        "compile-example",
+        "compiled-example"
+      ],
+      "notes": "Actual fixed compiled parent/child, no TS source aliases; hello/open/send/read; COMPLETED, 1 model call, 0 tool calls, tokens 3/4, cost 0, six ordered real SessionEventStore events; child shutdown returns successfully in private HOME."
+    },
+    "SDK-W02": {
+      "status": "PASS",
+      "evidence": [
+        "focused-sdk"
+      ],
+      "notes": "Shipped fragmented UTF-8/CRLF/coalescing and malformed/oversized/partial EOF tests executed."
+    },
+    "SDK-W03": {
+      "status": "PASS",
+      "evidence": [
+        "focused-sdk"
+      ],
+      "notes": "Shipped duplicate/type-distinct IDs, inherited-method, corrupted result/identity and queue/lifetime/byte validations executed. Lifecycle after exhaustion is rejected under SDK-W04."
+    },
+    "SDK-W04": {
+      "status": "FAIL",
+      "evidence": [
+        "focused-sdk",
+        "necessary-lifetime-io-regression-configured"
+      ],
+      "finding": "SDK-R2-F01"
+    },
+    "SDK-W05": {
+      "status": "PASS",
+      "evidence": [
+        "focused-sdk"
+      ],
+      "notes": "Shipped callback/drain, failed writes, bounded oversized response and post-model assistant append failure tests executed."
+    },
+    "SDK-W06": {
+      "status": "PASS",
+      "evidence": [
+        "focused-sdk"
+      ],
+      "notes": "Shipped peer authority and real-kernel deny/missing-approval zero-body cases executed."
+    },
+    "SDK-W07": {
+      "status": "INCOMPLETE",
+      "evidence": [
+        "focused-sdk",
+        "public-surface",
+        "typecheck",
+        "scoped-lint",
+        "sdk-public-closure",
+        "compile-example",
+        "compiled-example",
+        "snapshot-replay",
+        "product-boundary"
+      ],
+      "notes": "Boundary gate INCOMPLETE. Existing replay corpus passed, but a dedicated new stdio wire golden/replay schedule is not separately supplied/proven. Full unit/coverage/PG/E2E qualification not run."
+    },
+    "CTL-W01": {
+      "status": "PASS",
+      "evidence": [
+        "controls-shell-regression",
+        "public-controls-probe"
+      ],
+      "notes": "Frozen factory tests cover both profiles with zero model/tool bodies on tenant pause."
+    },
+    "CTL-W02": {
+      "status": "PASS",
+      "evidence": [
+        "controls-shell-regression",
+        "public-controls-probe"
+      ],
+      "notes": "Frozen sync/async start and settlement failures, preserved original-outcome/duration matrix, six payload bounds with reentry and serialized-store restart, final-checkpoint-write failure, and public multi-tool stale-success cases passed."
+    },
+    "CTL-W03": {
+      "status": "PASS",
+      "evidence": [
+        "controls-shell-regression"
+      ],
+      "notes": "Frozen missing/denied/unavailable/throw/invalid-grant and frozen-copy tests passed, with real default shell no-op grant spelling cases and injected runner grant/deadline checks. No OS security bypass tests."
+    },
+    "CTL-W04": {
+      "status": "INCOMPLETE",
+      "evidence": [
+        "controls-shell-regression",
+        "snapshot-replay",
+        "typecheck",
+        "scoped-lint",
+        "public-surface"
+      ],
+      "notes": "636/640 relevant regression tests passed; omitted catalog prevents aggregate PASS. Full coverage/PG/E2E gates remain NOT_RUN."
+    }
+  },
+  "prior_feedback_assessment": [
+    {
+      "item": "Slow active and queued requests survive lifetime overflow beyond closeTimeout absent close/I/O failure",
+      "assessment": "Verified by frozen SDK test at stdio.test.ts:377; passing current behavior. The additional I/O-loss transition is defective (SDK-R2-F01).",
+      "source": [
+        "packages/sdk/src/stdio.ts:536",
+        "packages/sdk/src/__tests__/stdio.test.ts:377"
+      ]
+    },
+    {
+      "item": "Fixed local unexpected exception text; genuine remote errors preserved",
+      "assessment": "Verified for the approved SDK exception/envelope boundary by server catch/mapping and local transport errors; frozen SDK tests passed. Not a claim that arbitrary model/tool output is sanitized.",
+      "source": [
+        "packages/sdk/src/server.ts:146",
+        "packages/sdk/src/server.ts:417",
+        "packages/sdk/src/stdio.ts:85",
+        "packages/sdk/src/stdio.ts:345",
+        "packages/sdk/src/__tests__/stdio.test.ts:429",
+        "packages/sdk/src/__tests__/stdio.test.ts:964"
+      ]
+    },
+    {
+      "item": "No replay of failed effect settlement under bounded checkpoint payload/restart",
+      "assessment": "Verified in frozen code and current executable tests. Lossless step errorCode, not bounded observations, fences reentry and reconstructed-store restart; final checkpoint write failure also covered.",
+      "source": [
+        "packages/harness/src/iterative-dispatch.ts:632",
+        "packages/harness/src/iterative-runtime.ts:655",
+        "packages/harness/src/__tests__/pare100-public-controls.test.ts:178"
+      ]
+    },
+    {
+      "item": "Canonical symlink/dotdot grants preserve rights/deadline",
+      "assessment": "Verified at shell runner boundary and existing default backend no-op tests; canonical workspaceRoot and all other grants preserved.",
+      "source": [
+        "packages/sandbox/src/shell-tool.ts:192",
+        "packages/sandbox/src/shell-tool.ts:282",
+        "packages/sandbox/src/shell-tool.ts:296",
+        "packages/harness/src/__tests__/pare100-public-controls.test.ts:453",
+        "packages/sandbox/src/__tests__/pare100-shell-handle.test.ts:69"
+      ]
+    },
+    {
+      "item": "No stale earlier SUCCEEDED result after later failed effect settlement",
+      "assessment": "Verified: dispatch clears lastToolObservation at entry, only later actual success replaces it; frozen multi-tool sync/async settlement tests passed.",
+      "source": [
+        "packages/harness/src/iterative-dispatch.ts:322",
+        "packages/harness/src/iterative-dispatch.ts:701",
+        "packages/harness/src/__tests__/pare100-public-controls.test.ts:363"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "compile-example",
+      "exit": 0,
+      "argv": [
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "-p",
+        "critic-qa/tsconfig.example.json",
+        "--pretty",
+        "false"
+      ],
+      "duration_s": 1.023
+    },
+    {
+      "name": "compiled-example",
+      "exit": 0,
+      "argv": [
+        "node",
+        "--input-type=module",
+        "-e",
+        "const {runSdkStdioExample} = await import(\"./critic-qa/compiled-example/index.mjs\"); console.log(JSON.stringify(await runSdkStdioExample()));"
+      ],
+      "duration_s": 0.13
+    },
+    {
+      "name": "controls-shell-regression",
+      "exit": 1,
+      "argv": [
+        "node",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "packages/harness/src/__tests__",
+        "packages/sandbox/src/__tests__/pare100-shell-handle.test.ts",
+        "packages/sandbox/src/__tests__/pdsh-013-shell-tool.test.ts",
+        "tests/conformance",
+        "--no-file-parallelism",
+        "--maxWorkers=1"
+      ],
+      "duration_s": 40.112
+    },
+    {
+      "name": "focused-sdk",
+      "exit": 0,
+      "argv": [
+        "node",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "packages/sdk/src/__tests__",
+        "tests/consumers-sdk-session.test.ts",
+        "--no-file-parallelism",
+        "--maxWorkers=1"
+      ],
+      "duration_s": 5.243
+    },
+    {
+      "name": "necessary-lifetime-io-regression",
+      "exit": 1,
+      "argv": [
+        "node",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "critic-qa/lifetime-io.test.ts",
+        "--include",
+        "critic-qa/lifetime-io.test.ts",
+        "--environment",
+        "node",
+        "--no-file-parallelism",
+        "--maxWorkers=1",
+        "--reporter=verbose"
+      ],
+      "duration_s": 0.05
+    },
+    {
+      "name": "necessary-lifetime-io-regression-configured",
+      "exit": 1,
+      "argv": [
+        "node",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--config",
+        "critic-qa/vitest.config.mts",
+        "--reporter=verbose"
+      ],
+      "duration_s": 0.736
+    },
+    {
+      "name": "product-boundary",
+      "exit": 1,
+      "argv": [
+        "node",
+        "scripts/check-product-boundary.mjs"
+      ],
+      "duration_s": 17.383
+    },
+    {
+      "name": "public-controls-probe",
+      "exit": 0,
+      "argv": [
+        "node",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--config",
+        "tests/replay/vitest.probe.config.mts",
+        "--reporter=verbose"
+      ],
+      "duration_s": 1.255
+    },
+    {
+      "name": "public-surface",
+      "exit": 0,
+      "argv": [
+        "node",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "tests/consumers-public-surface.test.ts",
+        "tests/phase4-public-consumer.test.ts",
+        "--no-file-parallelism",
+        "--maxWorkers=1",
+        "--reporter=verbose"
+      ],
+      "duration_s": 5.933
+    },
+    {
+      "name": "scoped-lint",
+      "exit": 0,
+      "argv": [
+        "node",
+        "node_modules/eslint/bin/eslint.js",
+        "packages/sdk/src",
+        "packages/harness/src/createOperationalHarness.ts",
+        "packages/harness/src/iterative-runtime.ts",
+        "packages/harness/src/iterative-dispatch.ts",
+        "packages/harness/src/kernel/pipeline.ts",
+        "packages/harness/src/__tests__/pare100-public-controls.test.ts",
+        "packages/sandbox/src/shell-tool.ts",
+        "packages/sandbox/src/__tests__/pare100-shell-handle.test.ts",
+        "packages/contracts/src/contracts.ts",
+        "examples/consumers/sdk-stdio/index.mts",
+        "examples/consumers/sdk-stdio/child.mts",
+        "tests/consumers-public-surface.test.ts"
+      ],
+      "duration_s": 1.636
+    },
+    {
+      "name": "sdk-public-closure",
+      "exit": 0,
+      "argv": [
+        "node",
+        "scripts/build-public-workspace.mjs",
+        "packages/sdk"
+      ],
+      "duration_s": 2.217
+    },
+    {
+      "name": "snapshot-replay",
+      "exit": 0,
+      "argv": [
+        "node",
+        "scripts/snapshot-replay.mjs"
+      ],
+      "duration_s": 1.493
+    },
+    {
+      "name": "typecheck",
+      "exit": 0,
+      "argv": [
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "-p",
+        "tsconfig.typecheck.json",
+        "--noEmit",
+        "--pretty",
+        "false"
+      ],
+      "duration_s": 12.224
+    }
+  ],
+  "check_summary": {
+    "shipped_test_invocations": {
+      "passed_assertions": 812,
+      "failed_assertions": 4,
+      "note": "Across the executed scoped shipped suites, not a full repository test result; all four shipped failures are missing-catalog tests."
+    },
+    "necessary_critic_regression": {
+      "passed": 3,
+      "failed": 3,
+      "exit": 1
+    },
+    "first_regression_invocation": "exit 1 before test discovery: unsupported Vitest --include option. Preserved as critic harness invocation error, corrected via private config without changing test expectations or production.",
+    "typecheck": "PASS exit 0",
+    "scoped_lint": "PASS exit 0",
+    "public_sdk_build": "PASS exit 0",
+    "no_alias_example_compile_and_execution": "PASS exits 0",
+    "product_boundary": "INCOMPLETE exit 1"
+  },
+  "not_run": [
+    {
+      "check": "Six Lead tests added after freeze",
+      "status": "NOT_RUN",
+      "reason": "Not supplied in a frozen supplement; no live test read or result claimed."
+    },
+    {
+      "check": "Full repository npm test and coverage/per-file coverage",
+      "status": "NOT_RUN",
+      "reason": "Bounded scoped critic QA only; cannot infer complete denominator coverage."
+    },
+    {
+      "check": "PostgreSQL suites",
+      "status": "NOT_RUN",
+      "reason": "User explicitly forbids DB."
+    },
+    {
+      "check": "Browser E2E and complete certification/SBOM/licenses/network audit",
+      "status": "NOT_RUN",
+      "reason": "Outside authorized bounded library QA; no network/install/shared certification outputs."
+    },
+    {
+      "check": "Dedicated stdio wire golden/replay beyond shipped stream assertions",
+      "status": "NOT_RUN",
+      "reason": "Existing snapshot corpus uses SDK in-process paths; no new wire replay corpus supplied."
+    },
+    {
+      "check": "Prepatch red reproduction / history comparison",
+      "status": "NOT_RUN",
+      "reason": "Packet only, no live/history/builder rationale."
+    },
+    {
+      "check": "Full 36-card parity, Python/HTTP/ACP, providers, product readiness and release",
+      "status": "OUT_OF_SCOPE_NOT_ACCEPTED",
+      "reason": "Not authorized by this scoped QA."
+    }
+  ],
+  "non_mutation": {
+    "packet_exact_before_after": true,
+    "sentinel_exact_before_after": true,
+    "scratch_all_1112_frozen_input_hashes_unchanged": true,
+    "writes": "Only owned result and scratch trees; no shared ledgers, lockfile, packages install, source repair, commits, push or deployment. Dependencies copied with cp -a --reflink=auto from live node_modules only.",
+    "handoff": "Lead owns any shared runtime/execution log/backlog update using these results."
+  },
+  "infrastructure": {
+    "attempt": "retry2/final allowed capacity retry",
+    "reported_prior_failures": [
+      {
+        "attempt": "initial",
+        "outcome": "Selected model is at capacity",
+        "classification": "INFRASTRUCTURE_NO_CODE_VERDICT",
+        "provenance": "user reported"
+      },
+      {
+        "attempt": "retry1",
+        "outcome": "Selected model is at capacity",
+        "classification": "INFRASTRUCTURE_NO_CODE_VERDICT",
+        "provenance": "user reported"
+      }
+    ],
+    "model_override": false,
+    "frozen_delta": {
+      "source": "user report",
+      "six_added_tests_postfreeze": "NOT_PROVIDED_NOT_RUN",
+      "production_hashes_claim": "not used as evidence; frozen packet hashes independently verified"
+    }
+  },
+  "next_action": "Fix SDK-R2-F01 under existing approval, preserve slow accepted-work drain and explicit close semantics, obtain fresh frozen candidate and independent focused retest. Resolve packaging and boundary gate limitations before claiming full SPEC qualification.",
+  "release_or_full_parity_accepted": false,
+  "finished_utc": "2026-10-15T03:14:22.380978+00:00"
+}

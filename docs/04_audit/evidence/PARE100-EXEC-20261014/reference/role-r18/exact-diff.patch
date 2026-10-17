@@ -1,0 +1,197 @@
+--- a/scripts/reference-contract-catalog.mjs
++++ b/scripts/reference-contract-catalog.mjs
+@@ -562,10 +562,7 @@
+           ts.SyntaxKind.TemplateMiddle,
+           ts.SyntaxKind.TemplateTail
+         ].includes(child.kind)) &&
+-      (sourcePayloadLiterals
+-        .get(child.getSourceFile())
+-        ?.has(hash(child.text)) ||
+-        !/^[A-Za-z0-9_$./:@-]{1,200}$/.test(child.text))
++      sourcePayloadLiterals.get(child.getSourceFile())?.has(hash(child.text))
+     )
+       literals.push({
+         value_sha256: hash(child.text),
+@@ -1012,7 +1009,6 @@
+     if isinstance(x,ast.Constant) and isinstance(x.value,bytes): return opaque(x.value)
+     if isinstance(x,ast.Constant) and isinstance(x.value,str) and opaque(x.value)["value_sha256"] in payload_literals:
+       return opaque(x.value,"Unresolved Python annotation/runtime payload collision; bytes not copied")
+-    if isinstance(x,ast.Constant) and isinstance(x.value,str) and not re.fullmatch(r'[A-Za-z0-9_$./:@-]{1,200}',x.value): return opaque(x.value)
+   return ast.unparse(n)
+ def sig(n):
+   args=n.args
+--- a/tests/reference-contract-catalog.test.js
++++ b/tests/reference-contract-catalog.test.js
+@@ -12,7 +12,7 @@
+ } from '../scripts/reference-contract-catalog.mjs'
+ 
+ const evidence = path.resolve(
+-  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/role-r16'
++  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/role-r18'
+ )
+ const temporary = []
+ const sha = (value) => crypto.createHash('sha256').update(value).digest('hex')
+@@ -187,6 +187,119 @@
+ })
+ 
+ describe('P100-003 static contract catalog', () => {
++  it.each([
++    'throw 0',
++    'event: ready?! [v2]',
++    'ação ✓ 你好',
++    'function guest() { return "OTHER_LITERAL_BODY_MARKER"; }'
++  ])(
++    'R18 TypeScript declaration-only selector preserves exact value %s',
++    (selector) => {
++      const source = 'packages/core/example/src/types.ts'
++      const text = `export type Selector = ${JSON.stringify(selector)};\n`
++      const entries = fixture({ [source]: text })
++        .collect()
++        .entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(2)
++      const entry = entries.find((entry) => entry.symbol === 'Selector')
++      const type = entry.shape.declarations[0].type
++      expect(typeof type).toBe('string')
++      expect(JSON.parse(type)).toBe(selector)
++      expect(entry.extraction_status).toBe('STATIC')
++      expect(entry.source_sha256).toBe(sha(text))
++      expect(entry.owner_task).toBe('P100-012')
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
++    }
++  )
++
++  it.each([
++    'throw 0',
++    'event: ready?! [v2]',
++    'ação ✓ 你好',
++    'function guest() { return "OTHER_LITERAL_BODY_MARKER"; }'
++  ])(
++    'R18 TypeScript same-source runtime collision remains opaque for %s',
++    (selector) => {
++      const source = 'packages/core/example/src/types.ts'
++      const text = `export type Selector = ${JSON.stringify(selector)};\nconsume(${JSON.stringify(selector)});\n`
++      const entries = fixture({ [source]: text })
++        .collect()
++        .entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(2)
++      const entry = entries.find((entry) => entry.symbol === 'Selector')
++      expect(entry.shape.declarations[0].type).toMatchObject({
++        status: 'UNKNOWN',
++        literals: [
++          {
++            value_sha256: sha(selector),
++            byte_length: Buffer.byteLength(selector)
++          }
++        ]
++      })
++      expect(JSON.stringify(entries)).not.toContain(selector)
++      expect(entry.extraction_status).toBe('UNKNOWN')
++      expect(entry.source_sha256).toBe(sha(text))
++      expect(entry.owner_task).toBe('P100-012')
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
++    }
++  )
++
++  it.each([
++    'throw 0',
++    'event: ready?! [v2]',
++    'ação ✓ 你好',
++    'function guest() { return "OTHER_LITERAL_BODY_MARKER"; }'
++  ])(
++    'R18 Python declaration-only selector preserves exact value %s',
++    (selector) => {
++      const source = 'python/sdk/src/sdk.py'
++      const text = `def run(value: ${JSON.stringify(selector)}) -> ${JSON.stringify(selector)}:\n    pass\n`
++      const entries = fixture({
++        [source]: text,
++        'python/sdk/src/other.py': `consume(${JSON.stringify(selector)})\n`
++      })
++        .collect()
++        .entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(2)
++      const entry = entries.find((entry) => entry.symbol === 'run')
++      expect(entry.shape.parameters[0].type).toBe("'" + selector + "'")
++      expect(entry.shape.returns).toBe("'" + selector + "'")
++      expect(entry.extraction_status).toBe('STATIC')
++      expect(entry.source_sha256).toBe(sha(text))
++      expect(entry.owner_task).toBe('P100-025')
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
++    }
++  )
++
++  it.each([
++    'throw 0',
++    'event: ready?! [v2]',
++    'ação ✓ 你好',
++    'function guest() { return "OTHER_LITERAL_BODY_MARKER"; }'
++  ])(
++    'R18 Python same-source runtime collision remains opaque for %s',
++    (selector) => {
++      const source = 'python/sdk/src/sdk.py'
++      const text = `def run(value: ${JSON.stringify(selector)}) -> ${JSON.stringify(selector)}:\n    pass\nconsume(${JSON.stringify(selector)})\n`
++      const entries = fixture({ [source]: text })
++        .collect()
++        .entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(2)
++      const entry = entries.find((entry) => entry.symbol === 'run')
++      for (const type of [entry.shape.parameters[0].type, entry.shape.returns])
++        expect(type).toMatchObject({
++          status: 'UNKNOWN',
++          value_sha256: sha(selector),
++          byte_length: Buffer.byteLength(selector)
++        })
++      expect(JSON.stringify(entries)).not.toContain(selector)
++      expect(entry.extraction_status).toBe('UNKNOWN')
++      expect(entry.source_sha256).toBe(sha(text))
++      expect(entry.owner_task).toBe('P100-025')
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
++    }
++  )
++
+   it.each([String.raw`\ud800`, String.raw`\udfff`, String.raw`a\ud800z`])(
+     'R17 Python escaped surrogate %s preserves unknown provenance without a collector crash',
+     (escaped) => {
+@@ -1629,7 +1742,7 @@
+   it('opaque literal protection also covers document cells, graph labels and annotation literals', () => {
+     const body = 'function guest() { return "OTHER_LITERAL_BODY_MARKER"; }'
+     const f = fixture({
+-      'packages/core/example/src/types.ts': `export type GuestSource = ${JSON.stringify(body)};`,
++      'packages/core/example/src/types.ts': `export type GuestSource = ${JSON.stringify(body)};\nexport const ProgramSource = ${JSON.stringify(body)};`,
+       'python/sdk/src/sdk.py': `__all__ = [${JSON.stringify(body)}]\ndef run(value: ${JSON.stringify(body)}):\n    pass\n`,
+       'docs/persistence-catalog.md':
+         '# Types\n| Field | Type |\n| --- | --- |\n| worker | ' + body + ' |\n',
+@@ -1653,6 +1766,34 @@
+             entry.kind === kind && entry.extraction_status === 'UNKNOWN'
+         )
+       ).toBe(true)
++    }
++    const tsSource = 'packages/core/example/src/types.ts'
++    const tsEntries = catalog.entries.filter(
++      (entry) => entry.source === tsSource
++    )
++    expect(tsEntries).toHaveLength(3)
++    const literal = {
++      value_sha256: sha(body),
++      byte_length: Buffer.byteLength(body)
++    }
++    const alias = tsEntries.find((entry) => entry.symbol === 'GuestSource')
++    const initializer = tsEntries.find(
++      (entry) => entry.symbol === 'ProgramSource'
++    )
++    expect(alias.shape.declarations[0].type).toMatchObject({
++      status: 'UNKNOWN',
++      literals: [literal]
++    })
++    expect(initializer.shape.declarations[0].value).toMatchObject({
++      status: 'UNKNOWN',
++      ...literal
++    })
++    for (const entry of tsEntries) {
++      expect(entry.source_sha256).toBe(
++        sha(fs.readFileSync(path.join(f.root, tsSource)))
++      )
++      expect(entry.owner_task).toBe('P100-012')
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
+     }
+   })
+ 

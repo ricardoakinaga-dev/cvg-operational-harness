@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path'
 import type {
   ModelRequest,
   ModelResult,
@@ -378,9 +379,8 @@ async function enforceSandbox(
       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
     )
   }
-  let outcome: SandboxGateOutcome
   try {
-    outcome = await gate.evaluate({
+    const outcome: SandboxGateOutcome = await gate.evaluate({
       descriptor: call.tool,
       context: {
         tenantId: call.turn.input.tenantId,
@@ -396,26 +396,66 @@ async function enforceSandbox(
         subprocessAllowed: requiredMode === 'PROCESS'
       }
     })
+    if (outcome.kind === 'denied') {
+      return stop(
+        'UNSAFE_REQUEST',
+        `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
+      )
+    }
+    if (outcome.kind === 'unavailable') {
+      return stop(
+        'UNSAFE_REQUEST',
+        `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
+      )
+    }
+    const granted = outcome.kind === 'allowed' ? outcome.handle : undefined
+    const handle = granted && {
+      mode: granted.mode,
+      allowNetwork: granted.allowNetwork,
+      allowSubprocess: granted.allowSubprocess,
+      workspaceRoot: granted.workspaceRoot,
+      deadlineMs: granted.deadlineMs
+    }
+    if (
+      outcome.kind !== 'allowed' ||
+      outcome.mode !== requiredMode ||
+      !handle ||
+      handle.mode !== requiredMode ||
+      typeof handle.allowNetwork !== 'boolean' ||
+      typeof handle.allowSubprocess !== 'boolean' ||
+      (handle.deadlineMs !== undefined &&
+        (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0)) ||
+      (requiredMode === 'WORKSPACE' && handle.workspaceRoot === undefined) ||
+      (handle.workspaceRoot !== undefined &&
+        (typeof handle.workspaceRoot !== 'string' ||
+          !isAbsolute(handle.workspaceRoot) ||
+          handle.workspaceRoot.includes('\0')))
+    ) {
+      return stop(
+        'UNSAFE_REQUEST',
+        `Sandbox gate returned an invalid handle for tool "${call.tool.id}".`
+      )
+    }
+    // Copy only validated grants. Neither a later gate mutation nor model
+    // JSON can rewrite the authority passed to the capability body.
+    call.sandboxHandle = Object.freeze({
+      mode: handle.mode,
+      allowNetwork: handle.allowNetwork,
+      allowSubprocess: handle.allowSubprocess,
+      ...(handle.workspaceRoot !== undefined
+        ? { workspaceRoot: handle.workspaceRoot }
+        : {}),
+      ...(handle.deadlineMs !== undefined
+        ? { deadlineMs: handle.deadlineMs }
+        : {})
+    })
+    return undefined
   } catch (error) {
     return stop(
       'UNSAFE_REQUEST',
       `Sandbox gate failed for tool "${call.tool.id}": ${errorMessage(error)}.`
     )
   }
-  if (outcome.kind === 'denied') {
-    return stop(
-      'UNSAFE_REQUEST',
-      `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
-    )
-  }
-  if (outcome.kind === 'unavailable') {
-    return stop(
-      'UNSAFE_REQUEST',
-      `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
-    )
-  }
-  call.sandboxHandle = outcome.handle
-  return undefined
 }
 
 async function dispatch(
@@ -444,7 +484,17 @@ async function dispatch(
     // a pause or a cancellation still prevents the effect (F01/F02).
     const blocked = await revalidate(host, call)
     if (blocked) return { kind: 'not_started', gate: blocked }
-    await host.get('effects').started(ref)
+    try {
+      await host.get('effects').started(ref)
+    } catch (error) {
+      return {
+        kind: 'not_started',
+        gate: stop(
+          'INSUFFICIENT_EVIDENCE',
+          `Effect ledger could not record the start: ${errorMessage(error)}.`
+        )
+      }
+    }
     started = true
     const startedAt = Date.now()
     const toolController = new AbortController()
@@ -458,6 +508,7 @@ async function dispatch(
           correlationId: turn.input.correlationId,
           traceId: turn.input.traceId,
           operationKey: call.invocation.operationKey,
+          ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
           signal: AbortSignal.any([toolController.signal, turn.signal])
         })
       )
@@ -505,9 +556,17 @@ async function dispatch(
   }
   const outcome = await run(0)
   if (started) {
-    await Promise.resolve(
-      host.get('effects').finished(ref, outcome.kind)
-    ).catch(() => undefined)
+    try {
+      await host.get('effects').finished(ref, outcome.kind)
+    } catch {
+      // The body already ran. A missing settlement is uncertain, never a
+      // successful effect or permission to retry the body/ledger.
+      return {
+        kind: 'threw',
+        error: 'unknown_effect: effect_settlement_failed',
+        durationMs: 'durationMs' in outcome ? outcome.durationMs : 0
+      }
+    }
   }
   return outcome
 }

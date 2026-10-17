@@ -1,0 +1,86 @@
+  ctx: IterativeDispatchContext,
+  run: LoopRun,
+  stepNumber: number,
+  outcome: Extract<DispatchOutcome, { kind: 'pause' }>
+): Promise<Extract<DispatchOutcome, { kind: 'stop' }>> {
+  const decision = outcome.decision
+  if (outcome.pausedKind === 'NEEDS_USER_INPUT') {
+    const requested = decision?.requestedInput
+    const promptIntent =
+      requested?.promptIntent ??
+      decision?.responseIntent ??
+      'More information is required.'
+    run.state = {
+      ...run.state,
+      ...(run.state.toolResultContext
+        ? {
+            toolResultContext: {
+              ...run.state.toolResultContext,
+              acceptedDecision: undefined
+            }
+          }
+        : {}),
+      stepNumber,
+      pendingQuestion: requested ?? {
+        questionType: 'CLARIFICATION',
+        missingFields: [],
+        promptIntent
+      },
+      openQuestions: [...run.state.openQuestions, promptIntent],
+      stopReason: 'NEEDS_USER_INPUT'
+    }
+    run.stepNumber = stepNumber
+    await ctx.recordStep(run, {
+      stepNumber,
+      stepType: 'USER_INPUT',
+      status: 'WAITING',
+      sideEffecting: false,
+      reasonCode: decision?.reasonCode ?? 'MISSING_INFORMATION'
+    })
+    await ctx.persistCheckpoint(run)
+    await ctx.safeAudit(run, 'runtime.paused', {
+      result: 'NEEDS_USER_INPUT'
+    })
+    return {
+      kind: 'stop',
+      stopReason: 'NEEDS_USER_INPUT',
+      response: promptIntent
+    }
+  }
+
+  const pauseStepNumber = outcome.pauseStepNumber ?? stepNumber
+  run.state = {
+    ...run.state,
+    ...(run.state.toolResultContext
+      ? {
+          toolResultContext: {
+            ...run.state.toolResultContext,
+            acceptedDecision: undefined
+          }
+        }
+      : {}),
+    stepNumber: pauseStepNumber,
+    pendingDecision: decision ?? undefined,
+    pendingStepNumber: pauseStepNumber,
+    ...(outcome.approvalId ? { pendingApprovalId: outcome.approvalId } : {}),
+    stopReason: 'APPROVAL_REQUIRED'
+  }
+  run.stepNumber = pauseStepNumber
+  await ctx.recordStep(run, {
+    stepNumber: pauseStepNumber,
+    stepType: 'TOOL',
+    status: 'WAITING',
+    sideEffecting: true,
+    reasonCode: 'POLICY_REQUIRED'
+  })
+  await ctx.persistCheckpoint(run)
+  await ctx.safeAudit(run, 'runtime.paused', { result: 'APPROVAL_REQUIRED' })
+  return {
+    kind: 'stop',
+    stopReason: 'APPROVAL_REQUIRED',
+    ...(outcome.approvalId ? { approvalId: outcome.approvalId } : {}),
+    response:
+      decision?.responseIntent ?? 'Approval is required before continuing.'
+  }
+}
+

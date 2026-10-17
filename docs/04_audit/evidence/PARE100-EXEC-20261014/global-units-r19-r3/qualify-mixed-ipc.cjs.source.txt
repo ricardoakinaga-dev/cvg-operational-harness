@@ -1,0 +1,30 @@
+'use strict';
+// Unregistered private stand-in created BEFORE installing the guard.
+// No child or external endpoint; this does not attest an OS sandbox.
+const net = require('node:net');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+(async () => {
+  assert.ok(!process.env.NODE_OPTIONS, 'This probe installs the guard explicitly');
+  let unownedAccepts = 0;
+  const unowned = net.createServer(socket => { unownedAccepts++; socket.end('PRIVATE_STANDIN'); });
+  const unownedPath = path.join(__dirname, 'unregistered.sock');
+  await new Promise(resolve => unowned.listen(unownedPath, resolve));
+  require('./network-guard.cjs');
+  const owned = net.createServer(socket => socket.end('OWNED_TCP'));
+  await new Promise(resolve => owned.listen(0, '127.0.0.1', resolve));
+  const port = owned.address().port;
+  for (const options of [{ path: unownedPath }, { path: unownedPath, host: '127.0.0.1', port }]) {
+    const result = await new Promise(resolve => {
+      const socket = net.connect(options);
+      socket.once('error', error => resolve(error.code));
+      socket.once('connect', () => { socket.destroy(); resolve('CONNECTED_UNEXPECTEDLY'); });
+    });
+    console.log(JSON.stringify({ options, result }));
+    assert.equal(result, 'CVG_GLOBAL_TEST_NETWORK_BLOCKED');
+  }
+  assert.equal(unownedAccepts, 0);
+  await new Promise(resolve => owned.close(resolve));
+  await new Promise(resolve => unowned.close(resolve));
+  console.log(JSON.stringify({ result: 'PASS', unownedAccepts }));
+})().catch(error => { console.error(error); process.exitCode = 1; });

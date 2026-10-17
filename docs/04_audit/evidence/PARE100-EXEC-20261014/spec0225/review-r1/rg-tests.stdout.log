@@ -1,0 +1,166 @@
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:65:  checkpoint_id: string
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:66:  checkpoint_version: number
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:82:const checkpointColumns = `
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:83:  tenant_id, execution_id, checkpoint_id, checkpoint_version, runtime_profile,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:87:// CASE suppresses oversized JSONB before node-postgres invokes its JSON parser.
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:89:const boundedCheckpointColumns = checkpointColumns.replace(
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:92:  CASE WHEN checkpoint_version <> 2 OR
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:96:  CASE WHEN checkpoint_version <> 2 OR octet_length(budget_usage::text) <= 4096
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:102:    throw new CheckpointError('checkpoint_binding', `${label} is required`)
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:105:    throw new CheckpointError('checkpoint_binding', `${label} is too long`)
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:123:      'checkpoint_integrity',
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:136:      'checkpoint_integrity',
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:172:    checkpointId: row.checkpoint_id,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:175:    checkpointVersion: row.checkpoint_version,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:182:      row.checkpoint_version === 2
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:200: * Durable Phase 3 step/checkpoint authority. Tenant scoping is inherited from
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:201: * the Phase 2 connection discipline; checkpoint integrity is validated before
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:257:  public saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:258:    if (checkpoint.checkpointVersion === 2)
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:260:        'checkpoint_version',
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:261:        'V2 checkpoints require CAS'
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:263:    const tenant = TenantIdSchema.parse(checkpoint.tenantId)
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:264:    validateCheckpointIntegrity(checkpoint, {
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:265:      tenantId: checkpoint.tenantId,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:266:      executionId: checkpoint.executionId
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:273:          checkpoint.executionId,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:275:          !!checkpoint.state.stopReason
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:278:        await saveOperationalCheckpointOnClient(client, tenant, checkpoint)
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:291:      input.expected.checkpointId === input.next.checkpointId
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:294:        'checkpoint_integrity',
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:295:        'CAS requires a fresh checkpoint ID'
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:298:    // Snapshot before the first await; callers cannot alter a validated write in flight.
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:302:      next.checkpointVersion === 2
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:308:      next.checkpointId,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:309:      next.checkpointVersion,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:314:      jsonText(state, 'checkpoint state'),
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:315:      jsonText(next.budgetUsage, 'checkpoint budget usage'),
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:329:          `SELECT ${boundedCheckpointColumns} FROM operational_execution_checkpoints
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:341:          ? { checkpointId: current.checkpointId, digest: current.digest }
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:347:              current.checkpointId !== expected.checkpointId ||
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:361:                `INSERT INTO operational_execution_checkpoints
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:362:          (tenant_id,execution_id,checkpoint_id,checkpoint_version,runtime_profile,runtime_version,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:364:          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12)
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:365:          ON CONFLICT (tenant_id,execution_id) DO NOTHING RETURNING checkpoint_id`,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:369:                `UPDATE operational_execution_checkpoints SET
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:370:          checkpoint_id=$3,checkpoint_version=$4,runtime_profile=$5,runtime_version=$6,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:371:          orchestrator_version=$7,step_number=$8,state=$9::jsonb,budget_usage=$10::jsonb,digest=$11,created_at=$12
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:372:          WHERE tenant_id=$1 AND execution_id=$2 AND checkpoint_id=$13 AND digest=$14
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:373:          RETURNING checkpoint_id`,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:374:                [...values, expected.checkpointId, expected.digest]
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:380:              token: { checkpointId: next.checkpointId, digest: next.digest }
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:396:           FROM operational_execution_checkpoints
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:402:      const checkpoint = mapCheckpoint(row)
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:403:      validateCheckpointIntegrity(checkpoint, { tenantId, executionId: id })
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:404:      return checkpoint
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:474:            observation_refs = $10::jsonb,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:507:      `Step ${step.stepNumber} cannot start before step ${blocking.rows[0].step_number} settles`
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:516:   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:537:/** Package-internal; used by the atomic snapshot/checkpoint seal. */
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:541:  checkpoint: ExecutionCheckpoint
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:543:  if (checkpoint.checkpointVersion === 2)
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:545:      'checkpoint_version',
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:546:      'V2 checkpoints require CAS'
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:548:  validateCheckpointIntegrity(checkpoint, {
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:550:    executionId: checkpoint.executionId
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:553:    `INSERT INTO operational_execution_checkpoints
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:554:     (tenant_id, execution_id, checkpoint_id, checkpoint_version,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:557:   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:560:     SET checkpoint_id = EXCLUDED.checkpoint_id,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:561:         checkpoint_version = EXCLUDED.checkpoint_version,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:570:     WHERE operational_execution_checkpoints.checkpoint_version <> 2`,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:573:      checkpoint.executionId,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:574:      checkpoint.checkpointId,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:575:      checkpoint.checkpointVersion,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:576:      checkpoint.runtimeProfile,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:577:      checkpoint.runtimeVersion,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:578:      checkpoint.orchestratorVersion,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:579:      checkpoint.stepNumber,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:580:      jsonText(checkpoint.state, 'checkpoint state'),
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:581:      jsonText(checkpoint.budgetUsage, 'checkpoint budget usage'),
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:582:      checkpoint.digest,
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:583:      checkpoint.createdAt
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:588:      'checkpoint_version',
+../packet-r1/source/packages/persistence/src/operational-step-postgres.ts:589:      'V1 cannot overwrite a V2 checkpoint'
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:6:import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:47:    checkpointVersion: 2,
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:94:function token(checkpoint: ExecutionCheckpoint) {
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:95:  return { checkpointId: checkpoint.checkpointId, digest: checkpoint.digest }
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:101:    checkpointId: _id,
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:154:    beforeAll(async () => {
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:188:        VALUES ($1,$2,$2,$3,'{}'::jsonb,'RECEIVED')`,
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:198:            'DELETE FROM operational_execution_checkpoints WHERE tenant_id=$1 AND execution_id=$2',
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:258:        checkpointId: _id,
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:268:        checkpointVersion: 1,
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:279:    it('returns bounded SQL projections, refuses corrupt wrappers and oversized state before driver JSON parsing', async () => {
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:280:      const checkpoint = (await store.loadCheckpoint(tenantId, executionId))!
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:284:          'SELECT state FROM operational_execution_checkpoints WHERE tenant_id=$1 AND execution_id=$2',
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:289:          'cvg.checkpoint-state/2'
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:292:          `UPDATE operational_execution_checkpoints SET state=jsonb_set(state,'{decodedSha256}',to_jsonb($3::text)) WHERE tenant_id=$1 AND execution_id=$2`,
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:303:            `UPDATE operational_execution_checkpoints SET state=jsonb_build_object('data',repeat('A',$3::int)) WHERE tenant_id=$1 AND execution_id=$2`,
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:313:            'UPDATE operational_execution_checkpoints SET state=$3::jsonb WHERE tenant_id=$1 AND execution_id=$2',
+../packet-r1/source/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts:319:        checkpoint
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:34:  checkpointId: c.checkpointId,
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:107:    checkpointVersion: 2,
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:166:     VALUES ($1,$2,$2,$3,'{}'::jsonb,'RECEIVED')`,
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:174:      'DELETE FROM operational_execution_checkpoints WHERE tenant_id=$1 AND execution_id=$2',
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:217:    proc.kill('SIGKILL')
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:264:            new Error(`Child exited before readiness: ${stdout}\n${stderr}`)
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:284:        const checkpoint = fixture(input.executionId)
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:291:              next: checkpoint
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:296:          join(dir, 'before.json'),
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:297:          JSON.stringify({ pid: process.pid, checkpoint })
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:305:        const checkpoint = await store.loadCheckpoint(
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:311:          JSON.stringify({ pid: process.pid, checkpoint })
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:313:        expect(checkpoint).not.toBeNull()
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:343:      it('preserves exact NUL output, bytes, usage and SETTLED receipt after writer SIGKILL and reader recreation', async () => {
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:355:          expect(writer.proc.kill('SIGKILL')).toBe(true)
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:356:          expect(await writer.done).toEqual({ code: null, signal: 'SIGKILL' })
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:360:          const before = JSON.parse(
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:361:            await readFile(join(dir, 'before.json'), 'utf8')
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:366:          expect(before.pid).toBe(writer.proc.pid)
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:368:          expect(after.pid).not.toBe(before.pid)
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:369:          expect(after.checkpoint).toEqual(before.checkpoint)
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:370:          const payload = after.checkpoint.state.observations[0].payload
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:375:          expect(after.checkpoint.budgetUsage).toMatchObject({
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:382:            after.checkpoint.state.toolResultContext.decisionAdmissions[0]
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:392:            next: before.checkpoint
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:395:            after.checkpoint
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:404:                writerPid: before.pid,
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:406:                writerSignal: 'SIGKILL',
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:419:            writer.proc.kill('SIGKILL')
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:496:              p.proc.kill('SIGKILL')
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:128:      checkpoints: (
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:130:          'SELECT * FROM operational_execution_checkpoints WHERE tenant_id=$1 AND execution_id=$2',
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:149:      checkpoint: await store.loadCheckpoint(tenantId, executionId),
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:163:        "INSERT INTO operational_executions (tenant_id,id,idempotency_key,request_hash,request,state) VALUES ($1,$2,$2,$3,'{}'::jsonb,'RECEIVED')",
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:183:    journalTrace: unknown[] = []
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:190:      journalTrace,
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:197:    'confirm',
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:209:          journalTrace.push({ method, args, result })
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:214:            method === 'confirm'
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:218:              phase: 'CONFIRMED_JOURNAL_BEFORE_RESULT_CHECKPOINT',
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:219:              checkpoint: await store.loadCheckpoint(
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:225:            process.stdout.write('PUBLIC224_READY CONFIRMED_JOURNAL\n')
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:232:          journalTrace.push({ method, args, error: errorInfo(e) })
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:265:        checkpoint: await store.loadCheckpoint(tenantId, input.executionId),
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:449:    proc.kill('SIGKILL')
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:524:        'resumes full %s after APPLIED CAS and SIGKILL without another body',
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:538:            const checkpointReady = await writer.ready
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:539:            if (checkpointReady !== 'ready') {
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:552:                  checkpointReady,
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:561:            expect(writer.proc.kill('SIGKILL')).toBe(true)
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:562:            expect(await writer.done).toEqual({ code: null, signal: 'SIGKILL' })
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:563:            const before = await snapshot(dir, 'before-reader', executionId)
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:567:            expect(before.checkpoint).toEqual(committed.checkpoint)
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:584:              beforeBudget: before.checkpoint?.budgetUsage,
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:585:              afterBudget: after.checkpoint?.budgetUsage,
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:598:            const payload = after.checkpoint!.state.observations.find(
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:615:            expect(after.rows.journal).toEqual(before.rows.journal)
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:617:              after.checkpoint!.state.toolResultContext!.decisionAdmissions
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:624:            expect(after.checkpoint!.budgetUsage).toMatchObject({
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:630:            expect(before.checkpoint!.budgetUsage.modelCalls).toBe(1)
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:654:              writer.proc.kill('SIGKILL')
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:705:          expect(state.checkpoint!.budgetUsage.modelCalls).toBe(1)
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:707:            state.checkpoint!.state.toolResultContext!.decisionAdmissions.map(
+../packet-r1/source/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:724:                c.proc.kill('SIGKILL')

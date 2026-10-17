@@ -1,0 +1,17 @@
+import json,pathlib,hashlib,os
+O=pathlib.Path(__file__).resolve().parents[1];P=O.parent/'review-packet-r2';M=json.loads((P/'manifest.json').read_text());before=json.loads((O/'fingerprint-before.json').read_text());after=[]
+for e in before:
+ f=pathlib.Path(e['path']);b=f.read_bytes();h=hashlib.sha256(b).hexdigest();after.append({'path':str(f),'bytes':len(b),'sha256':h,'expected':e['expected'],'clean':h==e['sha256'] and len(b)==e['bytes']})
+(O/'fingerprint-after.json').write_text(json.dumps(after,indent=2)+'\n')
+rows=[];D=pathlib.Path(M['allowedDependencyMirror'])
+for root,dirs,files in os.walk(D,followlinks=True):
+ for name in files:
+  f=pathlib.Path(root)/name
+  if f.is_file():
+   b=f.read_bytes();rows.append({'path':str(f.relative_to(D)),'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()})
+(O/'dependency-after.json').write_text(json.dumps(rows,indent=2)+'\n');depsClean=sorted(rows,key=lambda e:e['path'])==sorted(json.loads((O/'dependency-before.json').read_text()),key=lambda e:e['path'])
+b=pathlib.Path(M['node']).read_bytes();node={'path':M['node'],'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()};(O/'node-after.json').write_text(json.dumps(node,indent=2)+'\n');nodeClean=node==json.loads((O/'node-before.json').read_text())
+summary={'inputRecords':len(after),'inputClean':all(e['clean'] for e in after),'dependencyFiles':len(rows),'dependencyClean':depsClean,'nodeClean':nodeClean,'candidateManifestSHA256':M['candidateManifestSha256'],'immutableInputsClean':all(e['clean'] for e in after) and depsClean and nodeClean,'literalInitialExecutionScopeClean':False,'reason':'Initial dependency platform detection read /usr/bin/ldd and /proc/version; disclosed and subsequently blocked by strict NodeFS derivative. Historical reads cannot be undone.','strictRunsUnenumeratedSuccessfulNodeFSReads':0,'strictGuardIsOSAttestation':False}
+for stem in ['fingerprint-before','fingerprint-after','dependency-before','dependency-after','node-before','node-after']:
+ f=O/(stem+'.json');summary[stem+'SHA256']=hashlib.sha256(f.read_bytes()).hexdigest()
+(O/'integrity-summary.json').write_text(json.dumps(summary,indent=2)+'\n');print(json.dumps(summary,indent=2))

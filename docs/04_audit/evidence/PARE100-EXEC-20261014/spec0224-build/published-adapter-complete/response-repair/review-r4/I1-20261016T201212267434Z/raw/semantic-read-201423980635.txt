@@ -1,0 +1,156 @@
+
+packages/harness/src/iterative-runtime.ts:1010:1075
+1010:             decisionAdmissions: state.decisionAdmissions.map((value) =>
+1011:               ids.has(value.admissionId)
+1012:                 ? {
+1013:                     ...value,
+1014:                     status: 'UNKNOWN',
+1015:                     unknownReason: 'process_lost_before_decision'
+1016:                   }
+1017:                 : value
+1018:             )
+1019:           }
+1020:           // A settled receipt is immutable: a crash before acceptedDecision is
+1021:           // evidence of an unresolved decision, not permission to replay a model.
+1022:           // Keep the acknowledged checkpoint and return conservative live usage.
+1023:           return await this.finalize(
+1024:             run,
+1025:             {
+1026:               ...this.stop(
+1027:                 'INSUFFICIENT_EVIDENCE',
+1028:                 'DECISION_USAGE_UNKNOWN: unresolved decision needs handoff.'
+1029:               ),
+1030:               ...(orphaned.some((value) => value.status === 'SETTLED')
+1031:                 ? { preserveCheckpoint: true }
+1032:                 : {})
+1033:             },
+1034:             startedAtMs
+1035:           )
+1036:         }
+1037:         await this.persistCheckpoint(run)
+1038:       }
+1039:       await this.safeAudit(run, 'runtime_v2.started', {
+1040:         result: checkpoint ? 'resumed' : 'started'
+1041:       })
+1042:       const outcome = await this.runLoop(run)
+1043:       return await this.finalize(run, outcome, startedAtMs)
+1044:     } catch (error) {
+1045:       return await this.finalize(
+1046:         run,
+1047:         {
+1048:           kind: 'stop',
+1049:           stopReason:
+1050:             error instanceof ToolResultContextError
+1051:               ? error.stopReason
+1052:               : 'INTERNAL_FAILURE',
+1053:           response:
+1054:             error instanceof ToolResultContextError
+1055:               ? `${error.code}: ${error.message}`
+1056:               : `Execution failed internally: ${errorMessage(error)}.`,
+1057:           ...(run.checkpointConflict ? { preserveCheckpoint: true } : {})
+1058:         },
+1059:         startedAtMs
+1060:       )
+1061:     }
+1062:   }
+1063: 
+1064:   private rejectCheckpoint(
+1065:     checkpoint: ExecutionCheckpoint,
+1066:     input: RuntimeInput
+1067:   ): string | null {
+1068:     if (checkpoint.checkpointVersion === 2 && !this.options.toolResultContext) {
+1069:       return 'Complete checkpoint requires the explicitly configured complete-tool-v1 mode.'
+1070:     }
+1071:     if (checkpoint.runtimeProfile !== 'iterative') {
+1072:       return 'Execution checkpoint belongs to a different runtime profile.'
+1073:     }
+1074:     if (checkpoint.runtimeVersion !== RUNTIME_V2_VERSION) {
+1075:       return `Execution checkpoint requires runtime ${checkpoint.runtimeVersion}, this runtime is ${RUNTIME_V2_VERSION}.`
+
+packages/harness/src/iterative-runtime.ts:1220:1305
+1220:             stepNumber,
+1221:             decision,
+1222:             decisionAdmissionIds: decisionAdmissionIds ?? []
+1223:           }
+1224:         }
+1225:         await this.persistCheckpoint(run)
+1226:       }
+1227: 
+1228:       const signature = decisionSignature(decision)
+1229:       if (decision.decisionType !== 'STOP') {
+1230:         const repeats = run.state.loopSignatures.filter(
+1231:           (candidate) => candidate === signature
+1232:         ).length
+1233:         const threshold = this.effectiveRepeatThreshold(run, decision)
+1234:         const cycle = detectDecisionCycle(run.state.loopSignatures, signature)
+1235:         if (repeats >= threshold || cycle) {
+1236:           await this.recordStep(run, {
+1237:             stepNumber,
+1238:             stepType: 'POLICY',
+1239:             status: 'FAILED',
+1240:             sideEffecting: false,
+1241:             errorCode: 'loop_detected',
+1242:             reasonCode: 'LOOP_SUSPECTED'
+1243:           })
+1244:           return this.stop(
+1245:             'LOOP_DETECTED',
+1246:             cycle
+1247:               ? 'A repeated decision cycle was detected; the loop stopped without executing another effect.'
+1248:               : 'Repeated identical decisions were detected; the loop stopped without executing another effect.'
+1249:           )
+1250:         }
+1251:       }
+1252: 
+1253:       await this.safeAudit(run, 'orchestrator.decided', {
+1254:         result: `${decision.decisionType}:${decision.reasonCode}`,
+1255:         tool: decision.toolId ?? null
+1256:       })
+1257: 
+1258:       const dispatch = await this.dispatch(run, decision, stepNumber)
+1259:       if (dispatch.kind === 'pause') {
+1260:         return await this.pause(run, stepNumber, dispatch)
+1261:       }
+1262:       if (dispatch.kind === 'stop') {
+1263:         run.stepNumber = stepNumber
+1264:         if (this.options.toolResultContext) {
+1265:           run.state.stepNumber = stepNumber
+1266:           run.state.toolResultContext = {
+1267:             ...run.state.toolResultContext!,
+1268:             acceptedDecision: undefined
+1269:           }
+1270:         }
+1271:         return dispatch
+1272:       }
+1273: 
+1274:       const signatures = [...run.state.loopSignatures, signature].slice(
+1275:         -this.maxSignatures
+1276:       )
+1277:       run.stepNumber = stepNumber
+1278:       run.state = {
+1279:         ...run.state,
+1280:         stepNumber,
+1281:         loopSignatures: signatures,
+1282:         pendingDecision: undefined,
+1283:         pendingStepNumber: undefined,
+1284:         selectedCapability:
+1285:           decision.toolId ??
+1286:           decision.selectedCapability ??
+1287:           run.state.selectedCapability
+1288:       }
+1289:       if (this.options.toolResultContext) {
+1290:         run.state.toolResultContext = {
+1291:           ...run.state.toolResultContext!,
+1292:           acceptedDecision: undefined
+1293:         }
+1294:       }
+1295:       await this.persistCheckpoint(run)
+1296: 
+1297:       if (run.skipEvaluationOnce) {
+1298:         run.skipEvaluationOnce = false
+1299:         continue
+1300:       }
+1301:       const evaluationOutcome = await this.evaluate(run, decision)
+1302:       if (evaluationOutcome) return evaluationOutcome
+1303:     }
+1304:   }
+1305: 

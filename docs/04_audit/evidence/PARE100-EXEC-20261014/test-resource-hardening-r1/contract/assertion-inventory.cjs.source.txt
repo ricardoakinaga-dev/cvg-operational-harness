@@ -1,0 +1,48 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const assert = require('node:assert/strict');
+const base = __dirname;
+const worktree = path.join(base, '../worktree');
+const ts = require(path.join(worktree, 'node_modules/typescript/lib/typescript.js'));
+const task = JSON.parse(fs.readFileSync(path.join(base, 'task-short-spec.json')));
+const sha = b => crypto.createHash('sha256').update(b).digest('hex');
+function inventory(file) {
+  const bytes = fs.readFileSync(file);
+  const ast = ts.createSourceFile(file, bytes.toString(), ts.ScriptTarget.Latest, true);
+  const expectations = [], testDeclarations = [];
+  function walk(n) {
+    if (ts.isCallExpression(n)) {
+      if (ts.isIdentifier(n.expression) && n.expression.text === 'expect') {
+        let outer = n;
+        while ((ts.isPropertyAccessExpression(outer.parent) && outer.parent.expression === outer) ||
+               (ts.isCallExpression(outer.parent) && outer.parent.expression === outer)) outer = outer.parent;
+        expectations.push(outer.getText(ast).replace(/\s+/g, ' '));
+      }
+      if (/^(it|test)(\.|$)/.test(n.expression.getText(ast))) {
+        const first = n.arguments[0];
+        if (first && ts.isStringLiteralLike(first)) testDeclarations.push({ call: n.expression.getText(ast), title: first.text });
+      }
+    }
+    ts.forEachChild(n, walk);
+  }
+  walk(ast); return { sha256: sha(bytes), expectations, testDeclarations };
+}
+function difference(a, b) {
+  const bag = new Map(); for (const x of b) bag.set(x, (bag.get(x) || 0) + 1);
+  return a.filter(x => { const count = bag.get(x) || 0; if (count) { bag.set(x, count - 1); return false; } return true; });
+}
+const files = task.before.filter(x => x.sha256).map(row => {
+  const before = inventory(path.join(base, 'before', row.path));
+  assert.equal(before.sha256, row.sha256);
+  const after = inventory(path.join(worktree, row.path));
+  assert.deepEqual(after.testDeclarations, before.testDeclarations);
+  return { path: row.path, beforeSHA256: before.sha256, afterSHA256: after.sha256,
+    testDeclarations: before.testDeclarations,
+    expectationCounts: { before: before.expectations.length, after: after.expectations.length },
+    removedOrModified: difference(before.expectations, after.expectations),
+    addedOrModified: difference(after.expectations, before.expectations) };
+});
+process.stdout.write(JSON.stringify({ kind: 'LEAD_ASSERTION_INVENTORY', at: new Date().toISOString(),
+  scriptSHA256: sha(fs.readFileSync(__filename)), taskSHA256: sha(fs.readFileSync(path.join(base, 'task-short-spec.json'))),
+  note: 'AST declaration equality and assertion multiset are evidence for inspection, not semantic acceptance.', files }, null, 2) + '\n');

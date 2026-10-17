@@ -1,0 +1,386 @@
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/docs/02_spec/0225_pare100_complete_tool_result_journal.md
+1: # SPEC0225 — resultado JSON completo no journal operacional
+2: 
+3: Data: 16/10/2026. Task: `P100-014/P100-020/TOOL-RESULT-JOURNAL-SPEC-001`.
+4: Estado inicial: **PROPOSTA PARA REVISÃO TÉCNICA**. Elaboração T1 de mudança
+5: futura T3. **BUILD_AUTHORIZED=false**; todos os testes J01–J16 estão NOT_RUN.
+6: 
+7: ## 1. Problema, escopo e autoridade
+8: 
+9: A [SPEC0224](0224_pare100_complete_tool_result_context.md), SHA-256
+10: `f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea`, já foi
+11: aprovada pelo usuário. Seu BUILD local demonstrou preservação do resultado no
+12: contexto e no checkpoint V2. O journal confirma o resultado antes desse
+13: checkpoint e ainda grava o valor diretamente em JSONB. No teste público com
+14: NUL, o PostgreSQL devolveu 22P05 depois de um corpo; o journal ficou UNCERTAIN
+15: e o checkpoint completo não foi alcançado. Não houve sucesso fim a fim.
+16: 
+17: Esta proposta complementa essa fronteira. Prevê codec opt-in no
+18: `PostgresOperationalEffectJournal`, migração aditiva, composição local confiável
+19: e testes de persistência/retomada. Mantém a API lógica do journal e as regras de
+20: tenant, policy, approval, sandbox, identidade, tentativa e fence. Não substitui
+21: o journal operacional por um ledger de hashes, journal de canal ou fake.
+22: 
+23: O BUILD desta proposta exige revisão técnica independente, decisão humana T3
+24: sobre seu SHA-256 exato e task/recurso registrados. A autorização da0224 não é
+25: reenviada nem estendida silenciosamente ao novo formato.0220/0221/0222 permanecem
+26: decisões independentes; nenhum release ou aceite dos36cartões decorre daqui.
+27: 
+28: O escopo futuro é um recurso PostgreSQL novo, descartável e sintético. Papéis,
+29: sessões antigas e fixtures de cutover dos testes pertencem exclusivamente a
+30: esse recurso. Não se autoriza operar bancos/principals de terceiros, migrar
+31: dado real, ativar produção ou habilitar automaticamente hosts existentes.
+32: 
+33: ## 2. Fatos e fronteiras atuais
+34: 
+35: Os fatos referem-se ao worktree isolado PARE100 e aos snapshots por hash do
+36: [pacote de proposta](../04_audit/evidence/PARE100-EXEC-20261014/spec0225/README.md),
+37: não ao runtime ainda não integrado do diretório principal.
+38: 
+39: - `operational_effect_journal`, criado na0016, tem `result jsonb`, sem versão
+40:   de armazenamento. `result_protection_version` pertence a
+41:   `operational_executions`, não ao journal. O marcador da0029 também não é
+42:   discriminador por resultado. CheckpointVersion2 não versiona esses registros.
+43: - O caminho nativo serializa o resultado com limite262144bytes e envia JSONB
+44:   antes de devolver o sucesso da ferramenta. Escapar NUL novamente mudaria o
+45:   valor lógico. O codec do checkpoint não repara uma confirmação anterior.
+46: - A correção local de leitura preserva strings que parecem JSON. A projeção
+47:   calculada `result IS NOT NULL AS result_present` distingue JSONB null de
+48:   SQL NULL: o primeiro retorna propriedade própria `result:null`; o segundo
+49:   permanece ausência. Isso não adiciona coluna nem formato físico.
+50: - O reader com `jsonValue` e os readers que retornam o valor já decodificado
+51:   são gerações distintas. Um envelope ou string com prefixo em `result` pode
+52:   virar a saída da ferramenta para o reader atual. Não há segurança por tag.
+53: - A retomada pública já foi demonstrada para strings e null, inclusive perda
+54:   do processo após confirmação e antes do checkpoint. O caso NUL continua
+55:   vermelho. Esses testes não são execução dos testes futuros desta proposta.
+56: 
+57: Armazenar o resultado no journal não resolve automaticamente outros campos
+58: JSONB, como resultado final da execução, sessão, outbox ou consumidores SDK.
+59: Seu suporte fim a fim precisa de provas e contratos próprios. Não se habilita
+60: um worker inteiro apenas porque este codec passou em uma fábrica isolada.
+61: 
+62: ## 3. Decisão proposta e alternativa descartada
+63: 
+64: Adicionar **duas colunas** ao journal existente:
+65: `result_storage_version` e `result_storage_payload`. A versão fica fora do
+66: conteúdo da ferramenta. O payload1 contém bytes JSON canônicos em base64 ASCII;
+67: `result` continua reservado ao armazenamento legado.
+68: 
+69: | Alternativa                                                              | Decisão                                                                                                      |
+70: | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+71: | JSONB direto com correção do mapper                                      | Não representa NUL; mantém o gargalo de256KiB.                                                               |
+72: | Escape extra, tag ou envelope dentro de `result`                         | Altera o valor ou colide com saída legítima; readers atuais podem devolver o conteúdo físico como resultado. |
+73: | Reutilizar versão do checkpoint ou de outro registro                     | Não identifica o formato de cada linha do journal.                                                           |
+74: | Discriminador externo e payload separado                                 | Selecionada, com barreira explícita de compatibilidade.                                                      |
+75: | Serviço de blobs, nova tabela de journal, compressão ou dados ilimitados | Não necessários para esta fatia limitada.                                                                    |
+76: 
+77: Não haverá coexistência de binários antigos e novos com acesso ao mesmo schema
+78: ativado. A proposta escolhe cutover exclusivo de schema/principal. Se essa
+79: premissa não for aceita ou puder ser violada, o desenho não pode ser ativado.
+80: Uma alternativa de operação mista exige outra decisão técnica antes de BUILD.
+81: 
+82: ## 4. Contrato lógico, domínio e opt-in
+83: 
+84: As assinaturas de `EffectJournal`, seus estados e os bindings de
+85: operationKey/proposalHash/attempt não mudam. `confirm({result:v})`, `get` e
+86: `reserve` confirmado devolvem `v`, nunca base64, envelope, summary ou receipt
+87: fornecido pela ferramenta. Preservar tipo, valores vazios/falsy e null como
+88: propriedade própria. Não normalizar Unicode, truncar ou coagir números.
+89: 
+90: O domínio é o JSON estrito da0224: null/boolean/string Unicode escalar,
+91: números finitos exceto -0, arrays densos e objetos simples ou de protótipo
+92: nulo com propriedades próprias de dados. Recusar undefined, BigInt, símbolos,
+93: holes, getters/toJSON, ciclos, NaN/infinidades e surrogates isolados. Chaves
+94: seguem ordem lexicográfica UTF-16 do canonicalizador; arrays mantêm ordem.
+95: Aliases acíclicos repetem por valor. Isso não é sandbox para Proxy ou código
+96: instalado hostil.
+97: 
+98: Opção proposta do adapter:
+99: 
+100: ```ts
+101: new PostgresOperationalEffectJournal(connection, {
+102:   resultStorage: { version: 1 }
+103:   // fence permanece a porta nativa existente, quando aplicável.
+104: })
+105: ```
+106: 
+107: Sem opção: escrita legada. Versão desconhecida: falha antes da execução.
+108: Somente composição confiável escolhe o modo; campos de HTTP/modelo/output,
+109: variáveis não validadas ou uma tag não o ativam. Fixar modo, principal, schema
+110: e binário no manifesto de composição; não trocar modo durante uma execução.
+111: 
+112: `toolResultContext:{version:1}` não configura sozinho o armazenamento da porta
+113: externa. A composição isolada deve injetar explicitamente um journal
+114: compatível. Journals customizados continuam sob responsabilidade do seu owner.
+115: Não se alega persistência nativa para uma porta in-memory.
+116: 
+117: O worker comum hoje constrói o journal sem opção; a composição published passa
+118: o fence. Não ligar a nova opção implicitamente em nenhum dos dois, SDK,
+119: produto ou host principal. Todo consumidor admitido ao recurso novo deve ter
+120: wiring e readiness qualificados; consumidor não qualificado fica fora dele.
+121: 
+122: ## 5. Formato físico e limites exatos
+123: 
+124: Estas são exigências de schema, não SQL implementado:
+125: 
+126: | Campo/estado                                | Invariante                                                                                                  |
+127: | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+128: | `result_storage_version`                    | smallint NOT NULL, default0, somente0/1, imutável por linha inclusive retry.                                |
+129: | Versão0                                     | `result` mantém os bytes/significado JSONB existentes; payload novo SQL NULL.                               |
+130: | Versão1, qualquer estado                    | `result` legado SQL NULL.                                                                                   |
+131: | V1 RESERVED/EFFECT_STARTED/FAILED/UNCERTAIN | payload SQL NULL.                                                                                           |
+132: | V1 CONFIRMED                                | payload completo válido e bounded; `error` SQL NULL; estado/payload gravados atomicamente.                  |
+133: | Envelope                                    | Exatamente `encoding:"base64"`, `decodedBytes`, `decodedSha256`, `data`. A autoridade de versão é a coluna. |
+134: 
+135: DB CHECKs cobrem estados, exclusividade, tipos, forma, ASCII e comprimentos.
+136: Guard de escrita protege versão, principal autorizado e imutabilidade do
+137: confirmado. O adapter valida conteúdo, JSON estrito e SHA. Hash detecta
+138: corrupção; não autentica uma escrita privilegiada maliciosa.
+139: 
+140: Seja C(v) o JSON canônico e B seus bytes UTF-8. Exigir
+141: `decodedBytes=|B|`, `decodedSha256=SHA256(B)` sem prefixo e igualdade byte a byte
+142: entre B e a recanonicalização do valor decodificado. Um hash de conteúdo não
+143: substitui o binding de tenant/operação/tentativa.
+144: 
+145: | Limite                      | Valor inclusivo                                                                                |
+146: | --------------------------- | ---------------------------------------------------------------------------------------------- |
+147: | Resultado lógico no journal | 8388608bytes; mínimo um byte JSON válido.                                                      |
+148: | Forma lógica                | profundidade64 com raiz1;1000000nós de valor; chaves contam bytes, não nós.                    |
+149: | `data` base64               | `4*ceil(decodedBytes/3)`, máximo11184812caracteres ASCII.                                      |
+150: | Envelope JSONB expandido    | 11185324bytes, máximo do data+512; usar `octet_length(payload::text)`, não tamanho comprimido. |
+151: | Contexto0224, inalterado    | 32768bytes, profundidade32,10000nós.                                                           |
+152: | Checkpoint0224, inalterado  | 8388608bytes canônicos unsigned incluindo todo o restante do estado.                           |
+153: 
+154: 8MiB é orçamento proposto de contenção, não throughput/capacidade medidos.
+155: O capture atual limita **todo ToolResult** a8MiB; logo, o output público máximo
+156: fica abaixo do máximo isolado da API do journal. Os testes devem distinguir
+157: essas fronteiras. Não aumentar budgets de capture, checkpoint, mensagem,
+158: tokens, provider ou duração por consequência deste codec.
+159: 
+160: NUL e Unicode ficam nos bytes B, codificados como ASCII. IDs, erros e
+161: proveniência mantêm sua validação própria; não passam a aceitar NUL.
+162: 
+163: Encode verifica limites antes de crescer buffers/strings. SELECT/RETURNING
+164: suprime payload oversized **antes** do parser JSONB do driver, devolvendo flag
+165: de overflow distinta de ausência; todos get/reserve/transition usam a projeção
+166: bounded. CHECK não autoriza trazer conteúdo danificado sem limite.
+167: 
+168: Depois disso, validar versão, quatro chaves exatas, tipos, ASCII, fórmula de
+169: tamanho e padding. Reencodar base64 e exigir igualdade; Buffer permissivo não
+170: basta. Validar bytes/SHA, UTF-8 fatal sem BOM, scan lexical de profundidade/nós
+171: antes do grafo, um único valor JSON e recanonicalização idêntica. Recusar
+172: duplicatas de chaves, trailing material e formas não canônicas. Decodificar
+173: uma vez, sem interpretar recursivamente a forma do output.
+174: 
+175: ## 6. Legado, órfãos e barreira de readers/writers
+176: 
+177: Versão0 é dado bruto legado, inclusive se contiver campos que imitam o novo
+178: envelope, `storageCodec` ou nome de versão. Versão1 com esses mesmos campos
+179: como valor é codificada uma vez e decodificada uma vez.
+180: 
+181: Na porta opt-in, `get` pode inspecionar0 para reconciliação: strings como
+182: `"42"`, `"null"`, `"{}"` mantêm tipo; null JSONB com flag de presença é null.
+183: SQL NULL confirmado é resultado desconhecido, nunca null inventado. Essa
+184: inspeção não autoriza gerar observação0224 completa nem replay.
+185: 
+186: `reserve` e transitions opt-in encontram versão0: falhar
+187: JOURNAL_STORAGE_MODE/LEGACY_RESULT_UNKNOWN antes de replay/markStarted/corpo,
+188: preservando a linha. Isso inclui CONFIRMED com proposal igual, FAILED,
+189: trabalho ativo e órfãos. A0016 não dá FK de journal para parent: operationKey
+190: igual não prova admissão sob o modo novo. Não fabricar parent, fence ou
+191: conversão para adotar um órfão. Novas execuções opt-in reservam linhas1 novas;
+192: histórico permanece no recurso legado qualificado ou em handoff.
+193: 
+194: Separar payload e deixar `result` SQL NULL impede devolver base64 pelo mapper
+195: antigo, mas sozinho pode produzir SUCCEEDED/undefined. Isso também reprova a
+196: compatibilidade. Nenhuma geração de reader antigo é considerada protegida só
+197: por coluna, prefixo ou tag.
+198: 
+199: A alternativa de filtro RLS não foi selecionada. A política atual é de tenant;
+200: adicionar outra permissiva faria OR e poderia manter um bypass. Uma opção RLS
+201: teria de restringir/substituir a política existente, adaptar preflight e provar
+202: com roles sem bypass que conflito invisível não concede reserva. O código
+203: atual faz INSERT ON CONFLICT DO NOTHING, SELECT FOR UPDATE e lança conflito
+204: se não lê a linha, antes do corpo; isso é fato de fonte, não prova executada
+205: de uma política nova. Não se concede autoridade de modo por GUC de ferramenta.
+206: 
+207: ### 6.1 Cutover exclusivo selecionado
+208: 
+209: No schema ativado, admitir só binários qualificados e um LOGIN runtime novo,
+210: dedicado, com **zero memberships** e grants mínimos diretos. Sem SUPERUSER,
+211: BYPASSRLS, ownership, DDL ou alteração de roles/triggers; manter isolamento de
+212: tenant. Migration owner é separado. Não reutilizar credential em binário
+213: legado, em outro recurso ou por um role compartilhado.
+214: 
+215: O guard migration-owned é SECURITY INVOKER e compara `session_user` e
+216: `current_user` com o principal exato provisionado e o schema fixado na
+217: instalação. SECURITY DEFINER identificaria o owner e não implementa esse
+218: binding. Nome do principal é parâmetro confiável de instalação, não de output
+219: nem GUC runtime. Renomear/trocar exige requalificação.
+220: 
+221: A expansão inicial não permite escrita1 por ninguém. A ativação instala o
+222: binding imutável do principal no guard, sob owner, antes de habilitar admissão.
+223: A ferramenta de instalação deve gerar o binding a partir de identificadores
+224: validados/quotados e persistir seu hash no recibo de readiness; depois o runtime
+225: não pode alterá-lo. Nenhuma janela entre expansão e ativação libera escrita1.
+226: Essa configuração não altera os bytes aprovados da migração nem usa um GUC
+227: runtime como autoridade persistente.
+228: 
+229: Drenar trabalho e encerrar pools/sessões antigos **do recurso sintético próprio**.
+230: Revogar SELECT/INSERT/UPDATE/claim e rotas herdadas/PUBLIC/SECURITY DEFINER dos
+231: principals antigos; eles não podem assumir o novo role nem obter seu segredo.
+232: Manter somente USAGE de schema durante as provas negativas: a consulta antiga
+233: precisa resolver a tabela pretendida e falhar42501, sem fallback para public.
+234: Verificar privilégios efetivos, memberships, sessões e binários por hash.
+235: 
+236: A consulta SELECT original, usando credential antiga, deve falhar42501. Linha
+237: vazia RLS ou SUCCEEDED/undefined não passam. Worker antigo deve falhar
+238: readiness/claim antes de modelo/corpo. Permissão administrativa usada para
+239: provisionar fixture não é prova do role de serviço. Quarentenar até essas
+240: provas passarem; não disponibilizar o schema novo por pressuposição.
+241: 
+242: O guard exige inserts1 pelo principal ativo, recusa0 por esse principal,
+243: recusa escrita1 por outros e mudanças de versão/payload confirmado. Guards0029
+244: continuam condição AND independente; codec não concede fence published.
+245: Modo ausente sob principal ativo falha readiness antes de aceitar trabalho.
+246: Novos readers sem opt-in recusam linhas1, sem decode oportunista; queries
+247: legadas em schema não expandido mantêm seu caminho anterior. Readiness
+248: distingue explicitamente schema legado/expandido/ativado antes de escolher
+249: projeção; ausência de coluna no opt-in não autoriza fallback para legado.
+250: 
+251: Isso é isolamento de credential e configuração, não atestação criptográfica
+252: de um processo JS. Entregar a credential nova a binário antigo quebra a
+253: premissa. Se exclusividade não puder ser garantida, não ativar. Operação mista
+254: somente em schemas/recursos distintos; não há promessa de upgrade sem parada.
+255: 
+256: ### 6.2 Compatibilidade exigida
+257: 
+258: | Composição                                     | Comportamento                                                                                                           |
+259: | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+260: | Binário/recurso legado sem expansão            | baseline anterior preservada.                                                                                           |
+261: | Journal legado no schema expandido não ativado | 0/default e consultas legadas preservados; isso não promete que o preflight de um worker antigo aceite migrações novas. |
+262: | Binário novo default no legado/expandido       | não escreve1; recusa1 se encontrado.                                                                                    |
+263: | Novo opt-in no ativado                         | novas linhas1;0 somente inspeção, sem adoção.                                                                           |
+264: | Antigo com credential antiga no ativado        | 42501 em read/write/claim, modelo0/corpo0.                                                                              |
+265: | Default sem flag sob principal ativo           | readiness falha; guard recusa insert0.                                                                                  |
+266: | Opt-in sem migração/principal válidos          | falha antes de claim/modelo/corpo.                                                                                      |
+267: | Vários workers1 qualificados                   | mesma identidade/tentativa/fence, sem efeito duplicado.                                                                 |
+268: | Fleet antigo/novo no mesmo schema ativo        | configuração não suportada; ativação recusada.                                                                          |
+269: 
+270: ## 7. Confirmação, replay e falhas
+271: 
+272: Preservar a transação/ordem nativa: contexto tenant, locks de parent/fence/outer
+273: existentes, journal FOR UPDATE, identidade/tentativa, recheck, UPDATE atômico e
+274: recheck após escrita antes do commit. Revalidar prazo/lease depois de encode
+275: bounded. Pré-calcular fora do lock não dispensa guard; não há writer paralelo
+276: sem fence, backfill que settle ou nova garantia exactly-once externa.
+277: 
+278: Reserva1 cria RESERVED sem payload. markStarted só de RESERVED; confirm só de
+279: EFFECT_STARTED para a mesma tentativa. CONFIRMED/payload/timestamp commitam
+280: juntos. Repetição da confirmação da mesma tentativa exige mesmos bytes/hash;
+281: dados diferentes geram conflito, sem shortcut que aceite qualquer resultado.
+282: 
+283: Se cair após confirmação commitada e antes do checkpoint, recuperar o valor
+284: pelo journal, validar pela0224 e reconstruir observação sem corpo novo. Perda
+285: de commit/ack/fence ou payload inválido exige reconciliação, sem transformar
+286: em FAILED para retry. Estado started/uncertain não adota tentativa nova. Só
+287: FAILED genuinamente pre-effect-safe mantém o retry nativo, limpando payload
+288: atomicamente. Versão0 não ganha essa adoção pelo modo novo.
+289: 
+290: Resultado32769bytes/profundidade33/nós10001 que caiba no journal pode ser
+291: CONFIRMED integralmente e virar SUCCEEDED/UNAVAILABLE no contexto0224. Parar
+292: antes do próximo modelo; manter operationKey/settlement, sem truncar, repetir
+293: corpo ou declarar objetivo completo por summary. Testar também300KiB.
+294: 
+295: Valor fora do domínio/8MiB/profundidade64/1000000nós não admite confirmação
+296: parcial. Falha antes do commit continua o caminho nativo de journal incerto:
+297: preservar started/UNCERTAIN e fato de sucesso em memória em evidência redigida,
+298: sem confundi-lo com confirmação durável. Não demover CONFIRMED, liberar retry
+299: ou fingir hash completo. Nova API de sucesso sem resultado não é introduzida.
+300: 
+301: Falha de markUncertain não mascara a falha original de confirm. Se re-read
+302: provar CONFIRMED após ack perdido, preservá-lo; sem DB, parar com settlement
+303: não resolvido. Não emitir ACTION_CONFIRMED de texto fornecido pela ferramenta.
+304: 
+305: Usar categorias existentes de OperationalExecutionError: validation_failed,
+306: invalid_action, conflict e lease_lost. Razões redigidas propostas:
+307: JOURNAL_STORAGE_MODE, JOURNAL_RESULT_INVALID, JOURNAL_RESULT_TOO_LARGE,
+308: JOURNAL_RESULT_CORRUPT, JOURNAL_RESULT_CONFLICT, LEGACY_RESULT_UNKNOWN.
+309: 42501 não vira resultado ausente/sucesso. Logs contêm motivo, versão, tamanhos,
+310: IDs/correlação e estado, nunca conteúdo/base64/credential.
+311: 
+312: ## 8. Migração, ativação e recuperação futuras
+313: 
+314: Tudo abaixo está NOT_RUN. A próxima numeração observada é0030, apenas proposta;
+315: reler inventário/claims antes do BUILD. Não editar0016/0029 ou remover guards,
+316: checksums, RLS e verificações de owner/role existentes.
+317: 
+318: 1. Congelar candidata, migrations, binários e fixtures; registrar task e novo
+319:    recurso sintético. Provisionar owner, role antigo de teste e runtime novo.
+320: 2. Expandir colunas/default0/checks/guard que inicialmente nega1. Verificar
+321:    triggers/search_path/policies/grants. Proposta local: lock_timeout1s e
+322:    statement_timeout30s; timeout aborta transação, sem retry automático.
+323: 3. Sem backfill/conversão. Comparar contagens por tenant, identidades, estados,
+324:    tempos e digests de result::text, incluindo null SQL/JSONB e envelopes
+325:    aparentes. Qualquer drift aborta. Não criar parent nem normalizar órfãos.
+326: 4. Drenar o alvo próprio, impedir accessos antigos, instalar binding do guard
+327:    e qualificar principal/binário. Recibo liga schema, roles, ACL efetiva,
+328:    versão e hashes. Não ativar sem probes negativos42501 e owner separado.
+329: 5. Habilitar opt-in na composição isolada e executar J01–J16,0224 e regressões.
+330:    Nova chamada/corpo, reader antigo com acesso ou fence inválido bloqueiam.
+331: 6. Rollback de binário somente antes da primeira reserva1 **ou** escrita de
+332:    checkpoint2, sem trabalho ativo e com contagens/digests reconciliados.
+333:    Expansão pode permanecer; não executar down migration destrutiva.
+334: 7. Depois de qualquer linha1/checkpoint2, suspender admissão e fazer roll-forward
+335:    com readers novos/credentials retidas. Sem downgrade, copy de envelope para
+336:    result, backfill decodificado, reseal ou restore seguido de replay de efeitos.
+337:    Export/restore só em fixture descartável, comparando hashes/linhas/corpo0.
+338: 
+339: Volume, retenção, latência, janela de produção e recovery time reais não foram
+340: medidos. Demanda de conversão de trabalho vivo ou operação online mista exige
+341: outro desenho aprovado; não amplia esta proposta automaticamente.
+342: 
+343: ## 9. Testes rejeitáveis
+344: 
+345: **Todos J01–J16: NOT_RUN.** Hash de fonte, compilação, testes antigos e tabelas
+346: de intenção não são execução deste protocolo. Usar PostgreSQL real, journal,
+347: registry, fábrica e stores nativos; apenas ferramenta/modelo/counter sintéticos.
+348: Observar pedidos reais do modelo; não fornecer resposta oculta fora da ferramenta.
+349: 
+350: | ID  | Critério obrigatório futuro                                                                                                                                                                                                                                                                     |
+351: | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+352: | J01 | confirm/get/reserve em processo novo preservam todos os tipos JSON, null como propriedade própria, vazios/falsy, números finitos e strings que parecem JSON. Comparar valor/tipo/bytes/hash.                                                                                                    |
+353: | J02 | NUL4096, escapes, Unicode, NUL em chaves/valores, chaves vazias/reservadas e envelopes aparentes0/1: decode uma vez, sem coerção/prototype mutation.                                                                                                                                            |
+354: | J03 | Limites lógico8388608/+1, depth64/65, nós1000000/+1 e físicos11184812/data e11185324/envelope/+1; escape expansion, tamanho declarado falso e rejeição antes de alocar/parser driver. Separar limite de ToolResult público.                                                                     |
+355: | J04 | Versão desconhecida, mistura de campos/estado/payload, hash/length, chaves extra/faltantes, base64/padding, UTF-8/BOM, JSON duplicado/trailing/não canônico e domínio inválido: sem hook/modelo/corpo/fallback. Controle íntegro deve passar.                                                   |
+356: | J05 | Migração preserva legado/default0/contagens/digests e colisões de envelope; SQL NULL não vira null. Reserve1 recusa todas as linhas0, inclusive órfão confirmado/proposal igual e FAILED; sem backfill/adopção. Expansão interrompida reconcilia a transação.                                   |
+357: | J06 | Readers antigos com jsonValue, mapper direto e result_present usam suas consultas/credentials originais no ativado:42501/modelo0/corpo0. Controle legado separado funciona. Reintroduzir grant herdado/PUBLIC deve reprovar ativação; undefined/linha vazia não passam.                         |
+358: | J07 | Flag ausente/versão errada, role privilegiado/member/wrong, migração/wiring faltantes, sessão antiga e fleet misto falham antes de claim/modelo/corpo. Inserts0 pelo principal ativo e1 por outro são negados; GUC/tag forjados não ativam.                                                     |
+359: | J08 | Transação real: rollback antes/depoisUPDATE e antescommit, kill póscommit/préack, reread CONFIRMED, confirm idempotente igual e conflito diferente; tentativa/tenant/proposal inválidos não replayam nem sobrescrevem.                                                                          |
+360: | J09 | Fábrica+Hybrid+journal/store reais: ASCII4096, Unicode4096bytes, nul4096-escapes, strings parecendo JSON, null/false/0/vazios e objetos aninhados/envelope. SIGKILL após CAS completo, PID novo, um corpo, valor/frame/hash/bytes/receipts/usage idênticos. Toda fixture é obrigatória.         |
+361: | J10 | SIGKILL depois de confirmar journal e antes do checkpoint completo: NUL/null/envelopes/primitivos recuperados via journal em PID novo, sem corpo; comparar receipts e próximo frame/CAS. Não substituir pelo crashpoint J09.                                                                    |
+362: | J11 | Outputs32768/32769bytes, depth32/33 e nós10000/+1, mais300KiB: CONFIRMED íntegro, SUCCEEDED/UNAVAILABLE quando excede contexto, modelo seguinte0 e corpo único antes/depois da retomada; positivo pequeno completa. Incluir falha pósconfirm de save.                                           |
+363: | J12 | Falhas de DB/commit/ack/capture/encode acima8MiB e de markUncertain preservam erro original/estado, não FAILED/retry seguro. CONFIRMED não é demovido; started/uncertain bloqueiam em processo novo. Diferenciar sucesso em memória de prova de commit.                                         |
+364: | J13 | Composição bound usa triggers/fences0029 reais e lock order nativo: positivo, worker/attempt/outer stale, lease expirando no encode, pause/cancel/deadline e DML sem guard; ambas as barreiras independentes, sem escrita/corpo indevido. Unbound não prova fencebound.                         |
+365: | J14 | Dois processos públicos disputam reserva/dispatch/replay e CAS de decisão; um efeito vencedor e cobranças/receipts sem duplicação, perdedor sem corpo/settlement indevido; drift de modo/proposal/fingerprint bloqueia.                                                                         |
+366: | J15 | Drill de expansão/ativação, ACL/sessões, sem backfill; rollback antes da primeira escrita, proibição após reserva1/checkpoint2, roll-forward e export/restore sintético preservando hashes/linhas/corpo0.                                                                                       |
+367: | J16 | Regressões legadas worker/published/capabilities/tools/SDK pertinentes e direção neutra; Node22 type/lint/unit/PG/E2E/certificação com claims. Preservar reds/skips/pins stale, sem editar checker/pins para verde. Observer rejeita frame truncado/linha corrompida e aceita controle íntegro. |
+368: 
+369: Conservar o witness NUL vermelho anterior. Aceite exige candidata exata,
+370: schema/roles/Node/PG por versão, comandos/streams, snapshots duráveis, PIDs,
+371: acknowledgements, counters de modelo/corpo e controles positivos/negativos.
+372: Revisão técnica, decisão humana, BUILD e auditoria têm autoridades separadas.
+373: 
+374: ## 10. Critério de pronto e limite desta proposta
+375: 
+376: Pronto para decisão humana somente após contrato/candidata estabilizados,
+377: fontes autenticadas e crítica fresca sem achado material de especificação.
+378: BUILD futuro só após aprovação explícita do hash e registro da task/recurso.
+379: 
+380: A decisão humana inclui duas premissas concretas: corte exclusivo de schema e
+381: credential, com parada de consumidores sintéticos antigos, e orçamento lógico
+382: 8MiB com expansão física4/3. Se recusadas, rejeitar o desenho em vez de escolher
+383: alternativa silenciosa. Esta especificação não afirma desempenho, paridade
+384: integral, produção, migração de dados reais ou aprovação de outros gates.

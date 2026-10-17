@@ -1,0 +1,21 @@
+"""Lead capture receipt. Expected digest must be supplied independently later."""
+from pathlib import Path
+import argparse
+from common import digest, put
+
+FILES = {'process.json', 'sources-before.json', 'sources-after.json', 'stdout.txt', 'stderr.txt'}
+
+def seal(folder, target):
+    if target.exists():
+        raise FileExistsError(target)
+    value = {'schema': 'sandbox-observer-receipt-v2', 'run': str(folder.resolve()),
+             'files': {name: {'sha256': digest(folder / name), 'bytes': (folder / name).stat().st_size} for name in sorted(FILES)}}
+    put(target, value)
+    return digest(target)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--run', required=True, type=Path)
+    parser.add_argument('--out', required=True, type=Path)
+    args = parser.parse_args()
+    print(seal(args.run, args.out))

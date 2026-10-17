@@ -1,0 +1,46 @@
+python3 - <<'PY'
+import pathlib,json,hashlib,datetime
+O=pathlib.Path.cwd(); P=O.parent/'review-packet'
+boot=json.loads((O/'pre-fingerprint-bootstrap.json').read_text())
+checks=[]
+def check(path,expected,role):
+ p=pathlib.Path(path); b=p.read_bytes(); a=hashlib.sha256(b).hexdigest(); r={'role':role,'path':str(p),'expected':expected,'actual':a,'size':len(b),'match':expected is None or a==expected};checks.append(r);return r
+s=json.loads((P/'source-manifest.json').read_bytes()); m=json.loads((P/'packet-manifest.json').read_bytes()); c=json.loads((P/'constraints.json').read_bytes())
+for e in s:
+ check(e['live'],e['sha256'],'live');check(P/e['copy'],e['sha256'],'copy')
+for e in m:check(P/e['path'],e['sha256'],'packet-entry')
+check(P/'packet-manifest.json',boot['manifests']['packet-manifest.json']['sha256'],'packet-manifest-self')
+check(P/'source-manifest.json',boot['manifests']['source-manifest.json']['sha256'],'source-manifest-identity')
+check(P/'constraints.json',boot['manifests']['constraints.json']['sha256'],'constraints-identity')
+for e in c['sourceSpecs']:check(e['path'],e['sha256'],'sourceSpec')
+for e in c['normativeProjections']:
+ check(P/e['snapshot'],e['sha256'],'normative-projection')
+ if 'frozenOrigin' in e:check(e['frozenOrigin']['path'],e['frozenOrigin']['sha256'],'frozenOrigin-D12-hash-only')
+counts={'pairs':len(s),'packetEntries':len(m),'packetFilesIncludingManifest':len(m)+1,'checks':len(checks),'matches':sum(r['match'] for r in checks)}
+assert counts['pairs']==43 and counts['packetFilesIncludingManifest']==48
+assert all(r['match'] for r in checks)
+f={'timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat(),'counts':counts,'checks':checks,'sourceManifest':s,'packetManifest':m,'constraints':c,'semanticReadingStarted':False,'provenanceOnlyOriginRead':False,'protocolDeviation':'First hashing-only invocation completed all 43 live/copy and 47 packet entry hashes plus manifest self, but deferred constraints sourceSpecs/projections/frozen D12 hashing to invocation 002 after discovering explicit schema. All required hashes match before any semantic reading.'}
+(O/'pre-fingerprint.json').write_text(json.dumps(f,indent=2)+'\n')
+runner='''import sys,pathlib,io,contextlib,traceback,json,datetime
+out=pathlib.Path(__file__).parent
+idx=sys.argv[1]
+source=sys.stdin.read()
+(out/f'command-{idx}.py').write_text(source)
+stdout=io.StringIO();stderr=io.StringIO();code=0
+with contextlib.redirect_stdout(stdout),contextlib.redirect_stderr(stderr):
+ try:exec(compile(source,f'command-{idx}.py','exec'),{'__name__':'__main__'})
+ except BaseException as e:
+  code=e.code if isinstance(e,SystemExit) and isinstance(e.code,int) else 1
+  traceback.print_exc()
+(out/f'command-{idx}.stdout').write_text(stdout.getvalue())
+(out/f'command-{idx}.stderr').write_text(stderr.getvalue())
+with (out/'commands.jsonl').open('a') as f:f.write(json.dumps({'id':idx,'shell':'python3 runner.py '+idx+' < command-'+idx+'.py','workdir':str(out),'exit':code,'timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat()})+'\\n')
+print(stdout.getvalue(),end='');print(stderr.getvalue(),end='',file=sys.stderr)
+sys.exit(code)
+'''
+(O/'runner.py').write_text(runner)
+(O/'command-001.stdout').write_text(json.dumps({'counts':boot['counts'],'layouts':boot['layouts'],'constraints_metadata':boot['constraints_metadata'],'errors':boot['errors']},indent=2)+'\n')
+(O/'command-001.stderr').write_text('')
+(O/'commands.jsonl').write_text(json.dumps({'id':'001','workdir':str(O),'command':'HASHING-ONLY bootstrap (see command-001.txt and pre-fingerprint-bootstrap.json)','exit':0})+'\n'+json.dumps({'id':'002','workdir':str(O),'command':'HASHING-ONLY explicit constraints completion and recorder initialization','exit':0})+'\n')
+print(json.dumps({'validation':'PASS','counts':counts,'candidateSha256':s[0]['sha256'],'deviation':f['protocolDeviation']}))
+PY

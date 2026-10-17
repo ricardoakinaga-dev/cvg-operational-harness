@@ -1,0 +1,530 @@
+import { createHash } from 'node:crypto'
+import { TenantIdSchema, type TenantId } from '@cvg/platform'
+import {
+  CVG_TENANT_CONTEXT_SETTING,
+  readPostgresMigrationSql,
+  withTenantContext,
+  type DurableOutboxAdapter,
+  type PostgresPoolLike
+} from '@cvg/persistence'
+import type { ClaimExecutionRegistry } from './claimed-execution-lifecycle.ts'
+
+/**
+ * Tables the PostgreSQL worker reads or writes during a controlled drain. Each
+ * one must exist in the runtime schema with RLS + FORCE RLS enabled, and the
+ * runtime role must not own them.
+ */
+export const WORKER_CRITICAL_TABLES = [
+  'conversations',
+  'messages',
+  'sessions',
+  'agent_runs',
+  'tool_calls',
+  'approval_requests',
+  'tasks',
+  'audit_events',
+  'outbox_events',
+  'outbox_attempts',
+  'outbox_effects',
+  // PROD-0373: liveness heartbeat and the kernel pause switch (0027). An
+  // unreadable switch keeps the worker paused, so the grant is required.
+  'worker_heartbeats',
+  'kernel_pause_switches'
+] as const
+
+export const OPERATIONAL_HARNESS_CRITICAL_TABLES = [
+  'runtime_approvals',
+  'operational_executions',
+  'operational_execution_outbox',
+  'operational_execution_events',
+  'operational_effect_journal',
+  'operational_execution_steps',
+  'operational_execution_checkpoints'
+] as const
+
+export const OPERATIONAL_HARNESS_REQUIRED_MIGRATIONS = [
+  '0015_runtime_approval_store',
+  '0016_operational_execution_spine',
+  '0017_runtime_approval_execution_binding',
+  '0018_operational_execution_invariants',
+  '0019_iterative_execution_steps',
+  '0024_approval_decision_causality'
+] as const
+
+export interface PostgresWorkerPreflightOptions {
+  tenantId: TenantId
+  criticalTables?: readonly string[]
+  requiredMigrations?: readonly string[]
+  tableAccess?: Readonly<
+    Record<string, 'read' | 'append' | 'consume' | 'write'>
+  >
+}
+
+interface RoleRow {
+  rolname: string
+  rolsuper: boolean
+  rolbypassrls: boolean
+  rolcreatedb: boolean
+  rolcreaterole: boolean
+  rolreplication: boolean
+}
+
+const ROLE_QUERY = `SELECT rolname, rolsuper, rolbypassrls, rolcreatedb,
+                            rolcreaterole, rolreplication
+                       FROM pg_roles
+                      WHERE rolname = current_user
+                      LIMIT 1`
+
+const TENANT_ONLY_POLICY_TABLES = new Set([
+  'runtime_approvals',
+  'worker_heartbeats',
+  'kernel_pause_switches'
+])
+
+/**
+ * Verifies the effective PostgreSQL role and tenant-isolation schema before the
+ * worker claims its first event. Environment flags never replace this query.
+ *
+ * The preflight borrows one pool connection, sets the tenant context, runs the
+ * checks and clears the context before releasing the connection; a connection
+ * whose context cannot be cleared is destroyed instead of being reused.
+ */
+export async function assertPostgresWorkerPreflight(
+  pool: PostgresPoolLike,
+  options: PostgresWorkerPreflightOptions
+): Promise<void> {
+  const tenantId = TenantIdSchema.parse(options.tenantId)
+  const criticalTables = [...(options.criticalTables ?? WORKER_CRITICAL_TABLES)]
+  const client = await pool.connect()
+  let contextSet = false
+  let failure: Error | undefined
+
+  try {
+    await client.query('SELECT set_config($1, $2, false)', [
+      CVG_TENANT_CONTEXT_SETTING,
+      tenantId
+    ])
+    contextSet = true
+
+    const roleResult = await client.query<RoleRow>(ROLE_QUERY)
+    const role = roleResult.rows[0]
+    if (
+      !role ||
+      role.rolsuper ||
+      role.rolbypassrls ||
+      role.rolcreatedb ||
+      role.rolcreaterole ||
+      role.rolreplication
+    ) {
+      throw new Error(
+        'PostgreSQL worker role must be a non-superuser without BYPASSRLS'
+      )
+    }
+
+    const memberships = await client.query<{ count: number }>(
+      `SELECT count(*)::int AS count
+         FROM pg_auth_members AS membership
+         INNER JOIN pg_roles AS member ON member.oid = membership.member
+        WHERE member.rolname = current_user`
+    )
+    if (Number(memberships.rows[0]?.count ?? 0) > 0) {
+      throw new Error('PostgreSQL worker role must not inherit other roles')
+    }
+
+    const databaseOwner = await client.query<{ owner: string }>(
+      `SELECT pg_get_userbyid(datdba) AS owner
+         FROM pg_database
+        WHERE datname = current_database()`
+    )
+    if (databaseOwner.rows[0]?.owner === role.rolname) {
+      throw new Error('PostgreSQL worker role must not own the database')
+    }
+
+    const schemaPrivilege = await client.query<{ can_create: boolean }>(
+      `SELECT has_schema_privilege(current_user, current_schema(), 'CREATE')
+         AS can_create`
+    )
+    if (schemaPrivilege.rows[0]?.can_create) {
+      throw new Error('PostgreSQL worker role must not create schema objects')
+    }
+
+    const tables = await client.query<{
+      relname: string
+      owner: string
+      relrowsecurity: boolean
+      relforcerowsecurity: boolean
+    }>(
+      `SELECT c.relname,
+              pg_get_userbyid(c.relowner) AS owner,
+              c.relrowsecurity,
+              c.relforcerowsecurity
+         FROM pg_class AS c
+         INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema()
+          AND c.relname = ANY($1::text[])`,
+      [criticalTables]
+    )
+    if (tables.rows.length !== criticalTables.length) {
+      throw new Error(
+        'PostgreSQL worker schema is missing tenant-isolated tables'
+      )
+    }
+    if (
+      tables.rows.some(
+        (table) =>
+          table.owner === role.rolname ||
+          !table.relrowsecurity ||
+          !table.relforcerowsecurity
+      )
+    ) {
+      throw new Error(
+        'PostgreSQL worker tables must be tenant-isolated and not owned by the runtime role'
+      )
+    }
+
+    const policies = await client.query<{
+      tablename: string
+      policyname: string
+      permissive: string
+      roles: string
+      cmd: string
+      qual: string | null
+      with_check: string | null
+    }>(
+      `SELECT tablename, policyname, permissive, roles, cmd, qual, with_check
+         FROM pg_policies
+        WHERE schemaname = current_schema() AND tablename = ANY($1::text[])`,
+      [criticalTables]
+    )
+    for (const table of criticalTables) {
+      const tablePolicies = policies.rows.filter(
+        (policy) => policy.tablename === table
+      )
+      const policy = tablePolicies[0]
+      const tenantExpression =
+        "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
+      const expected =
+        ['outbox_effects', 'outbox_attempts'].includes(table) ||
+        TENANT_ONLY_POLICY_TABLES.has(table)
+          ? tenantExpression
+          : `tenant_isolation_quarantined = false AND ${tenantExpression}`
+      if (
+        tablePolicies.length !== 1 ||
+        !policy ||
+        policy.policyname !== `${table}_tenant_isolation` ||
+        policy.permissive !== 'PERMISSIVE' ||
+        policy.roles !== '{public}' ||
+        policy.cmd !== 'ALL' ||
+        normalizePolicyExpression(policy.qual) !== expected ||
+        normalizePolicyExpression(policy.with_check) !== expected
+      ) {
+        throw new Error(
+          'PostgreSQL worker tenant isolation policies are not verified'
+        )
+      }
+    }
+
+    const tablePrivileges = await client.query<{
+      table_name: string
+      can_select: boolean
+      can_insert: boolean
+      can_update: boolean
+      can_delete: boolean
+      can_truncate: boolean
+      can_trigger: boolean
+      can_references: boolean
+    }>(
+      `SELECT table_name, has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'SELECT') AS can_select,
+              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'INSERT') AS can_insert,
+              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'UPDATE') AS can_update,
+              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'DELETE') AS can_delete,
+              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'TRUNCATE') AS can_truncate,
+              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'TRIGGER') AS can_trigger,
+              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'REFERENCES') AS can_references
+         FROM unnest($1::text[]) WITH ORDINALITY AS requested(table_name, ordinal) ORDER BY ordinal`,
+      [criticalTables]
+    )
+    if (
+      tablePrivileges.rows.length !== criticalTables.length ||
+      tablePrivileges.rows.some((privileges, index) => {
+        const table = criticalTables[index]!
+        const mode = options.tableAccess?.[table] ?? 'write'
+        const insert = mode === 'append' || mode === 'write'
+        const update = mode === 'consume' || mode === 'write'
+        return (
+          (options.tableAccess !== undefined &&
+            privileges.table_name !== table) ||
+          !privileges.can_select ||
+          privileges.can_insert !== insert ||
+          privileges.can_update !== update ||
+          privileges.can_delete ||
+          privileges.can_truncate ||
+          privileges.can_trigger ||
+          privileges.can_references
+        )
+      })
+    ) {
+      throw new Error(
+        'PostgreSQL worker table privileges must be minimal (select/insert/update only)'
+      )
+    }
+
+    if (options.requiredMigrations?.length) {
+      const migrations = await client.query<{
+        version: string
+        checksum: string | null
+      }>(
+        `SELECT version, checksum
+           FROM schema_migrations
+          WHERE version = ANY($1::text[])`,
+        [options.requiredMigrations]
+      )
+      const applied = new Map(
+        migrations.rows.map((migration) => [migration.version, migration])
+      )
+      for (const version of options.requiredMigrations) {
+        const migration = applied.get(version)
+        const sql = await readPostgresMigrationSql(version)
+        const checksum = createHash('sha256').update(sql).digest('hex')
+        if (!migration || migration.checksum !== checksum) {
+          throw new Error(
+            `PostgreSQL worker migration is not verified: ${version}`
+          )
+        }
+      }
+    }
+  } catch (error) {
+    failure = toError(error)
+  }
+
+  let cleanupFailed = false
+  if (contextSet) {
+    try {
+      await client.query('SELECT set_config($1, $2, false)', [
+        CVG_TENANT_CONTEXT_SETTING,
+        ''
+      ])
+      const leaked = await client.query<{ tenant_id: string | null }>(
+        `SELECT NULLIF(current_setting($1, true), '') AS tenant_id`,
+        [CVG_TENANT_CONTEXT_SETTING]
+      )
+      if (leaked.rows.length !== 1 || leaked.rows[0]?.tenant_id !== null) {
+        failure ??= new Error(
+          'PostgreSQL tenant context cleanup was not verified'
+        )
+        cleanupFailed = true
+      }
+    } catch (cleanupError) {
+      client.release(toError(cleanupError))
+      throw failure ?? toError(cleanupError)
+    }
+  }
+  if (cleanupFailed && failure) {
+    client.release(failure)
+  } else {
+    client.release()
+  }
+  if (failure) throw failure
+}
+
+export const PUBLISHED_POSTGRES_CRITICAL_TABLES = [
+  'conversations',
+  'messages',
+  'sessions',
+  'audit_events',
+  'outbox_events',
+  'outbox_attempts',
+  'outbox_effects',
+  'worker_heartbeats',
+  'kernel_pause_switches',
+  'platform_agents',
+  'platform_agent_versions',
+  'platform_execution_traces',
+  'platform_capability_approvals',
+  'operational_executions',
+  'operational_execution_outbox',
+  'operational_execution_events',
+  'operational_effect_journal',
+  'operational_execution_steps',
+  'operational_execution_checkpoints',
+  'controlled_published_bindings',
+  'controlled_published_evidence'
+] as const
+
+export const PUBLISHED_POSTGRES_REQUIRED_MIGRATIONS = [
+  '0002_capability_approvals',
+  '0008_session_agent_version_pin',
+  '0010_outbox_durability',
+  '0011_outbox_payload_redaction',
+  '0016_operational_execution_spine',
+  '0018_operational_execution_invariants',
+  '0019_iterative_execution_steps',
+  '0027_worker_operations',
+  '0029_controlled_published_kernel'
+] as const
+
+export const PUBLISHED_POSTGRES_TABLE_ACCESS: NonNullable<
+  PostgresWorkerPreflightOptions['tableAccess']
+> = {
+  platform_agents: 'read',
+  platform_agent_versions: 'read',
+  platform_execution_traces: 'append',
+  platform_capability_approvals: 'consume',
+  audit_events: 'append',
+  // Native ACK locks this marker FOR UPDATE and may settle its result.
+  // 'write' is SELECT/INSERT/UPDATE only; DELETE/TRUNCATE/DDL remain forbidden.
+  outbox_effects: 'write',
+  operational_execution_events: 'append',
+  controlled_published_evidence: 'append'
+}
+
+const PUBLISHED_GUARD_TRIGGERS: Record<string, string> = {
+  controlled_published_evidence_append_only: 'controlled_published_evidence',
+  controlled_published_binding_immutable: 'controlled_published_bindings',
+  controlled_bound_execution_writer: 'operational_executions',
+  controlled_bound_queue_writer: 'operational_execution_outbox',
+  controlled_bound_event_writer: 'operational_execution_events',
+  controlled_bound_step_writer: 'operational_execution_steps',
+  controlled_bound_checkpoint_writer: 'operational_execution_checkpoints',
+  controlled_bound_journal_writer: 'operational_effect_journal',
+  controlled_bound_binding_writer: 'controlled_published_bindings',
+  controlled_bound_evidence_writer: 'controlled_published_evidence'
+}
+
+/** Serving-role/read-only qualification. Migration and DDL are never run here. */
+export async function assertPublishedPostgresWorkerPreflight(runtime: {
+  pool: PostgresPoolLike
+  tenantId: TenantId
+  workerId: string
+  adapter: DurableOutboxAdapter
+  claimExecutions: ClaimExecutionRegistry
+}): Promise<void> {
+  runtime.claimExecutions.claimAdapter(
+    runtime.tenantId,
+    runtime.workerId,
+    runtime.adapter
+  )
+  await assertPostgresWorkerPreflight(runtime.pool, {
+    tenantId: runtime.tenantId,
+    criticalTables: PUBLISHED_POSTGRES_CRITICAL_TABLES,
+    requiredMigrations: PUBLISHED_POSTGRES_REQUIRED_MIGRATIONS,
+    tableAccess: PUBLISHED_POSTGRES_TABLE_ACCESS
+  })
+  const migration = await readPostgresMigrationSql(
+    '0029_controlled_published_kernel'
+  )
+  await withTenantContext(runtime.pool, runtime.tenantId, async (client) => {
+    const ledger = await client.query<{ read_only: boolean }>(
+      `SELECT (has_table_privilege(current_user,'schema_migrations','SELECT')
+           AND NOT has_table_privilege(current_user,'schema_migrations','INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES')) AS read_only`
+    )
+    if (ledger.rows[0]?.read_only !== true)
+      throw new Error(
+        'Published serving role must not write migration metadata'
+      )
+    const result = await client.query<{
+      trigger_name: string
+      table_name: string
+      enabled: string
+      security_definer: boolean
+      function_name: string
+      definition: string
+      trigger_type: number
+      function_local: boolean
+      independent_owner: boolean
+      function_config: string[] | null
+      unconditional: boolean
+    }>(
+      `SELECT t.tgname AS trigger_name, c.relname AS table_name, t.tgenabled AS enabled,
+               p.prosecdef AS security_definer, p.proname AS function_name, pg_get_functiondef(p.oid) AS definition, t.tgtype AS trigger_type,
+               (p.pronamespace=n.oid) AS function_local, (pg_get_userbyid(p.proowner)<>current_user) AS independent_owner,
+               p.proconfig AS function_config, (t.tgqual IS NULL AND t.tgnargs=0) AS unconditional
+          FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+          JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_proc p ON p.oid=t.tgfoid
+         WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname=ANY($1::text[])`,
+      [Object.keys(PUBLISHED_GUARD_TRIGGERS)]
+    )
+    if (result.rows.length !== Object.keys(PUBLISHED_GUARD_TRIGGERS).length)
+      throw new Error('Published writer guard triggers are missing')
+    for (const [name, table] of Object.entries(PUBLISHED_GUARD_TRIGGERS)) {
+      const rows = result.rows.filter((row) => row.trigger_name === name)
+      const row = rows[0]
+      const expectedFunction = name.endsWith('_append_only')
+        ? 'cvg_controlled_evidence_append_only'
+        : name === 'controlled_published_binding_immutable'
+          ? 'cvg_controlled_binding_immutable'
+          : 'cvg_controlled_bound_writer'
+      const expectedType = name.endsWith('_append_only')
+        ? 58
+        : [
+              'controlled_published_binding_immutable',
+              'controlled_bound_execution_writer'
+            ].includes(name)
+          ? 27
+          : name === 'controlled_bound_binding_writer'
+            ? 19
+            : name === 'controlled_bound_evidence_writer'
+              ? 7
+              : 31
+      if (
+        rows.length !== 1 ||
+        !row ||
+        row.table_name !== table ||
+        row.enabled !== 'O' ||
+        row.security_definer ||
+        row.function_name !== expectedFunction ||
+        row.trigger_type !== expectedType ||
+        row.function_local !== true ||
+        row.independent_owner !== true ||
+        row.function_config !== null ||
+        row.unconditional !== true ||
+        functionBody(row.definition) !==
+          migrationFunctionBody(migration, expectedFunction)
+      ) {
+        throw new Error('Published writer guard definition is not verified')
+      }
+    }
+    const sequences = await client.query<{ permitted: boolean }>(
+      `SELECT (has_sequence_privilege(current_user, pg_get_serial_sequence('outbox_attempts','id'),'USAGE')
+           AND NOT has_sequence_privilege(current_user, pg_get_serial_sequence('outbox_attempts','id'),'UPDATE')
+           AND has_sequence_privilege(current_user, pg_get_serial_sequence('operational_execution_events','sequence'),'USAGE')
+           AND NOT has_sequence_privilege(current_user, pg_get_serial_sequence('operational_execution_events','sequence'),'UPDATE')) AS permitted`
+    )
+    if (sequences.rows[0]?.permitted !== true)
+      throw new Error('Published sequence privileges are not minimal')
+  })
+}
+
+function functionBody(definition: string): string {
+  const match = /\bAS\s+\$(\w*)\$([\s\S]*?)\$\1\$/i.exec(definition)
+  if (!match) throw new Error('Published writer function body is unavailable')
+  return match[2]!.replace(/\r\n/g, '\n').trim()
+}
+
+function migrationFunctionBody(sql: string, name: string): string {
+  const start = sql.indexOf(`CREATE FUNCTION ${name}(`)
+  if (start < 0)
+    throw new Error('Published writer function is missing from migration')
+  return functionBody(sql.slice(start))
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error
+    ? error
+    : new Error('PostgreSQL worker role preflight failed')
+}
+
+// Matches the deparsed expressions installed by the repository migrations.
+// Reject unknown policies rather than attempting arbitrary SQL equivalence.
+function normalizePolicyExpression(expression: string | null): string {
+  return (expression ?? '')
+    .replace(/::text/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\((tenant_isolation_quarantined = false)\)/g, '$1')
+    .replace(
+      /\((tenant_id = NULLIF\(current_setting\('cvg\.tenant_id', true\), ''\))\)/g,
+      '$1'
+    )
+    .replace(/^\((.*)\)$/, '$1')
+}

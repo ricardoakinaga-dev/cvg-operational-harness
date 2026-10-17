@@ -3,6 +3,7 @@ import type {
   AgenticKnowledgeProvider,
   Claim,
   CompletionEvaluator,
+  CompleteToolContextConfiguration,
   ContextEngine,
   ExecutionStepStore,
   IterativeOrchestrator,
@@ -25,11 +26,16 @@ import {
   type HarnessRuntimeOptions
 } from './runtime.ts'
 import { IterativeGovernedRuntime } from './iterative-runtime.ts'
+import {
+  prepareCompleteToolRegistry,
+  prepareCompleteToolResult
+} from './complete-tool-results.ts'
 
 export interface OperationalHarnessOptions extends Omit<
   HarnessRuntimeOptions,
   'orchestrator' | 'tools' | 'capabilityFingerprint'
 > {
+  readonly toolResultContext?: CompleteToolContextConfiguration
   readonly orchestrator?: HarnessRuntimeOptions['orchestrator']
   /**
    * Explicit capability composition. Its adapter is the only runtime-facing
@@ -73,6 +79,14 @@ export interface OperationalHarness {
 export function createOperationalHarness(
   options: OperationalHarnessOptions
 ): OperationalHarness {
+  if (
+    options.toolResultContext &&
+    (!options.iterativeOrchestrator || !options.stepStore)
+  ) {
+    throw new Error(
+      'complete-tool-v1 requires iterative orchestration and a checkpoint store.'
+    )
+  }
   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
   if (options.capabilities && !options.effectJournal) {
     throw new Error(
@@ -89,6 +103,8 @@ export function createOperationalHarness(
     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
     audit: options.audit,
     telemetry: options.telemetry,
+    ...(options.pause ? { pause: options.pause } : {}),
+    ...(options.effects ? { effects: options.effects } : {}),
     ...(options.log ? { log: options.log } : {}),
     ...(options.sandbox ? { sandbox: options.sandbox } : {})
   })
@@ -104,8 +120,14 @@ export function createOperationalHarness(
           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
           audit: options.audit,
           telemetry: options.telemetry,
+          ...(options.pause ? { pause: options.pause } : {}),
+          ...(options.effects ? { effects: options.effects } : {}),
+          ...(options.sandbox ? { sandbox: options.sandbox } : {}),
           ...(options.log ? { log: options.log } : {}),
           stepStore: options.stepStore,
+          ...(options.toolResultContext
+            ? { toolResultContext: options.toolResultContext }
+            : {}),
           ...(options.contextEngine
             ? { contextEngine: options.contextEngine }
             : {}),
@@ -123,8 +145,16 @@ export function createOperationalHarness(
         })
       : undefined
 
-  const resolveProfile = (input: RuntimeInput): RuntimeProfile =>
-    input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+  const resolveProfile = (input: RuntimeInput): RuntimeProfile => {
+    const profile =
+      input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+    if (options.toolResultContext && profile !== 'iterative') {
+      throw new Error(
+        'complete-tool-v1 is only supported by the iterative profile.'
+      )
+    }
+    return profile
+  }
 
   const execute = async (input: RuntimeInput): Promise<RuntimeResult> => {
     const governedInput = capabilityFingerprint
@@ -205,14 +235,20 @@ function resolveTools(
       'Operational harness composition accepts capabilities or tools, not both'
     )
   }
-  const registry = options.capabilities
-    ? createCapabilityToolRegistry(options.capabilities)
+  const baseRegistry = options.capabilities
+    ? createCapabilityToolRegistry(
+        options.capabilities,
+        options.toolResultContext ? prepareCompleteToolResult : undefined
+      )
     : options.tools
-  if (!registry) {
+  if (!baseRegistry) {
     throw new Error(
       'Operational harness composition requires an explicit capability or tool registry'
     )
   }
+  const registry = options.toolResultContext
+    ? prepareCompleteToolRegistry(baseRegistry)
+    : baseRegistry
   if (!options.effectJournal) return registry
   return createJournaledToolRegistry(registry, options.effectJournal, {
     ...options.effectJournalOptions,

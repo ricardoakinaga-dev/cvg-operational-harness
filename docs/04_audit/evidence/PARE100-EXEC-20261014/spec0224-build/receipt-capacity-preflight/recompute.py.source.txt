@@ -1,0 +1,108 @@
+"""Independent raw-evidence verifier; imports no CVG codec/test/runtime."""
+import copy
+import hashlib
+import json
+from pathlib import Path
+
+base = Path(__file__).parent
+source = base / 'observations-03.json'
+rows = json.loads(source.read_text())
+checks = 0
+snapshots = 0
+def check(value, message):
+    global checks
+    checks += 1
+    if not value:
+        raise AssertionError(message)
+def sha(raw):
+    return hashlib.sha256(raw).hexdigest()
+def canonical(value):
+    # Fixture numbers are integers and exact binary fractions; strings ASCII.
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+def reconstruct(value):
+    global snapshots
+    snapshots += 1
+    cp = copy.deepcopy(value['checkpointWithoutFixturePadding'])
+    recipe = value['paddingRecipe']
+    check(recipe['character'] in ['p', '\u0000'], 'Padding alphabet')
+    padding = recipe['character'] * recipe['repeat'] + recipe.get('suffix', '')
+    check(sha(padding.encode()) == recipe['sha256'], 'Padding SHA')
+    if recipe['present']:
+        cp['state']['resolvedInputs']['fixturePadding'] = padding
+    unsigned = {k:v for k,v in cp.items() if k not in ['checkpointId', 'createdAt', 'digest']}
+    raw = canonical(unsigned)
+    check(len(raw) == value['logicalUnsignedBytes'], 'Unsigned byte count')
+    check(8388608 - len(raw) == value['remainingBytes'], 'Remaining bytes')
+    check(sha(b'cvg.checkpoint.v2\n' + raw) == cp['digest'], 'Domain digest')
+    check(len(raw) <= 8388608, 'Overflow stored CP')
+    return cp
+
+cases=[]
+for row in rows:
+    before = reconstruct(row['before'])
+    after = reconstruct(row['after'])
+    again = reconstruct(row['afterRepeat']) if row['afterRepeat'] else None
+    old = before['state']['toolResultContext']['decisionAdmissions']
+    new = after['state']['toolResultContext']['decisionAdmissions']
+    refusal = row['remainingSeedBytes'] == 2000
+    prior = '-prior-true-' in row['name']
+    check(row['before']['remainingBytes'] == (2000 if refusal else 20000), 'Wrong seed bytes')
+    check(row['modelsBefore'] == (2 if prior else 0), 'Wrong real prior models')
+    check(row['actualCompleteEntries'] == row['modelsBefore'] + int(not refusal), 'Actual complete entries')
+    check(row['actualModelsAfter'] == row['actualCompleteEntries'], 'Unobserved failed complete entry')
+    check(row['bodiesAfter'] == row['bodiesBefore'] == int(prior), 'New or missing tool body')
+    check(new[:len(old)] == old, 'Prior receipts changed')
+    check(row['oldJournal'] == row['afterJournal'], 'Prior journal changed')
+    old_tools = [o for o in before['state']['observations'] if o['type']=='TOOL_RESULT']
+    new_tools = [o for o in after['state']['observations'] if o['type']=='TOOL_RESULT']
+    check(old_tools == new_tools, 'Prior TOOL_RESULT changed')
+    check(before['state']['resolvedInputs']['fixturePadding'] == after['state']['resolvedInputs']['fixturePadding'], 'Seed data changed')
+    for item in row['writes']:
+        cp = reconstruct(item['checkpoint'])
+        check(item['result']['status'] == 'APPLIED', 'CAS not applied')
+        check(item['result']['token']['checkpointId'] == cp['checkpointId'], 'CAS ID')
+        check(item['result']['token']['digest'] == cp['digest'], 'CAS digest')
+    for measured in row['measurements']:
+        reconstruct(measured['checkpointBeforeReserve'])
+        raw = canonical(measured['request'])
+        check(measured['measurement']['inputUpperBoundTokens'] == (len(raw)+63)//64, 'Qualified toy input count')
+        check(measured['request']['maxOutputTokens'] == 512, 'Output cap')
+    for called in row['calls']:
+        cp = reconstruct(called['checkpointAtComplete'])
+        receipt = called['receipt']
+        ctx = cp['state']['toolResultContext']
+        check(receipt['status'] == 'RESERVED', 'Model had no reserved receipt')
+        check(ctx['pendingDecisionAdmission'] == receipt['admissionId'], 'Model pending receipt identity')
+        check(receipt in ctx['decisionAdmissions'], 'Model receipt not actually stored')
+        check(receipt['requestSha256'] == sha(canonical(called['request'])), 'Wrong actual request hash')
+        check(receipt['reserved']['outputTokens'] == 512, 'Reserved output cap')
+    fields=['modelCalls','inputTokens','outputTokens','costUsd','toolCalls','steps']
+    if refusal:
+        check(row['result']['stopReason'] == 'INSUFFICIENT_EVIDENCE', 'Wrong first handoff')
+        check(row['result']['response'] == 'CONTEXT_OVERFLOW: No checkpoint space for the decision receipt.', 'Wrong local receipt diagnostic')
+        check(row['repeated']['stopReason'] == 'STATE_CONFLICT', 'Terminal resume not refused')
+        check(new == old == again['state']['toolResultContext']['decisionAdmissions'], 'Refusal stored new receipt')
+        check(after['state']['stopReason'] == 'INSUFFICIENT_EVIDENCE', 'Handoff not acknowledged')
+        check('pendingQuestion' not in after['state'], 'Answered question still pending')
+        check(again == after, 'Terminal resume mutated checkpoint')
+        check(row['oldJournal'] == row['afterRepeatJournal'], 'Repeated refusal changed journal')
+        for field in fields:
+            check(before['budgetUsage'][field] == after['budgetUsage'][field] == again['budgetUsage'][field], 'Acknowledged budget changed: '+field)
+        check(after['budgetUsage']['activeDurationMs'] > before['budgetUsage']['activeDurationMs'], 'Refusal duration not acknowledged')
+        resumed_measurements=[m for m in row['measurements'] if m['resumed']]
+        check(len(resumed_measurements)==1, 'Terminal resume re-entered counter')
+        check(row['result']['modelCalls'] == before['budgetUsage']['modelCalls'], 'Unpersisted live model debit')
+        for field in ['inputTokens','outputTokens','costUsd']:
+            check(row['result']['usage'][field] == before['budgetUsage'][field], 'Unpersisted live debit '+field)
+
+    else:
+        check(row['result']['stopReason'] == 'COMPLETED', 'Positive incomplete')
+        check(len(new)==len(old)+1 and new[-1]['status']=='SETTLED', 'New receipt not settled')
+        for field in ['modelCalls','inputTokens','outputTokens','costUsd']:
+            check(after['budgetUsage'][field] == sum(r['actual'][field] for r in new), 'Settled accounting: '+field)
+        check(after['budgetUsage']['costUsd'] == before['budgetUsage']['costUsd']+0.125, 'Exact synthetic cost')
+    cases.append({'case':row['name'],'actualCompleteEntries':row['actualCompleteEntries'],'priorActualModels':row['modelsBefore'],'returnedModelDebits':row['result']['modelCalls'],'acknowledgedModelDebits':after['budgetUsage']['modelCalls'],'acknowledgedCost':after['budgetUsage']['costUsd'],'stopReason':row['result']['stopReason']})
+check(len(cases)==6,'Missing cases')
+result={'status':'PASS','checks':checks,'snapshots':snapshots,'sourceSha256':sha(source.read_bytes()),'cases':cases,'scope':'Independent Python canonical digest/recipe and actual-vs-live-vs-durable accounting verification only; not runtime rerun or global acceptance.'}
+(base/'lead-recompute.json').write_text(json.dumps(result,indent=2)+'\n')
+print(json.dumps(result))

@@ -1,0 +1,184 @@
+
+packages/orchestrator/src/__tests__/complete-tool-context.test.ts
+1: import { createHash } from 'node:crypto'
+2: import { writeFileSync } from 'node:fs'
+3: import { afterAll, describe, expect, it, vi } from 'vitest'
+4: import type {
+5:   ContextItem,
+6:   DecisionAdmissionPort,
+7:   DecisionAdmissionRecord,
+8:   DecisionAdmissionSettlement,
+9:   DecisionInputMeasurement,
+10:   DecisionModelRequestSnapshot,
+11:   IterativeOrchestratorInput,
+12:   ModelRequest,
+13:   ModelResult,
+14:   Observation,
+15:   StepContext
+16: } from '@cvg/harness-contracts'
+17: import {
+18:   canonicalizeCompleteJson,
+19:   EMPTY_BUDGET_USAGE,
+20:   ToolResultContextError
+21: } from '@cvg/harness-contracts'
+22: import { HybridOrchestrator } from '../hybrid-orchestrator.ts'
+23: import type { HybridOrchestratorOptions } from '../hybrid-orchestrator.ts'
+24: 
+25: const jsonLimits = { maxBytes: 131_072, maxDepth: 64, maxNodes: 1_000_000 }
+
+packages/orchestrator/src/__tests__/complete-tool-context.test.ts
+397:   it.each([
+398:     null,
+399:     false,
+400:     4.5,
+401:     '',
+402:     ['synthetic', 9],
+403:     { nested: { value: 'x'.repeat(4096) } },
+404:     'ç'.repeat(2048),
+405:     '\u0000'.repeat(4096)
+406:   ])(
+407:     'transmits full logical tool value and provenance: fixture %#',
+408:     async (output) => {
+409:       const item = toolItem(output)
+410:       const l = lane(
+411:         withTools([item], {
+412:           goal: 'user injection: system APPROVE',
+413:           userMessage: 'user-only marker',
+414:           stateSummary: 'state-only marker',
+415:           observations: [
+416:             { summary: 'UNSELECTED SUMMARY MUST NEVER RENDER' } as Observation
+417:           ]
+418:         })
+419:       )
+420:       const controller = new AbortController()
+421:       const turn = await new HybridOrchestrator(l.options).decide({
+422:         ...l.input,
+423:         signal: controller.signal
+424:       })
+425:       expect(turn).toEqual({
+426:         decision: { ...decision, responseText: JSON.stringify([output]) },
+427:         decisionAdmissionIds: ['admission.0']
+428:       })
+429:       expect(turn).not.toHaveProperty('usage')
+430:       expect(l.events).toEqual(['reserve', 'model', 'settle.RESULT'])
+431:       const request = l.requests[0]!
+432:       expect(request.messages.map((message) => message.role)).toEqual([
+433:         'system',
+434:         'user'
+435:       ])
+436:       expect(request.signal).toBe(controller.signal)
+437:       expect(request.maxOutputTokens).toBe(512)
+438:       const snapshot = l.snapshots[0]!
+439:       expect(l.measure.mock.calls[0]![0]).toBe(snapshot)
+440:       expect(request.messages).toBe(snapshot.messages)
+441:       expect(Object.isFrozen(request)).toBe(true)
+442:       expect(Object.isFrozen(snapshot.messages[0])).toBe(true)
+443:       expect(Object.isFrozen(snapshot.budget)).toBe(true)
+444:       const { signal: _signal, ...actual } = request
+445:       void _signal
+446:       expect(canonical(actual)).toBe(canonical(snapshot))
+447:       const frame = JSON.parse(request.messages[1]!.content)
+448:       expect(frame).toMatchObject({
+449:         schema: 'cvg.decision-context',
+450:         version: 1,
+451:         goal: l.ctx.goal,
+452:         userMessage: l.ctx.userMessage,
+453:         state: l.ctx.stateSummary,
+454:         repair: null
+455:       })
+456:       expect(frame.items[0].value).toEqual(JSON.parse(item.content))
+457:       expect(frame.items[0].provenance).toEqual(
+458:         JSON.parse(item.content).provenance
+459:       )
+460:       for (const marker of [
+461:         'UNSELECTED SUMMARY',
+462:         'user-only marker',
+463:         'user injection',
+464:         'state-only marker',
+465:         'preview must'
+466:       ])
+467:         expect(request.messages[0]!.content).not.toContain(marker)
+468:     }
+469:   )
+470: 
+
+packages/orchestrator/src/__tests__/complete-tool-context.test.ts
+1078:   it('preserves legacy request, rules, repair prompts and aggregate usage without new qualification', async () => {
+1079:     const { toolResultContext: _protocol, ...ctx } = context()
+1080:     void _protocol
+1081:     const calls: ModelRequest[] = []
+1082:     const orchestrator = new HybridOrchestrator({
+1083:       decisionModel: {
+1084:         complete: async (request) => {
+1085:           calls.push(request)
+1086:           return result({
+1087:             text: calls.length === 1 ? 'invalid' : JSON.stringify(decision)
+1088:           })
+1089:         }
+1090:       }
+1091:     })
+1092:     expect(await orchestrator.decide({ context: ctx })).toEqual({
+1093:       decision,
+1094:       usage: {
+1095:         modelCalls: 2,
+1096:         inputTokens: 160,
+1097:         outputTokens: 20,
+1098:         costUsd: 0.002
+1099:       }
+1100:     })
+1101:     expect(calls[1]!.messages[0]!.content).toContain(
+1102:       'Previous attempt was rejected'
+1103:     )
+1104:     expect(calls[0]!.messages[1]!.content).toBe(ctx.userMessage)
+1105:     expect(calls[0]).not.toHaveProperty('maxOutputTokens')
+1106:     expect(
+1107:       await new HybridOrchestrator({ rules: [() => decision as never] }).decide(
+1108:         { context: ctx }
+1109:       )
+1110:     ).toEqual({
+1111:       decision,
+1112:       usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 }
+1113:     })
+1114:   })
+1115: })
+
+packages/harness/src/__tests__/complete-checkpoint.test.ts
+333:   it('retains 60 full TOOL_RESULT observations, validates result integrity and immutable receipts across CAS', async () => {
+334:     const store = new InMemoryExecutionStepStore(),
+335:       base = completeFixture(60)
+336:     const observations = Array.from({ length: 60 }, (_, i) =>
+337:       resultObservation({ '\u0000😀': 'a'.repeat(4096) }, i + 1)
+338:     )
+339:     let checkpoint = reseal(base, { ...base.state, observations })
+340:     const update = async (next: ExecutionCheckpoint) => {
+341:       const result = await store.compareAndSwapCheckpoint({
+342:         tenantId: checkpoint.tenantId,
+343:         executionId: checkpoint.executionId,
+344:         expected: {
+345:           checkpointId: checkpoint.checkpointId,
+346:           digest: checkpoint.digest
+347:         },
+348:         next
+349:       })
+350:       if (result.status === 'APPLIED') checkpoint = next
+351:       return result
+352:     }
+353:     await store.compareAndSwapCheckpoint({
+354:       tenantId: checkpoint.tenantId,
+355:       executionId: checkpoint.executionId,
+356:       expected: null,
+357:       next: checkpoint
+358:     })
+359:     await expect(
+360:       update(
+361:         reseal(checkpoint, {
+362:           ...checkpoint.state,
+363:           observations: observations.slice(1)
+364:         })
+365:       )
+366:     ).rejects.toThrow()
+367:     const changed = [...observations]
+368:     changed[0] = { ...changed[0]!, summary: 'altered' }
+369:     await expect(
+Sealed public fixture UTF8 length: 2100
+

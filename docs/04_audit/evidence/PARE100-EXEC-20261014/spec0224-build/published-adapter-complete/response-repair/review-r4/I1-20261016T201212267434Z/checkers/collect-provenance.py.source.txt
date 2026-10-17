@@ -1,0 +1,29 @@
+import pathlib,json,hashlib,collections,datetime
+R=pathlib.Path(__file__).parent.parent;inputs=json.loads((R/'input-index.json').read_text())['inputs'];allowed={e['copy']:e for e in inputs};observed=[];runs=[]
+for run in sorted((R/'raw').iterdir()):
+ if not run.is_dir()or not(run/'command.json').exists():continue
+ reads=[];denied=[]
+ if(run/'nodefs.jsonl').exists():
+  for line in(run/'nodefs.jsonl').read_text().splitlines():
+   e=json.loads(line)
+   if e.get('denied'):denied.append(e);continue
+   if e['path']in allowed:
+    x=allowed[e['path']];reads.append(dict(e,category=x['category'],boundToBefore=e.get('sha256')==x.get('sha256'),snapshot=str(R/'snapshots'/e['sha256'])if e.get('sha256')else None))
+ transform=[];executed=[]
+ if(run/'transforms/index.jsonl').exists():
+  for line in(run/'transforms/index.jsonl').read_text().splitlines():
+   e=json.loads(line);src=allowed.get(e['id'].split('?')[0]);transform.append(dict(e,category=src['category']if src else 'owned-checker',matchesImmutableOriginal=e['sha256']==src.get('sha256')if src and e['phase']=='pre'else None))
+ if(run/'executed/index.jsonl').exists():
+  for line in(run/'executed/index.jsonl').read_text().splitlines():
+   e=json.loads(line);p=run/'executed'/(e['sha256']+'.js');assert hashlib.sha256(p.read_bytes()).hexdigest()==e['sha256'];executed.append(e)
+ coverage=[]
+ if(run/'coverage').exists():
+  for p in sorted((run/'coverage').glob('*.json')):
+   for e in json.loads(p.read_text()).get('result',[]):
+    if '/artifact/packages/'in e['url']or str(R)in e['url']:
+     coverage.append({'file':str(p),'url':e['url'],'functions':len(e['functions']),'functionsWithPositiveCount':sum(1 for f in e['functions']if f['ranges'][0]['count']>0),'blocks':sum(len(f['ranges'])for f in e['functions']),'limit':'raw V8 generated-source block/function evidence; NOT mapped TypeScript line coverage'})
+ summary={'run':run.name,'exit':json.loads((run/'exit.json').read_text())['exit'],'command':str(run/'command.json'),'enumeratedNodeFSReads':reads,'denials':denied,'transforms':transform,'executedSourceRecords':executed,'rawV8Coverage':coverage}
+ (run/'provenance.json').write_text(json.dumps(summary,indent=2)+'\n')
+ runs.append({'run':run.name,'exit':summary['exit'],'enumeratedNodeFSReadCount':len(reads),'deniedCount':len(denied),'deniedPaths':sorted(set(e.get('path','child:'+e.get('childProcess',''))for e in denied)),'preTransformMismatches':[e for e in transform if e.get('matchesImmutableOriginal')is False],'executedSourceCount':len(executed),'coverageScripts':len(coverage)})
+(R/'execution-provenance.json').write_text(json.dumps({'runs':runs,'notes':['Snapshots of ALL enumerated source/constraints/proofs/templates/package/manifests were preserved before testing. That is byte provenance, not semantic review or execution.','NodeFS logs independently identify actual hooked read attempts and observed original SHA; Vite pre/post captures preserve transformed bytes.','Inspector scriptParsed/getScriptSource records preserve generated source provided to V8, and raw V8 coverage distinguishes functions with positive counts. Script parsing itself is not execution of every line.','No TypeScript line coverage claim; no OS-level read/write isolation claim.','Unwrapped native OS/libc/dlopen/Node loader operations cannot be fully attested by this guard. Denied metadata probes were left denied.']},indent=2)+'\n')
+print(json.dumps(runs,indent=2))

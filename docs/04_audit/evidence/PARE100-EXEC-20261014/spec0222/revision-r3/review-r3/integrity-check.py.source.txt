@@ -1,0 +1,26 @@
+import hashlib,json,pathlib,datetime,sys
+P=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0222-r1/revision-r3/review-packet')
+O=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0222-r1/revision-r3/review-r3')
+def sha(p): return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
+def check(p,expected):
+ try: actual=sha(p);return {'path':str(p),'expected':expected,'actual':actual,'match':actual==expected}
+ except Exception as e:return {'path':str(p),'expected':expected,'error':str(e),'match':False}
+s=json.loads((P/'source-manifest.json').read_bytes());m=json.loads((P/'packet-manifest.json').read_bytes());c=json.loads((P/'constraints.json').read_bytes())
+r={'timestamp_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'phase':sys.argv[1],'source_pairs':[],'packet_files':[],'frozen_constraints':[],'extras':[],'informational_origins':[]}
+for e in s:r['source_pairs'].append({'copy':check(P/e['copy'],e['sha256']),'live_hash_only':check(e['live'],e['sha256'])})
+for e in m:r['packet_files'].append(check(P/e['path'],e['sha256']))
+r['packet_manifest_self']={'path':str(P/'packet-manifest.json'),'actual':sha(P/'packet-manifest.json')}
+expected=set(e['path'] for e in m)|{'packet-manifest.json'};actual=set(str(p.relative_to(P)) for p in P.rglob('*') if p.is_file())
+r['membership']={'expected_count':len(expected),'actual_count':len(actual),'missing':sorted(expected-actual),'extra':sorted(actual-expected),'match':actual==expected}
+for e in c['sourceSpecs']:r['frozen_constraints'].append(check(e['path'],e['sha256']))
+for e in c['normativeProjections']:
+ r['frozen_constraints'].append(check(P/e['snapshot'],e['sha256']))
+ if 'frozenOrigin' in e:r['frozen_constraints'].append(check(e['frozenOrigin']['path'],e['frozenOrigin']['sha256']))
+ if 'originSnapshotOnly' in e:r['informational_origins'].append({**e['originSnapshotOnly'],'not_read_or_hashed':True,'reason':'Informational extraction provenance, not frozen live-origin proof'})
+r['counts']={'source_pairs':len(s),'packet_entries':len(m),'packet_with_self':len(actual)}
+r['pass']=len(s)==42 and len(m)==46 and len(actual)==47 and r['membership']['match'] and all(e[k]['match'] for e in r['source_pairs'] for k in ['copy','live_hash_only']) and all(e['match'] for e in r['packet_files']+r['frozen_constraints'])
+if sys.argv[1]=='post':
+ pre=json.loads((O/'integrity-pre.json').read_text());r['manifest_self_unchanged']=r['packet_manifest_self']==pre['packet_manifest_self'];r['pass']=r['pass'] and r['manifest_self_unchanged']
+q=O/('integrity-'+sys.argv[1]+'.json')
+with q.open('x') as f:json.dump(r,f,indent=2);f.write('\n')
+print(json.dumps({'path':str(q),'pass':r['pass'],'counts':r['counts'],'membership':r['membership']}))

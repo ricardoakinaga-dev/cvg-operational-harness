@@ -1,0 +1,118 @@
+// Executed as Node --input-type=module --eval from the worktree, so bare
+// specifiers use real package exports. This file is private test support.
+import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
+import {
+  createOperationalHarness, createCapabilityRegistry,
+  InMemoryEffectJournal, InMemoryExecutionStepStore, DefaultContextEngine
+} from '@cvg/harness'
+import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+import { canonicalizeCompleteJson } from '@cvg/harness-contracts'
+
+const publicPaths = {}
+for (const [name, workspace] of [['@cvg/harness', 'harness'], ['@cvg/harness-contracts', 'contracts'], ['@cvg/harness-orchestrator', 'orchestrator']]) {
+  const resolved = fileURLToPath(import.meta.resolve(name))
+  assert.equal(resolved, `${process.cwd()}/packages/${workspace}/dist/index.js`)
+  publicPaths[name] = resolved
+}
+const canonical = value => canonicalizeCompleteJson(value, { maxBytes: 131072, maxDepth: 64, maxNodes: 20000 })
+const hash = value => createHash('sha256').update(canonical(value)).digest('hex')
+const toy64 = value => Math.ceil(Buffer.byteLength(canonical(value)) / 64)
+function findResult(value) {
+  if (!value || typeof value !== 'object') return undefined
+  if (!Array.isArray(value) && value.type === 'TOOL_RESULT' && value.payload?.completion === 'COMPLETE') return value.payload.output
+  for (const child of Object.values(value)) {
+    const result = findResult(child)
+    if (result !== undefined) return result
+  }
+}
+function outputFromRequest(request) {
+  const frame = [request.context]
+  for (const message of request.messages) {
+    try { frame.push(JSON.parse(message.content)) } catch { /* Plain instructions. */ }
+  }
+  return findResult(frame)
+}
+const cases = []
+for (const kind of ['complete', 'framing-refusal', 'legacy']) {
+  const id = 'synthetic.compiled.context.read'
+  const value = { text: 'x'.repeat(kind === 'framing-refusal' ? 31000 : 4096) + '|COMPILED_SYNTHETIC_TAIL_224|' }
+  let bodies = 0, measurements = 0
+  const modelEntries = [], requests = [], measured = []
+  const steps = new InMemoryExecutionStepStore()
+  const capabilities = createCapabilityRegistry([{
+    descriptor: { id, version: '1', description: 'Pure synthetic memory read', inputSchema: { type: 'object' }, outputSchema: {},
+      risk: 'LOW', sideEffect: 'READ', idempotent: true, requiresApproval: false, origin: 'core', providerId: 'synthetic.compiled', providerVersion: '1' },
+    implementation: { validateInput: () => true, validateOutput: () => true, execute: async () => { bodies++; return { status: 'SUCCEEDED', output: value } } }
+  }])
+  const tenantId = 'tenant_00000000-0000-4000-8000-000000000224'
+  const executionId = `exec_compiled_context_${kind}`
+  // The provider derives its answer solely from the actual ModelRequest.
+  const model = {
+    complete: async ({ signal, ...request }) => {
+      void signal
+      requests.push(structuredClone(request))
+      modelEntries.push(await steps.loadCheckpoint(tenantId, executionId))
+      const actual = outputFromRequest(request)
+      assert.notEqual(actual, undefined, 'No complete output reached compiled provider')
+      return { text: 'sha256:' + hash(actual), provider: 'synthetic.compiled', model: 'toy64-v1', inputTokens: toy64(request), outputTokens: 2, costUsd: 0 }
+    }
+  }
+  const counter = { measure: async request => {
+    measurements++
+    const result = { counterId: 'compiled-toy64', counterVersion: '1', provider: 'synthetic.compiled', model: 'toy64-v1', formattingVersion: '1',
+      inputUpperBoundTokens: toy64(request), contextWindowTokens: 8192, costUpperBoundUsd: 0 }
+    measured.push(structuredClone(result)); return result
+  } }
+  const auditEvents = []
+  const harness = createOperationalHarness({
+    ...(kind === 'legacy' ? {} : { toolResultContext: { version: 1 } }),
+    ...(kind === 'framing-refusal' ? { contextEngine: new DefaultContextEngine({ tokenBudget: 100000 }) } : {}),
+    defaultRuntimeProfile: 'iterative', capabilities, effectJournal: new InMemoryEffectJournal(), stepStore: steps,
+    iterativeOrchestrator: new HybridOrchestrator({ decisionModel: model, decisionInputCounter: counter,
+      decisionModelSupportsMaxOutputTokens: true, maxDecisionRepairs: 0,
+      rules: [context => context.stepNumber === 1
+        ? { decisionType: 'CALL_TOOL', reasonCode: 'TOOL_REQUIRED', toolId: id, toolVersion: '1', toolInput: {} }
+        : { decisionType: 'RESPOND', reasonCode: 'GOAL_SATISFIED', ...(kind === 'legacy' ? { responseText: 'LEGACY_COMPILED_LITERAL' } : { responseIntent: 'Return canonical SHA256 of complete synthetic tool output' }) }] }),
+    modelGateway: model,
+    policy: { evaluate: async request => ({ outcome: request.tool.id === id ? 'ALLOW' : 'DENY', reason: 'Private synthetic fixture only', policyVersion: 'synthetic-v1' }) },
+    approvals: { request: async () => { throw new Error('No approval action permitted by this smoke') } },
+    audit: { append: async event => { auditEvents.push(event) } }, telemetry: { record: () => {} }
+  })
+  const input = { tenantId, executionId, conversationId: 'conversation_compiled_synthetic', sessionId: 'session_compiled_synthetic',
+    correlationId: 'correlation_compiled_synthetic', traceId: 'trace_compiled_synthetic', userMessage: 'Read the pure synthetic output then answer its full canonical hash',
+    agent: { id: 'agent.compiled.synthetic', version: 'v1', objective: 'Synthetic complete-context smoke', instructions: ['Synthetic data only'], skills: [], tools: [id], policies: ['synthetic-only'] },
+    context: { values: {}, sourceIds: ['synthetic-compiled'], capturedAt: '2026-10-16T00:00:00.000Z' },
+    state: { version: 1, values: {}, updatedAt: '2026-10-16T00:00:00.000Z' },
+    budget: { maxSteps: 4, maxModelCalls: 2, maxToolCalls: 1, maxDurationMs: 30000, maxCostUsd: 1, maxTokens: 10000, maxKnowledgeCalls: 0, maxReplans: 0, maxVerificationCalls: 0, maxDecisionRepairs: 0 },
+    runtimeProfile: 'iterative', capabilityFingerprint: capabilities.compositionFingerprint() }
+  const result = await harness.run(input)
+  const checkpoint = await steps.loadCheckpoint(tenantId, executionId)
+  assert.equal(bodies, 1)
+  assert.ok(checkpoint)
+  if (kind === 'complete') {
+    assert.equal(result.stopReason, 'COMPLETED')
+    assert.equal(result.response, 'sha256:' + hash(value))
+    assert.equal(requests.length, 1)
+    assert.equal(measurements, 0)
+    assert.equal(requests[0].purpose, 'RESPONSE')
+    assert.equal(result.budgetUsage.modelCalls, 1)
+    assert.equal(checkpoint.budgetUsage.modelCalls, 1)
+    assert.equal(modelEntries[0].budgetUsage.modelCalls, 1, 'Native slot persisted before provider entry')
+  } else if (kind === 'framing-refusal') {
+    assert.notEqual(result.stopReason, 'COMPLETED')
+    assert.match(result.response, /CONTEXT_OVERFLOW/)
+    assert.equal(requests.length, 0)
+    assert.equal(measurements, 0)
+    assert.equal(checkpoint.budgetUsage.modelCalls, 0)
+    assert.equal(hash(findResult(checkpoint.state.observations)), hash(value), 'Refused response retains full native observation')
+  } else {
+    assert.equal(result.stopReason, 'COMPLETED')
+    assert.equal(result.response, 'LEGACY_COMPILED_LITERAL')
+    assert.equal(requests.length, 0)
+    assert.equal(checkpoint.budgetUsage.modelCalls, 0)
+  }
+  cases.push({ kind, result, bodies, measurements, requests, measured, modelEntries, checkpoint, nativeSteps: await steps.listSteps(tenantId, executionId), auditEvents })
+}
+console.log(JSON.stringify({ publicPaths, cases, substitutions: 'Synthetic Toy64/cost0 and deterministic policy/model; native compiled factory/orchestrator/dispatch/context/budget/journal/store. Memory only, no published outer-host/PG/reference/global acceptance.' }, null, 2))

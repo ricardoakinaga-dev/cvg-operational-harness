@@ -1,0 +1,345 @@
+
+FILE packages/harness/src/iterative-runtime.ts
+720:     // unknown_effect records alone do not prove that this ledger failed.
+721:     if (
+722:       checkpoint?.state.pendingStepNumber &&
+723:       (checkpoint.state.pendingDecision?.decisionType === 'CALL_TOOL' ||
+724:         checkpoint.state.pendingDecision?.decisionType === 'REQUEST_APPROVAL')
+725:     ) {
+726:       let steps: readonly ExecutionStep[]
+727:       try {
+728:         steps = await this.options.stepStore.listSteps(
+729:           input.tenantId,
+730:           executionId
+731:         )
+732:       } catch {
+733:         return this.finalize(
+734:           run,
+735:           {
+736:             kind: 'stop',
+737:             stopReason: 'INSUFFICIENT_EVIDENCE',
+738:             response:
+739:               'Pending tool outcome could not be read; reconciliation is required.',
+740:             preserveCheckpoint: true
+741:           },
+742:           startedAtMs
+743:         )
+744:       }
+745:       if (
+746:         steps.some(
+747:           (step) =>
+748:             step.tenantId === input.tenantId &&
+749:             step.executionId === executionId &&
+750:             step.stepNumber === checkpoint.state.pendingStepNumber &&
+751:             step.stepType === 'TOOL' &&
+752:             step.status === 'FAILED' &&
+753:             step.errorCode === 'unknown_effect: effect_settlement_failed'
+754:         )
+755:       ) {
+756:         return this.finalize(
+757:           run,
+758:           {
+759:             kind: 'stop',
+760:             stopReason: 'TOOL_FAILURE',
+761:             response: 'unknown_effect: effect_settlement_failed',
+762:             preserveCheckpoint: true
+763:           },
+764:           startedAtMs
+765:         )
+766:       }
+767:       if (
+768:         this.options.toolResultContext &&
+769:         checkpoint.state.pendingStepNumber
+770:       ) {
+771:         const pendingStep = checkpoint.state.pendingStepNumber
+772:         const settledStep = steps.find(
+773:           (step) =>
+774:             step.tenantId === input.tenantId &&
+775:             step.executionId === executionId &&
+776:             step.stepNumber === pendingStep &&
+777:             step.stepType === 'TOOL' &&
+778:             step.status === 'SUCCEEDED'
+779:         )
+780:         const savedResult = checkpoint.state.observations.find(
+781:           (observation) =>
+782:             observation.type === 'TOOL_RESULT' &&
+783:             observation.stepNumber === pendingStep
+784:         )
+785:         if (
+786:           !settledStep &&
+787:           steps.some(
+788:             (step) =>
+789:               step.tenantId === input.tenantId &&
+790:               step.executionId === executionId &&
+791:               step.stepNumber === pendingStep &&
+792:               step.stepType === 'TOOL' &&
+793:               (step.status === 'RUNNING' || step.status === 'FAILED')
+794:           ) &&
+795:           !hasNativeEffectJournal(
+796:             this.options.tools.resolve(
+797:               checkpoint.state.pendingDecision!.toolId!,
+798:               checkpoint.state.pendingDecision!.toolVersion
+799:             )
+800:           )
+801:         ) {
+802:           return this.finalize(
+803:             run,
+804:             {
+805:               kind: 'stop',
+806:               stopReason: 'TOOL_FAILURE',
+807:               preserveCheckpoint: true,
+808:               response:
+809:                 'unknown_effect: pending tool dispatch has no native journal; explicit reconciliation is required.'
+810:             },
+811:             startedAtMs
+812:           )
+1008:       return 'Execution checkpoint belongs to a different capability composition.'
+1009:     }
+1010:     if (
+1011:       checkpoint.state.stopReason &&
+1012:       TERMINAL_STOPS.has(checkpoint.state.stopReason) &&
+1013:       checkpoint.state.stopReason !== 'NEEDS_USER_INPUT' &&
+1014:       checkpoint.state.stopReason !== 'APPROVAL_REQUIRED'
+1015:     ) {
+1016:       return 'Terminal execution cannot be resumed.'
+1017:     }
+1018:     return null
+1019:   }
+1020: 
+
+FILE packages/harness/src/effect-journal.ts
+116:     const operationKey = bounded(input.operationKey, 'operationKey')
+117:     const proposalHash = bounded(input.proposalHash, 'proposalHash')
+118:     const attemptId = bounded(input.attemptId, 'attemptId')
+119:     const identity = key(tenantId, operationKey)
+120:     const existing = this.records.get(identity)
+121:     if (existing) {
+122:       if (existing.proposalHash !== proposalHash) {
+123:         throw new EffectJournalError(
+124:           'Operation key is bound to a different proposal'
+125:         )
+126:       }
+127:       if (existing.state === 'FAILED') {
+128:         const timestamp = now()
+129:         const retried: EffectJournalRecord = {
+130:           tenantId: existing.tenantId,
+131:           operationKey: existing.operationKey,
+132:           proposalHash: existing.proposalHash,
+133:           state: 'RESERVED',
+134:           attemptId,
+135:           createdAt: existing.createdAt,
+136:           updatedAt: timestamp
+137:         }
+138:         this.records.set(identity, retried)
+139:         return clone(retried)
+140:       }
+141:       return clone(existing)
+142:     }
+143:     const timestamp = now()
+144:     const record: EffectJournalRecord = {
+145:       tenantId,
+146:       operationKey,
+147:       proposalHash,
+148:       state: 'RESERVED',
+149:       attemptId,
+150:       createdAt: timestamp,
+151:       updatedAt: timestamp
+152:     }
+153:     this.records.set(identity, record)
+154:     return clone(record)
+155:   }
+250: 
+251: // Private executor provenance survives the native descriptor copies used by
+252: // complete-result preparation. Caller-provided descriptor fields cannot opt in.
+253: const NATIVE_EFFECT_JOURNAL = Symbol('native-effect-journal')
+254: 
+255: export function hasNativeEffectJournal(
+256:   tool: ToolDefinition | undefined
+257: ): boolean {
+258:   return (
+259:     tool !== undefined &&
+260:     Object.getOwnPropertyDescriptor(tool, NATIVE_EFFECT_JOURNAL)?.value === true
+261:   )
+262: }
+298: export function createJournaledToolRegistry(
+299:   registry: ToolRegistry,
+300:   journal: EffectJournal,
+301:   options: JournaledToolRegistryOptions = {}
+302: ): ToolRegistry {
+303:   return {
+304:     list: () => registry.list(),
+305:     resolve: (toolId, version) => {
+306:       const tool = registry.resolve(toolId, version)
+307:       if (!tool) return undefined
+308:       return journaledTool(tool, journal, options)
+309:     }
+310:   }
+320:     : undefined
+321:   const wrapped = {
+322:     ...tool,
+323:     [NATIVE_EFFECT_JOURNAL]: true,
+324:     execute: async (
+325:       input: unknown,
+326:       context: ToolExecutionContext
+327:     ): Promise<ToolResult> => {
+328:       const operationKey = bounded(context.operationKey ?? '', 'operationKey')
+329:       const attemptId = createEffectAttemptId(options.attemptIdFactory)
+330:       const reservation = await journal.reserve({
+331:         tenantId: context.tenantId,
+332:         operationKey,
+333:         proposalHash: proposalHash(tool, input, compositionFingerprint),
+334:         attemptId
+335:       })
+336:       if (reservation.state === 'CONFIRMED') {
+337:         return { status: 'SUCCEEDED', output: reservation.result }
+338:       }
+339:       if (
+340:         reservation.state === 'UNCERTAIN' ||
+341:         reservation.state === 'EFFECT_STARTED'
+342:       ) {
+343:         return {
+344:           status: 'REJECTED',
+345:           error:
+346:             'unknown_effect: explicit reconciliation is required before retry'
+347:         }
+348:       }
+349:       if (reservation.attemptId !== attemptId) {
+350:         return {
+351:           status: 'REJECTED',
+352:           error:
+353:             'unknown_effect: an existing reservation requires reconciliation'
+354:         }
+355:       }
+356:       await journal.markStarted({
+357:         tenantId: context.tenantId,
+358:         operationKey,
+359:         attemptId
+360:       })
+361:       try {
+362:         const result = await tool.execute(input, context)
+
+FILE packages/harness/src/complete-tool-results.ts
+54: export function prepareCompleteToolRegistry(
+55:   registry: ToolRegistry
+56: ): ToolRegistry {
+57:   const prepare = (tool: ReturnType<ToolRegistry['resolve']>) =>
+58:     tool
+59:       ? {
+60:           ...tool,
+61:           execute: async (...args: Parameters<typeof tool.execute>) =>
+62:             prepareCompleteToolResult(await tool.execute(...args))
+63:         }
+64:       : undefined
+65:   return {
+66:     list: () => registry.list().map((tool) => prepare(tool)!),
+67:     resolve: (id, version) => prepare(registry.resolve(id, version))
+68:   }
+69: }
+
+FILE packages/harness/src/createOperationalHarness.ts
+39:   readonly orchestrator?: HarnessRuntimeOptions['orchestrator']
+40:   /**
+41:    * Explicit capability composition. Its adapter is the only runtime-facing
+42:    * registry for this path; callers cannot provide both registries.
+43:    */
+44:   readonly capabilities?: CapabilityRegistry
+45:   /** Compatibility port retained for existing Phase 2/3 consumers. */
+46:   readonly tools?: ToolRegistry
+47:   /** Required for capability composition and optional for compatibility tools. */
+48:   readonly effectJournal?: EffectJournal
+49:   readonly effectJournalOptions?: JournaledToolRegistryOptions
+230:   options: OperationalHarnessOptions,
+231:   capabilityFingerprint: string | undefined
+232: ): ToolRegistry {
+233:   if (options.capabilities && options.tools) {
+234:     throw new Error(
+235:       'Operational harness composition accepts capabilities or tools, not both'
+236:     )
+237:   }
+238:   const baseRegistry = options.capabilities
+239:     ? createCapabilityToolRegistry(
+240:         options.capabilities,
+241:         options.toolResultContext ? prepareCompleteToolResult : undefined
+242:       )
+243:     : options.tools
+244:   if (!baseRegistry) {
+245:     throw new Error(
+246:       'Operational harness composition requires an explicit capability or tool registry'
+247:     )
+248:   }
+249:   const registry = options.toolResultContext
+250:     ? prepareCompleteToolRegistry(baseRegistry)
+251:     : baseRegistry
+252:   if (!options.effectJournal) return registry
+253:   return createJournaledToolRegistry(registry, options.effectJournal, {
+254:     ...options.effectJournalOptions,
+255:     ...(capabilityFingerprint
+256:       ? { compositionFingerprint: capabilityFingerprint }
+257:       : {})
+258:   })
+
+FILE packages/harness/src/index.ts
+15: export {
+16:   createEffectAttemptId,
+17:   createJournaledToolRegistry,
+18:   EffectJournalError,
+19:   InMemoryEffectJournal
+20: } from './effect-journal.ts'
+21: export type {
+22:   EffectAttemptIdFactory,
+23:   EffectJournal,
+24:   EffectJournalRecord,
+25:   EffectJournalState,
+26:   JournaledToolRegistryOptions
+27: } from './effect-journal.ts'
+
+FILE packages/harness/src/iterative-dispatch.ts
+472:       // cannot replay the same step against an unconsumed counter; the
+473:       // approval is only reserved after this checkpoint.
+474:       if (!alreadyCounted) run.usage.toolCalls += 1
+475:       run.inFlightCounted = false
+476:       // The step is in flight from here: a stop reason left by an earlier
+477:       // approval wait would hide that this call is already counted when the
+478:       // execution resumes (AUD-0598 R02).
+479:       run.state = {
+480:         ...run.state,
+481:         pendingDecision: decision,
+482:         pendingStepNumber: stepNumber,
+483:         ...(approvalId ? { pendingApprovalId: approvalId } : {}),
+484:         stopReason: undefined
+485:       }
+486:       await ctx.persistCheckpoint(run)
+487:       await ctx.recordStep(run, {
+488:         stepNumber,
+489:         stepType: 'TOOL',
+490:         status: 'RUNNING',
+491:         sideEffecting: true,
+492:         reasonCode: decision.reasonCode
+493:       })
+494:       stepOpen = true
+495:       openedHere = true
+496:       return undefined
+497:     }
+498:   })
+499: 
+500:   const recordUnsupported = (): Promise<void> =>
+501:     ctx.recordObservation(
+
+FILE docs/02_spec/0224_pare100_complete_tool_result_context.md
+193: output for indisponível, não cabe no contexto ou o save falhar depois do
+194: efeito, interromper. Conservar operationKey, status nativo, provenance e
+195: settlement, sem emitir ACTION_CONFIRMED com base em uma prévia. Falha da
+196: serialização no próprio journal continua falha nativa/efeito incerto;
+197: esta SPEC não pode convertê-la em confirmação.
+198: 
+199: Se o checkpoint não foi confirmado, a retomada usa a fronteira durável0217
+200: e seu journal para resolver o efeito antes de qualquer novo despacho.
+201: Resultado confirmado recuperado do journal precisa passar pela mesma
+202: validação; não chamar o corpo novamente para reconstruir texto perdido.
+203: Sem prova de settlement ou sem dado recuperável: handoff/estado incerto,
+204: não replay. Nenhuma nova semântica de exatamente-uma-vez é concedida aqui.
+205: 
+476: | TR06 | Checkpoint2 com resultado completo: store memória e PostgreSQL sintético real, perda/recriação do processo e retomada sem novo corpo. Checkpoint1 legado e com/sem TOOL_RESULT, reader antigo, mudança de modo, digest/tenant/version/reserva corrompidos. Comparar valor/bytes/usage/settlement antes/depois, não apenas exit0. Incluir4096U+0000 e chaves comU+0000 no codec V2, base64/padding/hash/UTF-8/JSON inválidos, wrapper/dados grandes e retorno lógico idêntico nos dois stores. |
+477: | TR07 | Efeito sintético confirmado seguido de overflow ou falha de save: um único corpo, operationKey/settlement conservados, objetivo não declarado completo e nenhum replay na retomada. Falha nativa do journal continua incerta. Sem efeito externo real.                                                                                                                                                                                                                                        |
+478: | TR08 | Mais de50observações, várias ferramentas por regras antes do modelo e reserva de espaço próxima8MiB: nenhum TOOL_RESULT, entregue ou não, expulso; recusa pré-corpo quando não cabe; checkpoint jamais truncado.                                                                                                                                                                                                                                                                              |
+479: | TR09 | Modo legado e single_pass, custom ports, SDK/worker consumidores: regressão explícita; opção incompatível falha cedo. Schema de gateway governado aceita a representação comum quando testada diretamente, sem alegar integração de rota que não foi implementada.                                                                                                                                                                                                                            |

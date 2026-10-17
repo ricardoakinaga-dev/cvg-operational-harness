@@ -1,0 +1,405 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/complete-checkpoint.ts SHA256 4962fe127711c930c181388acde9214403288de374a762df9447f360b28cc8f0
+     1 import { createHash } from 'node:crypto'
+     2 import { TextDecoder } from 'node:util'
+     3 import {
+     4   canonicalizeCompleteJson,
+     5   COMPLETE_CHECKPOINT_MAX_BYTES,
+     6   MAX_CHECKPOINT_OBSERVATIONS,
+     7   OBSERVATION_TYPES,
+     8   OBSERVATION_SOURCES,
+     9   DECISION_TYPES,
+    10   DECISION_REASON_CODES,
+    11   COMPLETION_OUTCOMES,
+    12   STOP_REASONS,
+    13   validateLoopDecision,
+    14   type AgentLoopState,
+    15   type CompleteCheckpointStorageState,
+    16   type ExecutionCheckpoint
+    17 } from '@cvg/harness-contracts'
+    18 import { CheckpointError, type UnsignedCheckpoint } from './step-store.ts'
+    19 
+    20 const LIMITS = {
+    21   maxBytes: COMPLETE_CHECKPOINT_MAX_BYTES,
+    22   maxDepth: 64,
+    23   maxNodes: 1000000
+    24 }
+    25 export const COMPLETE_CHECKPOINT_DATA_MAX_CHARS =
+    26   4 * Math.ceil(COMPLETE_CHECKPOINT_MAX_BYTES / 3)
+    27 export const COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES =
+    28   COMPLETE_CHECKPOINT_DATA_MAX_CHARS + 512
+    29 const sha = (text: string | Uint8Array): string =>
+    30   createHash('sha256').update(text).digest('hex')
+    31 function fail(message = 'Invalid complete checkpoint'): never {
+    32   throw new CheckpointError('checkpoint_integrity', message)
+    33 }
+    34 type Rule = (value: unknown) => unknown
+    35 const str: Rule = (value) => (typeof value === 'string' ? value : fail())
+    36 const id: Rule = (value) =>
+    37   typeof value === 'string' && value.length > 0 && !value.includes('\u0000')
+    38     ? value
+    39     : fail('Invalid checkpoint identifier')
+    40 const number: Rule = (value) =>
+    41   typeof value === 'number' &&
+    42   Number.isFinite(value) &&
+    43   value >= 0 &&
+    44   !Object.is(value, -0)
+    45     ? value
+    46     : fail()
+    47 const integer: Rule = (value) =>
+    48   Number.isSafeInteger(number(value)) ? value : fail()
+    49 const positive: Rule = (value) =>
+    50   (integer(value) as number) > 0 ? value : fail()
+    51 const bool: Rule = (value) => (typeof value === 'boolean' ? value : fail())
+    52 const digest: Rule = (value) =>
+    53   typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+    54     ? value
+    55     : fail('Invalid checkpoint hash')
+    56 const one =
+    57   (...values: readonly unknown[]): Rule =>
+    58   (value) =>
+    59     values.includes(value) ? value : fail()
+    60 const json: Rule = (value) => {
+    61   canonicalizeCompleteJson(value, LIMITS)
+    62   return value
+    63 }
+    64 const nullable =
+    65   (rule: Rule): Rule =>
+    66   (value) =>
+    67     value === null ? null : rule(value)
+    68 
+    69 /** Only declared optional internal fields may omit undefined. Arbitrary JSON is never repaired. */
+    70 function record(
+    71   required: Record<string, Rule>,
+    72   optional: Record<string, Rule> = {}
+    73 ): Rule {
+    74   return (value) => {
+    75     if (!value || typeof value !== 'object' || Array.isArray(value)) fail()
+    76     const prototype = Object.getPrototypeOf(value)
+    77     if (prototype !== Object.prototype && prototype !== null) fail()
+    78     const keys = Reflect.ownKeys(value)
+    79     if (
+    80       keys.length >
+    81       Object.keys(required).length + Object.keys(optional).length
+    82     )
+    83       fail('Unknown checkpoint field')
+    84     const normalized = Object.create(null) as Record<string, unknown>
+    85     for (const key of keys) {
+    86       if (
+    87         typeof key !== 'string' ||
+    88         (!Object.hasOwn(required, key) && !Object.hasOwn(optional, key))
+    89       )
+    90         fail('Unknown checkpoint field')
+    91       const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    92       if (!descriptor || !('value' in descriptor))
+    93         fail('Checkpoint accessor is forbidden')
+    94       if (descriptor.value === undefined && Object.hasOwn(optional, key))
+    95         continue
+    96       normalized[key as string] = (required[key as string] ??
+    97         optional[key as string])!(descriptor.value)
+    98     }
+    99     for (const key of Object.keys(required))
+   100       if (!Object.hasOwn(normalized, key)) fail('Missing checkpoint field')
+   101     return normalized
+   102   }
+   103 }
+   104 function array(rule: Rule): Rule {
+   105   return (value) => {
+   106     if (
+   107       !Array.isArray(value) ||
+   108       Object.getPrototypeOf(value) !== Array.prototype
+   109     )
+   110       fail()
+   111     const length = Object.getOwnPropertyDescriptor(value, 'length')!
+   112       .value as number
+   113     if (
+   114       length > LIMITS.maxNodes ||
+   115       Reflect.ownKeys(value).length !== length + 1
+   116     )
+   117       fail('Invalid checkpoint array')
+   118     const normalized: unknown[] = []
+   119     for (let i = 0; i < length; i++) {
+   120       const descriptor = Object.getOwnPropertyDescriptor(value, String(i))
+   121       if (!descriptor || !('value' in descriptor))
+   122         fail('Invalid checkpoint array')
+   123       normalized.push(rule(descriptor.value))
+   124     }
+   125     return normalized
+   126   }
+   127 }
+   128 const usage = record({
+   129   modelCalls: integer,
+   130   inputTokens: integer,
+   131   outputTokens: integer,
+   132   costUsd: number
+   133 })
+   134 const measurement = record({
+   135   counterId: id,
+   136   counterVersion: id,
+   137   provider: id,
+   138   model: id,
+   139   formattingVersion: id,
+   140   inputUpperBoundTokens: integer,
+   141   contextWindowTokens: positive,
+   142   costUpperBoundUsd: number
+   143 })
+   144 const receipt = record(
+   145   {
+   146     admissionId: id,
+   147     tenantId: id,
+   148     executionId: id,
+   149     stepNumber: positive,
+   150     attempt: integer,
+   151     purpose: one('ORCHESTRATION', 'REPAIR'),
+   152     requestSha256: digest,
+   153     measurement,
+   154     reserved: usage,
+   155     status: one('RESERVED', 'SETTLED', 'UNKNOWN')
+   156   },
+   157   { actual: usage, unknownReason: id, resultSha256: digest }
+   158 )
+   159 const context = record(
+   160   {
+   161     version: one(1),
+   162     deliveredThroughStep: integer,
+   163     pendingDecisionAdmission: nullable(id),
+   164     decisionAdmissions: array(receipt)
+   165   },
+   166   { acceptedDecision: (value) => acceptedDecision(value) }
+   167 )
+   168 const question = record(
+   169   {
+   170     questionType: one(
+   171       'CLARIFICATION',
+   172       'MISSING_FIELD',
+   173       'CONFIRMATION',
+   174       'CHOICE'
+   175     ),
+   176     missingFields: array(str),
+   177     promptIntent: str
+   178   },
+   179   { choices: array(str) }
+   180 )
+   181 const decision = record(
+   182   {
+   183     decisionType: one(...DECISION_TYPES),
+   184     reasonCode: one(...DECISION_REASON_CODES)
+   185   },
+   186   {
+   187     selectedCapability: id,
+   188     toolId: id,
+   189     toolVersion: id,
+   190     toolInput: json,
+   191     query: str,
+   192     knowledgeCategories: array(str),
+   193     responseIntent: str,
+   194     responseText: str,
+   195     requestedInput: question,
+   196     verificationTarget: str
+   197   }
+   198 )
+   199 const acceptedDecision = record({
+   200   stepNumber: positive,
+   201   decision,
+   202   decisionAdmissionIds: array(id)
+   203 })
+   204 const evaluation = record(
+   205   {
+   206     outcome: one(...COMPLETION_OUTCOMES),
+   207     reasonCode: one(
+   208       ...DECISION_REASON_CODES,
+   209       'COMPLETION_CONFIRMED',
+   210       'EVALUATOR_UNAVAILABLE'
+   211     ),
+   212     deterministic: bool
+   213   },
+   214   { detail: str, usage }
+   215 )
+   216 const provenance = record(
+   217   { sourceId: id },
+   218   { sourceVersion: id, operationKey: id, effectRef: id, category: str }
+   219 )
+   220 const observation = record({
+   221   observationId: id,
+   222   executionId: id,
+   223   stepId: id,
+   224   stepNumber: integer,
+   225   type: one(...OBSERVATION_TYPES),
+   226   source: one(...OBSERVATION_SOURCES),
+   227   trust: one('TRUSTED', 'UNTRUSTED'),
+   228   payload: (value) => value,
+   229   summary: str,
+   230   provenance,
+   231   timestamp: id
+   232 })
+   233 const stateSchema = record(
+   234   {
+   235     goal: str,
+   236     stepNumber: integer,
+   237     observations: array(observation),
+   238     openQuestions: array(str),
+   239     resolvedInputs: json,
+   240     loopSignatures: array(str),
+   241     toolResultContext: context
+   242   },
+   243   {
+   244     capabilityFingerprint: id,
+   245     pendingQuestion: question,
+   246     pendingApprovalId: id,
+   247     pendingDecision: decision,
+   248     pendingStepNumber: positive,
+   249     selectedCapability: id,
+   250     stopReason: one(...STOP_REASONS),
+   251     lastEvaluation: evaluation
+   252   }
+   253 )
+   254 const budgetSchema = record({
+   255   steps: integer,
+   256   modelCalls: integer,
+   257   toolCalls: integer,
+   258   knowledgeCalls: integer,
+   259   verificationCalls: integer,
+   260   replans: integer,
+   261   decisionRepairs: integer,
+   262   inputTokens: integer,
+   263   outputTokens: integer,
+   264   costUsd: number,
+   265   activeDurationMs: number
+   266 })
+   267 const unsignedSchema = record({
+   268   tenantId: id,
+   269   executionId: id,
+   270   checkpointVersion: one(2),
+   271   runtimeProfile: one('iterative'),
+   272   runtimeVersion: id,
+   273   orchestratorVersion: id,
+   274   stepNumber: integer,
+   275   state: stateSchema,
+   276   budgetUsage: budgetSchema
+   277 })
+   278 const succeeded = record({
+   279   schemaVersion: one(1),
+   280   status: one('SUCCEEDED'),
+   281   sideEffect: one('NONE', 'READ', 'WRITE', 'EXTERNAL'),
+   282   completion: one('COMPLETE'),
+   283   resultAvailability: one('AVAILABLE'),
+   284   output: (value) => {
+   285     canonicalizeCompleteJson(value)
+   286     return value
+   287   },
+   288   outputBytes: integer,
+   289   outputSha256: digest
+   290 })
+   291 const unavailable = record({
+   292   schemaVersion: one(1),
+   293   status: one('SUCCEEDED'),
+   294   sideEffect: one('NONE', 'READ', 'WRITE', 'EXTERNAL'),
+   295   completion: one('UNAVAILABLE'),
+   296   resultAvailability: one('UNAVAILABLE'),
+   297   reason: one('INVALID_JSON', 'RESULT_TOO_LARGE', 'RESULT_COMPLEXITY')
+   298 })
+   299 const failed = record({
+   300   schemaVersion: one(1),
+   301   status: one('FAILED', 'REJECTED'),
+   302   sideEffect: one('NONE', 'READ', 'WRITE', 'EXTERNAL'),
+   303   completion: one('NOT_APPLICABLE'),
+   304   resultAvailability: one('UNAVAILABLE'),
+   305   error: str
+   306 })
+   307 
+   308 function validateState(
+   309   state: AgentLoopState,
+   310   binding?: { tenantId: string; executionId: string }
+   311 ): void {
+   312   const ctx = state.toolResultContext!
+   313   if (
+   314     !state.resolvedInputs ||
+   315     Array.isArray(state.resolvedInputs) ||
+   316     typeof state.resolvedInputs !== 'object'
+   317   )
+   318     fail()
+   319   if (
+   320     state.pendingStepNumber !== undefined &&
+   321     state.pendingStepNumber !== state.stepNumber + 1 &&
+   322     state.pendingStepNumber !== state.stepNumber
+   323   )
+   324     fail('Invalid pending step')
+   325   if (state.observations.length > MAX_CHECKPOINT_OBSERVATIONS)
+   326     fail('Complete checkpoint observation capacity exceeded')
+   327   const observations = new Set<string>(),
+   328     toolSteps = new Set<number>()
+   329   const executionId =
+   330     binding?.executionId ??
+   331     state.observations[0]?.executionId ??
+   332     ctx.decisionAdmissions[0]?.executionId
+   333   const tenantId = binding?.tenantId ?? ctx.decisionAdmissions[0]?.tenantId
+   334   for (const item of state.observations) {
+   335     if (
+   336       observations.has(item.observationId) ||
+   337       item.stepNumber >
+   338         Math.max(state.stepNumber, state.pendingStepNumber ?? 0) ||
+   339       item.executionId !== executionId
+   340     )
+   341       fail('Observation binding mismatch')
+   342     observations.add(item.observationId)
+   343     if (item.type !== 'TOOL_RESULT') continue
+   344     if (
+   345       item.source !== 'TOOL' ||
+   346       item.trust !== 'UNTRUSTED' ||
+   347       item.stepNumber < 1
+   348     )
+   349       fail('Invalid tool observation')
+   350     toolSteps.add(item.stepNumber)
+   351     const payload = item.payload as Record<string, unknown>
+   352     if (payload?.completion === 'COMPLETE') {
+   353       succeeded(payload)
+   354       const raw = canonicalizeCompleteJson(payload.output)
+   355       if (
+   356         payload.outputBytes !== Buffer.byteLength(raw) ||
+   357         payload.outputSha256 !== sha(raw)
+   358       )
+   359         fail('Complete output integrity mismatch')
+   360     } else if (payload?.completion === 'UNAVAILABLE') unavailable(payload)
+   361     else failed(payload)
+   362   }
+   363   if (
+   364     ctx.deliveredThroughStep > state.stepNumber ||
+   365     (ctx.deliveredThroughStep !== 0 && !toolSteps.has(ctx.deliveredThroughStep))
+   366   )
+   367     fail('Invalid delivery cursor')
+   368   const admissions = new Map<string, (typeof ctx.decisionAdmissions)[number]>(),
+   369     attempts = new Set<string>()
+   370   let pending: string | null = null
+   371   for (const entry of ctx.decisionAdmissions) {
+   372     if (
+   373       admissions.has(entry.admissionId) ||
+   374       entry.stepNumber > state.stepNumber + 1 ||
+   375       entry.tenantId !== tenantId ||
+   376       entry.executionId !== executionId
+   377     )
+   378       fail('Admission binding mismatch')
+   379     const attempt = `${entry.stepNumber}:${entry.attempt}`
+   380     if (attempts.has(attempt)) fail('Duplicate admission attempt')
+   381     attempts.add(attempt)
+   382     admissions.set(entry.admissionId, entry)
+   383     const m = entry.measurement,
+   384       r = entry.reserved
+   385     if (
+   386       r.modelCalls !== 1 ||
+   387       r.inputTokens !== m.inputUpperBoundTokens ||
+   388       r.outputTokens !== 512 ||
+   389       r.costUsd !== m.costUpperBoundUsd ||
+   390       m.inputUpperBoundTokens + 512 > m.contextWindowTokens
+   391     )
+   392       fail('Invalid admission reservation')
+   393     if (entry.status === 'RESERVED') {
+   394       if (
+   395         pending !== null ||
+   396         entry.actual !== undefined ||
+   397         entry.unknownReason !== undefined ||
+   398         entry.resultSha256 !== undefined
+   399       )
+   400         fail('Invalid pending admission')
+   401       pending = entry.admissionId
+   402     } else if (entry.status === 'SETTLED') {
+   403       if (
+   404         !entry.actual ||

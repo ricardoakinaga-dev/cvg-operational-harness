@@ -1,0 +1,225 @@
+{
+  "schema_version": 1,
+  "task": "SPEC0214 independent architecture/SPEC critic",
+  "review_type": "INDEPENDENT_STATIC_DOCUMENT_REVIEW",
+  "verdict": "REVISE_SPEC",
+  "design": {
+    "architecture_direction": "VIABLE",
+    "readiness": "NOT_YET_TECHNICALLY_SPECIFIED",
+    "conditional_handoff": "LEAD_DOCUMENT_REVISION_ONLY",
+    "blocking_findings": [
+      "F01",
+      "F02",
+      "F03",
+      "F04"
+    ]
+  },
+  "authority": {
+    "tier": "T3",
+    "user_approval": "NOT_GIVEN",
+    "build_authorized": false,
+    "runtime_verdict": "NOT_RUN",
+    "runtime_pass": false,
+    "pdsh003b_accepted": false,
+    "p100010_accepted": false,
+    "all_36_card_parity_accepted": false,
+    "release_accepted": false,
+    "production": "NO_GO",
+    "unrelated_approved_parallel_gates": "UNAFFECTED"
+  },
+  "candidate_sha256": "f02a7d2e036bf3eaf758b3a2fe61dce820fbdb0087e06d2c06280264b9589fb2",
+  "packet_root": "/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-spec0214-packet",
+  "captured_sources_root": "/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-spec0214-packet/docs/04_audit/evidence/PARE100-EXEC-20261014/spec0214/read-inputs",
+  "sentinel": {
+    "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-spec0214-packet.sentinel.json",
+    "expected_sha256": "cc5460f1aab3ae717adae3e1180864b9b5364c36b4f5f775285a2402ebef1beb",
+    "pre": {
+      "status": "MATCH",
+      "files": 75,
+      "inventory": "EXACT",
+      "all_file_hashes": "MATCH"
+    },
+    "post": {
+      "status": "MATCH",
+      "files": 75,
+      "inventory": "EXACT",
+      "all_file_hashes": "MATCH",
+      "verified_at": "2026-10-15T03:14:33.072239+00:00"
+    }
+  },
+  "findings": [
+    {
+      "id": "F01",
+      "severity": "P1",
+      "title": "Transformação única do payload e saída não especificada",
+      "kind": "technical_design_gap",
+      "owner": "Lead Platform/Runtime",
+      "blocks_design_closure": true,
+      "confidence": "HIGH",
+      "evidence": [
+        {
+          "path": "packages/platform/src/tool-invocation-boundary.ts.source.txt",
+          "lines": "60-111"
+        },
+        {
+          "path": "packages/harness/src/capability-boundary.ts.source.txt",
+          "lines": "351-401"
+        },
+        {
+          "path": "packages/contracts/src/contracts.ts.source.txt",
+          "lines": "417-420"
+        }
+      ],
+      "resolution": "Transformar uma vez; selar payload canônico; revalidações sem reaplicar transforms; igualdade em policy/hash/journal/handler."
+    },
+    {
+      "id": "F02",
+      "severity": "P1",
+      "title": "Procedência do handler sintético não é garantida por gateway/identidade",
+      "kind": "open01_design_refinement",
+      "owner": "Lead Platform/Integração",
+      "blocks_design_closure": true,
+      "confidence": "HIGH",
+      "evidence": [
+        {
+          "path": "packages/platform/src/plugin-gateway.ts.source.txt",
+          "lines": "64-70,116-139,798-890"
+        },
+        {
+          "path": "packages/harness/src/capability-boundary.ts.source.txt",
+          "lines": "133-144"
+        }
+      ],
+      "resolution": "Vincular descriptor a implementação/validators revisados por procedência privada; negar substituição sob mesmo nome/versão."
+    },
+    {
+      "id": "F03",
+      "severity": "P1",
+      "title": "Matriz de sucesso da tool, falha terminal e HTTP permanece aberta",
+      "kind": "open02_open05_contract_gap",
+      "owner": "Lead Integração + usuário T3",
+      "blocks_design_closure": true,
+      "confidence": "HIGH",
+      "evidence": [
+        {
+          "path": "apps/api/src/server.ts.source.txt",
+          "lines": "2212-2239"
+        },
+        {
+          "path": "packages/harness/src/iterative-dispatch.ts.source.txt",
+          "lines": "701-715"
+        },
+        {
+          "path": "packages/harness/src/iterative-runtime.ts.source.txt",
+          "lines": "1585-1687"
+        }
+      ],
+      "resolution": "Fechar tabela de projeção/falhas; primeira jornada pública com uma tool; falha de evidência obrigatória impede succeeded público sem apagar fato privado."
+    },
+    {
+      "id": "F04",
+      "severity": "P2",
+      "title": "Falhas intermediárias de AuditSink podem ser engolidas por safeAudit",
+      "kind": "technical_design_gap",
+      "owner": "Lead Runtime/Platform",
+      "blocks_design_closure": true,
+      "confidence": "HIGH",
+      "evidence": [
+        {
+          "path": "packages/harness/src/iterative-runtime.ts.source.txt",
+          "lines": "1502-1524,1644-1687"
+        },
+        {
+          "path": "packages/harness/src/iterative-dispatch.ts.source.txt",
+          "lines": "1010-1012"
+        }
+      ],
+      "resolution": "Definir eventos obrigatórios e latch de falha por invocação no adapter, ou limitar explicitamente A19 aos registros obrigatórios definidos."
+    }
+  ],
+  "open_items": {
+    "OPEN-01": {
+      "classification": "MIXED",
+      "lead_resolves": [
+        "descriptor for pure synthetic implementation",
+        "private provenance",
+        "consumer inventory"
+      ],
+      "user_decides": [
+        "U1"
+      ]
+    },
+    "OPEN-02": {
+      "classification": "USER_CONTRACT",
+      "lead_resolves": [
+        "step-index mechanics",
+        "full observation projection"
+      ],
+      "user_decides": [
+        "U2"
+      ]
+    },
+    "OPEN-03": {
+      "classification": "MIXED_SCOPE_AND_ADAPTER",
+      "lead_resolves": [
+        "legacy atomic one-use adapter",
+        "no release/reissue",
+        "explicit non-durable lifecycle limit"
+      ],
+      "user_decides": [
+        "U1"
+      ],
+      "parent_durable_requirement_waived": false
+    },
+    "OPEN-04": {
+      "classification": "LEAD_IMPLEMENTATION_AND_DECOMPOSITION",
+      "lead_resolves": [
+        "local invocation-bound stores and IDs",
+        "future durable host SPEC/task"
+      ],
+      "independent_user_choice_required_for_local_wiring": false
+    },
+    "OPEN-05": {
+      "classification": "MIXED",
+      "lead_resolves": [
+        "budget arithmetic and token mapping",
+        "explicit timeout start boundary"
+      ],
+      "user_decides": [
+        "U3"
+      ]
+    }
+  },
+  "unresolved_authority_decisions": [
+    {
+      "id": "U1",
+      "text_pt": "Aceitar fatia só do read sintético revisado e negação de plugins/gateways sem metadados e procedência aprovados."
+    },
+    {
+      "id": "U2",
+      "text_pt": "Aceitar sequência fail-fast/restantes not_run e fechar sucesso anterior versus falha de turno no trace, HTTP e worker."
+    },
+    {
+      "id": "U3",
+      "text_pt": "Aceitar timeout finito após preparação e falhas de provider/auditoria como trace failed/handoff, com mensagens e envelopes concretos."
+    },
+    {
+      "id": "U4",
+      "text_pt": "Revisar explicitamente a SPEC0214 final antes do BUILD T3; aprovações0211/0212 não se estendem a0214."
+    }
+  ],
+  "scope_recommendation": "One vertical synthetic controlled-execution slice through one real public factory/iterative execution; no durable cutover, legacy removal, external provider, runtime acceptance or parent-card closure.",
+  "limitations": [
+    "Static captured evidence only; no new runtime or tests executed.",
+    "Manifest graph evidence is partial, not complete monorepo/transitive import proof.",
+    "Current source refers exclusively to frozen captured bytes; no claim about later parallel edits.",
+    "No report/recon/historical PASS used as runtime evidence."
+  ],
+  "writes": [
+    "/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-spec0214-result/claim.json",
+    "/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-spec0214-result/report.md",
+    "/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-spec0214-result/verdict.json"
+  ],
+  "completed_at": "2026-10-15T03:14:33.072239+00:00",
+  "report_sha256": "8417f03596164379b43d79035c842aa93db542b39741640e77b1eb4126c70e61"
+}

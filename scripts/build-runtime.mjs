@@ -138,7 +138,10 @@ function createRuntimeProjectConfigs() {
           'tsconfig.runtime.tsbuildinfo'
         )
       },
-      include: [path.join(root, workspace, 'src/**/*.ts')],
+      include: [
+        path.join(root, workspace, 'src/**/*.ts'),
+        path.join(root, workspace, 'src/**/*.json')
+      ],
       exclude: [
         path.join(root, workspace, 'src/**/*.test.ts'),
         path.join(root, workspace, 'src/**/__tests__/**')

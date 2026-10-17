@@ -1,0 +1,28 @@
+import os,sys,json,time,hashlib,subprocess,selectors,pathlib,signal
+R=pathlib.Path(__file__).resolve().parent
+NODE='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+def env_for(base):
+ base=pathlib.Path(base);base.mkdir(parents=True,exist_ok=True)
+ e={'PATH':str(pathlib.Path(NODE).parent)+':/usr/bin:/bin','NODE_ENV':'test','LANG':'C.UTF-8','CI':'true'}
+ for k,d in {'HOME':'home','TMPDIR':'tmp','TMP':'tmp','TEMP':'tmp','XDG_CONFIG_HOME':'config','XDG_DATA_HOME':'data','XDG_CACHE_HOME':'cache','XDG_STATE_HOME':'state','DSH_HOME':'dsh'}.items():
+  p=base/d;p.mkdir(exist_ok=True);e[k]=str(p)
+ return e
+def run(name,argv,cwd,env,timeout=85,cap=2097152):
+ start=time.time();p=subprocess.Popen(argv,cwd=cwd,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+ sel=selectors.DefaultSelector();buf={'stdout':bytearray(),'stderr':bytearray()};sel.register(p.stdout,selectors.EVENT_READ,'stdout');sel.register(p.stderr,selectors.EVENT_READ,'stderr');reason=None
+ while sel.get_map():
+  if time.time()-start>timeout or sum(map(len,buf.values()))>=cap:
+   reason='timeout' if time.time()-start>timeout else 'output_limit';os.killpg(p.pid,signal.SIGKILL)
+  for key,_ in sel.select(.05):
+   b=os.read(key.fileobj.fileno(),65536)
+   if not b:sel.unregister(key.fileobj)
+   else:buf[key.data].extend(b[:max(0,cap-sum(map(len,buf.values())))])
+  if reason and p.poll() is not None:
+   for key in list(sel.get_map().values()):sel.unregister(key.fileobj)
+ code=p.wait(timeout=1);end=time.time();logs={}
+ for stream,data in buf.items():
+  file=R/'commands'/f'{name}.{stream}.log';file.parent.mkdir(exist_ok=True);file.write_bytes(data);logs[stream]={'file':str(file),'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)}
+ meta={'argv':argv,'cwd':str(cwd),'environment':env,'pid':p.pid,'parentPid':os.getpid(),'startedEpoch':start,'finishedEpoch':end,'elapsedMs':round((end-start)*1000),'timeoutSeconds':timeout,'outputLimitBytes':cap,'exit':code,'limitFailure':reason,'childExitObserved':True,'logs':logs}
+ (R/'commands'/f'{name}.json').write_text(json.dumps(meta,indent=2));print(json.dumps({'command':name,'exit':code,'elapsedMs':meta['elapsedMs'],'limitFailure':reason}));print(buf['stdout'].decode(errors='replace')[:12000]);print(buf['stderr'].decode(errors='replace')[:3000]);return code
+if __name__=='__main__':
+ name=sys.argv[1];spec=json.loads((R/(name+'.spec.json')).read_text());run(name,**spec)

@@ -1,0 +1,217 @@
+import { describe, expect, it } from 'vitest'
+import {
+  canonicalizeCompleteJson,
+  type DecisionInputCounter,
+  type ModelGateway,
+  type ModelRequest
+} from '@cvg/harness-contracts'
+import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+import {
+  createCapabilityRegistry,
+  createOperationalHarness,
+  InMemoryEffectJournal,
+  InMemoryExecutionStepStore
+} from '../index.ts'
+import {
+  phase3AgentProfile,
+  phase3RuntimeInput,
+  InMemoryApprovalEngine,
+  RecordingAuditSink,
+  RecordingTelemetrySink,
+  ScriptedPolicyEngine
+} from './fixtures/phase3-fixtures.ts'
+
+const toy64 = (value: unknown) =>
+  Math.ceil(
+    Buffer.byteLength(
+      canonicalizeCompleteJson(value, {
+        maxBytes: 131_072,
+        maxDepth: 64,
+        maxNodes: 20_000
+      })
+    ) / 64
+  )
+
+describe('SPEC0224 receipt preflight preserves ambiguous persistence semantics', () => {
+  for (const fault of [
+    'none',
+    'beforeCommit',
+    'afterCommit',
+    'reserveAudit'
+  ] as const) {
+    it(`keeps native reservation authority for ${fault}`, async () => {
+      const store = new InMemoryExecutionStepStore()
+      const cas = store.compareAndSwapCheckpoint.bind(store)
+      let injected = false
+      store.compareAndSwapCheckpoint = async (input) => {
+        if (
+          !injected &&
+          input.next.state.toolResultContext!.pendingDecisionAdmission &&
+          (fault === 'beforeCommit' || fault === 'afterCommit')
+        ) {
+          injected = true
+          if (fault === 'afterCommit') {
+            expect(await cas(input)).toMatchObject({ status: 'APPLIED' })
+          }
+          throw new Error('synthetic reservation commit acknowledgement loss')
+        }
+        return cas(input)
+      }
+      const audit = new RecordingAuditSink()
+      const append = audit.append.bind(audit)
+      audit.append = async (record) => {
+        if (
+          !injected &&
+          fault === 'reserveAudit' &&
+          record.action === 'decision.admission.reserved'
+        ) {
+          injected = true
+          throw new Error('synthetic post-reserve audit loss')
+        }
+        return append(record)
+      }
+      let modelEntries = 0
+      let toolEntries = 0
+      let measurements = 0
+      const capabilities = createCapabilityRegistry([
+        {
+          descriptor: {
+            id: 'synthetic.uncertainty.control',
+            version: '1',
+            description: 'Unused pure control',
+            inputSchema: {},
+            outputSchema: {},
+            risk: 'LOW',
+            sideEffect: 'NONE',
+            idempotent: true,
+            requiresApproval: false,
+            origin: 'core',
+            providerId: 'synthetic.uncertainty',
+            providerVersion: '1'
+          },
+          implementation: {
+            validateInput: () => true,
+            validateOutput: () => true,
+            execute: async () => {
+              toolEntries++
+              return { status: 'SUCCEEDED', output: 'pure synthetic' }
+            }
+          }
+        }
+      ])
+      const counter: DecisionInputCounter = {
+        measure: async (request) => {
+          measurements++
+          return {
+            counterId: 'toy64',
+            counterVersion: '1',
+            provider: 'synthetic.uncertainty',
+            model: 'toy64',
+            formattingVersion: '1',
+            inputUpperBoundTokens: toy64(request),
+            contextWindowTokens: 100_000,
+            costUpperBoundUsd: 0.25
+          }
+        }
+      }
+      const model: ModelGateway = {
+        complete: async ({ signal: _signal, ...request }: ModelRequest) => {
+          modelEntries++
+          void _signal
+          const text = JSON.stringify({
+            decisionType: 'RESPOND',
+            reasonCode: 'GOAL_SATISFIED',
+            responseText: 'Synthetic uncertainty control.'
+          })
+          return {
+            text,
+            provider: 'synthetic.uncertainty',
+            model: 'toy64',
+            inputTokens: toy64(request),
+            outputTokens: toy64(text),
+            costUsd: 0.125
+          }
+        }
+      }
+      const harness = createOperationalHarness({
+        toolResultContext: { version: 1 },
+        capabilities,
+        effectJournal: new InMemoryEffectJournal(),
+        stepStore: store,
+        iterativeOrchestrator: new HybridOrchestrator({
+          decisionModel: model,
+          decisionInputCounter: counter,
+          decisionModelSupportsMaxOutputTokens: true
+        }),
+        modelGateway: model,
+        policy: new ScriptedPolicyEngine(),
+        approvals: new InMemoryApprovalEngine(),
+        audit,
+        telemetry: new RecordingTelemetrySink()
+      })
+      const input = phase3RuntimeInput({
+        executionId: `exec_uncertain_reserve_${fault}`,
+        capabilityFingerprint: capabilities.compositionFingerprint(),
+        agent: phase3AgentProfile({ tools: ['synthetic.uncertainty.control'] })
+      })
+      const first = await harness.run(input)
+      const checkpoint = (await store.loadCheckpoint(
+        input.tenantId,
+        input.executionId!
+      ))!
+      expect(toolEntries).toBe(0)
+      expect(measurements).toBe(1)
+      expect(
+        checkpoint.state.toolResultContext!.decisionAdmissions
+      ).toHaveLength(1)
+      if (fault === 'none') {
+        expect(first.stopReason).toBe('COMPLETED')
+        expect(modelEntries).toBe(1)
+        expect(
+          checkpoint.state.toolResultContext!.decisionAdmissions[0]!.status
+        ).toBe('SETTLED')
+        expect(checkpoint.budgetUsage.costUsd).toBe(0.125)
+        return
+      }
+      expect(injected).toBe(true)
+      expect(first.stopReason).not.toBe('COMPLETED')
+      expect(modelEntries).toBe(0)
+      const receipt = checkpoint.state.toolResultContext!.decisionAdmissions[0]!
+      expect(receipt.status).toBe(
+        fault === 'afterCommit' ? 'RESERVED' : 'UNKNOWN'
+      )
+      expect(checkpoint.budgetUsage.modelCalls).toBe(1)
+      expect(checkpoint.budgetUsage.inputTokens).toBe(
+        receipt.reserved.inputTokens
+      )
+      expect(checkpoint.budgetUsage.outputTokens).toBe(512)
+      expect(checkpoint.budgetUsage.costUsd).toBe(0.25)
+      const resumed = await harness.run(input)
+      const recovered = (await store.loadCheckpoint(
+        input.tenantId,
+        input.executionId!
+      ))!
+      expect(resumed.stopReason).toBe('INSUFFICIENT_EVIDENCE')
+      expect(resumed.response).toContain('DECISION_USAGE_UNKNOWN')
+      expect(modelEntries).toBe(0)
+      expect(toolEntries).toBe(0)
+      expect(measurements).toBe(1)
+      expect(
+        recovered.state.toolResultContext!.decisionAdmissions
+      ).toMatchObject([
+        {
+          admissionId: receipt.admissionId,
+          status: 'UNKNOWN',
+          reserved: receipt.reserved
+        }
+      ])
+      for (const field of [
+        'modelCalls',
+        'inputTokens',
+        'outputTokens',
+        'costUsd'
+      ] as const)
+        expect(recovered.budgetUsage[field]).toBe(checkpoint.budgetUsage[field])
+    })
+  }
+})

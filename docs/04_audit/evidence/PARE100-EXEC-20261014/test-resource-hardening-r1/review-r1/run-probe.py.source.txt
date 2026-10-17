@@ -1,0 +1,11 @@
+import subprocess,json,pathlib,sys,time
+p=pathlib.Path(__file__).parent
+name=sys.argv[1]
+env={'PATH':'/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin','HOME':str(p/'home'),'TMPDIR':str(p/'tmp'),'TMP':str(p/'tmp'),'TEMP':str(p/'tmp'),'XDG_CONFIG_HOME':str(p/'home/config'),'XDG_CACHE_HOME':str(p/'cache'),'XDG_DATA_HOME':str(p/'home/data'),'XDG_STATE_HOME':str(p/'home/state'),'LANG':'C.UTF-8','TZ':'UTC','NODE_ENV':'test','CI':'1'}
+args=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',str(p/'probes'/name)]
+(p/'reports'/(name+'.command.json')).write_text(json.dumps({'argv':args,'cwd':str(p),'env':env,'timeoutSeconds':30},indent=2)+'\n')
+r=subprocess.run(args,cwd=p,env=env,capture_output=True,timeout=30)
+(p/'reports'/(name+'.stdout')).write_bytes(r.stdout)
+(p/'reports'/(name+'.stderr')).write_bytes(r.stderr)
+(p/'reports'/(name+'.exit.json')).write_text(json.dumps({'exit':r.returncode})+'\n')
+print('exit',r.returncode);print(r.stdout.decode()[:6000]);print(r.stderr.decode())

@@ -1,0 +1,21 @@
+import pathlib,json,hashlib,sys,datetime
+D=pathlib.Path.cwd();Q=D.parent/'review-packet';phase=sys.argv[1]
+read=lambda n:json.loads((Q/n).read_bytes())
+checks=[]
+def check(kind,p,sha):
+ try: actual=hashlib.sha256(p.read_bytes()).hexdigest();ok=actual==sha;error=None
+ except Exception as e: actual=None;ok=False;error=repr(e)
+ checks.append({'kind':kind,'path':str(p),'expected':sha,'actual':actual,'ok':ok,'error':error})
+m=read('packet-manifest.json');check('manifest-self',Q/'packet-manifest.json','dc387b70b88a043632c7f0f04d435d6093eb4d3c0d03497e8b128c9c7c12dd7d')
+for e in m:check('packet-entry',Q/e['path'],e['sha256'])
+actual=sorted(str(p.relative_to(Q)) for p in Q.rglob('*') if p.is_file());expected=sorted([e['path'] for e in m]+['packet-manifest.json'])
+membership={'expected_count':29,'actual_count':len(actual),'ok':actual==expected,'missing':sorted(set(expected)-set(actual)),'extra':sorted(set(actual)-set(expected))}
+s=read('source-manifest.json')
+for e in s:
+ check('primary-live',pathlib.Path(e['live']),e['sha256']);check('primary-copy',Q/e['copy'],e['sha256'])
+x=read('external-inputs.json')
+for e in x:check('external-input',pathlib.Path(e['path']),e['sha256'])
+c=read('constraints.json')
+for e in [c['frozenD12Origin']]+c['sourceSpecs']:check('protected-hash-only',pathlib.Path(e['path']),e['sha256'])
+r={'phase':phase,'hash_check_count':len(checks),'expected_hash_check_count':111,'membership':membership,'checks':checks,'primary_pairs':len(s),'external_inputs':len(x),'all_ok':len(checks)==111 and membership['ok'] and all(c['ok'] for c in checks),'origin_backlog':'snapshot only; deliberately not read or checked as sentinel','protected_semantic_reads':False,'utc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+(D/(phase+'-integrity.json')).write_text(json.dumps(r,ensure_ascii=False,indent=2));print(json.dumps({k:v for k,v in r.items() if k!='checks'},ensure_ascii=False,indent=2));sys.exit(0 if r['all_ok'] else 1)

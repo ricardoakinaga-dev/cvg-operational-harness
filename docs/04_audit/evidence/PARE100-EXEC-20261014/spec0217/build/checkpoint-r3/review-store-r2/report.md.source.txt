@@ -1,0 +1,111 @@
+# INTERIM corrected-store / D10 review R2 — REVISE
+
+Three concrete boundary gaps remain: **F4 final projection/receipt join, F3 seal provenance, and new F7 paired-renewal expiry/fault authority**. This is a finite correction review of the 18 pinned files, not final SPEC0217 acceptance. The six R1 findings were independently rechecked; their old verdict is not acceptance evidence.
+
+## Scope, authority and ownership
+
+- Judged artifact: `sources/**` selected by `manifest.json` in this R2 packet. All **18/18** hashes matched before probes, after probes and at final verification. Manifest SHA-256: `2546c3dc342af03530bfb9fa7265b475c0b39283b8703f4aacfe5a7f0dbca9eb`. Mutable W is not the judged artifact; concurrent Lead changes are outside this verdict.
+- Authoritative SPEC in W: `docs/02_spec/0217_pare100_durable_kernel_composition.md`, SHA-256 `1e5df50255e1634c06e09b46e2fc40da3a51a6e15be10ae4856e092bf910a905`. Canonical acceptance plan: `docs/04_audit/evidence/PARE100-EXEC-20261014/spec0217/acceptance-plan.md`, SHA-256 `eeea91052e435f81060aa40acf94ce9c8055180a628729ee33c88e176e9b38f5`. Both hashes verified before and at exit; the historical DESIGN/NOT_AUTHORIZED wording does not override the existing user BUILD authorization recorded in current state.
+- Read applicable root/W AGENTS, docs07, current99/20/30 and coordination instructions. Applied engineering-framework and gauntlet-loop in audit-only mode. Private claim: [probes/claim.json](probes/claim.json). The user's explicit output boundary overrides routine shared claim/ledger updates. Only this packet's `report.md`, `result.json`, `probes/**` were written. No application implementation, descendants, Root/W writes, index/lock/manifest edits, PG access/writes, services, container operations, install, network, certification or release actions.
+- Reviewer is separate from the Builder; same inherited model and forkfalse as supplied by the user (I1 role/context assertion, not independent host identity attestation). The tool agent UUID exists in Lead orchestration according to the user; its value was not exposed here and is not fabricated. Agent OS PID is unavailable. Probe process identity is not an agent PID. No bundled-v3 PID validator was run or passed.
+- Frozen bar: the approved SPEC and canonical plan, specifically R1 correction invariants/K04–K10 and D10. Profile remains default off, one attested pure tool, no RAG/production. No full36 parity, APPROVE_FULL, P100-010 closure, or K01–K12/N1 final PASS is inferred.
+
+## Remaining findings
+
+Paths/lines below refer **only to this packet's sources/**. S = `packages/persistence/src/controlled-published-kernel-store.ts`, pin `1e317b970ca61363e5c5e38c1773956a6e696b09dc48eff73362d1d88ed7fb89`. Full pins are listed below. `TESTED(pure)` exercises the actual frozen bodies against explicit SQL/dependency doubles; it is not a PostgreSQL or public API acceptance result.
+
+### F4 — P1 — Exact final projection is still not joined to the sealed state
+
+**S:1017,1037–1049,1067–1115,1149–1166. K04/K09/K10. STATIC + TESTED(pure), high confidence.**
+
+The new finalIssued, identity, anchor and mirror checks reject several original invalid cases. However, callback/mirror/journal verification is driven by `t.tools.filter(status !== 'not_run')`, without first requiring the trace's complete tools projection to match the sealed attempts/names. An omitted or `not_run` tool bypasses that loop. The separate journal read at1149 only chooses a failure classification; it does not veto a requested success.
+
+**Discriminating reproduction:** build a synthetic hash-consistent S2 with one successful attempt and the required ACK refs, use the actual frozen snapshot validator and actual checkpoint-integrity dependency, then pass `trace.tools=[]`. Make the audit mirror unrelated and the journal double return UNCERTAIN. `F4-omitted-tools-bypass-callback-join` still reaches the **SUCCEEDED transition request**, with **zero mirror SELECTs**. The same fixture with the tool declared succeeds normally; declared failed callback, foreign mirror, missing mandatory audit, absent finalIssued and foreign snapshot controls reject. The test does not claim a genuine PG state or completed public exploit.
+
+A second omission permits output substitution: only `r.response === t.response.text` is required. `F4-response-diverges-from-sealed-output` changes both strings from the sealed `Synthetic approved reply` to `Different synthetic reply`; success is still requested while the final snapshot retains the original output/digest. Thus the closed trace/result can disagree with the approved output whose digest was certified.
+
+**Impact:** closed success can certify a trace/result that hides a persisted tool attempt or changes the sealed response, and omission defeats the callback/mirror/journal defense. The normal facade currently constructs the expected projection; this is a store-boundary integrity defect, not evidence that arbitrary HTTP callers can supply it.
+
+**Remediation/closure:** derive and compare the exact trace tools and response/mode from the validated anchor/final snapshot before writing `execution.closed`. Join mandatory callbacks and journal facts by the sealed attempts/operation keys, regardless of what the incoming trace lists. Add real-PG omission/not_run, response substitution and contradictory-journal/mirror negatives, requiring parent/binding/closure evidence unchanged on rejection. Do not repair this by weakening the existing checks.
+
+### F3 — P1 — A matching phase name still does not prove plan-seal provenance
+
+**S:884–895,938–957; platform/controlled-kernel-continuation.ts:654–843. K04/K10. STATIC + TESTED(pure), high confidence.**
+
+Foreign checkpoint identity, wrong phase name and invalid checkpoint digest now reject. But `saveResumePoint` checks only `open_phase_type === 'plan.seal'` for S1 and the ACK boolean. Neither it nor `validateSealPayload` compares `open_phase_input_digest` with the snapshot's `{outputDigest,fingerprint}`, or joins the plan intent/result/ACK to those values. The generic validator validates the snapshot/checkpoint against digests constructed from that same candidate; it cannot supply the missing persisted provenance comparison.
+
+**Discriminating reproduction:** `seal-positive-exact-plan-phase` seals S1 for the expected digest. With the same fixture and checkpoint, ACK `plan.seal` for a digest advertising another output and fingerprint, then submit the original internally consistent snapshot. `F3-seal-does-not-bind-plan-phase-input` still invokes the checkpoint writer once and returns a new seal. The actual frozen canonicalizer, snapshot validator and checkpoint-integrity dependency execute; parent/step SQL rows and checkpoint persistence are doubles. The checkpoint fixture is simplified and was not emitted by a running kernel. This proves the predicate omission, not a PG tamper or public-path exploit. The synthetic evidence chain also lacks model predecessor facts; no separate public exploit is inferred from that fixture construction.
+
+**Impact:** the seal certifies an acknowledged phase for different inputs as the plan used by S1, so an input/projection error is made durably resumable rather than rejected before writes. Current facade preparation of the right digest does not make the store's certification exact.
+
+**Remediation/closure:** bind the exact persisted plan intent and ACK/result to the supplied snapshot output/fingerprint/plan and its real checkpoint/step, on the same client before checkpoint/state/seal writes. Preserve the good S1/S2 path and foreign-checkpoint rejection. A real-PG negative with an actual kernel-produced checkpoint must show unchanged checkpoint/binding/seal when only the phase input differs.
+
+### F7 — P2 — Paired renewal ignores kernel expiry/fault and does not clamp inner TTL
+
+**S:544–575; controlled-published-fencing.ts:218–224,296–328**, pin `270ecfbd7351638f4352665be8bc11cfd2521e17ca7fe63388915b8b7798f2f1`. **SPEC2.3.2, K05/K06/N1-R. STATIC + TESTED(pure), high confidence.**
+
+`renewPaired` calls the common guard with `settlement:true`. That deliberately skips dispatch_closed/FAULTED/fault and kernel-expiresAt vetoes. It then updates both inner execution and queue to `DBnow + 10000`, without `min(...,expiresAt)`. This differs from the explicit approved renewal contract: expired kernel or closed/faulted dispatch must not renew; inner TTL is capped at the fixed deadline.
+
+`F7-paired-renewal-expiry-and-fault` observes the two inner lease UPDATE requests in all four cases: live kernel with1s remaining (updated to+10s), already expired kernel, FAULTED binding and dispatch_closed binding. The actual store/common-guard bodies run; renewal transaction/outer renewal are doubles, so no actual COMMIT or pair atomicity is asserted.
+
+**Impact/containment:** persisted lease metadata can outlive the kernel authorization and a caller reaching this seam can renew after a durable veto. This is not evidence of body entry after expiry: active admission, persisted permit minimum and local synchronous guard still deny expired dispatch in the tested profile. Healthy lifecycle stop/join also limits reachability, but is not the required persistence guard.
+
+**Remediation/closure:** use active renewal authority (while still allowing initial pre-prepared state), reject expired/faulted/closed dispatch and clamp execution/inner queue TTL to expiresAt; keep outer renewal and rollback atomic. Prove the cases with real PG and the fixed original deadline, without administrative expiry edits for the native timing acceptance.
+
+## R1 correction recheck and D10 observations
+
+| Boundary | Independent R2 observation | Scope/remaining limit |
+| --- | --- | --- |
+| F1 abort after0002 lock | Host now carries signal; guard checks it after the simulated grant wait and immediately before mutation. Issued, audit0, evidence0. S:586,1265–1307,1460–1478; fencing:176,296–317; approval-repository:325–385. | Corrected for the tested path. Real PG abort/commit race NOT_RUN. |
+| F2 exact input/actor/phase | Positive consumes once with one root client/transaction double. Nine altered input/actor/step/operation/execution/request/fingerprint/phase-digest cases reject without consumption. S:1266–1307. | Original reproductions rejected; schema/tenant ID validators are doubles. No real transaction rollback claim. |
+| F3 foreign checkpoint/nonplan | Foreign checkpoint, pause.read phase and invalid checkpoint integrity reject before writer. S:884–895. | Original concrete cases corrected; remaining provenance gap above. |
+| F4 final proof/mirror | finalIssued/identity, failed callback and foreign mirror controls reject; callback correlation now compared atS:1389. | Partial correction; exact final projection gaps above. |
+| F5 preclaim CANCELLED | Attempt0 path returns CANCELLED disposition, checks exact cancellation event, closes with originating_attempt0/eventSequence7; foreign event8 rejects, no parent transition or inner lease acquired. S:337–351,1147; fencing:331–359; SQL:191–198. | Corrected in actual store/guard control flow with outer-claim assertion doubled. No actual PG trigger, queued cancellation race, facade/factory counters or outer ACK proof. |
+| F6 terminal headroom | Normal byte ceiling2MiB, intermediate terminal ceiling3.5MiB and protected fault/close ceiling4MiB; sequence248/254/256. At normal byte saturation, next normal append rejects and fault+close fit. S:80–86,733,1492–1526. | Corrected arithmetic and source structure; full persisted saturation/preflight/runtime liveness NOT_RUN. |
+| D10 persisted permit | `dispatch.permit` payload equals returned permit; leaseUntil is minimum of live inner/queue/outer leases and kernel expiry. Exact phase/input/fingerprint are checked. S:1226–1256; fencing:326–328. | Actual store plus guard on SQL doubles. Native race/COMMIT/ACK gates remain Lead-owned. |
+| D10 synchronous tool guard | Actual adapter admit accepts live permit and denies expired lease, expired kernel, wrong phase, abort and reused permit. Pinned adapter passes a synchronous admit callback and deletes the local permit before returning entry. adapters:193–240,504–540. The executor dependency is outside this packet. | Descriptor/lifecycle doubles; handler and public executor dependency not executed. No new v3/public runtime acceptance. |
+
+The same-client structure is present: bound consume uses transaction-free0002 helper; audit/receipt/ACK/state share the root client. Seal writes checkpoint+evidence+binding on that client. The migration contains FORCE RLS, append-only/monotonic guards and cancellation-only mode; generic writers/claims retain bound refusal/anti-joins. Tenant transaction cleanup, attemptRow fences, worker pool4/concurrency1, default-off/production refusal and lifecycle renewal join were inspected in the pinned files. These static observations do not prove actual atomic commit/rollback, serving-role grants, mixed-version rollout, native renewal, shutdown or crash recovery. In particular they do not cancel F3/F4/F7.
+
+## Private sanitizer equivalence/security
+
+The helper pin is `f5416da268c7a6afd4ee6fc05f07470bd4271c6c3ebedb058f2333c55852e37d` (`controlled-published-evidence.ts:12–36`). The original canonical JSON cap is checked before masking. Only whole long ASCII word **values** are replaced. For this class, delimiters required by email/credential/address/name/birth-date/secret patterns are absent; word boundaries prevent CPF/CNPJ substring matches inside the longer word. Phone matching can change an entire all-digit word, which the helper restores as `[redacted-phone]`. Restoration walks only the sanitizer's surviving output, so dropped sensitive keys remain absent. The fresh marker prefix is chosen outside the original canonical input.
+
+Seven equivalence cases compare the pinned helper with a private snapshot of the **unchanged actual shared sanitizer**: threshold4096/4097, alpha/underscore/mixed words, digits, email-delimited and Bearer forms; nested sensitive keys remain absent. Private-helper-only200000-character alpha and digit cases preserve/redact respectively and retain sensitive-key removal. Oversized original input rejects before masking. No helper equivalence/security fault was observed for that exact class.
+
+This does **not** prove a full CPU bound for arbitrary strings, multiple values, punctuation, Unicode or the shared sanitizer; nonmatching strings still take the original path. The earlier native200k/R16 lease-expired failure is preserved and is not relabeled PASS. The200k private-helper-only probe is not a rerun or acceptance of the native sanitizer gate. Callback mirrors atS:1396 and close's expected mirror at1095 still use the unchanged sanitizer directly; no optimization or general performance claim is made for them.
+
+## Evidence, limitations and stop
+
+Ran `node probes/review.cjs` (absolute path in this R2 packet), final **exit0**, Node24.20.0 / TypeScript6.0.3 pre-existing transpiler, **17 observations, zero harness errors**. These include successful controls, denied known-bad inputs and reproductions of the remaining defects; they are not17 application acceptance PASSes. No installation or application runner/build cache was used. Raw details: [probes/results.json](probes/results.json); repeatable source: [probes/review.cjs](probes/review.cjs); identity check: [probes/final-hash-check.json](probes/final-hash-check.json).
+
+The first private harness version omitted DomainIdSchema and a nullable runtime_result fixture field; those six harness errors are retained in `probes/results-initial-harness-errors.json`. A later200k fixture incorrectly doubled the input past the canonical cap; its expected bounds rejection is retained in `probes/results-oversized-fixture-error.json`. Fixes were confined to private doubles/fixtures. The failed-callback control was also tightened to keep the synthetic hash chain and snapshot refs consistent, so its final rejection tests semantics rather than stale hashes. No application defect is inferred from harness errors.
+
+Dependency context copies (`shared.ts`, `authority.ts`, `checkpoint.ts`) have origin hashes in the private claim and are not added to the18 judged source pins. Actual canonicalization, sanitizer and checkpoint-integrity functions are used; tenant/ID schema, SQL rows/locks, transaction runner, operational transition and checkpoint persistence are explicit doubles. Test fixtures are synthetic/minimal and not runtime-generated checkpoints. Cross-client visibility, SQL/RLS/trigger enforcement, COMMIT/ROLLBACK, actual body/tool executor, real worker/API, native timing/process/SIGKILL, completion/outer ACK, cleanup races, full gates and Node22 qualification were **NOT_RUN**. A SUCCEEDED transition request in these probes is not a persisted PostgreSQL SUCCEEDED fact.
+
+LeadPG R17 16PASS, sanitizer4 and API/workerR8 2PASS supplied in the request are Builder evidence only; subsequent mutable Lead K-case progress does not qualify this frozen packet. No old critique judgment, current log summary or mutable-source improvement was reused as acceptance. Frozen-only sentinel checks do not assert that the concurrently changing whole W stayed unchanged.
+
+**Verdict: REVISE, interim corrected-store/D10 scope only.** Original F1/F2/F5/F6 mechanisms improved and the tested original F3/F4 cases reject, but F3/F4 remain partially corrected and F7 remains open. Lead should repair these boundaries, freeze new exact pins and run real-PG negatives plus the canonical K01–K12/N1 positive/crash/race set. This review stops without implementation or a production/full-parity decision.
+
+## Frozen source pins (SHA-256)
+
+| Path relative to sources/ | SHA-256 |
+| --- | --- |
+| packages/persistence/src/controlled-published-kernel-store.ts | 1e317b970ca61363e5c5e38c1773956a6e696b09dc48eff73362d1d88ed7fb89 |
+| packages/persistence/src/controlled-published-fencing.ts | 270ecfbd7351638f4352665be8bc11cfd2521e17ca7fe63388915b8b7798f2f1 |
+| packages/persistence/src/controlled-published-evidence.ts | f5416da268c7a6afd4ee6fc05f07470bd4271c6c3ebedb058f2333c55852e37d |
+| packages/persistence/src/operational-execution-postgres.ts | d5fbf43a1abdc9c5419dcf286b4c89a1c1f93d52bedb23e86da7297080a9b03c |
+| packages/persistence/src/operational-step-postgres.ts | ae6d24bc826a878c41c525f86c8c0290c0d9163d4778ddb54dccdc2f0afcbb0a |
+| packages/persistence/src/platform-approval-repository.ts | d32fb6805a88609e9821e746d0435690edadfdcfcce4f87e0b8a26fb0aeba9ec |
+| packages/persistence/src/tenant-scoped-postgres.ts | 49ee853d26d8f77ba5177ee83d73f7ed4ec76484a2eb672b744d680952a836e5 |
+| packages/persistence/src/postgres-outbox.ts | 53f759267b75cae9ae830840c1a7bf26f273224b4faac5cb483ee2bfc59e0d37 |
+| packages/persistence/migrations/0029_controlled_published_kernel.sql | e6d275946b14be42a2c997a533e64ce6176d27131a0642c897d4035a73e2197e |
+| packages/platform/src/controlled-kernel-continuation.ts | e2d5357e3a65facd0a8c18c3b011e418959e80fe241afd169c7e9a3288753294 |
+| packages/platform/src/controlled-kernel-adapters.ts | 0a72ccbbf5d91e93fee0efeb2381aa707c13dad4e20738a2a8699fe875b8d8f4 |
+| packages/platform/src/controlled-kernel-execution.ts | e80d4bd52513c8a3fd5eb8ad6205afb48b26cdd8b05e067de7ebd53da92a8417 |
+| packages/platform/src/controlled-execution-plan.ts | 245c9014fd3b74456fe786cb8c323e4a9ead3e88a2f62982456c50690172f102 |
+| packages/platform/src/test-lab.ts | eeaa38eff2b5a609ced0c011b1b5843fcfe33bb2a94aeae010f83b657b9cb4e6 |
+| apps/worker/src/published-kernel-composition.ts | 0d4d6ef1134a9301760f12179b10534fe177b30e251e76c2a09b78088ae4507b |
+| apps/worker/src/claimed-execution-lifecycle.ts | 8a5ef4bf9e702b89d6b6e6608d34e86b2d0e688a0309e3a84c7ee4526df06019 |
+| apps/worker/src/postgres-controlled.ts | 3a14219f0abec9ed39045e665d24bb7b7612ff52c3a5db244cb474a13d5ab1e3 |
+| apps/worker/src/postgres-role-preflight.ts | 06b4c7e98453ce9af08f0e0ac45636fd0b7b4bd290b664f6d8d00e21f18c87cf |

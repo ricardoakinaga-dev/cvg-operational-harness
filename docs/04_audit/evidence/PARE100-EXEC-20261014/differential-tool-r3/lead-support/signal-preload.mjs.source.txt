@@ -1,0 +1,13 @@
+import { LlmRuntime } from '/home/ricardo/deepseek-harness-session-fixes/packages/llm/llm/lib/index.js'
+const original = LlmRuntime.prototype.registerAdapter
+LlmRuntime.prototype.registerAdapter = function (providers, adapter) {
+  const stream = adapter.stream.bind(adapter)
+  adapter.stream = async function* (options) {
+    const mode=process.env.SIGNAL_PROBE_MODE; let reads=0; let signal=options.signal
+    if(mode==='shadow-data') {const c=new AbortController();c.abort('actual-abort');signal=c.signal;Object.defineProperties(signal,{aborted:{value:false},reason:{value:undefined}})}
+    if(mode==='shadow-getter') {signal=new AbortController().signal;Object.defineProperty(signal,'reason',{get(){reads++;return undefined}})}
+    if(mode==='forged-brand') {signal=Object.create(AbortSignal.prototype);Object.defineProperties(signal,{aborted:{value:false},reason:{value:undefined}})}
+    try {yield* stream({...options,signal})} finally {process.stderr.write(JSON.stringify({kind:'SIGNAL_NEGATIVE',mode,getterReads:reads})+'\n')}
+  }
+  return original.call(this, providers, adapter)
+}

@@ -1,0 +1,16 @@
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto')
+const ts=require('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/typescript')
+const packet='/tmp/cvg-pare100-exec-20261014-6az3hlay/test-resource-hardening-r1/review-packet-r3'
+const w='/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree'
+const manifest=JSON.parse(fs.readFileSync(packet+'/manifest.json'))
+const sha=x=>crypto.createHash('sha256').update(x).digest('hex')
+function tokens(s){const scan=ts.createScanner(ts.ScriptTarget.Latest,true,ts.LanguageVariant.Standard,s);const list=[];let kind;while((kind=scan.scan())!==ts.SyntaxKind.EndOfFileToken)list.push([kind,scan.getTokenText()]);return JSON.stringify(list)}
+function analyze(text){const source=ts.createSourceFile('input.ts',text,ts.ScriptTarget.Latest,true);const expects=[],selection=[],literals=[],functions={};function visit(n){if(ts.isCallExpression(n)&&ts.isIdentifier(n.expression)&&n.expression.text==='expect'){let root=n;while(root.parent&&(ts.isPropertyAccessExpression(root.parent)||ts.isCallExpression(root.parent)||ts.isElementAccessExpression(root.parent))&&root.parent.expression===root)root=root.parent;expects.push(tokens(root.getText(source)))}
+if(ts.isCallExpression(n)&&/^(it|test|describe)(\.|\(|$)/.test(n.expression.getText(source))){selection.push({expression:tokens(n.expression.getText(source)),args:n.arguments.filter(a=>!ts.isArrowFunction(a)&&!ts.isFunctionExpression(a)).map(a=>tokens(a.getText(source)))})}
+if(ts.isStringLiteral(n)||ts.isNoSubstitutionTemplateLiteral(n))literals.push(n.text)
+if(ts.isFunctionDeclaration(n)&&n.name)functions[n.name.text]=sha(tokens(n.getText(source)))
+ts.forEachChild(n,visit)}visit(source);return {expects,selection,literals,functions}}
+const results=[]
+for(const f of manifest.files.filter(x=>x.path.startsWith('before/'))){const rel=f.path.slice(7);const before=analyze(fs.readFileSync(packet+'/'+f.path,'utf8')),after=analyze(fs.readFileSync(w+'/'+rel,'utf8'));const result={path:rel,expectBefore:before.expects.length,expectAfter:after.expects.length,exactOrderedExpectationTokens:JSON.stringify(before.expects)===JSON.stringify(after.expects),selectionBefore:before.selection.length,selectionAfter:after.selection.length,exactOrderedSelectionTokens:JSON.stringify(before.selection)===JSON.stringify(after.selection),unchangedFunctions:Object.keys(before.functions).filter(n=>before.functions[n]===after.functions[n]),changedFunctions:Object.keys(before.functions).filter(n=>before.functions[n]!==after.functions[n])};results.push(result)}
+if(results.some(r=>!r.exactOrderedExpectationTokens||!r.exactOrderedSelectionTokens))process.exitCode=1
+console.log(JSON.stringify({method:'TypeScript AST: ordered full outer expect chains and test/describe call selector plus all noncallback arguments tokenized, preserving literal spelling.',expectTotalBefore:results.reduce((n,r)=>n+r.expectBefore,0),expectTotalAfter:results.reduce((n,r)=>n+r.expectAfter,0),results},null,2))

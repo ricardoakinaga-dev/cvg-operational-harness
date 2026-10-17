@@ -1,0 +1,173 @@
+1: # AGENTS.md — Constituicao Operacional CVG
+2: 
+3: Para a tradução e desambiguação canônica de `approval`, `handoff`, `gate`,
+4: `candidate`, `tenant`, `release` e estados, consulte o
+5: [glossário operacional](../architecture/GLOSSARY.md). Esta constituição
+6: continua sendo a fonte de verdade dos estados CVG e do processo operacional.
+7: 
+8: ## Proposito
+9: 
+10: Este repositorio segue o padrao CVG de engenharia orientada por documentacao, gates e execucao controlada para manter o Operational Harness como infraestrutura reutilizavel. Pela [ADR-010](../architecture/adrs/ADR-010-harness-product-isolation.md), produtos como o Assistente de Plantao sao consumidores isolados, com dominio, processo, dados, testes, deploy e backlog proprios. O nucleo nao importa os produtos; suas barras de piloto/producao nao certificam o harness inteiro. A Esmeralda V2 permanece origem historica, nao a identidade atual deste repositorio.
+11: 
+12: ## Working Agreements
+13: 
+14: - Ler esta constituicao antes de agir.
+15: - Respeitar a estrutura do repositorio.
+16: - Seguir o pipeline CVG.
+17: - Nao improvisar solucoes fora do processo.
+18: - Manter documentacao viva e consistente.
+19: - Persistir estado, log e backlog.
+20: 
+21: ## Pipeline oficial
+22: 
+23: ```txt
+24: DISCOVERY -> PRD -> SPEC -> BUILD -> AUDIT
+25: ```
+26: 
+27: - Discovery define o problema.
+28: - PRD define o produto.
+29: - SPEC define a engenharia.
+30: - BUILD executa.
+31: - AUDIT valida a realidade.
+32: 
+33: ## Regras de transicao
+34: 
+35: - Nao iniciar PRD sem `docs/00_discovery/0090_discovery_validation.md` aprovado.
+36: - Nao iniciar SPEC sem `docs/01_prd/0090_prd_validation.md` aprovado.
+37: - Nao iniciar BUILD real sem `docs/02_spec/0190_spec_validation.md` aprovado e revisao humana.
+38: - Nao iniciar AUDIT real antes de sistema funcional.
+39: - Usar runtime-controller para continuidade operacional.
+40: 
+41: ## Uso das skills
+42: 
+43: - `discovery-engine`: usar para ideia, dor, gargalo ou oportunidade mal definida. Nao usar se discovery ou PRD ja estiver aprovado.
+44: - `prd-engine`: usar quando discovery estiver aprovado e for necessario transformar problema em produto. Nao usar se discovery estiver incompleto.
+45: - `spec-engine`: usar quando PRD estiver aprovado e for necessario transformar produto em engenharia. Nao usar se PRD estiver incompleto.
+46: - `build-engine`: usar quando SPEC estiver aprovada e for necessario executar construcao faseada. Nao usar sem SPEC validada.
+47: - `audit-engine`: usar quando houver sistema funcional em dev, staging ou producao. Nao usar antes de runtime observavel.
+48: - `runtime-controller`: usar apos qualquer etapa para atualizar estado, log, backlog e proximo passo.
+49: 
+50: ## Estado e continuidade
+51: 
+52: O Codex deve sempre ler e atualizar:
+53: 
+54: - `docs/99_runtime_state.md`
+55: - `docs/20_master_execution_log.md`
+56: 
+57: Quando aplicavel, atualizar:
+58: 
+59: - `docs/30_backlog_master.md`
+60: 
+61: Antes de encerrar qualquer rodada:
+62: 
+63: - atualizar estado;
+64: - registrar `last_completed_action`;
+65: - registrar `next_action`;
+66: - definir `status`;
+67: - atualizar log;
+68: - atualizar backlog quando houver impacto.
+69: 
+70: ## Estados oficiais
+71: 
+72: - `IN_PROGRESS`: execucao ativa.
+73: - `READY_FOR_NEXT_STEP`: etapa concluida e proxima acao definida.
+74: - `BLOCKED`: execucao impedida por gate, falta de dado ou erro.
+75: - `WAITING_HUMAN_APPROVAL`: decisao humana necessaria.
+76: - `COMPLETED`: ciclo finalizado corretamente.
+77: 
+78: ## Regras de bloqueio
+79: 
+80: Marcar `BLOCKED` quando houver falta de informacao critica, conflito entre documentos, dependencia ausente, erro nao recuperavel ou gate nao aprovado.
+81: 
+82: Ao bloquear, registrar causa raiz, impacto, acao necessaria e proxima dependencia.
+83: 
+84: ## Aprovacao humana
+85: 
+86: Marcar `WAITING_HUMAN_APPROVAL` quando houver decisao de negocio, alteracao de escopo, conflito entre PRD e SPEC, risco critico ou acao irreversivel.
+87: 
+88: O Codex nao pode assumir silenciosamente decisoes de negocio.
+89: 
+90: ## Governança proporcional (D-12, 26/09/2026)
+91: 
+92: Decisão do usuário registrada no
+93: [pacote 0357](../03_build/0357_production_decision_packet_2026-09-26.md). O
+94: rigor do gate acompanha o risco da mudança. As regras de segurança desta
+95: constituição (sem dado real, sem produção irrestrita, sem ação clínica,
+96: financeira ou de agenda automática, approval ou handoff para ação sensível)
+97: não mudam.
+98: 
+99: | Trilha | Quando se aplica                                                                                         | O que exige                                                                                                                                                                            |
+100: | ------ | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+101: | T1     | Documentação, ledgers, planos, inventários                                                               | Links e formatação verdes; atualizar estado, log e backlog                                                                                                                             |
+102: | T2     | Refatoração, remoção ou isolamento de código sem efeito externo e sem mudança de contrato público        | Task registrada, SPEC curta (recon, regras, critério de pronto), `typecheck`, `lint`, `npm test`, `test:postgres` e E2E verdes em Node 22; registro do resultado na SPEC e nos ledgers |
+103: | T3     | Mudança de contrato público, schema ou migration, segurança, identidade, policy ou approval              | T2 + revisão explícita da SPEC pelo usuário antes do BUILD                                                                                                                             |
+104: | T4     | Capacidade sensível (provider, canal, conhecimento, efeito externo real, dado real) ou release candidate | Gate hash-bound: pacote de decisão com SHA-256, candidato congelado, certificação completa e decisão humana registrada                                                                 |
+105: 
+106: Regras de baseline:
+107: 
+108: 1. A baseline de um gate T4 inclui só os arquivos que são input daquele gate.
+109:    Mudança em documento que não é input não invalida o gate.
+110: 2. A certificação (`npm run certify`) é reemitida por release candidate e ao
+111:    fim de cada rodada com código, não a cada edição documental.
+112: 3. Uma trilha só pode ser rebaixada por decisão humana registrada; em dúvida,
+113:    usar a trilha mais alta.
+114: 
+115: ## Regras de Build
+116: 
+117: BUILD deve sempre comecar por:
+118: 
+119: - `docs/03_build/0300_build_engineer_master.md`
+120: - `docs/03_build/0301_roadmap.md`
+121: - `docs/03_build/0302_backlog_master.md`
+122: 
+123: Seguir:
+124: 
+125: ```txt
+126: PHASE -> SPRINT -> TASK
+127: ```
+128: 
+129: Cada task deve conter o que, onde, como, dependencia e criterio de pronto.
+130: 
+131: Antes de encerrar sprint com codigo, executar os gates disponiveis:
+132: 
+133: - `npm test`
+134: - typecheck
+135: - lint
+136: - coverage quando configurado
+137: 
+138: Se qualquer gate estiver ausente numa sprint com codigo funcional, registrar debito P0 ou bloquear encerramento.
+139: 
+140: ## Regras de Audit
+141: 
+142: AUDIT deve produzir analise de aderencia ao PRD, aderencia a SPEC, runtime analysis, logs audit, metrics audit, integrations audit, data integrity audit, gap analysis, remediation plan e audit report.
+143: 
+144: AUDIT nao pode marcar sistema como enterprise se nao houver evidencia executavel. Documento bom nao substitui runtime, teste, log, metrica, trilha de auditoria e experiencia operacional real.
+145: 
+146: ## Regras de qualidade
+147: 
+148: - Preferir mudancas pequenas e coerentes.
+149: - Preservar arquitetura.
+150: - Evitar acoplamento.
+151: - Manter rastreabilidade.
+152: - Nao criar arquivos desnecessarios.
+153: - Nao quebrar convencoes do repositorio.
+154: - Documentar mudancas relevantes em `docs/`.
+155: 
+156: ## Definicao de pronto
+157: 
+158: Uma tarefa esta pronta quando atende a etapa correta do pipeline, respeita gates, atualiza estado/log, entrega artefatos esperados, registra ambiguidade e define proximo passo.
+159: 
+160: ## Anti-patterns
+161: 
+162: - Comecar codigo sem Discovery, PRD e SPEC quando aplicavel.
+163: - Inventar produto durante SPEC.
+164: - Fazer build sem roadmap e backlog.
+165: - Encerrar sem atualizar estado.
+166: - Ignorar bloqueios.
+167: - Ignorar backlog.
+168: - Ignorar skills existentes.
+169: - Resumir sem persistir.
+170: 
+171: ## Conclusao operacional
+172: 
+173: Este repositorio nao usa o Codex como gerador solto de codigo. Este repositorio usa o Codex como operador de um sistema de engenharia controlado.

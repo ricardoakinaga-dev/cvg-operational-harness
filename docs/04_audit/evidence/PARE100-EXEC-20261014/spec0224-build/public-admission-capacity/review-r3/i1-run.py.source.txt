@@ -1,0 +1,15 @@
+import os, subprocess, json, pathlib, time, sys
+p=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-admission-capacity/review-packet-r4');o=p.parent/'review-r3';a=p/'artifact'
+node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+label=sys.argv[1] if len(sys.argv)>1 else 'reproduction'
+flags=['--permission','--allow-child-process','--allow-worker','--allow-addons','--allow-fs-read='+str(a),'--allow-fs-read='+str(p/'node_modules'),'--allow-fs-read='+str(p/'package.json'),'--allow-fs-read='+str(p/'manifest.json'),'--allow-fs-read='+str(o),'--allow-fs-read='+'/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules','--allow-fs-write='+str(o),'--require='+str(o/'i1-guard.cjs')]
+env={'PATH':str(pathlib.Path(node).parent)+':/usr/bin:/bin','LANG':'C.UTF-8','TZ':'UTC','TMPDIR':str(o/'i1-tmp'),'NODE_OPTIONS':' '.join(flags),'I1_BOUNDARY':str(o/'i1-boundary.json'),'I1_RUN':label,'CVG_COMPLETE_ADMISSION_CAPACITY_EVIDENCE':str(o/('i1-observations-'+label+'.json')),'NO_COLOR':'1'}
+(o/'i1-tmp').mkdir(exist_ok=True)
+cmd=[node,str(a/'node_modules/vitest/vitest.mjs'),'run','packages/harness/src/__tests__/complete-admission-capacity-public.test.ts','--no-file-parallelism','--maxWorkers=1','--config',str(o/'i1-vitest.config.mjs')]
+start=time.time()
+with (o/('i1-'+label+'.stdout.log')).open('w') as stdout,(o/('i1-'+label+'.stderr.log')).open('w') as stderr:
+ r=subprocess.run(cmd,cwd=a,env=env,stdout=stdout,stderr=stderr)
+result={'command':cmd,'cwd':str(a),'environment':env,'exit':r.returncode,'seconds':time.time()-start,'stdout':'i1-'+label+'.stdout.log','stderr':'i1-'+label+'.stderr.log'}
+(o/('i1-command-'+label+'.json')).write_text(json.dumps(result,indent=2)+'\n')
+print(json.dumps(result,indent=2))
+print((o/result['stdout']).read_text());print((o/result['stderr']).read_text()[-9000:])

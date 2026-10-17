@@ -1,0 +1,12 @@
+import fs from 'node:fs'
+import assert from 'node:assert/strict'
+import {measureModelFailureContracts as old} from './baseline/compare-model-failure.mjs'
+import {measureModelFailureContracts as current} from './project/tests/differential/compare-model-failure.mjs'
+const d=JSON.parse(fs.readFileSync(new URL('./own-results/real-explicit-v4/model-failure/error-ascii.native.json',import.meta.url)))
+const mutations=[
+ ['missing header',r=>delete r.native.events[6].data],['missing context',r=>delete r.native.events[7].data],['missing model request',(_r,c)=>delete c.native.events[2].payload.request],
+ ['persisted user changed',r=>r.native.messages[1].content[0].text+='tampered'],['persisted system changed',r=>r.native.messages[0].content[0].text+='tampered'],['extra tool message',r=>r.native.messages.push({role:'tool',content:'unexpected'})],['extra turn effects',(_r,c)=>c.native.turn.effects=[{unexpected:true}]],
+ ['zero hash',r=>r.reference.artifacts[0].sha256='0'.repeat(64)],['nonexistent export',r=>r.reference.artifacts[0].file=r.reference.root+'/DOES-NOT-EXIST.js'],['directory export',r=>r.reference.artifacts[0].file=r.reference.root],['swapped export',r=>Object.assign(r.reference.artifacts[0],{file:r.reference.artifacts[1].file,sha256:r.reference.artifacts[1].sha256})]
+];let rows=[]
+for(const [name,mutate]of mutations){const r=structuredClone(d.reference),c=structuredClone(d.cvg);mutate(r,c);let red=null;try{assert.throws(()=>old(r,c,d.fixture),/invalid native failure observation/)}catch(e){red=e.message};assert.throws(()=>current(r,c,d.fixture),/invalid native failure observation/);rows.push({name,beforeAssertionFailed:red!==null,assertion:red,currentRejects:true})}
+fs.writeFileSync(new URL('./own-results/red-controls.json',import.meta.url),JSON.stringify({purpose:'Controlled RED of earlier comparator against unchanged rejection requirements; not a real-motor failure',rows},null,2));console.error(JSON.stringify({expectedControlledRED:true,failedBaselineAssertions:rows.filter(x=>x.beforeAssertionFailed).length,currentRejects:rows.length}));if(rows.some(x=>x.beforeAssertionFailed))process.exitCode=1

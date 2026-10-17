@@ -1,0 +1,38 @@
+import pathlib,json,hashlib,subprocess,os,sys
+R=pathlib.Path(__file__).parent
+P=R.parent/'review-packet-r3'
+W=R.parent.parent/'worktree'
+def record(name,meta,out,err=b'',code=0):
+ (R/(name+'.stdout')).write_bytes(out);(R/(name+'.stderr')).write_bytes(err)
+ with (R/'commands.jsonl').open('a') as f:f.write(json.dumps(dict(id=name,**meta,exit=code,stdout=name+'.stdout',stderr=name+'.stderr'))+'\n')
+ sys.stdout.buffer.write(out);sys.stdout.buffer.write(err);sys.stdout.flush()
+ return code
+def sentinel(phase):
+ m=json.loads((P/'manifest.json').read_bytes());rows=[]
+ for kind,entries in [('source',m['sources']),('proof',m['proofs'])]:
+  for e in entries:
+   paths=[('live',pathlib.Path(e['live'])),('copy',P/e['copy'])] if kind=='source' else [('proof',P/e['path'])]
+   for location,p in paths:
+    b=p.read_bytes();h=hashlib.sha256(b).hexdigest();rows.append(dict(kind=kind,location=location,path=str(p),expected=e['sha256'],actual=h,bytes=len(b),expectedBytes=e['bytes'],ok=h==e['sha256'] and len(b)==e['bytes']))
+ b=(P/'manifest.json').read_bytes();rows.append(dict(kind='manifest',path=str(P/'manifest.json'),actual=hashlib.sha256(b).hexdigest(),ok=hashlib.sha256(b).hexdigest()=='7d2dd6847fc3bbd9e123dd92680bd9848f6703b4521c4376f1e0fb1bfd2bbe1a'))
+ out=(json.dumps(rows,indent=2)+'\n').encode();(R/('sentinel-'+phase+'.json')).write_bytes(out)
+ return record('sentinel-'+phase,dict(operation='sha256+byte_count_all_manifest_entries',argv=[sys.executable,__file__,'sentinel',phase],cwd=str(pathlib.Path.cwd())),out,code=0 if all(x['ok'] for x in rows) else 1)
+def read(name,paths):
+ out=b''
+ for s in paths:
+  p=pathlib.Path(s);p=p if p.is_absolute() else W/p
+  b=p.read_bytes();h=hashlib.sha256(b).hexdigest()
+  out+=('FILE '+str(p)+' SHA256 '+h+'\n').encode()+b''.join(('%6d '%i).encode()+line for i,line in enumerate(b.splitlines(keepends=True),1))+b'\n'
+  with (R/'reads.jsonl').open('a') as f:f.write(json.dumps(dict(path=str(p),sha256=h,phase='before',command=name))+'\n')
+  h2=hashlib.sha256(p.read_bytes()).hexdigest()
+  with (R/'reads.jsonl').open('a') as f:f.write(json.dumps(dict(path=str(p),sha256=h2,phase='after',command=name))+'\n')
+  assert h==h2
+ return record(name,dict(operation='read_bytes_with_line_numbers_and_pre_post_hash',paths=paths,argv=[sys.executable,__file__,'read',name,*paths],cwd=str(pathlib.Path.cwd())),out)
+def run(name,args):
+ env=os.environ.copy();env.update(TMPDIR=str(R/'tmp'),XDG_CACHE_HOME=str(R/'cache'),NODE_COMPILE_CACHE=str(R/'node-cache'),CVG_COMPLETE_PUBLIC_EVIDENCE=str(R/'public-requests.json'))
+ for d in ['tmp','cache','node-cache']:(R/d).mkdir(exist_ok=True)
+ x=subprocess.run(args,cwd=W,env=env,capture_output=True)
+ return record(name,dict(argv=args,cwd=str(W),env={k:env[k] for k in ['TMPDIR','XDG_CACHE_HOME','NODE_COMPILE_CACHE','CVG_COMPLETE_PUBLIC_EVIDENCE']}),x.stdout,x.stderr,x.returncode)
+if __name__=='__main__':
+ op,*args=sys.argv[1:]
+ sys.exit(sentinel(*args) if op=='sentinel' else read(args[0],args[1:]) if op=='read' else run(args[0],args[1:]))

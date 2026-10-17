@@ -1,0 +1,75 @@
+import pathlib,json,hashlib,datetime,subprocess,urllib.parse,shutil
+b=pathlib.Path(__file__).resolve().parent;w=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree');node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node';expected='0ad83ddab6016ee21e9601a8dd4db013814420bc71a9dab67cf6221f6f84e2c2'
+sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+save=lambda p,v:p.write_text(json.dumps(v,indent=2,ensure_ascii=True)+'\n')
+source=w/'packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts';assert sha(source)==expected
+run=json.loads((b/'pg-r3.command.json').read_text());assert run['exit']==0 and run['sourceInputsUnchanged'] and run['sourceBeforeSHA256']==run['sourceAfterSHA256']==expected
+assert json.loads((b/'container-stopped-proof-r3.json').read_text())['state']['Running'] is False
+assert json.loads((b/'connection-close-proof-r3.json').read_text())['total']==0
+candidate=json.loads((b.parent.parent/'candidate-r10.json').read_text());assert all(sha(pathlib.Path(r['live']))==r['sha256'] for r in candidate['sourceBindings'])
+
+if not (b/'current-status-before-r3.json').exists():shutil.copyfile(b/'current-status.json',b/'current-status-before-r3.json')
+if not (b/'source-current-before-r3.ts').exists():shutil.copyfile(b/'source-current.ts',b/'source-current-before-r3.ts')
+shutil.copyfile(source,b/'source-current.ts')
+caseRows=[]
+for p in sorted((b/'runs/r3/cases').glob('*/observed.json')):
+ o=json.loads(p.read_text());assert o['verdict']=='IMPLEMENTED_SCOPED_EXECUTION_ONLY' and not o['observerErrors']
+ caseRows.append({'name':p.parent.name,'priorActualReceipts':o['priorReceipts'],'freeBytes':o['freeBytes'],'paddingMode':o['paddingMode'],'initialStopReason':o['first']['stopReason'],'resultStopReason':o['result']['stopReason'],'repeatedStopReason':o['repeated']['stopReason'] if o.get('repeated') else None,'modelEntryCount':o['countsAtFinally']['completeEntries'],'counterCount':o['countsAtFinally']['measurements'],'bodyCount':o['countsAtFinally']['bodies'],'newModelEntriesAfterPadding':o['countsAtFinally']['completeEntries']-o['modelsBefore'],'sourceSHA256':expected})
+assert len(caseRows)==6
+publicEnv={'SPEC0224_ADMISSION_PG_ASSIGNED_ROOT':str(b),'SPEC0224_ADMISSION_PG_RESOURCE':str(b/'resource-private-r2.json'),'SPEC0224_ADMISSION_PG_EVIDENCE':str(b/'runs/r3'),'SPEC0224_ADMISSION_PG_RUN_ID':'r3','TMPDIR':str(b/'tmp'),'NO_COLOR':'1','schema':'pare224_admission_r2','role':'pare224_admission_r2_service','cacheDir':str(b/'cache'),'configLoader':'runner','credentialValues':'OMITTED: resource JSON files private and excluded from primary publication'}
+save(b/'pg-r3-environment-public.json',publicEnv)
+version=subprocess.check_output([node,'-p','JSON.stringify({version:process.version,execPath:process.execPath})'],text=True);save(b/'node-post-execution.json',{'observedAfterExecution':True,'node':json.loads(version),'binarySHA256':sha(pathlib.Path(node)),'limitation':'Hash observed after execution, not attested during child execution.'})
+status={'status':'IMPLEMENTED','approval':'NOT_SELF_APPROVED; fresh independent Lead/I1 acceptance remains pending','source':str(source.relative_to(w)),'sourceSHA256':expected,'sourceBytes':source.stat().st_size,'finalExecutedRun':'pg-r3.command.json','scope':'Six actual PostgreSQL public factory Toy64/cap512 receipt-capacity cases in fresh assigned r2 schema/principal; no release/full TR05/TR08/global qualification','cases':caseRows,'checks':{'focusedPostgres':{'exit':0,'casesPassed':6,'log':'pg-r3.log','commandRecord':'pg-r3.command.json','environmentRecord':'pg-r3-environment-public.json'},'format':{'exit':0,'record':'format-r4.command.json','log':'format-r4.log'},'lint':{'exit':0,'record':'lint-r4.command.json','log':'lint-r4.log'},'typesOwnSourceAndTransitiveImports':{'exit':0,'record':'type-r5.command.json','log':'type-r5.log'},'standaloneBuilderReconstruction':{'exit':0,'record':'physical-reconstruction-r3.command.json','report':'physical-reconstruction-r3.json','records':30,'modelEntryBindings':8,'negativeControls':12}},'preservedFailures':[{'artifact':'type-r1.command.json','exit':2,'diagnosis':'Private TS config initially resolved node types relative to its private directory; fixed only private typeRoots.'},{'artifact':'type-r2.command.json','exit':2,'diagnosis':'Own source tenant brand cast and ES2022 findLast incompatibility; repaired before PG attempt.'},{'artifact':'required-resource-guard-r1.command.json','exit':1,'diagnosis':'Intentional no-resource fail-closed control; no tests ran, never skipped.'},{'artifact':'pg-r1.command.json','diagnosis':'Readiness probe exit2 before Vitest; resource stopped in finally; no schema create; see diagnosis-attempt-r1.json. Exact readiness stdout was not retained, no functional verdict.'},{'artifact':'pg-r2.command.json','exit':1,'casesFailed':6,'diagnosis':'Observer digest assertion on pre-normalized input after APPLIED changed harness outcome. All six invalid as receipt-capacity proof; full logs and traces retained. Repair reads native normalized loaded CP, separates observational errors. See diagnosis-pg-r2.json.'}], 'resources':{'containerId':'0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c','containerStoppedProof':'container-stopped-proof-r3.json','connectionClosureProof':'connection-close-proof-r3.json','ownServiceConnections':0,'schemasRolesDataPreserved':['pare224_admission_r1','pare224_admission_r1_service','pare224_admission_r2','pare224_admission_r2_service'],'otherResources':'PG217 and previous namespaces/roles not used, read, changed or dropped'},'sourceR10':{'count':72,'manifestSHA256':candidate['manifestSha256'],'allFrozenBindingsUnchanged':True,'prePostCuts':['source-cut-before-pg-r3.json','source-cut-after-pg-r3.json']},'limitations':['Synthetic same-process unbound factory; request{} parent is only a native operational_executions FK fixture. No fabricated published command, approval or claim.','Fresh physical service Client/backend proves committed visibility before synthetic response computation, with ordered actual CAS-return -> complete entry -> SQL-read -> computation; no external provider or stronger concurrent linearization assertion.','No OS restart, bound host, fence, concurrency, broad global tests, E2E, certify, SBOM, licenses, production, push, commit or deploy.','Native journal PostgreSQL NUL two required functional failures remain outside this proof, not fixed by NUL checkpoint padding.','Native maxDuration30s, output512, checkpoint8MiB and case60s unchanged. Recorded case durations near25.9s are observations, not a performance guarantee.','Initial readiness attempt has no retained stdout or Vitest log because Vitest never started. Earlier preliminary type attempts retain source SHA/commands but not full source snapshots; every actual PG invocation has before/after cuts and source copies.','Lead owns shared ledgers/claims/independent publication; builder changed only allowed new test and builder-r1 artifacts.'],'nextAction':'Lead verifies disjoint source/evidence/digests and assigns fresh I1 with explicit own allowed root, fresh absent namespace/principal and private resource. Execute the identical frozen source without source rewrite.'}
+save(b/'current-status.json',status);save(b/'delivery.json',status)
+cmd=run['command']
+report=f'''IMPLEMENTED — scoped builder evidence, pending fresh I1; no self approval.
+
+Final executed source SHA256: {expected}
+Source: {source.relative_to(w)} ({source.stat().st_size} bytes).
+R3: 6 PASS, exit0; type-r5/lint-r4/format-r4 exit0. Source remains identical before/after run. Native limits unchanged.
+
+Exact final test command (cwd {w}):
+{json.dumps(cmd)}
+Explicit nonsecret environment: pg-r3-environment-public.json. Exact runner: python3 {b}/run-pg.py r3, exit0. Logs: runner-pg-r3.log and pg-r3.log.
+
+Standalone reconstruction command: {node} {b}/verify-physical-evidence.mjs r3, exit0; 30 physical records,8 model-entry/CAS bindings,12 tamper rejections. Builder reconstruction only, not independent acceptance.
+
+Six cases: prior actual receipts false/true crossed ASCII20k admit,ASCII2k refuse,NUL2k refuse. Two positives add one actual synthetic model entry with committed RESERVED and final SETTLED actualusage. Four refusals reach counter, add no model/tool/debit, persist terminal INSUFFICIENT_EVIDENCE, repeat STATE_CONFLICT without counter/model/CAS mutation. Prior two SETTLED receipts, real tool result and journal retained; afterRepeatJournal captured.
+
+Schema/role absent checks, migrations, service identity, grants and forcedRLS: runs/r3/*.json. Actual ordered events, requests/responses/counter/usage/CAS and journal traces: runs/r3/cases/*/*.json. Physical state::text hash+bytes/header, data base64 hash, native logical CP digest and lossless padding recipes allow full independent reconstruction; no duplicated8MiB strings.
+
+Failures preserved: TS environment exit2, TS ownsource exit2, intentional no-resource guard exit1, immediate readiness exit2 before Vitest, r2 sixFAIL observer digest mismatch after commit (not native preflight). Detailed diagnoses are diagnosis-attempt-r1.json and diagnosis-pg-r2.json. r1data/schema/role preserved; r3 used new authorized r2 names, no adoption.
+
+Resource stopped: container-stopped-proof-r3.json (exited,false,Pid0), connection-close-proof-r3.json (service0). Only assigned224 started/stopped; volumes/data preserved. Never touched PG217 or old namespaces. Credential JSONs and raw credential logs are omitted from primary publication; manifest has explicit empty/derived/cache/private omissions.
+
+Scope: synthetic public same-process unbound native PG path; no OS restart, bound host, fence, concurrent linearization, actual provider, global/fullTR05/TR08 or release claim. Native PG journal NUL two required functional failures remain outside this proof. Ledgers/claims/independent verdict belong to Lead.
+'''
+(b/'delivery.txt').write_text(report)
+# All relative entries. Never publish credential material or sensitive raw logs.
+secretPaths=[];secretValues=[]
+for p in b.glob('resource-private*.json'):
+ secretPaths.append(p.relative_to(b).as_posix());r=json.loads(p.read_text());pwd=urllib.parse.urlsplit(r['test_database_url']).password
+ secretValues.append(r['test_database_url'].encode())
+primary=[];empty=[];derived=[];cache=[];private=[]
+for p in sorted(b.rglob('*')):
+ if not p.is_file():continue
+ rel=p.relative_to(b).as_posix()
+ if rel=='artifact-manifest.json':continue
+ if rel in secretPaths:
+  private.append({'path':rel,'reason':'Private synthetic admin credential resource; excluded, contents/hash not published.'});continue
+ if any(part in ['cache','tmp','__pycache__'] for part in p.relative_to(b).parts):
+  cache.append({'path':rel,'bytes':p.stat().st_size,'reason':'Private tool cache/temp, not evidence.'});continue
+ raw=p.read_bytes()
+ assert not any(v in raw for v in secretValues), 'Credential found in nonprivate output: '+rel
+ row={'path':rel,'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
+ if not raw:empty.append({**row,'reason':'Empty stdout/stderr or successful silent check; command exit record is primary.'});continue
+ if p.name.endswith('.template.txt') or p.name=='make-source.py' or p.name.startswith('source-current-before-') or p.name=='current-status-before-r3.json':
+  derived.append({**row,'reason':'Preserved intermediate generator/template or superseded pointer snapshot; not current execution evidence.'});continue
+ primary.append(row)
+manifest={'manifestVersion':1,'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'status':'IMPLEMENTED_PENDING_INDEPENDENT_ACCEPTANCE','baseDirectory':str(b),'executedSourceSHA256':expected,'primary':primary,'omissions':{'empty':empty,'derived':derived,'cache':cache,'privateCredentials':private,'rawCredentialLogs':{'paths':[],'reason':'None generated/identified in retained public artifacts; every nonprivate output checked for private resource connection URLs without displaying them. An initial password-substring check was rejected because the synthetic password equals an existing public fixture policy ID; this is documented and no credential URL was disclosed.'},'self':{'path':'artifact-manifest.json','reason':'Self digest omitted to avoid recursion.'},'missingNotGenerated':[{'path':'pg-r1.log','reason':'Vitest never invoked; readiness failed first. Recorded transparently, not fabricated.'} ]},'counts':{'primary':len(primary),'empty':len(empty),'derived':len(derived),'cache':len(cache),'privateCredentials':len(private)}}
+save(b/'artifact-manifest.json',manifest)
+# Final readback verifies primary membership, nonempty bytes, hashes and source.
+for r in manifest['primary']:
+ p=b/r['path'];assert p.stat().st_size==r['bytes']>0 and sha(p)==r['sha256']
+assert sha(source)==expected
+print(json.dumps({'sourceSHA256':expected,'manifestSHA256':sha(b/'artifact-manifest.json'),'manifestCounts':manifest['counts'],'status':'IMPLEMENTED_PENDING_INDEPENDENT_ACCEPTANCE'}))

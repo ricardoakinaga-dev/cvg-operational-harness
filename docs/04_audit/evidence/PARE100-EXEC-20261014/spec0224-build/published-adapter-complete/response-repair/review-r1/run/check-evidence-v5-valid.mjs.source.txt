@@ -1,0 +1,35 @@
+import fs from 'node:fs';import{createHash}from'node:crypto';
+import{canonicalizeCompleteJson}from'/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-packet-r1/artifact/packages/contracts/src/complete-json.ts';
+const R=process.env.I1_REVIEW;
+const canonical=(x,maxBytes=8388608)=>canonicalizeCompleteJson(x,{maxBytes,maxDepth:64,maxNodes:1000000});
+const hraw=x=>createHash('sha256').update(x).digest('hex');
+const h=x=>hraw(canonical(x));
+const eq=(a,b)=>canonical(a)===canonical(b);
+function analyze(d){
+ const cp=d.checkpoint,res=d.result,obs=cp.state.observations.filter(o=>o.type==='TOOL_RESULT'),adm=cp.state.toolResultContext?.decisionAdmissions??[];
+ const checks=[],check=(name,ok,detail)=>checks.push({name,ok,...(detail===undefined?{}:{detail})});
+ const requests=d.requests.map((q,index)=>{
+  const frame=q.messages[1]?.content?.startsWith('{')?JSON.parse(q.messages[1].content):null;
+  const items=frame?.items?.filter(i=>i.priority==='FRESH_TOOL_RESULTS')??[];
+  const observation=items[0]?.value??null;
+  const entry=d.modelEntryCheckpoints[index];const rr=adm.find(a=>a.requestSha256===h(q));const native=d.modelResults[index];
+  const metrics={index,purpose:q.purpose,requestSha256:h(q),canonicalBytes:Buffer.byteLength(canonical(q)),messages:q.messages.map(m=>({role:m.role,utf16Units:m.content.length,utf8Bytes:Buffer.byteLength(m.content),sha256:hraw(m.content)})),toy64Tokens:Math.ceil(Buffer.byteLength(canonical(q))/64),limits:{systemUtf16:16000,userUtf16:32000,requestBytes:131072},entryCheckpoint:{checkpointId:entry?.checkpointId,stepNumber:entry?.stepNumber,usage:entry?.budgetUsage,pendingAdmission:entry?.state.toolResultContext?.pendingDecisionAdmission},receiptId:rr?.admissionId??null,modelResult:native??null,actualToolItems:items.map(i=>({contextId:i.contextId,trust:i.trust,source:i.source,observationId:i.value.observationId,provenance:i.value.provenance,outputBytes:i.value.payload.outputBytes,outputSha256:i.value.payload.outputSha256,completeObservationMatchesDurable:obs.some(o=>eq(o,i.value))}))};
+  check('request-capacity-'+index,metrics.canonicalBytes<=131072&&metrics.messages[0].utf16Units<=16000&&metrics.messages[1].utf16Units<=32000);
+  if(q.purpose==='RESPONSE'&&cp.checkpointVersion===2){check('response-no-decision-receipt-'+index,!rr);check('response-full-selection-'+index,items.length===obs.length&&obs.every(o=>items.some(i=>eq(o,i.value))));check('response-provenance-trust-'+index,items.every(i=>i.trust==='UNTRUSTED'&&i.value.trust==='UNTRUSTED'&&i.source===i.value.provenance.sourceId));if(native)check('response-digest-from-actual-data-'+index,Boolean(observation?.payload && Object.hasOwn(observation.payload,'output') && native.text==='sha256:'+h(observation.payload.output)));}
+  if(rr){check('decision-settled-'+index,rr.status==='SETTLED');check('decision-native-usage-'+index,eq(rr.actual,{modelCalls:1,inputTokens:native.inputTokens,outputTokens:native.outputTokens,costUsd:native.costUsd}));check('decision-result-digest-'+index,rr.resultSha256===h(native));check('decision-entry-reserved-'+index,entry?.state.toolResultContext?.decisionAdmissions.some(a=>a.admissionId===rr.admissionId&&a.status==='RESERVED'));}
+  return metrics;
+ });
+ const actualUsage=d.modelResults.reduce((s,x)=>({inputTokens:s.inputTokens+x.inputTokens,outputTokens:s.outputTokens+x.outputTokens,costUsd:s.costUsd+x.costUsd}),{inputTokens:0,outputTokens:0,costUsd:0});
+ check('actual-calls-returned',res.modelCalls===d.requests.length,{actual:d.requests.length,returned:res.modelCalls});check('actual-calls-durable',cp.budgetUsage.modelCalls===d.requests.length,{actual:d.requests.length,durable:cp.budgetUsage.modelCalls});check('native-usage-returned',eq(actualUsage,res.usage),{actual:actualUsage,returned:res.usage});check('native-usage-durable',Object.keys(actualUsage).every(k=>actualUsage[k]===cp.budgetUsage[k]));
+ check('stop-returned-durable',res.stopReason===cp.state.stopReason,{returned:res.stopReason,durable:cp.state.stopReason});check('step-count-returned-durable',res.steps===cp.budgetUsage.steps);
+ check('terminal-no-outstanding-accepted-response',!cp.state.toolResultContext?.acceptedDecision||cp.state.toolResultContext.acceptedDecision.decision.decisionType!=='RESPOND',{cursor:cp.stepNumber,accepted:cp.state.toolResultContext?.acceptedDecision??null});
+ for(const o of obs){const p=o.payload;if(p.completion==='COMPLETE'){check('output-value-'+o.observationId,eq(p.output,d.output));check('output-hash-'+o.observationId,p.outputSha256===h(p.output));check('output-bytes-'+o.observationId,p.outputBytes===Buffer.byteLength(canonical(p.output)));}}
+ check('confirmed-journal-full-value',d.journals.every(j=>j.state==='CONFIRMED'&&eq(j.result,d.output)));
+ if(cp.checkpointVersion===2){const{checkpointId,createdAt,digest,...unsigned}=cp;check('checkpoint-native-digest',digest===hraw('cvg.checkpoint.v2\n'+canonical(unsigned)));}
+ return {case:d.case,result:{response:res.response,stopReason:res.stopReason,steps:res.steps,modelCalls:res.modelCalls,usage:res.usage},durable:{cursor:cp.stepNumber,stateCursor:cp.state.stepNumber,stopReason:cp.state.stopReason,usage:cp.budgetUsage,checkpointId:cp.checkpointId,digest:cp.digest,acceptedDecision:cp.state.toolResultContext?.acceptedDecision??null},receipts:adm,modelEntryCheckpoints:d.modelEntryCheckpoints,requests,actualUsage,nativeSteps:d.nativeSteps,journals:d.journals.map(j=>({state:j.state,operationKey:j.operationKey,resultSha256:h(j.result)})),checks,failures:checks.filter(c=>!c.ok)};
+}
+const groups={};for(const[name,file]of Object.entries({producer:'run/producer-raw/raw-cases.json',frozen:'run/cases-private.json',independent:'run/independent-private.json',omitControl:'controls/omit-response-data/cases-private.json',terminalControl:'controls/lose-terminal-refusal/cases-private.json'})){
+ const data=JSON.parse(fs.readFileSync(R+'/'+file));groups[name]=data.map(analyze);
+}
+fs.writeFileSync(R+'/reports/evidence-analysis-private.json',JSON.stringify(groups,null,2)+'\n');
+console.log(JSON.stringify(Object.fromEntries(Object.entries(groups).map(([k,ds])=>[k,ds.map(d=>({case:d.case,failures:d.failures.map(c=>c.name)}))])),null,2));

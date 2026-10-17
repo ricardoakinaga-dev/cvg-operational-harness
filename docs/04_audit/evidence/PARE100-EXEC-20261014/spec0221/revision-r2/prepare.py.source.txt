@@ -1,0 +1,146 @@
+import hashlib
+import json
+import shutil
+from pathlib import Path
+
+ROOT = Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+PARENT = Path('/tmp/cvg-pare100-exec-20261014-6az3hlay')
+WORK = PARENT / 'worktree'
+PRIVATE = PARENT / 'spec0221-r1/revision-r2'
+REF = Path('/home/ricardo/deepseek-harness-session-fixes')
+SPEC = 'docs/02_spec/0221_pare100_public_session_persistence.md'
+BASE = 'docs/04_audit/evidence/PARE100-EXEC-20261014'
+OLD = ROOT / BASE / 'matrix/session-durable-r3'
+EVIDENCE = ROOT / BASE / 'spec0221/revision-r2'
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+
+
+def main():
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / SPEC, WORK / SPEC)
+    original = json.loads((OLD / 'leaf-bindings.json').read_text())
+    family_sections = {
+        'SERVICE': [3], 'SURFACE_PENDING': [3, 8, 10],
+        'CREATE': [3, 4, 6, 9], 'METADATA': [3, 4, 5, 9],
+        'OWNERSHIP': [5, 6], 'READ': [4, 7], 'APPEND': [4, 6, 7],
+        'BARRIER': [7], 'CLOSE': [7], 'OBSERVE': [3, 7],
+        'CANCELLATION': [4, 7], 'VALIDATION': [4, 8], 'ERRORS': [8],
+    }
+    rows = []
+    for row in original:
+        assert row['family'] in family_sections, row['family']
+        new = dict(row)
+        new['foundation_spec'] = 'SPEC0221'
+        new['spec_sections'] = family_sections[row['family']]
+        new['foundation_status'] = 'PROPOSED_NOT_RUN'
+        new['original_binding_unchanged'] = True
+        new['residual_obligations'] = [
+            'Native public reference/backend qualification and lossless protocol projection pending',
+            'Full P100-015/P100-020 original acceptance remains mandatory',
+        ]
+        if row['unknown_extraction_not_resolved'] or row['semantic_surface_review_pending']:
+            new['residual_obligations'].append('Original UNKNOWN/surface review is not resolved by this proposal')
+        rows.append(new)
+    assert len(rows) == 75 and len({r['id'] for r in rows}) == 75
+    assert all({k: r[k] for k in old} == old for r, old in zip(rows, original))
+    write(EVIDENCE / 'leaf-bindings.json', rows)
+    procedures = json.loads((OLD / 'procedures.json').read_text())
+    mapping = {
+        'SD01': ['SP01'], 'SD02': ['SP02'], 'SD03': ['SP01', 'SP02'],
+        'SD04': ['SP03', 'SP16', 'SP17'], 'SD05': ['SP04'], 'SD06': ['SP05'],
+        'SD07': ['SP06'], 'SD08': ['SP07'], 'SD09': ['SP08'],
+        'SD10': ['SP09'], 'SD11': ['SP10'], 'SD12': ['SP11'],
+        'SD13': ['SP12'], 'SD14': ['SP13'], 'SD15': ['SP14'],
+        'SD16': ['SP05', 'SP14'], 'SD17': ['SP14'], 'SD18': ['SP15'],
+    }
+    write(EVIDENCE / 'procedure-crosswalk.json', {
+        'status': 'PROPOSED_NOT_RUN', 'no_differential_or_parity_pass': True,
+        'procedures': [{
+            'id': p['id'], 'original_title': p['title'], 'sp_ids': mapping[p['id']],
+            'status': 'NOT_RUN', 'scope': 'CVG_POSTGRES_ONLY_NOT_REFERENCE_QUALIFICATION',
+            'native_reference_or_format_residual': p['id'] in ['SD01', 'SD05', 'SD15', 'SD16', 'SD17', 'SD18'],
+        } for p in procedures['procedures']],
+        'original_gaps_preserved': procedures['current_gaps'],
+    })
+    proposal = json.loads((PARENT / 'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json').read_text())
+    pins = proposal['newGroups'][0]['pins']
+    mismatch = [p for p, h in pins.items() if sha(WORK / p) != h]
+    permitted = {'docs/99_runtime_state.md', 'docs/20_master_execution_log.md', 'docs/30_backlog_master.md', 'docs/08_runtime/agent_coordination.md'}
+    input_drift = [p for p, h in proposal['inputs'].items() if sha(WORK / p) != h]
+    assert not mismatch, mismatch
+    assert set(input_drift) <= permitted, input_drift
+    write(EVIDENCE / 'protected-inputs.json', {
+        'pins_checked': len(pins), 'pin_mismatches': mismatch,
+        'inputs_checked': len(proposal['inputs']), 'input_drift': input_drift,
+        'nonledger_input_drift': [p for p in input_drift if p not in permitted],
+        'scope': 'integrity only, not runtime or gate approval',
+        'expected_pins': pins,
+    })
+    files = [
+        SPEC, 'packages/contracts/src/session-events.ts',
+        'packages/contracts/src/session-event-schemas.v1.json',
+        'packages/contracts/src/canonical-json.ts', 'packages/harness/src/session/kernel-log.ts',
+        'packages/contracts/src/index.ts', 'packages/harness/src/session/events.ts',
+        'packages/harness/src/session/memory.ts', 'packages/harness/src/session/index.ts',
+        'packages/persistence/src/session-events.ts', 'packages/persistence/src/tenant-scoped-postgres.ts',
+        'packages/persistence/src/postgres-migrations.ts', 'packages/persistence/src/index.ts',
+        'packages/persistence/migrations/0028_session_events.sql',
+        'packages/sdk/src/server.ts', 'packages/sdk/src/client.ts',
+        'packages/harness/src/kernel/pipeline.ts', 'package.json',
+        '.github/workflows/verify.yml',
+    ]
+    packet = PRIVATE / 'review-packet'
+    assert not packet.exists(), 'Do not overwrite a sealed packet'
+    manifest = []
+    for rel in files:
+        src = WORK / rel
+        dst = packet / 'cvg' / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        manifest.append({'live': str(src), 'copy': str(dst.relative_to(packet)), 'sha256': sha(src)})
+    src_hashes = json.loads((OLD / 'source-hashes.json').read_text())
+    for rel, meta in src_hashes['sources'].items():
+        if rel.startswith('CVG/'):
+            continue
+        src = REF / rel
+        assert sha(src) == meta['sha256'], rel
+        dst = packet / 'reference' / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        manifest.append({'live': str(src), 'copy': str(dst.relative_to(packet)), 'sha256': sha(src)})
+    for name in ['leaf-bindings.json', 'procedure-crosswalk.json']:
+        src = EVIDENCE / name
+        dst = packet / name
+        shutil.copy2(src, dst)
+        manifest.append({'live': str(src), 'copy': name, 'sha256': sha(src)})
+    for name in ['leaf-bindings.json', 'procedures.json']:
+        src = OLD / name
+        dst = packet / ('original-' + name)
+        shutil.copy2(src, dst)
+        manifest.append({'live': str(src), 'copy': dst.name, 'sha256': sha(src)})
+    write(packet / 'source-manifest.json', manifest)
+    write(PRIVATE / 'sentinel-pre.json', manifest)
+    write(EVIDENCE / 'decision-status.json', {
+        'status': 'PROPOSED_FOR_TECHNICAL_REVIEW', 'human_approval': 'NOT_REQUESTED',
+        'build_authorized': False, 'tests_sp01_sp22': 'NOT_RUN',
+        'spec_sha256': sha(ROOT / SPEC), 'original_scope': '36 cards, 2 DONE_LOCAL, 34 open',
+        'parity': 'NOT_MEASURED', 'selected_leaves': 75, 'unknown_preserved': 4,
+    })
+    for src in EVIDENCE.rglob('*'):
+        if src.is_file():
+            dst = WORK / src.relative_to(ROOT)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+    print(json.dumps({'packet': str(packet), 'sources': len(manifest), 'pins': len(pins), 'leaf_count': len(rows)}))
+
+
+if __name__ == '__main__':
+    main()

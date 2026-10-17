@@ -1,0 +1,21 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
+const base = path.dirname(fileURLToPath(import.meta.url))
+const task = JSON.parse(fs.readFileSync(path.join(base, 'task-short-spec.json'), 'utf8'))
+const stages = []
+for (const [target, argv] of Object.entries(task.commandsByTarget)) {
+  const result = spawnSync(process.execPath, argv.slice(1), { cwd: process.cwd(), encoding: 'utf8' })
+  const record = { target, argv, exit: result.status, signal: result.signal, error: result.error?.message ?? null }
+  fs.writeFileSync(path.join(base, target.replaceAll('/', '-') + '.stdout.log'), result.stdout ?? '')
+  fs.writeFileSync(path.join(base, target.replaceAll('/', '-') + '.stderr.log'), result.stderr ?? '')
+  if (result.status === 0) {
+    record.result = JSON.parse(result.stdout.trim().split('\n').at(-1))
+    if (JSON.stringify(record.result.workspaces) !== JSON.stringify(task.targetClosures[target])) throw new Error('Unexpected compiler closure')
+  }
+  fs.writeFileSync(path.join(base, target.replaceAll('/', '-') + '.json'), JSON.stringify(record, null, 2) + '\n')
+  stages.push(record)
+  if (result.status !== 0) { process.exitCode = 1; break }
+}
+console.log(JSON.stringify({ stages, actualPublicExports: true, sourceAliases: false }))

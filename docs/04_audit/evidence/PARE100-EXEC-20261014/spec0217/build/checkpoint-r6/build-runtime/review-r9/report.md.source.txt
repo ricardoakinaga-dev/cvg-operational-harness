@@ -1,0 +1,45 @@
+# Fresh I1 — F-BUILD-001
+
+**APPROVE_SCOPED_DELTA** — `fork_context=false`; inherited model, no descendants. No findings requiring revision within this exact delta.
+
+Only the generated project `include` changes: the existing `src/**/*.ts` is retained and `src/**/*.json` is added. Mechanical single-replacement comparison proves all remaining code is identical, including 19 workspace entries/order, strict/noEmitOnError, exclusions, NodeNext, references, manifest copying, compile/output assertions, safe-context guard and errors. Contract: sealed SPEC0208 F-BUILD-001 plus R8 measurement correction. See `delta.diff`.
+
+Preimage: `dcd7b864cc56c69b1f39723cab0a6ec8bd618d90761222da5ec4f280144ade5e`. Current/live: `4ed82a15728a485d0e7adc86f8d966bd27014282e800156e95bbb39e9acff81d`. Packet file/manifest hashes and live script match before and after. The pre snapshot has 36778 entries and 19128 content hashes. **All reviewed build inputs, dependency files and frozen dist remain unchanged. Whole-tree immutability was not observed:** metadata changed on 7 out-of-scope document paths during the interval. Their content was not read and their writer was not observed. `concurrent-metadata-changes.json` preserves exact pre/post metadata and paths; no baseline was reset. The first failed-finalization snapshot is also retained. Reviewer commands write only under owned output. Scope/exclusions are explicit in `isolation-post.json`; no git/history or shared ledger content was read.
+
+## Discrimination and observed behavior
+
+The actual old CLI in the owned fixture fails with TS6307 on the imported catalog and `runtime_build_failed:tsc_exit:1`; the affected JavaScript is not emitted. Cascading dependent resolution errors are preserved in its raw log. Replacing only the script with the sealed current version in that same fixture succeeds and assembles the context. Node is v22.23.2; TypeScript is 6.0.3, both preexisting, without installation.
+
+Source catalog: 6075 bytes, SHA-256 `ab37e629aa3f3c91ac72b1dd6debdfe5e23567f6b7c14edb65770bdd9bc9d7fd`. Runtime emission: 7515 bytes, SHA-256 `b31cd3103f1cfdb2dc86ee626e424dff67191214ee3085fb29ec393f2c5f7158`. Parsed JSON values agree; source/emit bytes intentionally differ. Context JSON equals emitted bytes exactly. An independent fresh JSON-only TypeScript build produces the same emitted hash. Node imports the emitted JSON directly and verifies deep equality without evaluating any application module body. Static compiled output retains its JSON import with the NodeNext import attribute.
+
+Only the private fixture JSON is changed, adding `_i1Synthetic` data. The next real build succeeds, emits that value, and changes the emitted hash to `1690bf27eed80ac3bbf28cc458c49c662f2fd2166f75e596907e881a2553c47b`; context bytes equal this new emission. Source and emission remain semantically equal. A further real build for the unsafe-context check independently reproduces those same synthetic emitted bytes.
+
+The context inventory has 877 files, compiled API and worker `main.js`, and an exact 19-entry `runtime-context.json` compiled-workspace list. No `src`, test, or executable TypeScript appears; declarations are allowed. All runtime manifests match their fixture inputs. Preserved manifest copying also includes other workspace manifests: **27 workspace package.json files total**, plus root package.json and package-lock.json; this is existing behavior, not a changed 19-workspace compile list. Migrations and the three copied runtime scripts match bytewise. Existing sandbox dist is physically copied for compilation, without adding it to the original runtime list or repairing packaging.
+
+The invalid context target is an owned `TMPDIR/unsafe-owned` directory. After compilation, the CLI exits 1 with the unchanged `runtime_build_failed:unsafe_context_dir:<path>` error. Its sole 30-byte sentinel remains intact with SHA-256 `aef66e7cbdb6eb4356641e665d2cda5a21d32137c8761db465fee356aadc4f57`. The accepted context and generated configs are entirely beneath private TMPDIR.
+
+## Commands and raw evidence
+
+`commands.jsonl` and `result.json` contain exact argv, source paths, cwd, enumerated environment, bounds, exits, raw-log hashes and PIDs. Compiler argv inside each runtime CLI is unchanged: Node22, fixture TypeScript `bin/tsc`, `-b`, private `solution.json`, `--force --pretty false`. Runs were bounded to 120 seconds (version/data-import commands: 10); no timeouts. Internal tsc child PIDs were not separately captured.
+
+| Command | PID | Exit | Seconds | Raw log |
+| --- | ---: | ---: | ---: | --- |
+| node-version | 3709814 | 0 | 0.008 | `logs/node-version.log` |
+| ts-version | 3709815 | 0 | 0.164 | `logs/ts-version.log` |
+| before-real-build | 3711001 | 1 | 5.925 | `logs/before-real-build.log` |
+| after-real-build | 3712120 | 0 | 8.679 | `logs/after-real-build.log` |
+| independent-json-emit | 3713665 | 0 | 0.415 | `logs/independent-json-emit.log` |
+| baseline-data-only-import | 3713687 | 0 | 0.032 | `logs/baseline-data-only-import.log` |
+| synthetic-real-build | 3713705 | 0 | 8.579 | `logs/synthetic-real-build.log` |
+| synthetic-data-only-import | 3714091 | 0 | 0.032 | `logs/synthetic-data-only-import.log` |
+| unsafe-context-real-build | 3714111 | 1 | 8.529 | `logs/unsafe-context-real-build.log` |
+
+Reviewer driver invocations: `python3 review.py prepare` (0); first `python3 review.py redgreen` (1 due solely to reviewer's mistaken expected tsc exit 2); corrected `python3 review.py redgreen` (0, retaining initial RED log without rerunning it); `python3 review.py further` (0); first `python3 review.py finalize` (1 because document metadata changed); corrected `python3 review.py finalize` (this finalization, comparing build paths and reporting document changes explicitly). The observed TS6 compiler exit was 1. These reviewer assertion corrections changed no project/product code. Runtime raw logs are original and unfiltered. Bootstrap inspection used Python file reads/hashes, `rg` for the JSON import, and terminal inventory reads only.
+
+## Isolation, evidence manifest and limits
+
+All writes are under this output directory. The fixture starts with 19114 physically copied regular files and 49 internal symlinks, with inode/hash checks recorded in `fixture-copy-manifest.json`; no hardlinks or links to W. `.env` files other than `.env.example` and irrelevant caches were excluded; the out-of-scope product dependency symlink was omitted. No real credentials were intentionally copied. HOME, XDG_CACHE_HOME, XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_STATE_HOME, XDG_RUNTIME_DIR, TMPDIR/TMP/TEMP are individually assigned under owned resources; no inherited credential/service environment is passed. Every tracked child is reaped. Owned artifacts are retained for reproducibility; no cleanup touches W or external paths.
+
+`evidence-manifest.json` inventories all retained regular files and symlinks except itself, including `result.json`, this report, driver, exact diff, configs, logs, baseline/synthetic JSON, copy/context inventories and pre/post sentinels. Baseline context paths were subsequently overwritten by the synthetic build; the original baseline emission and complete hash inventory remain separately retained.
+
+This is a scoped tooling-delta decision only. No whole-candidate/global certification, P100-050 completion, 0220 human approval, production/release permission or push. No broader gates were run; no services, application bodies, public builder, W build/tsc, installs, network, PG, Docker, E2E, certify, SBOM or licenses. Unrelated existing packaging remains outside the verdict. Stop criterion met: exact JSON inclusion correction is discriminated by real old/new CLI runs and independent output/propagation/safety evidence.

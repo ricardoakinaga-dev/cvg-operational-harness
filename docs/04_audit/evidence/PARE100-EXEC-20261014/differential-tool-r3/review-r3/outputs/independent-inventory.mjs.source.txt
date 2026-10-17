@@ -1,0 +1,10 @@
+import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import {createRequire} from 'node:module'; import {execFileSync} from 'node:child_process';
+const root='/home/ricardo/deepseek-harness-session-fixes';
+const names=['cordis','dsh-agent-loop-testkit','dsh-llm','dsh-session','dsh-agent','dsh-agent-loop','dsh-session-projection','dsh-system-prompt','dsh-tools'];
+const h=p=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+const req=createRequire(root+'/packages/test-support/agent-loop-testkit/package.json');
+const head=execFileSync('git',['--no-replace-objects','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-C',root,'rev-parse','HEAD'],{encoding:'utf8',env:{PATH:'/usr/bin:/bin',GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1',GIT_OPTIONAL_LOCKS:'0'}}).trim();
+if(head!=='768fb1f3d3dcf9a16659ee354e927d05475f22dd') throw Error('pin');
+const artifacts=names.map(n=>{const p=fs.realpathSync(req.resolve('@deepseek-ai/'+n)); if(!p.startsWith(root+'/'))throw Error('escape');return {package:'@deepseek-ai/'+n,file:p,sha256:h(p)}});
+const inventory={root,head,artifacts,transitiveArtifactClosure:'NOT_VERIFIED',method:'independent Node resolution and raw SHA256; no candidate inventory import'};
+fs.writeFileSync('outputs/independent-inventory.json',JSON.stringify(inventory,null,2)+'\n'); console.log(JSON.stringify(inventory));

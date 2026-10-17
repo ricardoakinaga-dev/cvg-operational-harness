@@ -1,0 +1,129 @@
+import json
+from pathlib import Path
+
+D = Path(__file__).resolve().parent
+P = D.parent
+W = P.parent / 'worktree'
+SHA = '5844ddc39924126d61f783cc8012ebb54e8df1078c068c2a73c396a9e1d6406f'
+findings = [
+    {
+        'id': 'I1-001', 'severity': 'HIGH', 'confidence': 'HIGH',
+        'title': 'Run validator accepts an empty replacement source map and unbound process evidence',
+        'sourceAnchors': [str(P / 'validate.py') + ':96-109'],
+        'recordAnchors': [str(D / 'negative-controls.json') + '#controls/empty-source-authority', str(D / 'forged-cli-empty.command.json'), str(D / 'forged-cli-duration.command.json'), str(D / 'negative-controls/uncaptured-stderr-file/stderr.txt')],
+        'evidence': 'Empty before/after maps plus sourceFiles=0 are accepted with pins=465. CLI exit0 and controls PASS. durationMs=6001, missing durationMs, altered limits, forged argv/cwd/env/PID/PGID and concealed nonempty stderr also pass check_run+evaluate. Duration variant independently passes full CLI.',
+        'impact': 'OBS-SBX-04 cannot reject source sentinel removal, unverified launch provenance, unknown/out-of-limit duration, or concealed stream evidence. These are observer defects, not proof that the actual pinned runs were forged.',
+        'requiredRevision': 'Bind run membership/digests to trusted frozen authority and verify expected process/stream schemas, identity, duration, limits, and actual stderr evidence in test support. Do not alter production.'
+    },
+    {
+        'id': 'I1-002', 'severity': 'HIGH', 'confidence': 'HIGH',
+        'title': 'Observation validator accepts lost telemetry and forged causal payloads',
+        'sourceAnchors': [str(P / 'validate.py') + ':20-87', str(P / 'validate.py') + ':109'],
+        'recordAnchors': [str(D / 'negative-controls.json') + '#controls', str(D / 'forged-cli-telemetry.command.json'), str(D / 'negative-controls/forged-log-payload/stdout.txt')],
+        'evidence': 'Telemetry can be [] or arbitrary malformed objects; full CLI still returns exit0 for lost telemetry. Tool log identity/input/key/correlation, body tenant/agent/signal, direct gate policy flags, decision input, and a fabricated 64-hex fingerprint also pass. Duplicate JSON keys and boolean counters pass. Updated copied stdout hashes rule out a trivial checksum mismatch as the explanation.',
+        'impact': 'OBS-SBX-04 requires adulterated evidence rejection; current checks preserve event topology but do not authenticate the full recorded meaning. Correct counters alone cannot establish truthful causal logs or metadata.',
+        'requiredRevision': 'Validate required native event payloads/types and links, recompute composition fingerprint, reject ambiguous JSON and boolean numeric counters, and add copied-evidence rejection controls. Test support only.'
+    },
+    {
+        'id': 'I1-003', 'severity': 'MEDIUM', 'confidence': 'HIGH_STATIC',
+        'title': 'Execution deadline ceases to be enforced when both pipes reach EOF',
+        'sourceAnchors': [str(P / 'run.py') + ':71-97', str(P / 'run.py') + ':141-153'],
+        'recordAnchors': [str(D / 'static-lifecycle.json') + '#deadline'],
+        'evidence': 'The 5s check is inside while selector.get_map(). After both pipes close, child.wait(timeout=2) grants a fresh 2s without comparing elapsed time. A child that closes both streams at 4.9s and exits at 5.4s takes the success branch, with violation=None. The success predicate never checks durationMs. Static control-flow finding; no altered probe or OS timing experiment executed.',
+        'impact': 'The advertised 5s execution bound can be exceeded without rejection; distinct from permitted post-kill cleanup time.',
+        'requiredRevision': 'Use the remaining absolute execution deadline for join after EOF and record a deadline violation when execution exceeds it. Keep teardown time separately identified.'
+    },
+    {
+        'id': 'I1-004', 'severity': 'MEDIUM', 'confidence': 'HIGH_STATIC',
+        'title': 'Unexpected launcher errors can bypass cleanup and final evidence persistence',
+        'sourceAnchors': [str(P / 'run.py') + ':63-134', str(P / 'run.py') + ':134-151'],
+        'recordAnchors': [str(D / 'static-lifecycle.json') + '#errors'],
+        'evidence': 'There is no enclosing try/finally after Popen. An os.read/selector error bypasses kill/join and stream persistence. An after-snapshot digest/read error raises after stream writes but before sources-after/process.json; process outcome and teardown record are then missing. killpg in the join-timeout branch also lacks the ProcessLookupError protection used in the earlier branch. Static only; no filesystem fault or source mutation introduced.',
+        'impact': 'The promise that failure retains bounded streams, exit/join and source evidence does not cover these failure paths.',
+        'requiredRevision': 'Make post-spawn cleanup unconditional and persist partial streams plus explicit error/unknown snapshot metadata even if capture or hashing fails. Reject incomplete runs; do not change production.'
+    },
+]
+criteria = [
+    {'id': 'OBS-SBX-01', 'status': 'PASS_OBSERVED', 'evidence': 'Both raw runs: direct WORKSPACE gate=1, body=0, UNSAFE_REQUEST.'},
+    {'id': 'OBS-SBX-02', 'status': 'PASS_OBSERVED', 'evidence': 'Both raw runs: capability NONE gate=0, body=1, exact echo, model=0, approval=0.'},
+    {'id': 'OBS-SBX-03', 'status': 'PASS_MEASUREMENT_OF_FAILED_INVARIANT', 'invariant': 'FAIL', 'evidence': 'Both raw runs: capability WORKSPACE descriptor sandbox absent, gate=0, body=1, COMPLETED; capability fingerprints equal.'},
+    {'id': 'OBS-SBX-04', 'status': 'FAIL', 'evidence': '15/21 independent copied-JSON controls accepted; three full-CLI counterexamples exit0. Static deadline/error-path findings.'},
+    {'id': 'OBS-SBX-05', 'status': 'PARTIAL_NOT_ACCEPTABLE', 'evidence': 'Frozen 11+1054 intact, no new source paths, focused type/lint/format pass. Review rejects observer. Fresh-review procedure compromised by accidental coordination history exposure. Four protected SPECs are not map members: no independent before/after digest claim for those separate documents, no direct semantic read or write to them.'},
+]
+nonclaims = {'nativeIsolation': 'NOT_TESTED', 'policyProduction': 'NOT_TESTED', 'managedLifecycleML29': 'NOT_TESTED', 'bothEngines': 'NOT_TESTED', 'fullParity': 'NOT_MEASURED', 'release': 'NOT_TESTED', 'globalT2Gates': 'NOT_RUN', 'transitiveDependencyClosure': 'NOT_VERIFIED'}
+verdict = {
+    'reviewer': 'fresh-context I1; no subagents/descendants delegated',
+    'task': 'P100-004/P100-024/SBX-METADATA-OBS-001',
+    'verdict': 'REVISE', 'observerValidity': 'REVISE',
+    'observedInvariant': {'status': 'FAIL', 'finding': 'OBS-SBX-METADATA-001', 'confidence': 'HIGH', 'independentlyReproduced': True, 'securityPass': False},
+    'expectedPacketSha256': SHA, 'actualPacketSha256': SHA,
+    'integrityBefore': str(D / 'integrity-before.json'), 'integrityAfter': str(D / 'integrity.json'),
+    'reproduction': str(P / 'runs/i1-01'), 'candidateValidationExit': 0,
+    'negativeControls': {'total': 21, 'incorrectlyAccepted': 15, 'rejected': 6, 'fullCliAcceptedCounterexamples': 3},
+    'findings': findings, 'criteria': criteria, 'nonclaims': nonclaims,
+    'reviewProcedure': {'historyExposure': True, 'freshnessCompliance': 'NOT_FULLY_MET', 'details': 'Required operations read included full agent_coordination.md; historical claim/verdict/spec summaries entered saved stdout and partially tool-visible output. No previous review artifact/ledger/.gauntlet opened separately. This cannot be represented as a clean history-free review.'},
+    'writes': [str(D) + '/**', str(P / 'runs/i1-01') + '/**'],
+    'productionChanges': False, 'candidateChanges': False,
+    'nextAction': 'Lead revises only test-support observer/validator/launcher and freezes a new packet for a truly fresh history-free independent review; production fix remains outside this task.'
+}
+(D / 'verdict.json').write_text(json.dumps(verdict, indent=2) + '\n')
+static = {
+    'method': 'Static source control-flow inspection only, no probe mutations or OS sandbox exercises.',
+    'deadline': {'anchor': str(P / 'run.py') + ':71-97', 'counterexampleSchedule': ['At t=4.9s both streams reach EOF, selector map empties.', 'Loop exits without another 5s comparison.', 'Child exits at t=5.4s during wait(timeout=2).', 'No timeout exception occurs; violation stays None; duration is not part of exit success predicate.'], 'dynamicFaultExecution': 'NOT_RUN'},
+    'errors': {'anchors': [str(P / 'run.py') + ':63-98', str(P / 'run.py') + ':126-151'], 'unprotectedOperations': ['selector.register/select/os.read after child creation', 'second killpg/wait after join timeout', 'after digest snapshot before process.json'], 'consequence': 'No enclosing finally ensures group cleanup or partial process/error evidence on exception.', 'dynamicFaultExecution': 'NOT_RUN'},
+    'positivePaths': ['Successful own child exit0 at 412ms with stdout 21652 bytes and expected empty stderr.', 'Own group1403578: parent join recorded, one loader child reaped, no remaining group; read-only final enumeration found none.', 'Timeout and output cap branches kill the dedicated group and normally retain partial bounded streams; output buffer can overshoot 1MiB by up to one 65536-byte read, marked as violation.', 'Cleanup adds up to 2s parent join plus 2s descendant cleanup after execution; that is separate from the EOF deadline defect.'],
+    'scopeLimits': ['Subreaper waitpid uses original process group only; absence of escaped-group descendants is not established.', 'No faulting native helper or OS containment test executed.', 'Homes are task-private shared P paths, not fresh per-run homes. Existing homes were not removed.', 'Bootstrap and snapshot errors before child spawn can leave a partial new run folder; original folders are not overwritten.']
+}
+(D / 'static-lifecycle.json').write_text(json.dumps(static, indent=2) + '\n')
+
+report = f'''REVISE — observer validity is insufficient; the sandbox metadata preservation invariant itself was independently observed to FAIL.
+
+This I1 review is bound to Lead's expected review-packet SHA256 `{SHA}` (3347 bytes), confirmed before candidate interpretation. All 11 candidate file digests/byte counts and all 1054 frozen source paths matched before semantic reading and at final recheck. Saved attempt-03 before/after maps and both i1-01 maps are identical. `integrity-before.json` and `integrity.json` contain the per-path records; no new source paths appeared. Scope is test support only. No candidate, application, fixture, policy, contract, checker, lockfile, protected SPEC, or repository document was edited. No install, service, PG, provider, real data, network request, OS sandbox exercise, or release gate was performed.
+
+**Actual result, independent of observer acceptance.** The authorized command `python3 {P / 'run.py'} i1-01` ran under the Python capture wrapper from D. It created a new folder and exited 0. The required `python3 {P / 'validate.py'} {P / 'runs/i1-01'}` also exited 0. These are measurement process outcomes, not security PASS. Own child Node22 execution lasted 412ms, stdout 21652 bytes, stderr expected-empty, no limit violation. The launcher recorded parent join and reaped loader child1403728, with no remaining process group1403578. `cleanup-check.json` independently found no current members of either reviewed group; descendants that changed process groups are outside that check.
+
+| Route | Submitted sandbox | Gate calls | Body calls | Native stop |
+|---|---|---:|---:|---|
+| direct WORKSPACE | WORKSPACE | 1 | 0 | UNSAFE_REQUEST |
+| capability WORKSPACE | ABSENT | 0 | 1 | COMPLETED |
+| capability NONE | ABSENT | 0 | 1 | COMPLETED |
+
+Both raw attempt-03 and own i1-01 have this topology. The capability fingerprints are both `135ae3fe3091d3cf87cbf008cc4701a9d62d7190ead93098262c451b3bc143d2`. Independent strict parsing, complete actual kernel-log identity/input/key linkage, gate/context checks, body authority/signal checks, real decision input, audit/telemetry links and recomputed fingerprint passed for these actual records without importing the candidate validator. See `independent-record-check.json`, `independent_records.py`, own `process.json`/`stdout.txt`, and command/stream files. Actual raw stdout SHA256 is `20c96da18a834f60e85145da5b8515a860d704fcdf60ee67913040b772b6e329`; pinned attempt-03 stdout SHA256 is `91fa52f84ff202f4aad60dad99e26c166a505e7cd5e57b3a03443110cf6972d4`. Timestamp/UUID differences were retained, not normalized away.
+
+**Real source path.** `observe.mts:12-25` imports the public source entry and existing synthetic fixtures; `observe.mts:154-187` calls the public factory and `harness.run`. Frozen W `packages/harness/src/index.ts:1-9` exports the factory/registry. `createOperationalHarness.ts:73-96,134-191,204-227` selects the real capability bridge or direct registry, applies the real journal wrapper and dispatches single_pass. `runtime.ts:42-54` delegates to the real kernel; `kernel/profile.ts:57-87` installs its controls including the injected sandbox port. `kernel/kernel-runtime.ts:194-209,281-302,501-508` boots the real host, invokes the synthetic planner and calls the real `runToolCall`. `capability-boundary.ts:207-262` normalizes a descriptor by enumerating fields without sandbox; `:184-204,342-348` exposes the resulting descriptor in the executable bridge. `kernel/pipeline.ts:265-306,351-366,383-403,504-513` logs and gates the real call, treats absent sandbox as NONE, records the direct denial, and dispatches the capability body. This is current source behavior, not a production mutant or replacement kernel.
+
+The seven labelled synthetic ports are orchestrator, model, policy, approval, audit, telemetry and sandbox-deny (`observe.mts:223-231`). Direct ToolRegistry list/resolve is a fixture input; capability registry, public factory, journal wrapper and kernel wiring are native source classes. Journals/logs are in-memory native classes, fresh per case. The only body (`observe.mts:93-99`) records its input/context and returns a fixed memory echo; the model fixture throws if called and was never called. No sandbox helper/grant or production policy was exercised. Node/tsx transformation may create a loader child; that is part of the authorized launcher and is not containment evidence.
+
+**Findings requiring revision.**
+
+1. **I1-001 — HIGH, HIGH confidence.** `validate.py:96-109` trusts replacement map membership and process declarations. An empty source map and `sourceFiles=0`, retaining `pins=465`, passes the full original CLI with exit0 and controls PASS (`forged-cli-empty.command.json`, its stdout, and `negative-controls/empty-source-authority/`). A copied duration6001ms also passes full CLI (`forged-cli-duration.*`). Missing duration, changed limits, forged argv/cwd/env/PID/PGID and a nonempty stderr.txt hidden behind expected_empty metadata pass check_run plus evaluate. This violates OBS-SBX-04; external review hashing of actual runs does not repair a validator that accepts removal of its own sentinel. Bind membership and digests to trusted frozen authority and authenticate process/stream schemas and limits within test support.
+
+2. **I1-002 — HIGH, HIGH confidence.** `validate.py:20-87,109` checks some topology and counters but not full record meaning. Empty/malformed telemetry, forged log tool/input/key/correlation, forged body actor/signal, gate policy flags, decision input and a fabricated 64-hex fingerprint are accepted. Duplicate JSON keys and boolean counters are also accepted. Missing telemetry passes the full original CLI with exit0 (`forged-cli-telemetry.*`). `negative-controls.json` and the exact copied fixtures preserve every mutation; copied stdout checksums were recomputed. Validate payload/type/link completeness, recompute fingerprints and reject ambiguous JSON. This is an evidence-validator issue; actual frozen records passed the separate direct checks above.
+
+3. **I1-003 — MEDIUM, HIGH confidence in static control flow.** `run.py:71-97,141-153` checks 5s only while a pipe remains registered. If both pipes close at4.9s and a still-running child exits at5.4s, wait(timeout=2) succeeds, violation stays None, and duration is never checked by the success predicate. This permits execution beyond5s, distinct from post-kill teardown time. No modified probe/timing exercise was run. Use the remaining absolute deadline for the join and separately record teardown allowance. See `static-lifecycle.json#/deadline`.
+
+4. **I1-004 — MEDIUM, HIGH confidence in static control flow.** `run.py:63-134,134-151` has no enclosing cleanup/persistence finally after spawn. A capture read/select exception bypasses group cleanup and stream persistence. An after-hash read failure aborts before sources-after/process.json; a final process/teardown record is then unavailable. The join-timeout kill also lacks the race protection used in the earlier kill branch. No filesystem/source fault was introduced. Preserve partial evidence/error metadata and guarantee group cleanup on exceptional paths in test support. See `static-lifecycle.json#/errors`.
+
+The 21 independent copied-JSON controls produced 15 incorrectly ACCEPTED and 6 REJECTED results; the rejected controls include extra native-result field, wrong tool-call count, known nonzero exit, unjoined process, explicit source drift and declared output violation. The candidate's original11 negative controls also passed on the real own run, showing those controls are useful but incomplete. No production mutants were used. Three accepted counterexamples were confirmed through the original CLI, not just imported functions.
+
+| SPEC0223 criterion | Status | Evidence |
+|---|---|---|
+| OBS-SBX-01 | PASS_OBSERVED | Direct WORKSPACE gate1/body0/UNSAFE_REQUEST in both raw runs |
+| OBS-SBX-02 | PASS_OBSERVED | Capability NONE gate0/body1/echo, zero model/approval |
+| OBS-SBX-03 | PASS measurement; invariant FAIL | Capability WORKSPACE loses metadata, gate0/body1; no security PASS |
+| OBS-SBX-04 | FAIL | Four findings; 15 accepted adulterations and three full-CLI witnesses |
+| OBS-SBX-05 | PARTIAL_NOT_ACCEPTABLE | Frozen source preservation and focused quality pass; observer rejected and freshness procedure limited |
+
+**Limits, quality and review procedure.** Typecheck passed with an extending private noEmit/nonincremental config and current Node22. Format passed for observe.mts and tsconfig.json. Lint of exact authenticated observe bytes passed over stdin with a virtual filename inside D. Two earlier reviewer config failures are preserved: module resolution exit2 and outside-base ignored-file exit1; neither is silently treated as a candidate failure or pass. See quality/typecheck/format/lint-r3 records and all earlier lint logs. Builder quality logs were not used as independent proof. Global T2/PG/E2E/certify/SBOM/license gates were not run.
+
+I made a procedural error while reading required operational instructions: the `read-ops` subprocess captured the entire coordination document, including historical claim/verdict and protected-SPEC summaries, and part of that history entered tool-visible output. I stopped further history reads. The raw capture is retained and this review cannot truthfully claim complete compliance with the history-free requirement. No previous revision artifact, builder validation/ledger or .gauntlet directory was separately opened. Technical findings above come from the frozen current source, actual own run, and private negative controls. A future acceptance needs a truly fresh reviewer without that exposure. Only hashes, not direct semantic contents, were read for map members; the four protected SPEC files are absent from this1054-path map, so separate before/after preservation of those documents is not independently certified. The narrow user scope superseded repository ledger updates; Lead must integrate the result, not this lane.
+
+The initial pwd, inline bootstrap hashing/authoring, and preliminary metadata inspection used tool-provided capture, not a previously installed independent wrapper. `bootstrap.json` records this gap; no raw stderr provenance is invented for those calls. Subsequent commands use `capture.py` subprocess PIPE capture with exact argv/cwd/exit and complete byte streams in D. Wrapper presentation is limited to60000 bytes per stream and tool output may truncate further; raw files are authoritative. The source-wiring presentation and operations presentation were truncated; later targeted reads supplied the needed source anchors. The wrapper's45s outer timeout path itself was not exercised and is not claimed exception-safe. Final manifest sealing has its own command record and truthfully labelled capture scope.
+
+Launcher lifecycle limits were reviewed statically as well as on success. Normal timeout/output-cap branches kill the dedicated group and retain partial output, with a possible one-read65536-byte cap overshoot explicitly marked as violation. No timeout/output-flood/faulting probe, native containment test, application process, real model or OS sandbox exercise was run. Homes are task-private shared P paths, not new per-run homes; no claim of home cleanup is made. Snapshot integrity covers the frozen map at the observed before/after times, not continuous monitoring or the full transitive dependency closure.
+
+Native isolation, production policy, ML29, both-engine behavior and release are NOT_TESTED; fullParity is NOT_MEASURED. No parent card,36-criterion program,2DONE_LOCAL/34open status or protected pending gate is changed by this report. Recommended next action is revision of this test-support observer only, followed by a new frozen packet and fresh independent review. Production behavior was observed, never changed or accepted.
+'''
+(D / 'report.md').write_text(report)
+(D / 'handoff.json').write_text(json.dumps({'status': 'READY_FOR_LEAD_REVIEW', 'last_completed_action': 'I1 reproduction and adversarial copied-evidence review; REVISE with integrity intact', 'next_action': verdict['nextAction'], 'repositoryLedgersUpdated': False, 'reason': 'User authorizes writes only under review-i1 and own i1 run folders.'}, indent=2) + '\n')
+print(json.dumps({'verdict': 'REVISE', 'findings': len(findings), 'report': str(D / 'report.md'), 'invariant': 'FAIL', 'criteria': criteria}))

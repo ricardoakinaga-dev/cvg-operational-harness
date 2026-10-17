@@ -1,0 +1,95 @@
+"""I1 semantic copied-record diagnostics. No child execution; NOT captures."""
+import copy
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import sys
+
+P = Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r3')
+D = Path(__file__).resolve().parent
+sys.path.insert(0, str(P))
+from common import authority, env_for, load, put
+from seal import seal
+from validate import validate_run
+
+A = '2f526748d30c66ca9d36af4ba5554d3784dd94005296dac1e855f2c8222f23e4'
+trusted = authority(P/'authority.json', A)
+suffix = '-02' if sys.argv[1:] == ['02'] else ''
+out = D/('adversarial-copies'+suffix)
+out.mkdir(exist_ok=False)
+results = []
+
+def check(name, mutate, expected='REJECTED'):
+    folder = out/name
+    shutil.copytree(P/'runs/i1-01', folder)
+    process = load(folder/'process.json')
+    process['capture']['env'] = env_for(folder)
+    data = load(folder/'stdout.txt')
+    mutate(folder, process, data)
+    put(folder/'stdout.txt', data)
+    process['capture']['retainedBytes'] = (folder/'stdout.txt').stat().st_size
+    put(folder/'process.json', process)
+    receipt = out/(name+'.TEST-ONLY.receipt.json')
+    seal(folder, receipt)
+    # Independent local hash here only establishes the semantic diagnostic harness.
+    # This digest is never submitted as an actual captured-run pin.
+    sha = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    try:
+        value = validate_run(folder, trusted, A, receipt, sha)
+        result = 'ACCEPTED'
+        detail = value
+    except Exception as error:
+        result = 'REJECTED'
+        detail = {'type': type(error).__name__, 'message': str(error)}
+    results.append({'test': name, 'expected': expected, 'result': result,
+                    'meetsExpectation': result == expected,
+                    'captureStatus': 'TEST_ONLY_RESIGNED_COPY_NOT_ACTUAL_CAPTURE',
+                    'receiptSHA256': sha, 'detail': detail})
+
+check('positive-copy', lambda f,p,d: None, 'ACCEPTED')
+check('tool-duration-exceeds-turn-latency', lambda f,p,d: d['cases'][1]['telemetryEvents'][0].update(latencyMs=0, toolDurationMs=5000))
+check('tool-duration-exceeds-outer-execution', lambda f,p,d: d['cases'][2]['telemetryEvents'][0].update(latencyMs=5000, toolDurationMs=5000))
+check('negative-tool-duration', lambda f,p,d: d['cases'][1]['telemetryEvents'][0].update(toolDurationMs=-1))
+check('float-counter', lambda f,p,d: d['cases'][1]['nativeResult'].update(toolCalls=1.0))
+check('float-duration', lambda f,p,d: d['cases'][1]['telemetryEvents'][0].update(toolDurationMs=1.0))
+check('boolean-source-count', lambda f,p,d: p.update(sourceCount=True))
+check('unknown-teardown', lambda f,p,d: p['capture'].update(remainingProcessGroup=None))
+check('missing-log-end', lambda f,p,d: d['cases'][1]['kernelLogEvents'].pop())
+check('reordered-log', lambda f,p,d: d['cases'][1]['kernelLogEvents'].reverse())
+check('journal-before-create', lambda f,p,d: d['cases'][1]['journalRecord'].update(createdAt='2099-01-01T00:00:00.000Z'))
+check('tool-body-wrong-operation', lambda f,p,d: d['cases'][1]['bodyCalls'][0]['context'].update(operationKey='forged'))
+check('false-audit-policy', lambda f,p,d: d['cases'][1]['auditEvents'][0].update(policy='DENY'))
+check('unknown-run-file', lambda f,p,d: (f/'extra.txt').write_text('unexpected'))
+check('duplicated-descendant', lambda f,p,d: p['capture'].update(descendantsReaped=[{'pid':2147483646,'waitStatus':9}]*2))
+check('false-stdout-eof', lambda f,p,d: p['capture']['eof'].update(stdout=False))
+check('boolean-execution-duration', lambda f,p,d: p['capture'].update(executionElapsedNs=True))
+check('cleanup-over-deadline', lambda f,p,d: p['capture'].update(cleanupElapsedNs=2200000001))
+check('bad-total-accounting', lambda f,p,d: p['capture'].update(totalElapsedNs=1))
+check('wrong-retained-count', lambda f,p,d: p['capture'].update(outputLimit=1))
+check('unknown-snapshot-failure', lambda f,p,d: p['snapshotErrors'].append({'stage':'after','type':'Error','message':'forged'}))
+
+# Ambiguous JSON must be checked through the full file/receipt route as well.
+for name, raw in [('duplicate-native-json', b'{"cases":[],"cases":[]}'),
+                  ('nonfinite-native-json', b'{"value":NaN}')]:
+    folder = out/name
+    shutil.copytree(P/'runs/i1-01', folder)
+    process = load(folder/'process.json')
+    process['capture']['env'] = env_for(folder)
+    process['capture']['retainedBytes'] = len(raw)
+    put(folder/'process.json', process)
+    (folder/'stdout.txt').write_bytes(raw)
+    receipt = out/(name+'.TEST-ONLY.receipt.json')
+    seal(folder, receipt)
+    sha = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    try:
+        validate_run(folder, trusted, A, receipt, sha)
+        result, detail = 'ACCEPTED', {}
+    except Exception as error:
+        result, detail = 'REJECTED', {'type':type(error).__name__, 'message':str(error)}
+    results.append({'test':name,'expected':'REJECTED','result':result,'meetsExpectation':result=='REJECTED',
+                    'captureStatus':'TEST_ONLY_RESIGNED_COPY_NOT_ACTUAL_CAPTURE','detail':detail})
+
+put(D/('adversarial-results'+suffix+'.json'), results)
+for item in results:
+    print(item['test'], item['result'], 'expected', item['expected'], item['detail'])

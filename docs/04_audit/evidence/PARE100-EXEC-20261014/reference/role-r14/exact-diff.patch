@@ -1,0 +1,432 @@
+--- a/scripts/reference-contract-catalog.mjs
++++ b/scripts/reference-contract-catalog.mjs
+@@ -462,10 +462,10 @@
+   return { find, packages, additional }
+ }
+ 
+-// Per parsed source, not a global vocabulary blacklist. Initializer strings
+-// already require semantic review; an identical literal type in that source
+-// cannot independently establish a declaration-only role for the same bytes.
+-const sourceInitializerLiterals = new WeakMap()
++// Per physical source, not a global vocabulary blacklist. Runtime expression
++// literals are unresolved payload data; matching declaration literals cannot
++// independently establish a declaration-only role for the same bytes.
++const sourcePayloadLiterals = new WeakMap()
+ const stringInitializerReason =
+   'String initializer requires semantic review; bytes not copied'
+ function initializerLiterals(node) {
+@@ -510,12 +510,12 @@
+     : unknown('Dynamic payload key; bytes not copied', {
+         ...(node ? { literals: initializerLiterals(node) } : {})
+       })
+-const matchesInitializer = (node) =>
+-  sourceInitializerLiterals.get(node.getSourceFile())?.has(hash(node.text))
++const matchesPayload = (node) =>
++  sourcePayloadLiterals.get(node.getSourceFile())?.has(hash(node.text))
+ // Identity projection stays separate from exact, role-established metadata.
+ const declarationName = (node) =>
+   node && ts.isStringLiteral(node)
+-    ? matchesInitializer(node)
++    ? matchesPayload(node)
+       ? payloadName(node)
+       : node.text
+     : nodeName(node)
+@@ -545,7 +545,7 @@
+           ts.SyntaxKind.TemplateMiddle,
+           ts.SyntaxKind.TemplateTail
+         ].includes(child.kind)) &&
+-      (sourceInitializerLiterals
++      (sourcePayloadLiterals
+         .get(child.getSourceFile())
+         ?.has(hash(child.text)) ||
+         !/^[A-Za-z0-9_$./:@-]{1,200}$/.test(child.text))
+@@ -574,7 +574,7 @@
+ const nodeName = (node) => {
+   if (!node) return unknown('Computed or destructured name')
+   if (ts.isStringLiteral(node))
+-    return identityVocabulary(node.text) && !matchesInitializer(node)
++    return identityVocabulary(node.text) && !matchesPayload(node)
+       ? node.text
+       : opaqueLiteral(node.text, 'Unclassified literal name; bytes not copied')
+   return ts.isIdentifier(node) || ts.isNumericLiteral(node)
+@@ -701,12 +701,7 @@
+   }
+ }
+ 
+-export function extractTypeScriptContracts(
+-  text,
+-  emit,
+-  context = '',
+-  scriptKind = ts.ScriptKind.TS
+-) {
++function parseTypeScriptContract(text, scriptKind) {
+   const source = ts.createSourceFile(
+     'contract.ts',
+     text,
+@@ -721,20 +716,56 @@
+         .map((d) => ts.flattenDiagnosticMessageText(d.messageText, ' '))
+         .join('; ')
+     )
+-  const payloadLiterals = new Set()
+-  sourceInitializerLiterals.set(source, payloadLiterals)
+-  const remember = (node) => {
+-    for (const literal of initializerLiterals(node))
+-      payloadLiterals.add(literal.value_sha256)
+-  }
+-  const visitInitializers = (node) => {
+-    if (node.initializer) remember(node.initializer)
+-    if (ts.isExportAssignment(node)) remember(node.expression)
+-    ts.forEachChild(node, visitInitializers)
+-  }
+-  // Index every literal descendant before projection, even under unsupported
+-  // expression wrappers. This is AST traversal, never expression evaluation.
+-  visitInitializers(source)
++  return source
++}
++function indexRuntimeLiterals(source, payloadLiterals) {
++  const remember = (text) => payloadLiterals.add(hash(text))
++  const visit = (node) => {
++    // Type syntax, static module locators and declaration names are separate
++    // roles. Runtime expressions inside bodies, call arguments, computed names
++    // and other expression slots remain conservative payload evidence.
++    if (
++      (ts.isTypeNode(node) && !ts.isExpressionWithTypeArguments(node)) ||
++      ts.isImportDeclaration(node) ||
++      ts.isExportDeclaration(node) ||
++      ts.isExternalModuleReference(node)
++    )
++      return
++    const declaredName =
++      node.parent?.name === node &&
++      !ts.isObjectLiteralExpression(node.parent.parent)
++    if (
++      !declaredName &&
++      (ts.isStringLiteralLike(node) ||
++        [
++          ts.SyntaxKind.TemplateHead,
++          ts.SyntaxKind.TemplateMiddle,
++          ts.SyntaxKind.TemplateTail
++        ].includes(node.kind))
++    )
++      remember(node.text)
++    if (ts.isObjectLiteralExpression(node))
++      for (const property of node.properties)
++        if (
++          property.name &&
++          (ts.isIdentifier(property.name) || ts.isNumericLiteral(property.name))
++        )
++          remember(property.name.text)
++    ts.forEachChild(node, visit)
++  }
++  visit(source)
++}
++
++export function extractTypeScriptContracts(
++  text,
++  emit,
++  context = '',
++  scriptKind = ts.ScriptKind.TS,
++  payloadLiterals = new Set()
++) {
++  const source = parseTypeScriptContract(text, scriptKind)
++  sourcePayloadLiterals.set(source, payloadLiterals)
++  indexRuntimeLiterals(source, payloadLiterals)
+   const records = new Map()
+   const add = (kind, symbol, shape) => {
+     if (
+@@ -1127,26 +1158,71 @@
+   return value
+ }
+ 
++const isTypeScriptContractFence = (fence) =>
++  /^(?:ts|typescript)(?: |$)/.test(fence) &&
++  /(?:config-catalog|type-equiv|public-api|cordis)/.test(fence)
++function documentTypeScript(fence, content) {
++  const scanner = ts.createScanner(
++    ts.ScriptTarget.Latest,
++    true,
++    ts.LanguageVariant.Standard,
++    content
++  )
++  const first = scanner.scan()
++  const declaration = [
++    ts.SyntaxKind.ExportKeyword,
++    ts.SyntaxKind.DeclareKeyword,
++    ts.SyntaxKind.InterfaceKeyword,
++    ts.SyntaxKind.TypeKeyword,
++    ts.SyntaxKind.ClassKeyword,
++    ts.SyntaxKind.FunctionKeyword,
++    ts.SyntaxKind.EnumKeyword,
++    ts.SyntaxKind.ImportKeyword,
++    ts.SyntaxKind.ModuleKeyword,
++    ts.SyntaxKind.NamespaceKeyword
++  ].includes(first)
++  const wrapped =
++    fence.includes('cordis-catalog') && !declaration
++      ? `export declare class CordisSurface {\n${content}\n}`
++      : content
++  return wrapped
++}
++
+ function extractDocument(text, source, add, owners) {
+   const lines = text.split('\n')
++  // One local role scope for this physical source. Complete the prepass before
++  // emitting any fragment, so forward/backward matches are order independent.
+   const payloadLiterals = new Set()
+   let indexingFence,
+     indexingBody = []
+   for (const line of lines) {
+     if (indexingFence !== undefined) {
+       if (/^```\s*$/.test(line)) {
+-        if (indexingFence === 'json') {
+-          try {
++        const content = indexingBody.join('\n')
++        try {
++          if (indexingFence === 'json')
+             jsonPayloadLiterals(
+-              JSON.parse(indexingBody.join('\n')),
++              JSON.parse(content),
+               undefined,
+               'declaration',
+               payloadLiterals
+             )
+-          } catch {
+-            // The established extraction pass reports malformed JSON with its
+-            // exact source/heading. This prepass never accepts malformed data.
+-          }
++          else if (isTypeScriptContractFence(indexingFence))
++            indexRuntimeLiterals(
++              parseTypeScriptContract(
++                documentTypeScript(indexingFence, content),
++                ts.ScriptKind.TS
++              ),
++              payloadLiterals
++            )
++        } catch (error) {
++          if (
++            !(error instanceof SyntaxError) &&
++            !error.message.startsWith('AST_PARSE:')
++          )
++            throw error
++          // The established projection pass reports malformed data with its
++          // original source/heading; the prepass never grants it acceptance.
+         }
+         indexingFence = undefined
+         indexingBody = []
+@@ -1218,39 +1294,16 @@
+             ),
+             owner()
+           )
+-        } else if (
+-          /^(?:ts|typescript)(?: |$)/.test(fence) &&
+-          /(?:config-catalog|type-equiv|public-api|cordis)/.test(fence)
+-        ) {
+-          const scanner = ts.createScanner(
+-            ts.ScriptTarget.Latest,
+-            true,
+-            ts.LanguageVariant.Standard,
+-            content
+-          )
+-          const first = scanner.scan()
+-          const declaration = [
+-            ts.SyntaxKind.ExportKeyword,
+-            ts.SyntaxKind.DeclareKeyword,
+-            ts.SyntaxKind.InterfaceKeyword,
+-            ts.SyntaxKind.TypeKeyword,
+-            ts.SyntaxKind.ClassKeyword,
+-            ts.SyntaxKind.FunctionKeyword,
+-            ts.SyntaxKind.EnumKeyword,
+-            ts.SyntaxKind.ImportKeyword,
+-            ts.SyntaxKind.ModuleKeyword,
+-            ts.SyntaxKind.NamespaceKeyword
+-          ].includes(first)
+-          const wrapped =
+-            fence.includes('cordis-catalog') && !declaration
+-              ? `export declare class CordisSurface {\n${content}\n}`
+-              : content
++        } else if (isTypeScriptContractFence(fence)) {
++          const wrapped = documentTypeScript(fence, content)
+           try {
+             extractTypeScriptContracts(
+               wrapped,
+               (kind, symbol, shape) =>
+                 add(`document-${kind}`, symbol, shape, owner()),
+-              `${context()}/`
++              `${context()}/`,
++              ts.ScriptKind.TS,
++              payloadLiterals
+             )
+           } catch (error) {
+             if (!error.message.startsWith('AST_PARSE:')) throw error
+--- a/tests/reference-contract-catalog.test.js
++++ b/tests/reference-contract-catalog.test.js
+@@ -12,7 +12,7 @@
+ } from '../scripts/reference-contract-catalog.mjs'
+ 
+ const evidence = path.resolve(
+-  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/role-r13'
++  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/role-r14'
+ )
+ const temporary = []
+ const sha = (value) => crypto.createHash('sha256').update(value).digest('hex')
+@@ -187,6 +187,160 @@
+ })
+ 
+ describe('P100-003 static contract catalog', () => {
++  it.each([false, true])(
++    'R14 exact I1-R13-01 shares physical Markdown payload evidence (reverse=%s)',
++    (reverse) => {
++      const program = 'throw/FENCE_I1/'
++      const source = 'docs/tool-catalog.md'
++      const fragments = [
++        "## Mirror\n```ts public-api\nexport type SourceMirror = 'throw/FENCE_I1/';\n```\n",
++        "## Program\n```ts public-api\nexport const WorkerSource = 'throw/FENCE_I1/';\nnew Worker(WorkerSource, { eval: true });\n```\n"
++      ]
++      const markdown =
++        '# Tools\n' + (reverse ? [...fragments].reverse() : fragments).join('')
++      const f = fixture({ [source]: markdown })
++      const catalog = f.collect()
++      const entries = catalog.entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(3)
++      const mirror = entries.find((entry) => entry.kind === 'document-type')
++      const literal = {
++        value_sha256: sha(program),
++        byte_length: Buffer.byteLength(program)
++      }
++      expect(mirror.shape.declarations[0].type).toMatchObject({
++        status: 'UNKNOWN',
++        literals: [literal]
++      })
++      const payload = entries.find((entry) => entry.kind === 'document-value')
++      expect(payload.shape.declarations[0].value).toMatchObject({
++        status: 'UNKNOWN',
++        ...literal
++      })
++      expect(JSON.stringify(entries)).not.toContain(program)
++      for (const entry of entries) {
++        expect(entry.owner_task).toBe('P100-003')
++        expect(entry.source_sha256).toBe(sha(markdown))
++        expect(entry.parity_status).toBe('NOT_VERIFIED')
++      }
++    }
++  )
++
++  it('R14 exact I1-R13-02 masks a type mirrored from a direct runtime argument', () => {
++    const program = 'throw/INLINE_I1/'
++    const source = 'packages/core/example/src/types.ts'
++    const text =
++      "export type SourceMirror = 'throw/INLINE_I1/';\nnew Worker('throw/INLINE_I1/', { eval: true });\n"
++    const f = fixture({ [source]: text })
++    const entries = f
++      .collect()
++      .entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(2)
++    const mirror = entries.find((entry) => entry.symbol === 'SourceMirror')
++    expect(mirror.shape.declarations[0].type).toMatchObject({
++      status: 'UNKNOWN',
++      literals: [
++        { value_sha256: sha(program), byte_length: Buffer.byteLength(program) }
++      ]
++    })
++    expect(JSON.stringify(entries)).not.toContain(program)
++    expect(mirror.owner_task).toBe('P100-012')
++    expect(mirror.source_sha256).toBe(sha(text))
++    expect(mirror.parity_status).toBe('NOT_VERIFIED')
++  })
++
++  it.each([
++    ['call', (literal) => `consume(${literal});`],
++    ['unary', (literal) => `void ${literal};`],
++    ['tagged template', () => 'tag`throw/GENERIC_R14/`;']
++  ])(
++    'R14 runtime literal roles are generic for standalone %s expressions',
++    (_kind, expression) => {
++      const program = 'throw/GENERIC_R14/'
++      const rows = []
++      extractTypeScriptContracts(
++        `export type Mirror = ${JSON.stringify(program)}; ${expression(JSON.stringify(program))}`,
++        (kind, symbol, shape) => rows.push({ kind, symbol, shape })
++      )
++      expect(rows).toHaveLength(1)
++      expect(rows[0].shape.declarations[0].type).toMatchObject({
++        status: 'UNKNOWN',
++        literals: [
++          {
++            value_sha256: sha(program),
++            byte_length: Buffer.byteLength(program)
++          }
++        ]
++      })
++      expect(JSON.stringify(rows)).not.toContain(program)
++    }
++  )
++
++  it('R14 preserves declaration-only selectors, event names and module locators', () => {
++    const selector = 'throw/DECL_R14/'
++    const rows = []
++    extractTypeScriptContracts(
++      `import type { Config } from ${JSON.stringify(selector)}; export { Config } from ${JSON.stringify(selector)}; export type Selector = ${JSON.stringify(selector)}; export interface Events { ${JSON.stringify(selector)}(): void; 'throw 0'(): void }`,
++      (kind, symbol, shape) => rows.push({ kind, symbol, shape })
++    )
++    expect(
++      rows.find((row) => row.symbol === 'Selector').shape.declarations[0].type
++    ).toContain(selector)
++    expect(
++      rows.find((row) => row.symbol === `Events.${selector}`).shape
++        .declarations[0].declared_name
++    ).toBe(selector)
++    expect(
++      rows.find(
++        (row) =>
++          row.kind === 'event-vocabulary' &&
++          row.shape.declarations[0].declared_name === 'throw 0'
++      )
++    ).toBeDefined()
++    expect(
++      rows.find((row) => row.kind === 'export').shape.declarations[0].from
++    ).toBe(selector)
++  })
++
++  it('R14 keeps document scopes separate while sharing TS and JSON within a physical source', () => {
++    const program = 'throw/MIXED_R14/'
++    const mirror =
++      '# Mirror\n```ts public-api\nexport type Mirror = ' +
++      JSON.stringify(program) +
++      ';\n```\n'
++    const payload =
++      '# Payload\n```json\n' + JSON.stringify({ default: program }) + '\n```\n'
++    const f = fixture({
++      'docs/tool-catalog.md': mirror + payload,
++      'docs/config-catalog.md': mirror
++    })
++    const catalog = f.collect()
++    const shared = catalog.entries.find(
++      (entry) =>
++        entry.source === 'docs/tool-catalog.md' &&
++        entry.kind === 'document-type'
++    )
++    const separate = catalog.entries.find(
++      (entry) =>
++        entry.source === 'docs/config-catalog.md' &&
++        entry.kind === 'document-type'
++    )
++    expect(shared.shape.declarations[0].type).toMatchObject({
++      status: 'UNKNOWN',
++      literals: [
++        { value_sha256: sha(program), byte_length: Buffer.byteLength(program) }
++      ]
++    })
++    expect(separate.shape.declarations[0].type).toContain(program)
++    expect(
++      [shared, separate].every(
++        (entry) =>
++          entry.owner_task === 'P100-003' &&
++          entry.source_sha256 &&
++          entry.parity_status === 'NOT_VERIFIED'
++      )
++    ).toBe(true)
++  })
++
+   it.each(['default', 'const', 'examples', 'unclassified'])(
+     'R13 S01 opaquely retains complete JSON payload object keys under %s',
+     (field) => {

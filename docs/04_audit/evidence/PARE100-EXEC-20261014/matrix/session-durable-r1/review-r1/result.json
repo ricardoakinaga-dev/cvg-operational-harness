@@ -1,0 +1,180 @@
+{
+  "role": "Fresh independent I1 critic; no descendants",
+  "task": "P100-003/SESSION-DURABLE-PROCEDURES-R1",
+  "verdict": "REVISE",
+  "decision_scope": "T1 finite prospective documentary design only",
+  "static_design_acceptance": false,
+  "largest_material_gap": "I1-01",
+  "findings": [
+    {
+      "id": "I1-01",
+      "severity": "MEDIUM",
+      "confidence": "HIGH",
+      "blocks_proposal_acceptance": true,
+      "title": "SD07 cannot distinguish a synchronous check-then-copy from one-traversal materialization",
+      "artifact_locations": [
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/matrix-session-durable-r1/review-packet/procedures.json",
+          "line": 390
+        },
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/matrix-session-durable-r1/review-packet/procedures.json",
+          "line": 392
+        },
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/matrix-session-durable-r1/review-packet/procedures.json",
+          "line": 396
+        }
+      ],
+      "contract_locations": [
+        {
+          "path": "/home/ricardo/deepseek-harness-session-fixes/packages/session/session-persistence/src/storage-contract.ts",
+          "line": 106
+        },
+        {
+          "path": "/home/ricardo/deepseek-harness-session-fixes/packages/session/session-persistence/src/storage-contract.ts",
+          "line": 123
+        }
+      ],
+      "finding": "The observation names the one-traversal guarantee, but the finite steps mutate ordinary JSON only after invocation. A validator and a second copier can both traverse synchronously before the first await. They then persist the same pre-mutation value as a single snapshot. The listed cycle/function/undefined/createdAt negatives do not expose the second traversal.",
+      "rejecting_example": "A prospective adapter validates a normal nested input A, copies A on a second synchronous traversal, then awaits storage and persists the copy. Caller mutation to B after invocation leaves that copy at A, so the described SD07 transcript accepts it. A per-access-changing input can expose a different value on the second traversal; this is the failure specifically addressed by the append materializer contract. This is a static logical counterexample, not a claim that either current implementation behaves this way.",
+      "required_revision": "Add a bounded adversarial per-access/single-traversal witness and a known-bad synchronous check-then-copy control, with an oracle grounded in the permitted-input behavior of the qualified materializer closure. Do not assume accessor acceptance or invent a refusal category. If that closure cannot be inspected/qualified here, explicitly mark this materialization obligation as a semantic gap rather than imply it is discharged by asynchronous caller mutation."
+    },
+    {
+      "id": "I1-02",
+      "severity": "MEDIUM",
+      "confidence": "HIGH",
+      "blocks_proposal_acceptance": true,
+      "title": "Default read vector has null arguments without a decoding contract",
+      "artifact_locations": [
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/matrix-session-durable-r1/review-packet/procedures.json",
+          "line": 987
+        },
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/matrix-session-durable-r1/review-packet/procedures.json",
+          "line": 988
+        },
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/matrix-session-durable-r1/review-packet/procedures.json",
+          "line": 989
+        }
+      ],
+      "contract_locations": [
+        {
+          "path": "/home/ricardo/deepseek-harness-session-fixes/packages/session/session-persistence/src/handle.ts",
+          "line": 77
+        },
+        {
+          "path": "/home/ricardo/deepseek-harness-session-fixes/packages/session/session-persistence/src/handle.ts",
+          "line": 83
+        }
+      ],
+      "finding": "The full-log vector supplies offset:null and length:null. The pinned public signature specifies optional numbers; null is neither an omitted argument nor undefined. No vector decoding rule maps these literal fields to omitted call arguments. The general future projection is explicitly unspecified.",
+      "rejecting_example": "A future driver passes the JSON vector fields directly as read arguments. Under the declared TypeScript public signature, read(null,null) is not a valid positive consumer fixture. Treating it as read() silently adds a coercion contract and can produce a false result for the default/full-log case.",
+      "required_revision": "Encode omission explicitly, for example an empty args array for read(), or define a versioned vector decoding rule that translates this particular descriptor to omitted arguments before either public call. Do not require the public backend to accept null."
+    },
+    {
+      "id": "I1-03",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "blocks_proposal_acceptance": false,
+      "title": "Envelope/artifact manifest basename collision prevents one sealed-file verification",
+      "artifact_locations": [
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/matrix-session-durable-r1/review-packet/manifest.json",
+          "line": 8
+        }
+      ],
+      "contract_locations": [],
+      "finding": "files.manifest.json.sealed names manifest.json, which is the envelope itself, while the expected SHA belongs to the live artifact manifest. Those are different bytes. All other eight sealed payloads and all live artifact/source inputs match their advertised digests; no drift was observed.",
+      "rejecting_example": "A strict verifier hashing packet/manifest.json against files.manifest.json.sha256 rejects this packet. The corresponding live artifact manifest does match, so this is a packaging namespace defect rather than evidence of source mutation.",
+      "required_revision": "In a separately prepared packet, give the artifact manifest a distinct sealed filename and point the envelope at it; do not alter this sealed packet during review."
+    }
+  ],
+  "verification": {
+    "probe": "STDLIB_DATA_ONLY",
+    "catalog_rows": 44132,
+    "leaf_rows": 44132,
+    "catalog_sha256": "4bb8acfeec196b96ba53feb528ab23625316e39c9e19277bd2b9c8d5407385b1",
+    "leaves_sha256": "d57e1d15770ba2eff5b78d6b97030b54a2f22df705734d10c6af85dfcfdc3270",
+    "selected": 75,
+    "remaining": 44057,
+    "source_counts": {
+      "packages/session/session-persistence/src/index.ts": 55,
+      "packages/session/session-persistence/src/handle.ts": 20
+    },
+    "extraction": {
+      "STATIC": 71,
+      "UNKNOWN": 4
+    },
+    "families": {
+      "SERVICE": 6,
+      "CREATE": 5,
+      "VALIDATION": 6,
+      "BARRIER": 5,
+      "APPEND": 4,
+      "METADATA": 8,
+      "CLOSE": 1,
+      "OWNERSHIP": 6,
+      "OBSERVE": 12,
+      "ERRORS": 10,
+      "READ": 10,
+      "SURFACE_PENDING": 2
+    },
+    "procedures": 18,
+    "gaps": 13,
+    "anchors_checked": 44,
+    "identity_and_owner_comparisons": "ALL_MATCH",
+    "readonly_pre_post": "ALL_36_UNCHANGED",
+    "sealed_payload_hashes": "8_MATCH; envelope/artifact manifest basename collision separately recorded",
+    "all_external_hashes": "18_MATCH",
+    "commit_scope": "Declared pin matches across catalog/proposal/source manifest; content authenticated by 18 enumerated hashes. Git history and unlisted Git metadata not inspected.",
+    "all_procedures": "NOT_RUN",
+    "parity": "NOT_MEASURED"
+  },
+  "procedures": {
+    "SD01": "NOT_RUN",
+    "SD02": "NOT_RUN",
+    "SD03": "NOT_RUN",
+    "SD04": "NOT_RUN",
+    "SD05": "NOT_RUN",
+    "SD06": "NOT_RUN",
+    "SD07": "NOT_RUN",
+    "SD08": "NOT_RUN",
+    "SD09": "NOT_RUN",
+    "SD10": "NOT_RUN",
+    "SD11": "NOT_RUN",
+    "SD12": "NOT_RUN",
+    "SD13": "NOT_RUN",
+    "SD14": "NOT_RUN",
+    "SD15": "NOT_RUN",
+    "SD16": "NOT_RUN",
+    "SD17": "NOT_RUN",
+    "SD18": "NOT_RUN"
+  },
+  "parity": "NOT_MEASURED",
+  "functional_status": "NOT_VERIFIED",
+  "approvals": {
+    "functionalPASS": false,
+    "contractBUILD": false,
+    "T3": false,
+    "release": false
+  },
+  "open_scope": [
+    "P100-003 full card",
+    "P100-020 full card",
+    "36-goal program",
+    "remaining 44057 leaves",
+    "four UNKNOWN leaves",
+    "two source-surface semantic reviews",
+    "reference backend qualification",
+    "lossless CVG protocol"
+  ],
+  "source_limitations": "Content hashes authenticate only listed files; declared commit pin cross-checked across sealed/catalog records. No Git history or unlisted metadata inspected. No dependency utility or runtime adapter execution used to assume accessor behavior.",
+  "write_scope": "/tmp/cvg-pare100-exec-20261014-6az3hlay/matrix-session-durable-r1/review",
+  "runtime_execution": false,
+  "source_edits": false,
+  "shared_ledger_writes": false,
+  "reference_implementation_copied": false
+}

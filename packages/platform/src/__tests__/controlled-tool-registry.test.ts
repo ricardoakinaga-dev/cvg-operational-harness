@@ -278,7 +278,7 @@ describe('controlled tool registry identity boundary', () => {
     expect(left).toHaveBeenCalledTimes(1)
   })
 
-  it('plans a compiled fixture tool by intent and executes it through Test Lab', async () => {
+  it('plans a custom fixture by intent but refuses unreviewed code in Test Lab', async () => {
     const handler = vi.fn<PluginHandler>(async () => ({
       status: 'succeeded',
       data: { fixtureOnly: true }
@@ -346,9 +346,12 @@ describe('controlled tool registry identity boundary', () => {
     })
 
     expect(trace.tools).toEqual([
-      { name: 'find_controlled_schedule', status: 'succeeded' }
+      { name: 'find_controlled_schedule', status: 'not_run' }
     ])
-    expect(handler).toHaveBeenCalledTimes(1)
+    expect(trace.status).toBe('blocked')
+    expect(trace.handoff.reason).toBe('controlled_runtime_unsafe_request')
+    expect(trace.response.mode).toBe('handoff')
+    expect(handler).not.toHaveBeenCalled()
   })
 
   it('never turns a catalog-only binding into executable code', async () => {

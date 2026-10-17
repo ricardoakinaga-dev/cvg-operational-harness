@@ -1,0 +1,21 @@
+import hashlib, json, pathlib
+
+root = pathlib.Path(__file__).resolve().parent
+entries = []
+for path in sorted(root.rglob('*')):
+    if not path.is_file() or path.name in ['artifact-manifest.json', 'artifact-manifest.sha256']:
+        continue
+    raw = path.read_bytes()
+    entries.append({'path': str(path.relative_to(root)), 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()})
+manifest = root / 'artifact-manifest.json'
+manifest.write_text(json.dumps({
+    'status': 'BUILDER_EVIDENCE_ONLY', 'acceptance': False,
+    'scope': 'all evidence directory files including private caches, excluding the manifest and its detached checksum',
+    'command': ['python3', str(pathlib.Path(__file__).resolve())],
+    'files': entries
+}, indent=2) + '\n')
+digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+(root / 'artifact-manifest.sha256').write_text(f'{digest}  artifact-manifest.json\n')
+for item in entries:
+    assert hashlib.sha256((root / item['path']).read_bytes()).hexdigest() == item['sha256']
+print(json.dumps({'files': len(entries), 'manifestSha256': digest, 'verified': True}))

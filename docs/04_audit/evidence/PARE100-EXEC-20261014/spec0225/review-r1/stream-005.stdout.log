@@ -1,0 +1,630 @@
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/harness/src/complete-tool-results.ts
+1: import { createHash } from 'node:crypto'
+2: import type {
+3:   CompleteToolObservationPayload,
+4:   CompleteJsonValue,
+5:   ContextItem,
+6:   Observation,
+7:   SideEffect,
+8:   StepContext,
+9:   ToolResult,
+10:   ToolRegistry
+11: } from '@cvg/harness-contracts'
+12: import {
+13:   canonicalizeCompleteJson,
+14:   COMPLETE_CHECKPOINT_MAX_BYTES,
+15:   CompleteJsonError,
+16:   MAX_CHECKPOINT_OBSERVATIONS,
+17:   ToolResultContextError
+18: } from '@cvg/harness-contracts'
+19: 
+20: const LARGE_LIMITS = {
+21:   maxBytes: COMPLETE_CHECKPOINT_MAX_BYTES,
+22:   maxDepth: 64,
+23:   maxNodes: 1_000_000
+24: }
+25: 
+26: /** Before legacy serialization/validators can coerce or invoke output data. */
+27: export function prepareCompleteToolResult(raw: unknown): ToolResult {
+28:   let safe: Record<string, unknown>
+29:   try {
+30:     const text = canonicalizeCompleteJson(raw, LARGE_LIMITS)
+31:     safe = JSON.parse(text) as Record<string, unknown>
+32:     if (
+33:       !safe ||
+34:       Array.isArray(safe) ||
+35:       !['SUCCEEDED', 'FAILED', 'REJECTED'].includes(safe.status as string)
+36:     )
+37:       throw new Error('shape')
+38:     if (
+39:       safe.error !== undefined &&
+40:       (typeof safe.error !== 'string' || safe.error.length > 512)
+41:     )
+42:       throw new Error('error')
+43:   } catch {
+44:     // The body may already have acted; do not turn capture failure into safe replay.
+45:     throw new Error('unknown_effect: complete_result_not_representable')
+46:   }
+47:   return {
+48:     status: safe.status as ToolResult['status'],
+49:     ...(Object.hasOwn(safe, 'output') ? { output: safe.output } : {}),
+50:     ...(typeof safe.error === 'string' ? { error: safe.error } : {})
+51:   }
+52: }
+53: 
+54: export function prepareCompleteToolRegistry(
+55:   registry: ToolRegistry
+56: ): ToolRegistry {
+57:   const prepare = (tool: ReturnType<ToolRegistry['resolve']>) =>
+58:     tool
+59:       ? {
+60:           ...tool,
+61:           execute: async (...args: Parameters<typeof tool.execute>) =>
+62:             prepareCompleteToolResult(await tool.execute(...args))
+63:         }
+64:       : undefined
+65:   return {
+66:     list: () => registry.list().map((tool) => prepare(tool)!),
+67:     resolve: (id, version) => prepare(registry.resolve(id, version))
+68:   }
+69: }
+70: 
+71: export function completeSnapshot(value: unknown): string {
+72:   return canonicalizeCompleteJson(value, LARGE_LIMITS)
+73: }
+74: 
+75: export function completeToolPayload(
+76:   output: unknown,
+77:   sideEffect: SideEffect
+78: ): CompleteToolObservationPayload {
+79:   try {
+80:     const serialized = canonicalizeCompleteJson(output)
+81:     return {
+82:       schemaVersion: 1,
+83:       status: 'SUCCEEDED',
+84:       sideEffect,
+85:       completion: 'COMPLETE',
+86:       resultAvailability: 'AVAILABLE',
+87:       output: JSON.parse(serialized) as CompleteJsonValue,
+88:       outputBytes: Buffer.byteLength(serialized, 'utf8'),
+89:       outputSha256: createHash('sha256').update(serialized).digest('hex')
+90:     }
+91:   } catch (error) {
+92:     if (!(error instanceof CompleteJsonError)) throw error
+93:     return {
+94:       schemaVersion: 1,
+95:       status: 'SUCCEEDED',
+96:       sideEffect,
+97:       completion: 'UNAVAILABLE',
+98:       resultAvailability: 'UNAVAILABLE',
+99:       reason: error.code
+100:     }
+101:   }
+102: }
+103: 
+104: export function assertCompleteToolObservation(observation: Observation): void {
+105:   if (observation.type !== 'TOOL_RESULT') return
+106:   const raw = observation.payload
+107:   // Validate plain JSON before reading individual fields; never invoke accessors.
+108:   completeSnapshot(raw)
+109:   const payload = raw as CompleteToolObservationPayload
+110:   if (
+111:     !payload ||
+112:     payload.schemaVersion !== 1 ||
+113:     observation.source !== 'TOOL' ||
+114:     observation.trust !== 'UNTRUSTED' ||
+115:     !['NONE', 'READ', 'WRITE', 'EXTERNAL'].includes(payload.sideEffect)
+116:   ) {
+117:     throw new ToolResultContextError(
+118:       'STATE_CONFLICT',
+119:       'Invalid complete tool envelope.',
+120:       'STATE_CONFLICT'
+121:     )
+122:   }
+123:   if (payload.status === 'SUCCEEDED' && payload.completion === 'COMPLETE') {
+124:     const value = canonicalizeCompleteJson(payload.output)
+125:     if (
+126:       payload.resultAvailability !== 'AVAILABLE' ||
+127:       payload.outputBytes !== Buffer.byteLength(value, 'utf8') ||
+128:       payload.outputSha256 !==
+129:         createHash('sha256').update(value).digest('hex') ||
+130:       Object.keys(payload).sort().join(',') !==
+131:         'completion,output,outputBytes,outputSha256,resultAvailability,schemaVersion,sideEffect,status'
+132:     ) {
+133:       throw new ToolResultContextError(
+134:         'STATE_CONFLICT',
+135:         'Tool result integrity mismatch.',
+136:         'STATE_CONFLICT'
+137:       )
+138:     }
+139:   } else if (
+140:     payload.status === 'SUCCEEDED' &&
+141:     payload.completion === 'UNAVAILABLE'
+142:   ) {
+143:     if (
+144:       payload.resultAvailability !== 'UNAVAILABLE' ||
+145:       !['INVALID_JSON', 'RESULT_TOO_LARGE', 'RESULT_COMPLEXITY'].includes(
+146:         payload.reason
+147:       ) ||
+148:       Object.keys(payload).sort().join(',') !==
+149:         'completion,reason,resultAvailability,schemaVersion,sideEffect,status'
+150:     ) {
+151:       throw new ToolResultContextError(
+152:         'STATE_CONFLICT',
+153:         'Invalid unavailable result.',
+154:         'STATE_CONFLICT'
+155:       )
+156:     }
+157:   } else if (
+158:     (payload.status !== 'FAILED' && payload.status !== 'REJECTED') ||
+159:     payload.completion !== 'NOT_APPLICABLE' ||
+160:     payload.resultAvailability !== 'UNAVAILABLE' ||
+161:     typeof payload.error !== 'string' ||
+162:     payload.error.length > 512 ||
+163:     Object.keys(payload).sort().join(',') !==
+164:       'completion,error,resultAvailability,schemaVersion,sideEffect,status'
+165:   ) {
+166:     throw new ToolResultContextError(
+167:       'STATE_CONFLICT',
+168:       'Invalid failed tool result.',
+169:       'STATE_CONFLICT'
+170:     )
+171:   }
+172: 
+173:   const identifiers = [
+174:     observation.observationId,
+175:     observation.executionId,
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/harness/src/createOperationalHarness.ts
+90:   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
+91:   if (options.capabilities && !options.effectJournal) {
+92:     throw new Error(
+93:       'Capability composition requires an explicit effect journal'
+94:     )
+95:   }
+96:   const tools = resolveTools(options, capabilityFingerprint)
+97:   const singlePass = new SinglePassGovernedRuntime({
+98:     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+99:     modelGateway: options.modelGateway,
+100:     policy: options.policy,
+101:     approvals: options.approvals,
+102:     tools,
+103:     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+104:     audit: options.audit,
+105:     telemetry: options.telemetry,
+106:     ...(options.pause ? { pause: options.pause } : {}),
+107:     ...(options.effects ? { effects: options.effects } : {}),
+108:     ...(options.log ? { log: options.log } : {}),
+109:     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+110:   })
+111: 
+112:   const iterative =
+113:     options.iterativeOrchestrator && options.stepStore
+114:       ? new IterativeGovernedRuntime({
+115:           orchestrator: options.iterativeOrchestrator,
+116:           modelGateway: options.modelGateway,
+117:           policy: options.policy,
+118:           approvals: options.approvals,
+119:           tools,
+120:           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+121:           audit: options.audit,
+122:           telemetry: options.telemetry,
+123:           ...(options.pause ? { pause: options.pause } : {}),
+124:           ...(options.effects ? { effects: options.effects } : {}),
+125:           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+126:           ...(options.log ? { log: options.log } : {}),
+127:           stepStore: options.stepStore,
+128:           ...(options.toolResultContext
+129:             ? { toolResultContext: options.toolResultContext }
+130:             : {}),
+131:           ...(options.contextEngine
+132:             ? { contextEngine: options.contextEngine }
+133:             : {}),
+134:           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+135:           ...(options.sufficiencyEvaluator
+136:             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+137:             : {}),
+138:           ...(options.completionEvaluator
+139:             ? { completionEvaluator: options.completionEvaluator }
+140:             : {}),
+141:           ...(options.claimExtractor
+142:             ? { claimExtractor: options.claimExtractor }
+143:             : {}),
+144:           ...(options.clock ? { clock: options.clock } : {})
+145:         })
+146:       : undefined
+147: 
+148:   const resolveProfile = (input: RuntimeInput): RuntimeProfile => {
+149:     const profile =
+150:       input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+151:     if (options.toolResultContext && profile !== 'iterative') {
+152:       throw new Error(
+153:         'complete-tool-v1 is only supported by the iterative profile.'
+154:       )
+155:     }
+156:     return profile
+157:   }
+158: 
+159:   const execute = async (input: RuntimeInput): Promise<RuntimeResult> => {
+160:     const governedInput = capabilityFingerprint
+161:       ? { ...input, capabilityFingerprint }
+162:       : input
+163:     if (
+164:       capabilityFingerprint &&
+165:       input.executionId &&
+166:       input.capabilityFingerprint === undefined
+167:     ) {
+168:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+169:       return {
+170:         response:
+171:           'Capability composition fingerprint is required for durable execution.',
+172:         stopReason: 'STATE_CONFLICT',
+173:         steps: 0,
+174:         modelCalls: 0,
+175:         toolCalls: 0,
+176:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+177:       }
+178:     }
+179:     if (
+180:       capabilityFingerprint &&
+181:       input.capabilityFingerprint !== undefined &&
+182:       input.capabilityFingerprint !== capabilityFingerprint
+183:     ) {
+184:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+185:       return {
+186:         response:
+187:           'Capability composition fingerprint does not match the runtime.',
+188:         stopReason: 'STATE_CONFLICT',
+189:         steps: 0,
+190:         modelCalls: 0,
+191:         toolCalls: 0,
+192:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+193:       }
+194:     }
+195:     const profile = resolveProfile(governedInput)
+196:     if (profile === 'iterative') {
+197:       if (!iterative) {
+198:         await safeAudit(
+199:           options,
+200:           governedInput,
+201:           'runtime.stopped',
+202:           'STATE_CONFLICT'
+203:         )
+204:         return {
+205:           response:
+206:             'The iterative runtime profile is not configured in this composition.',
+207:           stopReason: 'STATE_CONFLICT',
+208:           steps: 0,
+209:           modelCalls: 0,
+210:           toolCalls: 0,
+211:           usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+212:         }
+213:       }
+214:       return iterative.execute(governedInput)
+215:     }
+216:     return singlePass.execute(governedInput)
+217:   }
+218: 
+219:   return {
+220:     run: (input) => execute(input),
+221:     execute,
+222:     resolveProfile,
+223:     ...(options.capabilities
+224:       ? { capabilityFingerprint: options.capabilities.compositionFingerprint() }
+225:       : {})
+226:   }
+227: }
+228: 
+229: function resolveTools(
+230:   options: OperationalHarnessOptions,
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/docs/02_spec/0224_pare100_complete_tool_result_context.md
+180: aceita são gravados no mesmo checkpoint antes do próximo despacho. Se essa
+181: gravação falhar, nenhum novo corpo é invocado.
+182: 
+183: Antes de invocar ferramenta, o runtime verifica um checkpoint prospectivo
+184: com o estado atual, os campos nativos que serão adicionados e espaço para
+185: um envelope de até36864bytes. Também reserva64KiB de folga para alterações
+186: de estado do passo; não pode confiar apenas em `sizeAtual + outputBytes`.
+187: Se não conseguir limitar os campos que mudarão, recusar a invocação. Após o
+188: retorno, medir o checkpoint real antes de gravar. O limite do wrapper não
+189: substitui a verificação final, nem a disponibilidade do banco.
+190: 
+191: Após resultado SUCCEEDED, o journal/settlement continua autoridade do efeito.
+192: O checkpoint completo é gravado antes da próxima decisão de modelo. Se
+193: output for indisponível, não cabe no contexto ou o save falhar depois do
+194: efeito, interromper. Conservar operationKey, status nativo, provenance e
+195: settlement, sem emitir ACTION_CONFIRMED com base em uma prévia. Falha da
+196: serialização no próprio journal continua falha nativa/efeito incerto;
+197: esta SPEC não pode convertê-la em confirmação.
+198: 
+199: Se o checkpoint não foi confirmado, a retomada usa a fronteira durável0217
+200: e seu journal para resolver o efeito antes de qualquer novo despacho.
+201: Resultado confirmado recuperado do journal precisa passar pela mesma
+202: validação; não chamar o corpo novamente para reconstruir texto perdido.
+203: Sem prova de settlement ou sem dado recuperável: handoff/estado incerto,
+204: não replay. Nenhuma nova semântica de exatamente-uma-vez é concedida aqui.
+205: 
+206: ### 3.3 Codec físico V2 para o state JSONB
+207: 
+208: O domínio lógico inclui U+0000 em valores e chaves. PostgreSQL JSONB não
+209: aceita esse caractere decodificado, mesmo quando escrito como escape JSON;
+210: a restrição está na [documentação oficial17, seção8.14](https://www.postgresql.org/docs/17/datatype-json.html).
+211: Essa leitura é evidência documental, não teste do banco instalado.
+212: 
+213: O adaptador não grava state lógico diretamente em JSONB no modo2. Grava um
+214: wrapper de chaves fixas ASCII: storageCodec=`cvg.checkpoint-state/2`,
+215: encoding=`base64`, decodedBytes, decodedSha256 e data. data contém base64
+216: canônico RFC4648 com padding dos bytes UTF-8 canônicos do state lógico.
+217: O hash decodedSha256 é desses bytes; o digest geral do checkpoint continua
+218: sendo do unsigned lógico com separação de domínio3.2. BudgetUsage tem schema
+219: fechado de números/metadados nativos sem conteúdo arbitrário e permanece
+220: na coluna existente. IDs/versões externos ao state recusam U+0000.
+221: 
+222: Limite lógico de8MiB inclui o unsigned inteiro, não só state. Para leitura,
+223: limitar data a `4 * ceil(8388608 / 3)` caracteres ASCII e o wrapper físico a
+224: esse total +512bytes. A query deve recusar linhas acima desse teto antes de
+225: entregar JSON ao parser do driver; depois validar chaves/tipos/comprimentos,
+226: padding e reencode base64 exato. Decodificar UTF-8 estrito, exigir bytecount
+227: e hash, validar JSON limitado (profundidade total64 e1000000nós) e schema
+228: V2, exigir reserialização canônica byte a byte igual e conferir digest do
+229: checkpoint. Duplicatas de chave, lixo final, base64 permissivo ou Unicode
+230: malformado são erro, não reparo silencioso. Limites se aplicam antes da
+231: alocação/parse correspondente e novamente ao unsigned reconstruído.
+232: 
+233: Memória e PostgreSQL exercitam o mesmo encode/decode lógico V2; load devolve
+234: ExecutionCheckpoint lógico, nunca o wrapper ao runtime/modelo. O protocolo
+235: wire do modelo continua JSON lógico e não base64. Não há migração de coluna,
+236: SQL dinâmico, compressão, blob externo ou endpoint de decode. Base64 não é
+237: criptografia nem controle de acesso. V1 permanece no formato existente;
+238: V2 sem wrapper ou com storageCodec desconhecido é recusado, sem autodetect
+239: por chaves arbitrárias dentro de output. Não alterar a autoridade/formato
+240: dos journals por supor que uma classe de digest-only seja store de output.
+241: Falha nativa de journal anterior ao checkpoint mantém efeito incerto; o
+242: codec não pode forjar uma confirmação ou reconstruir dado não recuperável.
+243: 
+244: ## 4. Seleção única e pedido real
+245: 
+246: ContextBuildInput/StepContext recebem um campo opcional versionado
+247: `toolResultContext`. No modo novo sua ausência ou inconsistência é erro;
+248: não existe fallback silencioso para summary. O runtime valida a saída de
+249: ContextEngine customizado, inclusive IDs/cursor, integridade do envelope e
+250: conjunto obrigatório. HybridOrchestrator anuncia suporte ao protocolo1;
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/controlled-published-fencing.ts
+1: import { OperationalExecutionError } from '@cvg/harness'
+2: import { TenantIdSchema } from '@cvg/platform'
+3: import type { FencedOuterClaimRef } from './outbox.ts'
+4: import type { PostgresQueryable } from './postgres.ts'
+5: 
+6: /** Private persistence fence, reconstructed by the trusted worker, never HTTP. */
+7: export interface ControlledPublishedDatabaseFence {
+8:   readonly tenantId: string
+9:   readonly executionId: string
+10:   readonly workerId: string
+11:   readonly attempt: number
+12:   readonly outer: FencedOuterClaimRef
+13:   readonly signal?: AbortSignal
+14:   readonly cancellation?: {
+15:     readonly eventSequence: string
+16:     readonly attempt: number
+17:   }
+18: }
+19: 
+20: export interface ControlledPublishedBindingRow extends Record<string, unknown> {
+21:   tenant_id: string
+22:   execution_id: string
+23:   inbound_message_id: string
+24:   conversation_id: string
+25:   session_id: string
+26:   outbox_id: string
+27:   agent_id: string
+28:   version_id: string
+29:   trace_id: string
+30:   correlation_id: string
+31:   request_digest: string
+32:   capability_fingerprint: string
+33:   prepared: unknown
+34:   prepared_digest: string | null
+35:   state: unknown
+36:   state_digest: string | null
+37:   state_revision: string | number
+38:   evidence_sequence: number
+39:   evidence_bytes: number
+40:   evidence_hash: string
+41:   started_at: Date | string | null
+42:   expires_at: Date | string | null
+43:   dispatch_closed: boolean
+44:   fault: unknown
+45:   closed_trace: unknown
+46:   closed_trace_digest: string | null
+47:   phase_state: 'IDLE_SEALED' | 'OPEN' | 'FAULTED' | 'CLOSED'
+48:   phase_revision: string | number
+49:   seal_id: string
+50:   seal_checkpoint_digest: string | null
+51:   sealed_checkpoint: unknown
+52:   seal_state_digest: string | null
+53:   sealed_through_sequence: number
+54:   consumed_seal_id: string | null
+55:   open_phase_id: string | null
+56:   open_phase_type: string | null
+57:   open_phase_input_digest: string | null
+58:   open_phase_attempt: number | null
+59:   open_phase_acked: boolean
+60:   active_outer_attempt: number | null
+61:   active_outer_worker_id: string | null
+62:   active_outer_attempt_row_id: string | null
+63:   approval_receipt: unknown
+64: }
+65: 
+66: interface ParentRow extends Record<string, unknown> {
+67:   tenant_id: string
+68:   id: string
+69:   state: string
+70:   attempt: number
+71:   lease_owner: string | null
+72:   lease_until: Date | string | null
+73: }
+74: 
+75: export function publishedFenceError(code = 'lease_lost'): never {
+76:   throw new OperationalExecutionError(
+77:     code === 'conflict' ? 'conflict' : 'lease_lost',
+78:     'Controlled published execution guard rejected the operation'
+79:   )
+80: }
+81: 
+82: export function publishedIso(value: Date | string): string {
+83:   const date = value instanceof Date ? value : new Date(value)
+84:   if (!Number.isFinite(date.getTime())) publishedFenceError('conflict')
+85:   return date.toISOString()
+86: }
+87: 
+88: export async function publishedDbNow(client: PostgresQueryable): Promise<Date> {
+89:   const result = await client.query<{ now: Date | string }>(
+90:     'SELECT clock_timestamp() AS now'
+91:   )
+92:   const now = result.rows[0]?.now
+93:   if (now === undefined) publishedFenceError()
+94:   return new Date(publishedIso(now))
+95: }
+96: 
+97: export async function setPublishedWriteContext(
+98:   client: PostgresQueryable,
+99:   fence: Pick<
+100:     ControlledPublishedDatabaseFence,
+101:     'executionId' | 'workerId' | 'attempt'
+102:   >,
+103:   mode: 'active' | 'settlement' | 'claim' | 'close' | 'cancel' | 'cancel_close'
+104: ): Promise<void> {
+105:   await client.query(
+106:     `SELECT set_config('cvg.published_execution',$1,true),
+107:     set_config('cvg.published_worker',$2,true),set_config('cvg.published_attempt',$3,true),
+108:     set_config('cvg.published_mode',$4,true)`,
+109:     [fence.executionId, fence.workerId, String(fence.attempt), mode]
+110:   )
+111: }
+112: 
+113: export async function boundExecutionIdForOperation(
+114:   client: PostgresQueryable,
+115:   tenantId: string,
+116:   operationKey: string
+117: ): Promise<string | null> {
+118:   const result = await client.query<{ execution_id: string }>(
+119:     `SELECT id AS execution_id FROM operational_executions
+120:      WHERE tenant_id=$1 AND request#>>'{runtime,context,values,adapterVersion}'='controlled-published-v1'
+121:        AND left($2,length(id)+2)=id||':s' LIMIT 1`,
+122:     [tenantId, operationKey]
+123:   )
+124:   return result.rows[0]?.execution_id ?? null
+125: }
+126: 
+127: export async function guardOptionalPublishedWrite(
+128:   client: PostgresQueryable,
+129:   tenantId: string,
+130:   executionId: string,
+131:   fence: ControlledPublishedDatabaseFence | undefined,
+132:   settlement = false
+133: ): Promise<Awaited<ReturnType<typeof guardControlledPublishedFence>> | null> {
+134:   const bound = await client.query(
+135:     `SELECT id FROM operational_executions WHERE tenant_id=$1 AND id=$2
+136:      AND request#>>'{runtime,context,values,adapterVersion}'='controlled-published-v1'`,
+137:     [tenantId, executionId]
+138:   )
+139:   if (!bound.rows.length) {
+140:     if (fence) publishedFenceError()
+141:     return null
+142:   }
+143:   if (
+144:     !fence ||
+145:     fence.tenantId !== tenantId ||
+146:     fence.executionId !== executionId
+147:   )
+148:     publishedFenceError()
+149:   return guardControlledPublishedFence(client, fence, {
+150:     settlement,
+151:     requirePhase: true
+152:   })
+153: }
+154: 
+155: /** One client/one transaction; global lock order is shared by every bound port. */
+156: export async function guardControlledPublishedFence(
+157:   client: PostgresQueryable,
+158:   fence: ControlledPublishedDatabaseFence,
+159:   options: {
+160:     settlement?: boolean
+161:     requirePhase?: boolean
+162:     skipPause?: boolean
+163:     signal?: AbortSignal
+164:   } = {}
+165: ): Promise<{
+166:   binding: ControlledPublishedBindingRow
+167:   now: Date
+168:   recheck: () => Promise<Date>
+169:   leaseUntil: string
+170: }> {
+171:   options = {
+172:     ...options,
+173:     ...(!options.settlement && !options.signal && fence.signal
+174:       ? { signal: fence.signal }
+175:       : {})
+176:   }
+177:   TenantIdSchema.parse(fence.tenantId)
+178:   if (fence.cancellation) {
+179:     if (!options.settlement || options.requirePhase) publishedFenceError()
+180:     return guardCancelledPublishedFence(client, fence)
+181:   }
+182:   const outer = fence.outer
+183:   if (
+184:     !Number.isSafeInteger(fence.attempt) ||
+185:     fence.attempt < 1 ||
+186:     outer.tenantId !== fence.tenantId ||
+187:     outer.processWorkerId !== fence.workerId ||
+188:     !Number.isSafeInteger(outer.expectedOuterAttempt) ||
+189:     outer.expectedOuterAttempt < 1 ||
+190:     !/^[1-9]\d*$/.test(outer.expectedAttemptRowId) ||
+191:     options.signal?.aborted
+192:   )
+193:     publishedFenceError()
+194:   const parentResult = await client.query<ParentRow>(
+195:     'SELECT tenant_id,id,state,attempt,lease_owner,lease_until FROM operational_executions WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+196:     [fence.tenantId, fence.executionId]
+197:   )
+198:   const parent = parentResult.rows[0]
+199:   const bindingResult = await client.query<ControlledPublishedBindingRow>(
+200:     'SELECT * FROM controlled_published_bindings WHERE tenant_id=$1 AND execution_id=$2 FOR UPDATE',
+201:     [fence.tenantId, fence.executionId]
+202:   )
+203:   const binding = bindingResult.rows[0]
+204:   if (
+205:     !parent ||
+206:     !binding ||
+207:     binding.outbox_id !== outer.eventId ||
+208:     binding.active_outer_attempt !== outer.expectedOuterAttempt ||
+209:     binding.active_outer_worker_id !== outer.processWorkerId ||
+210:     String(binding.active_outer_attempt_row_id) !==
+211:       outer.expectedAttemptRowId ||
+212:     parent.attempt !== fence.attempt ||
+213:     parent.lease_owner !== fence.workerId ||
+214:     !['CLAIMED', 'RUNNING'].includes(parent.state) ||
+215:     binding.phase_state === 'CLOSED'
+216:   )
+217:     publishedFenceError()
+218:   if (
+219:     !options.settlement &&
+220:     (binding.dispatch_closed ||
+221:       binding.fault ||
+222:       binding.phase_state === 'FAULTED')
+223:   )
+224:     publishedFenceError()
+225:   if (
+226:     options.requirePhase &&
+227:     (!['OPEN', ...(options.settlement ? ['FAULTED'] : [])].includes(
+228:       binding.phase_state
+229:     ) ||
+230:       !binding.open_phase_id ||
+231:       binding.open_phase_attempt !== fence.attempt ||
+232:       binding.open_phase_acked)
+233:   )
+234:     publishedFenceError()
+235:   const queueResult = await client.query<Record<string, unknown>>(

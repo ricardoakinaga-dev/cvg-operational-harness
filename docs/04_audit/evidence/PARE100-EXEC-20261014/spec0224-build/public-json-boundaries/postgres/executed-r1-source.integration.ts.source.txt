@@ -1,0 +1,840 @@
+/** SPEC0224/TR02 bounded synthetic public factory proof, not BUILD acceptance.
+ * Deliberate .integration.ts: requires the assigned PG resource and private config.
+ */
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { Client, Pool } from 'pg'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import {
+  canonicalizeCompleteJson,
+  type DecisionInputCounter,
+  type ModelGateway,
+  type ModelRequest,
+  type RuntimeInput
+} from '@cvg/harness-contracts'
+import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+import { TenantIdSchema } from '@cvg/platform'
+import {
+  createCapabilityRegistry,
+  createOperationalHarness
+} from '../../../harness/src/index.ts'
+import {
+  phase3AgentProfile,
+  phase3RuntimeInput,
+  InMemoryApprovalEngine,
+  RecordingAuditSink,
+  RecordingTelemetrySink,
+  ScriptedPolicyEngine
+} from '../../../harness/src/__tests__/fixtures/phase3-fixtures.ts'
+import { runPostgresMigrations } from '../postgres-migrations.ts'
+import { PostgresOperationalEffectJournal } from '../operational-execution-postgres.ts'
+import { PostgresExecutionStepStore } from '../operational-step-postgres.ts'
+import { withTenantContext } from '../tenant-scoped-postgres.ts'
+
+const resourcePath = process.env.SPEC0224_JSON_RESOURCE
+const evidence = process.env.SPEC0224_JSON_EVIDENCE
+if (!resourcePath || !evidence)
+  throw new Error(
+    'Assigned JSON PG224 resource and private evidence required; never skip'
+  )
+const containerId =
+  '0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c'
+const schema = 'pare224_json_r1',
+  role = 'pare224_json_r1_service'
+const tenantId = TenantIdSchema.parse(
+  'tenant_00000000-0000-4000-8000-000000000224'
+)
+const otherTenant = TenantIdSchema.parse(
+  'tenant_00000000-0000-4000-8000-000000000225'
+)
+const toolId = 'synthetic.public.json.echo'
+const sha = (value: string) => createHash('sha256').update(value).digest('hex')
+const save = (path: string, value: unknown) =>
+  writeFile(path, JSON.stringify(value, null, 2) + '\n', { flag: 'wx' })
+const errorInfo = (error: unknown) =>
+  error instanceof Error
+    ? {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+        code: (error as Error & { code?: string }).code
+      }
+    : { message: String(error) }
+
+// Independent oracle, called ONLY for known-valid fixtures / parsed model frames.
+// Unsafe native body outputs are never passed to this or JSON.stringify.
+function golden(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return '[' + value.map(golden).join(',') + ']'
+  return (
+    '{' +
+    Object.keys(value)
+      .sort()
+      .map(
+        (key) =>
+          JSON.stringify(key) +
+          ':' +
+          golden((value as Record<string, unknown>)[key])
+      )
+      .join(',') +
+    '}'
+  )
+}
+const toy64 = (value: unknown) =>
+  Math.ceil(
+    Buffer.byteLength(
+      canonicalizeCompleteJson(value, {
+        maxBytes: 8_388_608,
+        maxDepth: 64,
+        maxNodes: 1_000_000
+      }),
+      'utf8'
+    ) / 64
+  )
+type Kind =
+  | 'complete'
+  | 'context-overflow'
+  | 'too-large'
+  | 'complexity'
+  | 'invalid'
+  | 'nul'
+interface Case {
+  id: string
+  kind: Kind
+  make: (hook: () => void) => unknown
+  canonical?: string
+  bytes?: number
+  depth?: number
+  nodes?: number
+}
+const valid = (id: string, value: unknown, canonical: string): Case => ({
+  id,
+  kind: 'complete',
+  make: () => value,
+  canonical,
+  bytes: Buffer.byteLength(canonical)
+})
+const depthValue = (depth: number) => {
+  let value: unknown = 0
+  for (let i = 1; i < depth; i++) value = [value]
+  return value
+}
+const shared = { v: 7 }
+const cases: Case[] = [
+  valid('null', null, 'null'),
+  valid('true', true, 'true'),
+  valid('false', false, 'false'),
+  valid('finite-number', 123.25, '123.25'),
+  valid('empty-string', '', '""'),
+  valid(
+    'json-looking-string',
+    '{"a":[true,null,42]}',
+    '"{\\"a\\":[true,null,42]}"'
+  ),
+  valid(
+    'plain-object',
+    { z: 'Olá🙂漢字"\\\n', a: [null, true, 17] },
+    '{"a":[null,true,17],"z":"Olá🙂漢字\\"\\\\\\n"}'
+  ),
+  valid(
+    'dense-array',
+    [null, false, 0, 'null', {}],
+    '[null,false,0,"null",{}]'
+  ),
+  valid(
+    'shared-acyclic-alias',
+    { z: shared, a: shared },
+    '{"a":{"v":7},"z":{"v":7}}'
+  ),
+  {
+    ...valid(
+      'ascii-bytes32768',
+      'x'.repeat(32766),
+      '"' + 'x'.repeat(32766) + '"'
+    ),
+    kind: 'context-overflow'
+  },
+  {
+    ...valid(
+      'ascii-bytes32769',
+      'x'.repeat(32767),
+      '"' + 'x'.repeat(32767) + '"'
+    ),
+    kind: 'too-large'
+  },
+  valid(
+    'unicode-bytes32768',
+    '🙂'.repeat(8191) + 'xx',
+    '"' + '🙂'.repeat(8191) + 'xx"'
+  ),
+  {
+    ...valid(
+      'unicode-bytes32769',
+      '🙂'.repeat(8191) + 'xxx',
+      '"' + '🙂'.repeat(8191) + 'xxx"'
+    ),
+    kind: 'too-large'
+  },
+  {
+    ...valid(
+      'root-depth32',
+      depthValue(32),
+      '['.repeat(31) + '0' + ']'.repeat(31)
+    ),
+    depth: 32
+  },
+  {
+    ...valid(
+      'root-depth33',
+      depthValue(33),
+      '['.repeat(32) + '0' + ']'.repeat(32)
+    ),
+    kind: 'complexity',
+    depth: 33
+  },
+  {
+    ...valid(
+      'value-nodes10000',
+      Array(9999).fill(0),
+      '[' + Array(9999).fill('0').join(',') + ']'
+    ),
+    nodes: 10000
+  },
+  {
+    ...valid(
+      'value-nodes10001',
+      Array(10000).fill(0),
+      '[' + Array(10000).fill('0').join(',') + ']'
+    ),
+    kind: 'complexity',
+    nodes: 10001
+  },
+  { id: 'undefined', kind: 'invalid', make: () => undefined },
+  { id: 'nested-undefined', kind: 'invalid', make: () => ({ a: undefined }) },
+  { id: 'negative-zero', kind: 'invalid', make: () => -0 },
+  { id: 'NaN', kind: 'invalid', make: () => NaN },
+  { id: 'Infinity', kind: 'invalid', make: () => Infinity },
+  { id: 'BigInt', kind: 'invalid', make: () => BigInt(1) },
+  { id: 'isolated-high-surrogate', kind: 'invalid', make: () => '\ud800' },
+  {
+    id: 'isolated-low-surrogate-key',
+    kind: 'invalid',
+    make: () => ({ ['\udfff']: 'x' })
+  },
+  {
+    id: 'cycle',
+    kind: 'invalid',
+    make: () => {
+      const x: Record<string, unknown> = {}
+      x.self = x
+      return x
+    }
+  },
+  { id: 'array-hole', kind: 'invalid', make: () => Array(2) },
+  {
+    id: 'accessor',
+    kind: 'invalid',
+    make: (hook) =>
+      Object.defineProperty({}, 'x', {
+        enumerable: true,
+        get: () => {
+          hook()
+          throw new Error('Getter must never run')
+        }
+      })
+  },
+  {
+    id: 'toJSON',
+    kind: 'invalid',
+    make: (hook) => ({
+      toJSON: () => {
+        hook()
+        throw new Error('toJSON must never run')
+      }
+    })
+  },
+  { id: 'symbol-key', kind: 'invalid', make: () => ({ [Symbol('x')]: 1 }) },
+  {
+    id: 'array-extra-property',
+    kind: 'invalid',
+    make: () => Object.assign([1], { extra: 2 })
+  },
+  {
+    id: 'custom-prototype',
+    kind: 'invalid',
+    make: () => Object.create({ inherited: true })
+  },
+  {
+    ...valid(
+      'nul-value4096',
+      '\0'.repeat(4096),
+      '"' + '\\u0000'.repeat(4096) + '"'
+    ),
+    kind: 'nul'
+  },
+  {
+    ...valid(
+      'nul-key',
+      { ['\0']: 'safe synthetic' },
+      '{"\\u0000":"safe synthetic"}'
+    ),
+    kind: 'nul'
+  }
+]
+let admin: Client | undefined, pool: Pool | undefined
+let servingOptions: ConstructorParameters<typeof Pool>[0]
+const summaries: unknown[] = []
+
+async function snapshot(
+  connection: Pool,
+  store: PostgresExecutionStepStore,
+  executionId: string
+) {
+  const rows = await withTenantContext(connection, tenantId, async (c) => ({
+    execution: (
+      await c.query(
+        'SELECT * FROM operational_executions WHERE tenant_id=$1 AND id=$2',
+        [tenantId, executionId]
+      )
+    ).rows,
+    checkpoints: (
+      await c.query(
+        'SELECT * FROM operational_execution_checkpoints WHERE tenant_id=$1 AND execution_id=$2',
+        [tenantId, executionId]
+      )
+    ).rows,
+    steps: (
+      await c.query(
+        'SELECT * FROM operational_execution_steps WHERE tenant_id=$1 AND execution_id=$2 ORDER BY step_number',
+        [tenantId, executionId]
+      )
+    ).rows,
+    journal: (
+      await c.query(
+        'SELECT * FROM operational_effect_journal WHERE tenant_id=$1 AND operation_key LIKE $2 ORDER BY operation_key',
+        [tenantId, executionId + ':%']
+      )
+    ).rows
+  }))
+  return {
+    rows,
+    checkpoint: await store.loadCheckpoint(tenantId, executionId),
+    steps: await store.listSteps(tenantId, executionId)
+  }
+}
+
+describe('SPEC0224 public JSON matrix on assigned real PostgreSQL', () => {
+  beforeAll(async () => {
+    const resource = JSON.parse(await readFile(resourcePath!, 'utf8'))
+    const url = new URL(resource.test_database_url)
+    if (
+      resource.containerId !== containerId ||
+      !resource.synthetic ||
+      resource.schemaName !== schema ||
+      resource.roleName !== role ||
+      url.hostname !== '127.0.0.1' ||
+      url.pathname !== '/pare224_synthetic' ||
+      url.username !== 'pare224' ||
+      resource.hostPort.HostIp !== '127.0.0.1' ||
+      resource.hostPort.HostPort !== url.port
+    )
+      throw new Error('Refusing unassigned PG resource')
+    admin = new Client({ connectionString: url.toString() })
+    await admin.connect()
+    const preexisting = (
+      await admin.query(
+        'SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname=$1) AS schema_exists, EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$2) AS role_exists',
+        [schema, role]
+      )
+    ).rows[0]
+    await save(join(evidence!, 'preexistence-check.json'), preexisting)
+    expect(preexisting).toEqual({ schema_exists: false, role_exists: false })
+    await admin.query(`CREATE SCHEMA ${schema}`)
+    await runPostgresMigrations(admin, {
+      schemaName: schema,
+      createSchema: false
+    })
+    const password = randomBytes(24).toString('hex')
+    await admin.query(
+      `CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS`
+    )
+    await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
+    for (const table of [
+      'operational_executions',
+      'operational_execution_checkpoints',
+      'operational_execution_steps',
+      'operational_effect_journal'
+    ])
+      await admin.query(
+        `GRANT SELECT,INSERT,UPDATE ON ${schema}.${table} TO ${role}`
+      )
+    url.username = role
+    url.password = password
+    servingOptions = {
+      connectionString: url.toString(),
+      max: 2,
+      options: `-c search_path=${schema} -c statement_timeout=5000 -c lock_timeout=1500`
+    }
+    pool = new Pool(servingOptions)
+    const identity = (
+      await pool.query(
+        `SELECT current_user,session_user,current_database(),current_schema(),r.rolsuper,r.rolbypassrls,r.rolinherit,r.rolcanlogin,
+      (SELECT count(*)::int FROM pg_auth_members WHERE member=r.oid) AS memberships,
+      (SELECT count(*)::int FROM pg_namespace WHERE nspname=$1 AND nspowner=r.oid) AS owned_schemas,
+      (SELECT count(*)::int FROM pg_class WHERE relnamespace=$1::regnamespace AND relowner=r.oid) AS owned_relations FROM pg_roles r WHERE rolname=current_user`,
+        [schema]
+      )
+    ).rows[0]
+    const rls = (
+      await pool.query(
+        `SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class WHERE relnamespace=$1::regnamespace AND relname=ANY($2) ORDER BY relname`,
+        [
+          schema,
+          [
+            'operational_executions',
+            'operational_execution_steps',
+            'operational_execution_checkpoints',
+            'operational_effect_journal'
+          ]
+        ]
+      )
+    ).rows
+    await save(join(evidence!, 'serving-identity-rls.json'), {
+      identity,
+      rls,
+      migrationRows: (
+        await admin.query(
+          `SELECT * FROM ${schema}.schema_migrations ORDER BY version`
+        )
+      ).rows
+    })
+    expect(identity).toMatchObject({
+      current_user: role,
+      session_user: role,
+      current_database: 'pare224_synthetic',
+      rolsuper: false,
+      rolbypassrls: false,
+      rolinherit: false,
+      rolcanlogin: true,
+      memberships: 0,
+      owned_schemas: 0,
+      owned_relations: 0
+    })
+    expect(rls).toHaveLength(4)
+    expect(rls.every((r) => r.relrowsecurity && r.relforcerowsecurity)).toBe(
+      true
+    )
+    await save(
+      join(evidence!, 'matrix-plan.json'),
+      cases.map(({ make: _make, ...c }) => {
+        void _make
+        return c
+      })
+    )
+  })
+  afterAll(async () => {
+    await save(join(evidence!, 'matrix-summary.json'), summaries)
+    await pool?.end()
+    await admin?.end()
+  })
+
+  it('independent observer accepts genuine frames and rejects truncation, type and digest tampering', async () => {
+    const check = (
+      value: unknown,
+      canonical: string,
+      bytes: number,
+      digest: string
+    ) => {
+      const actual = golden(value)
+      if (
+        actual !== canonical ||
+        Buffer.byteLength(actual) !== bytes ||
+        sha(actual) !== digest
+      )
+        throw new Error('observer mismatch')
+    }
+    const raw = '"42"'
+    check('42', raw, 4, sha(raw))
+    expect(() => check(42, raw, 4, sha(raw))).toThrow('observer mismatch')
+    expect(() => check('4', raw, 4, sha(raw))).toThrow('observer mismatch')
+    expect(() => check('42', raw, 4, sha('42'))).toThrow('observer mismatch')
+    await save(join(evidence!, 'observer-controls.json'), {
+      positive: 1,
+      negative: 3,
+      rejectedTypeTruncationDigest: true
+    })
+  })
+
+  it.each(cases)('$id [$kind]', async (c) => {
+    const dir = join(evidence!, 'cases', c.id)
+    await mkdir(dir, { recursive: true })
+    const executionId = `json224_${randomUUID()}`
+    const counts = { body: 0, model: 0, outputValidation: 0, getterHook: 0 }
+    const output = c.make(() => {
+      counts.getterHook++
+    })
+    // Record safe fixture labels for invalid values, never stringify those values.
+    await save(join(dir, 'fixture.json'), {
+      id: c.id,
+      kind: c.kind,
+      rawType: output === null ? 'null' : typeof output,
+      safeSanitizedOnly: c.kind === 'invalid',
+      canonical: c.canonical,
+      canonicalBytes: c.bytes,
+      canonicalSha256: c.canonical === undefined ? undefined : sha(c.canonical),
+      depth: c.depth,
+      nodes: c.nodes
+    })
+    if (c.canonical !== undefined) {
+      expect(golden(output)).toBe(c.canonical)
+      await writeFile(join(dir, 'expected.canonical.json'), c.canonical, {
+        flag: 'wx'
+      })
+      expect(Buffer.byteLength(c.canonical)).toBe(c.bytes)
+    }
+    await withTenantContext(pool!, tenantId, (client) =>
+      client.query(
+        "INSERT INTO operational_executions (tenant_id,id,idempotency_key,request_hash,request,state) VALUES ($1,$2,$2,$3,'{}'::jsonb,'RECEIVED')",
+        [tenantId, executionId, sha(executionId)]
+      )
+    )
+    const requests: unknown[] = [],
+      responses: unknown[] = [],
+      counters: unknown[] = [],
+      journalTrace: unknown[] = [],
+      casTrace: unknown[] = []
+    const audit = new RecordingAuditSink(),
+      telemetry = new RecordingTelemetrySink()
+    const frameValues: unknown[] = []
+    const receipts: string[] = []
+    const capabilities = createCapabilityRegistry([
+      {
+        descriptor: {
+          id: toolId,
+          version: '1',
+          description: 'Synthetic JSON echo',
+          inputSchema: { type: 'object' },
+          outputSchema: {},
+          risk: 'LOW',
+          sideEffect: 'NONE',
+          idempotent: true,
+          requiresApproval: false,
+          origin: 'core',
+          providerId: 'synthetic.public.json',
+          providerVersion: '1'
+        },
+        implementation: {
+          validateInput: () => true,
+          validateOutput: () => {
+            counts.outputValidation++
+            return true
+          },
+          execute: async () => {
+            counts.body++
+            return { status: 'SUCCEEDED', output }
+          }
+        }
+      }
+    ])
+    const model: ModelGateway = {
+      complete: async ({ signal: _signal, ...request }: ModelRequest) => {
+        void _signal
+        counts.model++
+        requests.push(structuredClone(request))
+        expect(request.maxOutputTokens).toBe(512)
+        const frame = JSON.parse(request.messages[1]!.content)
+        const tool = frame.items.find(
+          (i: { value?: { type?: string } }) => i.value?.type === 'TOOL_RESULT'
+        )
+        let decision: unknown
+        if (tool) {
+          // Derive from the actual received full value only. No closure over expected fixture.
+          const actualCanonical = golden(tool.value.payload.output)
+          frameValues.push(tool.value)
+          const receipt = `sha256:${sha(actualCanonical)};bytes:${Buffer.byteLength(actualCanonical)}`
+          receipts.push(receipt)
+          decision = {
+            decisionType: 'RESPOND',
+            reasonCode: 'GOAL_SATISFIED',
+            responseText: receipt
+          }
+        } else
+          decision = {
+            decisionType: 'CALL_TOOL',
+            reasonCode: 'TOOL_REQUIRED',
+            toolId,
+            toolVersion: '1',
+            toolInput: { fixtureId: c.id }
+          }
+        const text = JSON.stringify(decision)
+        expect(toy64(text)).toBeLessThanOrEqual(512)
+        const result = {
+          text,
+          provider: 'synthetic.public.json',
+          model: 'toy64-v1',
+          inputTokens: toy64(request),
+          outputTokens: toy64(text),
+          costUsd: 0
+        }
+        responses.push(result)
+        return result
+      }
+    }
+    const counter: DecisionInputCounter = {
+      measure: async (request) => {
+        const measurement = {
+          counterId: 'syntheticToy64',
+          counterVersion: '1',
+          provider: 'synthetic.public.json',
+          model: 'toy64-v1',
+          formattingVersion: '1',
+          inputUpperBoundTokens: toy64(request),
+          contextWindowTokens: 100_000,
+          costUpperBoundUsd: 0
+        }
+        counters.push({ request: structuredClone(request), measurement })
+        return measurement
+      }
+    }
+    function fresh(connection: Pool) {
+      const journal = new PostgresOperationalEffectJournal(connection),
+        store = new PostgresExecutionStepStore(connection)
+      // Native method delegation is observational: exact input/result, unchanged errors.
+      for (const method of [
+        'reserve',
+        'markStarted',
+        'confirm',
+        'fail',
+        'markUncertain',
+        'get'
+      ] as const) {
+        const original = journal[method].bind(journal)
+        Object.defineProperty(journal, method, {
+          value: async (...args: unknown[]) => {
+            try {
+              const result = await (
+                original as (...a: unknown[]) => Promise<unknown>
+              )(...args)
+              journalTrace.push({ method, args, result })
+              return result
+            } catch (error) {
+              journalTrace.push({ method, args, error: errorInfo(error) })
+              throw error
+            }
+          }
+        })
+      }
+      const cas = store.compareAndSwapCheckpoint.bind(store)
+      store.compareAndSwapCheckpoint = async (input) => {
+        try {
+          const result = await cas(input)
+          casTrace.push({ input, result })
+          return result
+        } catch (error) {
+          casTrace.push({ input, error: errorInfo(error) })
+          throw error
+        }
+      }
+      return {
+        store,
+        harness: createOperationalHarness({
+          toolResultContext: { version: 1 },
+          capabilities,
+          effectJournal: journal,
+          stepStore: store,
+          iterativeOrchestrator: new HybridOrchestrator({
+            decisionModel: model,
+            decisionInputCounter: counter,
+            decisionModelSupportsMaxOutputTokens: true
+          }),
+          modelGateway: model,
+          policy: new ScriptedPolicyEngine(),
+          approvals: new InMemoryApprovalEngine(),
+          audit,
+          telemetry
+        })
+      }
+    }
+    const base = phase3RuntimeInput({
+      tenantId: tenantId as RuntimeInput['tenantId'],
+      executionId
+    })
+    const input = {
+      ...base,
+      capabilityFingerprint: capabilities.compositionFingerprint(),
+      agent: phase3AgentProfile({ tools: [toolId] }),
+      userMessage:
+        'Return a digest receipt for the complete synthetic JSON tool value.',
+      budget: { ...base.budget, maxTokens: 100_000 }
+    }
+    await save(join(dir, 'runtime-input.json'), input)
+    let first: unknown,
+      rerun: unknown,
+      before: Awaited<ReturnType<typeof snapshot>> | undefined,
+      after: Awaited<ReturnType<typeof snapshot>> | undefined
+    let checkError: unknown
+    const checks: Record<string, unknown> = {}
+    try {
+      const initial = fresh(pool!)
+      first = await initial.harness.run(input)
+      before = await snapshot(pool!, initial.store, executionId)
+      await save(join(dir, 'before-fresh-harness.json'), before)
+      const beforeCounts = { ...counts }
+      const freshPool = new Pool(servingOptions)
+      try {
+        const second = fresh(freshPool)
+        rerun = await second.harness.run(input)
+        after = await snapshot(freshPool, second.store, executionId)
+      } finally {
+        await freshPool.end()
+      }
+      await save(join(dir, 'after-fresh-harness.json'), after)
+      expect(counts).toEqual(beforeCounts)
+      checks.noReplayFreshConnectionAndFactory = true
+      expect(counts.body).toBe(1)
+      expect(counts.getterHook).toBe(0)
+      expect(counts.outputValidation).toBe(c.kind === 'invalid' ? 0 : 1)
+      expect(before.rows.journal).toHaveLength(1)
+      const journal = before.rows.journal[0]!
+      const obs = before.checkpoint?.state.observations.find(
+        (o) => o.type === 'TOOL_RESULT'
+      )
+      const payload = obs?.payload as Record<string, unknown> | undefined
+      checks.capture = payload?.completion ?? 'NO_TOOL_RESULT'
+      checks.journalState = journal.state
+      checks.stopReason = (first as { stopReason: string }).stopReason
+      checks.modelCalls = counts.model
+      checks.admissions =
+        before.checkpoint?.state.toolResultContext?.decisionAdmissions
+      if (c.kind === 'invalid' || c.kind === 'nul') {
+        expect(journal.state).toBe('UNCERTAIN')
+        expect(counts.model).toBe(1)
+        expect(frameValues).toHaveLength(0)
+        expect((first as { stopReason: string }).stopReason).not.toBe(
+          'COMPLETED'
+        )
+        checks.storageClassification =
+          c.kind === 'nul'
+            ? 'REQUIRED_PATH_FAIL_NATIVE_NUL'
+            : 'SAFE_NATIVE_UNCERTAIN_INVALID_JSON'
+        if (c.kind === 'nul') {
+          expect(
+            journalTrace.some(
+              (t) =>
+                (t as { method: string; error?: { code?: string } }).method ===
+                  'confirm' &&
+                (t as { error?: { code?: string } }).error?.code === '22P05'
+            )
+          ).toBe(true)
+        }
+      } else {
+        expect(journal.state).toBe('CONFIRMED')
+        expect(golden(journal.result)).toBe(c.canonical)
+        checks.storageClassification = 'CONFIRMED'
+        if (c.kind === 'too-large' || c.kind === 'complexity') {
+          expect(payload).toMatchObject({
+            status: 'SUCCEEDED',
+            completion: 'UNAVAILABLE',
+            resultAvailability: 'UNAVAILABLE',
+            reason:
+              c.kind === 'too-large' ? 'RESULT_TOO_LARGE' : 'RESULT_COMPLEXITY'
+          })
+          expect(payload).not.toHaveProperty('output')
+          expect(counts.model).toBe(1)
+          expect((first as { stopReason: string }).stopReason).not.toBe(
+            'COMPLETED'
+          )
+        } else {
+          expect(payload).toMatchObject({
+            status: 'SUCCEEDED',
+            completion: 'COMPLETE',
+            resultAvailability: 'AVAILABLE',
+            outputBytes: c.bytes,
+            outputSha256: sha(c.canonical!)
+          })
+          expect(golden(payload!.output)).toBe(c.canonical)
+          expect(payload!.output).toEqual(JSON.parse(c.canonical!))
+          expect(obs).toMatchObject({ source: 'TOOL', trust: 'UNTRUSTED' })
+          expect(obs!.provenance.operationKey).toBe(journal.operation_key)
+          if (c.kind === 'context-overflow') {
+            expect(counts.model).toBe(1)
+            expect((first as { stopReason: string }).stopReason).toBe(
+              'CONTEXT_OVERFLOW'
+            )
+            checks.admissionClassification = 'CAPTURE_AVAILABLE_CONTEXT_REFUSED'
+          } else {
+            expect(counts.model).toBe(2)
+            expect(frameValues).toHaveLength(1)
+            const observed = frameValues[0] as {
+              payload: Record<string, unknown>
+            }
+            expect(golden(observed.payload.output)).toBe(c.canonical)
+            expect(observed.payload.output).toEqual(JSON.parse(c.canonical!))
+            expect(observed.payload).toEqual(payload)
+            expect((first as { stopReason: string }).stopReason).toBe(
+              'COMPLETED'
+            )
+            expect((first as { response: string }).response).toBe(receipts[0])
+            checks.admissionClassification = 'FULL_VALUE_ACTUALLY_DELIVERED'
+          }
+        }
+      }
+      // Cross-tenant SELECT and store read controls exercise native tenant context.
+      const isolation = await withTenantContext(
+        pool!,
+        otherTenant,
+        async (client) =>
+          (
+            await client.query(
+              'SELECT * FROM operational_effect_journal WHERE operation_key LIKE $1',
+              [executionId + ':%']
+            )
+          ).rows
+      )
+      expect(isolation).toEqual([])
+      expect(
+        await initial.store.loadCheckpoint(otherTenant, executionId)
+      ).toBeNull()
+      checks.crossTenantDenied = true
+      expect(after?.checkpoint).toEqual(before.checkpoint)
+      checks.checkpointUnchangedOnRerun = true
+    } catch (error) {
+      checkError = error
+      throw error
+    } finally {
+      const observation = {
+        caseId: c.id,
+        kind: c.kind,
+        executionId,
+        counts,
+        first,
+        rerun,
+        checks,
+        verdict: checkError
+          ? 'RED'
+          : c.kind === 'nul'
+            ? 'EXPECTED_SAFE_REQUIRED_PATH_FAIL'
+            : 'BUILD_TEST_EVIDENCE',
+        error: checkError ? errorInfo(checkError) : undefined
+      }
+      summaries.push(observation)
+      await save(join(dir, 'observed.json'), observation)
+      await save(join(dir, 'raw-requests-responses.json'), {
+        requests,
+        responses,
+        counters,
+        frameValues,
+        receipts
+      })
+      await save(join(dir, 'native-journal-cas-trace.json'), {
+        journalTrace,
+        casTrace
+      })
+      await save(join(dir, 'audit-telemetry.json'), {
+        audit: audit.events,
+        telemetry: telemetry.events
+      })
+    }
+  })
+})

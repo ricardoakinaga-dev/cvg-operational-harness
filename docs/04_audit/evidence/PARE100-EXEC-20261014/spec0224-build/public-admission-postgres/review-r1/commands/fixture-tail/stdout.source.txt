@@ -1,0 +1,361 @@
+            })
+            expect(receipt!.reserved.outputTokens).toBe(512)
+            expect(receipt!.reserved.modelCalls).toBe(1)
+            expect(checkpoint.budgetUsage.modelCalls).toBe(calls.length + 1)
+            expect(receipt!.measurement).toEqual(
+              (measurements.at(-1) as { measurement: unknown }).measurement
+            )
+            calls.push({
+              resumed,
+              completeEntry,
+              readEvent,
+              priorCASEvent: matchingCAS!.sequence,
+              request: structuredClone(request),
+              receipt: structuredClone(receipt),
+              checkpointAtComplete: snapshot(checkpoint)
+            })
+            event('synthetic-response-computation', {
+              completeEntry,
+              readEvent
+            })
+            const decision: LoopDecision = resumed
+              ? {
+                  decisionType: 'RESPOND',
+                  reasonCode: 'GOAL_SATISFIED',
+                  responseText: 'Synthetic admission control complete.'
+                }
+              : calls.length === 1
+                ? {
+                    decisionType: 'CALL_TOOL',
+                    reasonCode: 'TOOL_REQUIRED',
+                    toolId: id,
+                    toolVersion: '1',
+                    toolInput: {}
+                  }
+                : ask
+            const text = JSON.stringify(decision)
+            expect(request.maxOutputTokens).toBe(512)
+            expect(tokens(text)).toBeLessThanOrEqual(512)
+            const response = {
+              text,
+              provider,
+              model: modelName,
+              inputTokens: tokens(request),
+              outputTokens: tokens(text),
+              costUsd: 0.125
+            }
+            responses.push({ completeEntry, response })
+            event('synthetic-response-return', { completeEntry, response })
+            return response
+          }
+        }
+        const rule = (_context: StepContext): LoopDecision | undefined => {
+          void _context
+          return !priorReceipts && !resumed ? ask : undefined
+        }
+        const audit = new RecordingAuditSink()
+        const telemetry = new RecordingTelemetrySink()
+        const harness = createOperationalHarness({
+          toolResultContext: { version: 1 },
+          capabilities,
+          effectJournal: journal,
+          stepStore: store,
+          iterativeOrchestrator: new HybridOrchestrator({
+            rules: [rule],
+            decisionModel: model,
+            decisionInputCounter: counter,
+            decisionModelSupportsMaxOutputTokens: true
+          }),
+          modelGateway: model,
+          policy: new ScriptedPolicyEngine(),
+          approvals: new InMemoryApprovalEngine(),
+          audit,
+          telemetry
+        })
+        let checkError: unknown
+        const observation: Record<string, unknown> = {
+          caseName,
+          freeBytes,
+          paddingMode,
+          priorReceipts
+        }
+        try {
+          const first = await harness.run(input)
+          observation.first = first
+          expect(observerErrors).toEqual([])
+          expect(first.stopReason).toBe('NEEDS_USER_INPUT')
+          expect(calls).toHaveLength(priorReceipts ? 2 : 0)
+          const paused = await physical('actual-native-pause-before-padding')
+          expect(
+            paused.state.toolResultContext!.decisionAdmissions.map(
+              (r) => r.status
+            )
+          ).toEqual(priorReceipts ? ['SETTLED', 'SETTLED'] : [])
+          const oldJournal = priorReceipts
+            ? await journal.get(input.tenantId, `${input.executionId}:s1:${id}`)
+            : null
+          observation.actualBeforePadding = {
+            paused: snapshot(paused),
+            oldJournal
+          }
+          const base = {
+            ...unsigned(paused),
+            state: {
+              ...paused.state,
+              resolvedInputs: {
+                ...paused.state.resolvedInputs,
+                fixturePadding: ''
+              }
+            }
+          }
+          const paddingLength =
+            COMPLETE_CHECKPOINT_MAX_BYTES -
+            freeBytes -
+            Buffer.byteLength(canonicalizeCompleteJson(base, limits))
+          const bytesPerCharacter = paddingCharacter === 'p' ? 1 : 6
+          const padding =
+            paddingCharacter.repeat(
+              Math.floor(paddingLength / bytesPerCharacter)
+            ) + 'p'.repeat(paddingLength % bytesPerCharacter)
+          const seeded = sealCheckpoint({
+            ...base,
+            state: {
+              ...base.state,
+              resolvedInputs: {
+                ...base.state.resolvedInputs,
+                fixturePadding: padding
+              }
+            }
+          })
+          expect(snapshot(seeded).remainingBytes).toBe(freeBytes)
+          expect(
+            await store.compareAndSwapCheckpoint({
+              tenantId: input.tenantId,
+              executionId: input.executionId!,
+              expected: {
+                checkpointId: paused.checkpointId,
+                digest: paused.digest
+              },
+              next: seeded
+            })
+          ).toMatchObject({ status: 'APPLIED' })
+          await physical('data-only-padding-CAS-committed')
+          const oldReceipts = seeded.state.toolResultContext!.decisionAdmissions
+          const oldResults = seeded.state.observations.filter(
+            (o) => o.type === 'TOOL_RESULT'
+          )
+          const modelsBefore = calls.length
+          const bodiesBefore = bodies
+          resumed = true
+          const resumeInput = {
+            ...input,
+            resume: { kind: 'user_input' as const, message: 'synthetic answer' }
+          }
+          const result = await harness.run(resumeInput)
+          observation.result = result
+          expect(observerErrors).toEqual([])
+          const after = await physical('after-resume')
+          const afterJournal = priorReceipts
+            ? await journal.get(input.tenantId, `${input.executionId}:s1:${id}`)
+            : null
+          const repeatBaseline = {
+            events: events.length,
+            measurements: measurements.length,
+            completeEntries,
+            writes: writes.length,
+            bodies
+          }
+          const repeated = refusal ? await harness.run(resumeInput) : null
+          const repeatFinal = {
+            events: events.length,
+            measurements: measurements.length,
+            completeEntries,
+            writes: writes.length,
+            bodies
+          }
+          observation.repeatCounts = {
+            before: repeatBaseline,
+            after: repeatFinal
+          }
+          const afterRepeat = refusal ? await physical('after-repeat') : null
+          const afterRepeatJournal =
+            priorReceipts && refusal
+              ? await journal.get(
+                  input.tenantId,
+                  `${input.executionId}:s1:${id}`
+                )
+              : null
+          Object.assign(observation, {
+            name: `free-${freeBytes}-prior-${priorReceipts}-${paddingMode}`,
+            remainingSeedBytes: freeBytes,
+            paddingMode,
+            fixtureProvenance:
+              'Actual public native pause, optional two actual settled model receipts and one actual pure result; one CAS adds only labelled synthetic data; real user resume. All 512-character metadata is legal explicit synthetic pair identity.',
+            first,
+            before: snapshot(seeded),
+            result,
+            after: snapshot(after),
+            repeated,
+            afterRepeat: afterRepeat ? snapshot(afterRepeat) : null,
+            measurements,
+            calls,
+            writes,
+            bodiesBefore,
+            bodiesAfter: bodies,
+            modelsBefore,
+            actualModelsAfter: calls.length,
+            actualCompleteEntries: completeEntries,
+            oldJournal,
+            afterJournal,
+            afterRepeatJournal,
+            scope:
+              'Actual PG public factory, unbound same process, paired synthetic Toy64/cap512. No OS restart/bound host/fence/concurrency/provider/global qualification. Native journal NUL two required failures remain outside this checkpoint-padding proof.'
+          })
+          expect(bodiesBefore).toBe(priorReceipts ? 1 : 0)
+          expect(oldJournal?.state ?? null).toBe(
+            priorReceipts ? 'CONFIRMED' : null
+          )
+          expect(oldResults).toHaveLength(priorReceipts ? 1 : 0)
+          expect(bodies).toBe(bodiesBefore)
+          expect(completeEntries).toBe(modelsBefore + (refusal ? 0 : 1))
+          expect(after.state.resolvedInputs.fixturePadding).toBe(
+            seeded.state.resolvedInputs.fixturePadding
+          )
+          expect(
+            after.state.observations.filter((o) => o.type === 'TOOL_RESULT')
+          ).toEqual(oldResults)
+          expect(afterJournal).toEqual(oldJournal)
+          expect(
+            after.state.toolResultContext!.decisionAdmissions.slice(
+              0,
+              oldReceipts.length
+            )
+          ).toEqual(oldReceipts)
+          expect(measurements.length).toBeGreaterThan(modelsBefore)
+          if (refusal) {
+            expect(calls).toHaveLength(modelsBefore)
+            expect(result.modelCalls).toBe(seeded.budgetUsage.modelCalls)
+            expect(result.usage).toEqual({
+              inputTokens: seeded.budgetUsage.inputTokens,
+              outputTokens: seeded.budgetUsage.outputTokens,
+              costUsd: seeded.budgetUsage.costUsd
+            })
+            expect(result.stopReason).toBe('INSUFFICIENT_EVIDENCE')
+            expect(result.response).toBe(
+              'CONTEXT_OVERFLOW: No checkpoint space for the decision receipt.'
+            )
+            expect(after.state.stopReason).toBe('INSUFFICIENT_EVIDENCE')
+            expect(after.state.pendingQuestion).toBeUndefined()
+            expect(after.budgetUsage.activeDurationMs).toBeGreaterThan(
+              seeded.budgetUsage.activeDurationMs
+            )
+            expect(after.state.toolResultContext!.decisionAdmissions).toEqual(
+              oldReceipts
+            )
+            for (const field of [
+              'modelCalls',
+              'inputTokens',
+              'outputTokens',
+              'costUsd',
+              'toolCalls',
+              'steps'
+            ] as const)
+              expect(after.budgetUsage[field]).toBe(seeded.budgetUsage[field])
+            expect(repeatFinal.measurements).toBe(repeatBaseline.measurements)
+            expect(repeatFinal.completeEntries).toBe(
+              repeatBaseline.completeEntries
+            )
+            expect(repeatFinal.writes).toBe(repeatBaseline.writes)
+            expect(repeatFinal.bodies).toBe(repeatBaseline.bodies)
+            expect(repeated!.stopReason).toBe('STATE_CONFLICT')
+            expect(repeated!.response).toContain(
+              'Terminal execution cannot be resumed'
+            )
+            expect(afterRepeat).toEqual(after)
+            expect(measurements).toHaveLength(modelsBefore + 1)
+            expect(afterRepeatJournal).toEqual(oldJournal)
+            expect(
+              afterRepeat!.state.toolResultContext!.decisionAdmissions
+            ).toEqual(oldReceipts)
+          } else {
+            expect(calls).toHaveLength(modelsBefore + 1)
+            expect(result.stopReason).toBe('COMPLETED')
+            const receipts = after.state.toolResultContext!.decisionAdmissions
+            expect(receipts).toHaveLength(oldReceipts.length + 1)
+            expect(receipts.at(-1)!.status).toBe('SETTLED')
+            expect(after.budgetUsage.modelCalls).toBe(
+              seeded.budgetUsage.modelCalls + 1
+            )
+            expect(after.budgetUsage.costUsd).toBe(
+              seeded.budgetUsage.costUsd + 0.125
+            )
+            for (const field of [
+              'inputTokens',
+              'outputTokens',
+              'costUsd'
+            ] as const)
+              expect(after.budgetUsage[field]).toBe(
+                receipts.reduce((sum, r) => sum + r.actual![field], 0)
+              )
+          }
+          const crossTenant = await withTenantContext(
+            pool!,
+            otherTenant,
+            async (client) =>
+              (
+                await client.query(
+                  'SELECT checkpoint_id FROM operational_execution_checkpoints WHERE execution_id=$1',
+                  [input.executionId]
+                )
+              ).rows
+          )
+          expect(crossTenant).toEqual([])
+          expect(
+            await store.loadCheckpoint(otherTenant, input.executionId!)
+          ).toBeNull()
+          const noContext = (
+            await pool!.query(
+              'SELECT checkpoint_id FROM operational_execution_checkpoints WHERE execution_id=$1',
+              [input.executionId]
+            )
+          ).rows
+          expect(noContext).toEqual([])
+          observation.rlsControls = {
+            crossTenant,
+            noContext,
+            storeOtherTenant: null
+          }
+          observation.verdict = 'IMPLEMENTED_SCOPED_EXECUTION_ONLY'
+        } catch (error) {
+          checkError = error
+          observation.verdict = 'UNPROVEN_FAILURE'
+          observation.error = errorInfo(error)
+          throw error
+        } finally {
+          observation.countsAtFinally = {
+            bodies,
+            completeEntries,
+            calls: calls.length,
+            measurements: measurements.length
+          }
+          observation.events = events
+          observation.writes = writes
+          observation.observerErrors = observerErrors
+          observation.measurements = measurements
+          observation.calls = calls
+          observation.responses = responses
+          observation.audit = audit.events
+          observation.telemetry = telemetry.events
+          traces.push({
+            caseName,
+            verdict: observation.verdict,
+            error: checkError ? errorInfo(checkError) : undefined
+          })
+          await save(join(dir, 'observed.json'), observation)
+          await save(join(dir, 'physical-checkpoints.json'), physicalRecords)
+          await save(join(dir, 'native-journal-trace.json'), journalTrace)
+        }
+      }, 60_000)
+    }
+  }
+})

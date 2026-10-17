@@ -1,0 +1,12 @@
+import fs from 'node:fs';
+import pg from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/pg/lib/index.js';
+const root = '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-admission-postgres/builder-r1';
+const resource = JSON.parse(fs.readFileSync(root + '/resource-private-r2.json', 'utf8'));
+const c = new pg.Client({connectionString:resource.test_database_url});
+try {
+ await c.connect();
+ const r = await c.query("SELECT usename,state,count(*)::int AS connections FROM pg_stat_activity WHERE datname='pare224_synthetic' AND usename='pare224_admission_r2_service' GROUP BY usename,state");
+ const proof = {ownServiceConnections:r.rows,total:r.rows.reduce((n,r)=>n+r.connections,0),observer:'own assigned admin connection, closes in finally',observedAt:new Date().toISOString()};
+ fs.writeFileSync(root+'/connection-close-proof-r3.json',JSON.stringify(proof,null,2)+'\n',{flag:'wx'});
+ if(proof.total!==0) process.exitCode=1;
+} finally {await c.end();}

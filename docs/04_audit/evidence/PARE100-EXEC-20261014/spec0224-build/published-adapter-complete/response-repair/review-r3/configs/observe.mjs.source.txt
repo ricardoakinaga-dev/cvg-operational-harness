@@ -1,0 +1,4 @@
+import fs from 'node:fs';import {createHash} from 'node:crypto';
+const root=process.env.I1_REVIEW;
+function capture(stage,code,id){if(!id.includes('/artifact/')&&!id.startsWith(root+'/'))return;const sha=createHash('sha256').update(code).digest('hex');const path=root+'/snapshots/'+sha+'.txt';if(!fs.existsSync(path))fs.writeFileSync(path,code);fs.appendFileSync(root+'/raw/transforms.jsonl',JSON.stringify({stage,id,bytes:Buffer.byteLength(code),sha256:sha,snapshot:path})+'\n');}
+export const observation=[{name:'i1-observed-pre',enforce:'pre',transform(code,id){capture('pre',code,id);return null}},{name:'i1-observed-post',enforce:'post',transform(code,id){capture('post',code,id);return null}}];

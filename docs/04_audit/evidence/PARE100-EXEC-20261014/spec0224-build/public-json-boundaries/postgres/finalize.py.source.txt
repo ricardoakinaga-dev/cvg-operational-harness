@@ -1,0 +1,90 @@
+import datetime
+import hashlib
+import json
+import pathlib
+import shutil
+
+B = pathlib.Path(__file__).resolve().parent
+W = pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree')
+T = W / 'packages/persistence/src/__tests__/complete-tool-json-public-postgres.integration.ts'
+def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+def read(p): return json.loads(p.read_text())
+def save(p,v):
+    with p.open('x') as f: json.dump(v,f,indent=2); f.write('\n')
+
+before, after = read(B/'source-sentinel-before.json'), read(B/'source-sentinel-after.json')
+assert before == after
+frozen = {x['path']:x for x in before}
+transformed = [json.loads(l) for l in (B/'run-r1/transformed-inputs.jsonl').read_text().splitlines()]
+source_checks = []
+for entry in transformed:
+    if entry['path'] == str(T):
+        assert entry['sha256'] == sha(B/'executed-r1-source.integration.ts')
+        source_checks.append(dict(path=entry['path'], status='EXECUTED_SOURCE_MATCH_PRESERVED_R1', sha256=entry['sha256']))
+    else:
+        assert entry == frozen[entry['path']]
+        assert sha(pathlib.Path(entry['path'])) == entry['sha256']
+        source_checks.append(dict(path=entry['path'], status='BEFORE_AFTER_CURRENT_MATCH', sha256=entry['sha256']))
+save(B/'source-sentinel-verification.json', dict(readonlyFiles=len(before), allEqual=True, transformedInputs=len(transformed), transformedChecks=source_checks, excludedFromRuntimeFreeze=['packages/harness/src/__tests__/complete-tool-public.test.ts (Lead-owned)',str(T)+' (new assigned fixture; executed/final hashes separate)']))
+assert sha(B.parent/'contract.json') == 'c955b85cca6bb4103837f746e6d71c5893b7019c9c3fdab33a822de0ba967e42'
+assert sha(W/'docs/02_spec/0224_pare100_complete_tool_result_context.md') == 'f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea'
+proof = read(B/'artifact-verification-r2.json')
+assert not proof['failed'] and proof['counts']['matrix'] == 34
+stop = read(B/'stop-verification.json')
+assert stop['state']['Status'] == 'exited' and not stop['state']['Running']
+identity = read(B/'run-r1/serving-identity-rls.json')
+resource = read(B/'resource-private.json')
+shutil.copyfile(T, B/'final-assigned-source.integration.ts')
+status = dict(
+    task='PUBLIC-JSON-001 / SPEC0224 TR02 real PostgreSQL builder lane',
+    status='BOUNDED_REAL_PG_MATRIX_DELIVERED_WITH_KNOWN_REQUIRED_PATH_FAILURES_AND_PRESERVED_FIXTURE_FAILURES',
+    createdAt=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    authority='User-provided approved SPEC0224; no descendants; claim already recorded by Lead',
+    contractSHA256=sha(B.parent/'contract.json'), approvedSpecSHA256=sha(W/'docs/02_spec/0224_pare100_complete_tool_result_context.md'),
+    assignedTestFile=str(T), exactTestFileSHA256=sha(T), executedTestFileSHA256=sha(B/'executed-r1-source.integration.ts'),
+    configSHA256=sha(B/'vitest.private.mts'), executedTestSource='executed-r1-source.integration.ts', finalTestSource='final-assigned-source.integration.ts',
+    testExecution=dict(realPostgresRuns=1, command='commands/011-matrix-r1/command.json', exitCode=1, vitestTests=35, vitestPassed=17, vitestFailed=18, matrixCases=34, observerControlTestPassed=True,
+      failureClassification={'fixtureExpectedWrongStopReason':1,'fixtureOverstrictCheckpointEqualityAfterUncertainRerun':17},
+      originalFailuresPreserved=True, finalSourceRealPostgresRerun=False,
+      finalSourceNotRerunReason='Assigned schema/role have been created by this lane. Refuse preexistence/no adoption/no deletion; no additional fresh schema was assigned to this builder.'),
+    artifactVerification=dict(kind=proof['kind'], command='commands/021-artifact-check-r2/command.json', checks=len(proof['checks']), failures=len(proof['failed']), exitCode=0, evidence='artifact-verification-r2.json', notAPostgresRetest=True),
+    focusedFinalChecks=dict(lintExitCode=0, formatExitCode=0, commands=['commands/034-lint-reproducibility/command.json','commands/035-format-check-reproducibility/command.json']),
+    counts=proof['counts'], resource=dict(containerId=resource['containerId'], schemaName=resource['schemaName'], roleName=resource['roleName'], hostPort=resource['hostPort'], stopped=True, stopVerification='stop-verification.json', state=stop['state'], volumeSchemaRolePreserved=True),
+    servingIdentity=identity['identity'], servingRLS=identity['rls'],
+    sentinels=dict(readonlyFiles=len(before), beforeAfterEqual=True, transformedSources=len(transformed), runtimeSourceEdits=False, sourceSentinel='source-sentinel-verification.json', additionalTransitiveHashes='additional-transitive-dependency-hashes.json'),
+    requiredPathFailures=[dict(caseId=x['caseId'], classification='REQUIRED_PATH_FAIL_NATIVE_NUL', journalState='UNCERTAIN', postgresSQLSTATE='22P05', evidence='run-r1/cases/'+x['caseId']) for x in proof['observations'] if x['kind']=='nul'],
+    sourceIssues=[dict(id='KNOWN_NATIVE_PG_NUL', severity='RED_REQUIRED_PATH', status='EXPECTED_UNRESOLVED_NO_CODEC_OR_SCHEMA_CHANGE', repro='run-r1/cases/nul-value4096/native-journal-cas-trace.json and nul-key equivalent', description='Native JSONB journal confirm rejects NUL value/key with 22P05. UNCERTAIN, no next model, no replay. SPEC225 unapproved; no remediation in this lane.')],
+    rerunObservation=dict(uncertainCases=17, bodyDelta=0, modelDelta=0, outputValidationDelta=0, getterHookDelta=0, nativeToolCallsDeltaPerUncertainCase=1, checkpointDiagnosticAppend=True, journalUnchanged=True, settledModelUsageUnchanged=True, classification='NATIVE_RECONCILIATION_ATTEMPT_COUNTS_AS_TOOL_CALL_WITHOUT_SECOND_BODY'),
+    finalFixtureChanges=['Correct generic terminal stopReason INSUFFICIENT_EVIDENCE with CONTEXT_OVERFLOW response prefix', 'On UNCERTAIN rerun require result/receipt/model usage preservation; allow native diagnostic append and expose toolCalls delta', 'Lead-requested resource schemaName/roleName safe pare224_json_ prefix, <=63 chars, distinct; loopback/exact ID/synthetic DB guards; initial preexistence refusal retained'],
+    acceptedBuild=False, wholeTR02PASS=False, globalParityClaim=False, releaseGranted=False,
+    globalTypecheckRun=False, globalTestsRun=False, productionOrRealDataUsed=False, nextAction='Lead integrates frozen final fixture and artifacts; separately claimed fresh critic may run identical source using NEW safe-prefix schema/role and own private resource/config/evidence.'
+)
+save(B/'status.json',status)
+handoff = f'''# PostgreSQL public JSON lane — builder handoff
+
+Bounded real-PG matrix delivered. This is BUILD/test evidence, with no acceptance, whole-TR02 PASS, parity, or release claim. Container224 is stopped and its volume/schema/role are preserved.
+
+Contract SHA256 `{status['contractSHA256']}`. Approved SPEC0224 SHA256 `{status['approvedSpecSHA256']}`. No runtime, codec, SQL source, migration, lockfile, other test, shared ledger, staging, or commit changes.
+
+Assigned test: `{T}`. Final SHA256 `{status['exactTestFileSHA256']}`. Actually executed source SHA256 `{status['executedTestFileSHA256']}` is preserved in `executed-r1-source.integration.ts`; final copy is `final-assigned-source.integration.ts`. The final fixture has lint/format PASS, **not a second real-PG run**.
+
+One actual Node22/Vitest run used native createCapabilityRegistry/createOperationalHarness, HybridOrchestrator, PostgresOperationalEffectJournal, PostgresExecutionStepStore, native preparer/validation/admission/tenant context, and paired synthetic Toy64 (canonical UTF8 bytes /64). Body returned raw values. No fake adapter, limit increase, model provider, external HTTP, process-crash claim, or real action was used. Max output512, user32000 UTF16, request131072 bytes, and native capture32768/depth32/nodes10000 remained intact.
+
+34 matrix cases: 12 full values actually delivered, 1 ASCII32768 capture COMPLETE/CONFIRMED followed by refused admission, 2 byte32769 UNAVAILABLE/RESULT_TOO_LARGE, 2 depth33/nodes10001 UNAVAILABLE/RESULT_COMPLEXITY, 15 strict-invalid UNCERTAIN before output validation, and 2 native-PG NUL REQUIRED_PATH_FAIL. Native journal states:17 CONFIRMED/17 UNCERTAIN. Total body34/model46/outputValidation19/getter-or-toJSON-hook0. Observer control test passed one actual positive and three type/truncation/digest mutations. Every case used a fresh connection/store/journal/factory rerun: zero second body/model/validator/hook calls.
+
+The initial Vitest process exited1:17PASS/18FAIL across35 tests (34 cases + observer). **These original failures are preserved, not relabeled PASS.** One fixture incorrectly expected stopReason CONTEXT_OVERFLOW: native response starts `CONTEXT_OVERFLOW:` with stopReason INSUFFICIENT_EVIDENCE. Seventeen fixtures incorrectly required a byte-identical checkpoint on TOOL_FAILURE rerun. Native reconciliation appends diagnostics and increments budgetUsage.toolCalls by1 without another body or model; journal, prior observations, receipts and settled model usage remain intact. These two fixture expectations were corrected, then the Lead-requested reusable safe-prefix resource guard was added. No runtime was changed to force green.
+
+Read-only independent verification of the actual captured artifacts:2024 checks/0 mismatches (`artifact-verification-r2.json`, command021). It reconstructs expected canonical bytes, types/depth/nodes, actual model frames and frame-derived short receipts, request/result hashes, Toy64 counts, reservation/settlement usage, native caps, physical checkpoint codec/hash/logical value/digest, and no-replay evidence. **This is artifact verification, not reexecution of the revised test or independent acceptance.** The verifier's initial Python scalar-frame-item AttributeError is retained in command020 plus `executed-verifier-r1.py`; command021 corrected the verifier's dict guard.
+
+Known RED required path: `run-r1/cases/nul-value4096` and `run-r1/cases/nul-key`. Native confirm fails SQLSTATE22P05 (`unsupported Unicode escape sequence`), journal becomes UNCERTAIN, model is called only before the tool, and rerun does not repeat the body. No NUL adaptation/codec/schema225 was attempted. Fifteen strict-invalid cases similarly remain uncertain before output validation; getters/toJSON are never executed and invalid objects are represented only by safe labels, never JSON.stringify.
+
+Resource `{resource['containerId']}`, local postgres16.4-alpine, loopback `{resource['hostPort']['HostIp']}:{resource['hostPort']['HostPort']}`, synthetic DB pare224_synthetic, schema `{resource['schemaName']}`, service role `{resource['roleName']}`. Initial schema/role absence was checked and CREATE never used IF NOT EXISTS. Existing runPostgresMigrations only. Admin and serving connections were separate. Service LOGIN/NOSUPERUSER/NOBYPASSRLS/NOINHERIT, zero memberships/owned schemas/owned relations, direct SELECT/INSERT/UPDATE on only four operational tables, native tenant context and forced RLS on all four. See serving-identity-rls/preexistence raw evidence. No PG217 or other service was touched. Stop/inspect commands090/091 verify exited/Running=false.
+
+Reproducibility: the frozen final test reads schemaName/roleName from `SPEC0224_JSON_RESOURCE`, accepts distinct safe `pare224_json_[a-z0-9_]+` names of at most63 chars, and still checks exact containerID, synthetic=true, literal127.0.0.1, mapped-port equality, postgres protocol, no URL query/fragment, DB and admin username. A future critic needs its own explicit resource claim and **NEW schema/role**, own resource JSON, evidence directory, cache/tmp and private config. Do not reuse/adopt/delete pare224_json_r1 or its role. The original private resource retains the exact assigned r1 names. All actual run overrides/argv/cwd/times/exit/full stdout/stderr are in commands011; private config/source aliases are preserved. The .integration.ts name deliberately stays outside automatic .test.ts discovery.
+
+Freeze proof:352 read-only inputs equal before/after;109 actually transformed source inputs (108 runtime/fixture inputs plus the assigned test). No transformed CVG dist files. Additional hash evidence includes14 external runtime packages/280 files (pg/zod transitive closure), tooling entries and exact Node22.23.2 binary. Lead-owned complete-tool-public.test.ts is excluded from the runtime freeze as requested.
+
+Next action belongs to Lead: inspect manifest/status/raw proofs, integrate the final fixture, and arrange fresh independent execution under a separately claimed new schema/role if needed. No self-acceptance or shared-ledger update by this builder. The published raw R1 reds and required NUL failures remain visible.
+'''
+with (B/'HANDOFF.md').open('x') as f:f.write(handoff)
+print(json.dumps(dict(status=status['status'], finalTestSHA256=status['exactTestFileSHA256'], executedTestSHA256=status['executedTestFileSHA256'], readonlyInputCount=len(before), actualTransformedInputs=len(transformed), stopVerified=True)))

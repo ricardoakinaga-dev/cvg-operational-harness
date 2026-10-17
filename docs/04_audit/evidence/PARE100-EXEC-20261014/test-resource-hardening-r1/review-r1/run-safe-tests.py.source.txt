@@ -1,0 +1,12 @@
+import subprocess,json,pathlib,time
+p=pathlib.Path(__file__).parent
+w='/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree'
+env={'PATH':'/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin','HOME':str(p/'home'),'TMPDIR':str(p/'tmp'),'TMP':str(p/'tmp'),'TEMP':str(p/'tmp'),'XDG_CONFIG_HOME':str(p/'home/config'),'XDG_CACHE_HOME':str(p/'cache'),'XDG_DATA_HOME':str(p/'home/data'),'XDG_STATE_HOME':str(p/'home/state'),'LANG':'C.UTF-8','TZ':'UTC','NODE_ENV':'test','CI':'1'}
+name='safe-tests-private-r2'
+args=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',w+'/node_modules/vitest/vitest.mjs','run','--config',str(p/'vitest.config.mjs'),'--configLoader','native','--reporter=verbose','--reporter=json','--outputFile.json='+str(p/'reports'/(name+'.json'))]
+(p/'reports'/(name+'.command.json')).write_text(json.dumps({'argv':args,'cwd':str(p),'env':env,'privateDirectoryModes':{str(d):oct(d.stat().st_mode & 0o777) for d in [p,p/'home',p/'tmp',p/'cache']},'timeoutSeconds':60},indent=2)+'\n')
+start=time.time()
+with (p/'reports'/(name+'.stdout')).open('w') as out,(p/'reports'/(name+'.stderr')).open('w') as err:
+ r=subprocess.run(args,cwd=p,env=env,stdout=out,stderr=err,timeout=60)
+(p/'reports'/(name+'.exit.json')).write_text(json.dumps({'exit':r.returncode,'seconds':time.time()-start})+'\n')
+print('exit',r.returncode)

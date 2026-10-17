@@ -1,0 +1,47 @@
+import pathlib,hashlib,json,stat,os
+r=pathlib.Path(__file__).parent;p=r.parent/'review-packet-r6';m=json.loads((p/'manifest.json').read_text())
+def sha(b):return hashlib.sha256(b).hexdigest()
+def dump(path,value):path.write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n')
+pre=json.loads((r/'inputs-pre.json').read_text());post=[]
+for x in pre:
+ b=pathlib.Path(x['path']).read_bytes();row=dict(path=x['path'],bytes=len(b),sha256=sha(b));assert row==x,x['path'];post.append(row)
+b=(p/'manifest.json').read_bytes();assert sha(b)=='5b6370afac03115fe1ce89875721001760c74dc550bedf05aa945f1662c21329';post.append(dict(path=str(p/'manifest.json'),bytes=len(b),sha256=sha(b)))
+dump(r/'inputs-post.json',post)
+assert json.loads((r/'assertions.json').read_text())['failed']==0
+assert all(x['matched'] for x in json.loads((r/'candidate-bindings.json').read_text()))
+assert all(x['qualified'] for x in json.loads((r/'controls.json').read_text()))
+for run,code in [('focused',1),('response',0),('adversarial',0),('supplemental',0),('boundary',0),('system-plus-one',0)]:assert json.loads((r/'raw'/f'{run}-command.json').read_text())['exit']==code
+excludes={'inventory.json','seal.json','seal.sha256'}
+def role(name,typ):
+ if typ=='directory':return 'output directory marker (empty-byte hash; membership verified by exact path closure)'
+ if name.startswith('executed/'):return 'exact invoked VM source transform'
+ if name.startswith('nodecache/'):return 'Node compiled cache; not execution evidence'
+ if name.startswith('cache/'):return 'test/tool cache; not execution evidence'
+ if name.startswith('tmp/'):return 'retained test temporary artifact'
+ if name.startswith('raw/'):return 'raw test observation, command, native read trace or invocation trace'
+ if name.startswith('config/'):return 'test configuration'
+ if name.endswith('.test.ts'):return 'reviewer-authored independent public-factory probe source'
+ if name.endswith('.py'):return 'reviewer checker or orchestration source'
+ if name.endswith('.cjs'):return 'native guard or observation-only invocation hook'
+ if name=='REPORT.md':return 'independent scoped final verdict'
+ if name=='inventory.json':return 'exact retained output inventory'
+ return 'review input binding, hash verification or recomputed evidence'
+def entry(path):
+ name=path.relative_to(r).as_posix();st=path.lstat()
+ if stat.S_ISDIR(st.st_mode):typ='directory';b=b''
+ elif stat.S_ISREG(st.st_mode):typ='file';b=path.read_bytes()
+ elif stat.S_ISLNK(st.st_mode):typ='symlink';b=os.readlink(path).encode()
+ else:raise AssertionError(('unexpected output type',name))
+ return dict(path=name,type=typ,role=role(name,typ),bytes=len(b),sha256=sha(b))
+paths=sorted(r.rglob('*'));entries=[entry(v) for v in paths if v.relative_to(r).as_posix() not in excludes]
+dump(r/'inventory.json',dict(schema='i1.output-inventory/1',scope='final retained output set',excludedExactly=sorted(excludes),directoryHashSemantics='SHA256 of empty directory-marker bytes; directory contents covered through exact path closure',entries=entries))
+sealed=sorted(entries+[entry(r/'inventory.json')],key=lambda e:e['path'])
+dump(r/'seal.json',dict(schema='i1.final-seal/1',verdict='APPROVE scoped memory/native only',candidateSha256=m['candidateManifestSha256'],packetManifestSha256=sha((p/'manifest.json').read_bytes()),excludedExactly=['seal.json','seal.sha256'],inventorySha256=sha((r/'inventory.json').read_bytes()),entries=sealed))
+digest=sha((r/'seal.json').read_bytes());(r/'seal.sha256').write_text(digest+'  seal.json\n')
+actual={v.relative_to(r).as_posix() for v in r.rglob('*')};assert actual-{x['path'] for x in entries}==excludes
+assert actual-{x['path'] for x in sealed}=={'seal.json','seal.sha256'}
+for x in sealed:assert entry(r/x['path'])==x,x['path']
+# Recheck the entire readonly copied input set after writing closure artifacts.
+for x in post:
+ b=pathlib.Path(x['path']).read_bytes();assert len(b)==x['bytes'] and sha(b)==x['sha256'],x['path']
+print(json.dumps(dict(verdict='APPROVE scoped memory/native only',inventoryEntries=len(entries),sealedEntries=len(sealed),copiedInputsVerifiedBeforeAndAfter=len(pre),manifestVerified=True,detachedSealSHA256=digest,inventorySHA256=sha((r/'inventory.json').read_bytes()),exactOutputClosureVerified=True),indent=2))

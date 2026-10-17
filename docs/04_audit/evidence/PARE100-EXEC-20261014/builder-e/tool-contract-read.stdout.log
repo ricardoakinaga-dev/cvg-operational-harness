@@ -1,0 +1,488 @@
+  readonly status: 'SUCCEEDED' | 'FAILED' | 'REJECTED'
+  readonly output?: unknown
+  readonly error?: string
+}
+
+export interface ToolExecutionContext {
+  readonly tenantId: TenantId
+  readonly agentId: AgentId
+  readonly correlationId: CorrelationId
+  readonly traceId: TraceId
+  readonly operationKey?: string
+  readonly signal?: AbortSignal
+  /** Validated, frozen grant supplied by the kernel after sandbox approval. */
+  readonly sandboxHandle?: SandboxHandle
+}
+
+export interface ToolDescriptor {
+  readonly id: string
+  readonly version: string
+  readonly description: string
+  readonly inputSchema: unknown
+  readonly outputSchema: unknown
+  readonly risk: RiskLevel
+  readonly sideEffect: SideEffect
+  readonly idempotent: boolean
+  readonly requiresApproval: boolean
+  /**
+   * Containment this capability requires before it may run (SPEC 0195 §5).
+   * Absent or `'NONE'` means no gate; any other mode makes the pipeline fail
+   * closed when no `SandboxGate` is configured.
+   */
+  readonly sandbox?: SandboxMode
+}
+
+export interface ToolDefinition extends ToolDescriptor {
+  execute(input: unknown, context: ToolExecutionContext): Promise<ToolResult>
+}
+
+export interface ContextSnapshot {
+  readonly values: Readonly<Record<string, unknown>>
+  readonly sourceIds: readonly string[]
+  readonly capturedAt: string
+}
+
+export interface StateSnapshot {
+  readonly version: number
+  readonly values: Readonly<Record<string, unknown>>
+  readonly updatedAt: string
+}
+
+export interface ConversationState {
+export interface OrchestratorDecision {
+  readonly action: OrchestratorAction
+  readonly response?: string
+  readonly toolInvocation?: ToolInvocation
+  readonly reason?: string
+}
+
+export interface Orchestrator {
+  decideNextStep(input: OrchestratorInput): Promise<OrchestratorDecision>
+}
+
+export interface ModelMessage {
+  readonly role: 'system' | 'user' | 'assistant' | 'tool'
+  readonly content: string
+}
+
+export type ModelCallPurpose =
+  | 'ORCHESTRATION'
+  | 'RESPONSE'
+  | 'EVALUATION'
+  | 'REPAIR'
+
+export interface ModelRequest {
+  readonly messages: readonly ModelMessage[]
+  readonly context: ContextSnapshot
+  readonly budget: ExecutionBudget
+  readonly correlationId: CorrelationId
+  /** Phase 3 accounting hint; providers may ignore it. */
+  readonly purpose?: ModelCallPurpose
+  /**
+   * Aborted by the runtime when the execution deadline passes, so a provider
+   * can stop the in-flight request instead of spending connection and cost.
+   */
+  readonly signal?: AbortSignal
+}
+
+export interface ModelResult {
+  readonly text: string
+  readonly provider: string
+  readonly model: string
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly costUsd: number
+}
+
+export interface ModelGateway {
+  complete(request: ModelRequest): Promise<ModelResult>
+}
+
+export interface PolicyRequest {
+  readonly tenantId: TenantId
+  readonly agentId: AgentId
+  readonly action: string
+  readonly tool: ToolDefinition
+  readonly invocation: ToolInvocation
+  readonly correlationId: CorrelationId
+}
+
+export type PolicyOutcome = 'ALLOW' | 'DENY' | 'REQUIRE_APPROVAL' | 'HANDOFF'
+
+export interface PolicyDecision {
+  readonly outcome: PolicyOutcome
+  readonly reason: string
+  readonly policyVersion: string
+}
+
+export interface PolicyEngine {
+  evaluate(request: PolicyRequest): Promise<PolicyDecision>
+}
+
+export interface ApprovalRequest {
+  readonly tenantId: TenantId
+  readonly agentId: AgentId
+  readonly operationKey: string
+  readonly toolId: string
+  readonly summary: string
+import { describe, expect, it } from 'vitest'
+import type {
+  ApprovalEngine,
+  ApprovalExecutionPort,
+  AuditSink,
+  ModelGateway,
+  Orchestrator,
+  OrchestratorDecision,
+  PolicyEngine,
+  RuntimeInput,
+  TelemetrySink,
+  ToolDefinition,
+  ToolRegistry
+} from '@cvg/harness-contracts'
+import { SinglePassGovernedRuntime } from '../runtime.ts'
+import {
+  InMemoryApprovalEngine,
+  RecordingAuditSink,
+  RecordingTelemetrySink,
+  ScriptedPolicyEngine,
+  phase3AgentProfile,
+  phase3RuntimeInput
+} from './fixtures/phase3-fixtures.ts'
+
+const defaultModel: ModelGateway = {
+  complete: async () => ({
+    text: 'model response',
+    provider: 'synthetic-provider',
+    model: 'synthetic-model',
+    inputTokens: 2,
+    outputTokens: 3,
+    costUsd: 0.01
+  })
+}
+
+function tool(overrides: Partial<ToolDefinition> = {}): ToolDefinition {
+  return {
+    id: 'synthetic.runtime.tool',
+    version: 'v1',
+    description: 'Synthetic runtime tool',
+    inputSchema: { type: 'object' },
+    outputSchema: { type: 'object' },
+    risk: 'LOW',
+    sideEffect: 'WRITE',
+    idempotent: false,
+    requiresApproval: false,
+    execute: async () => ({ status: 'SUCCEEDED', output: { ok: true } }),
+    ...overrides
+  }
+}
+
+function registry(...tools: ToolDefinition[]): ToolRegistry {
+  return {
+    list: () => tools,
+    resolve: (id, version) =>
+      tools.find(
+        (candidate) =>
+          candidate.id === id &&
+          (version === undefined || candidate.version === version)
+      )
+  }
+}
+
+function orchestrator(decision: OrchestratorDecision): Orchestrator {
+  return { decideNextStep: async () => decision }
+}
+
+function build(options: {
+  readonly decision: OrchestratorDecision
+  readonly orchestrator?: Orchestrator
+  readonly modelGateway?: ModelGateway
+  readonly policy?: PolicyEngine
+  readonly approvals?: ApprovalEngine
+  readonly tools?: ToolRegistry
+  readonly audit?: AuditSink
+  readonly telemetry?: TelemetrySink
+  readonly capabilityFingerprint?: string
+}): {
+  readonly runtime: SinglePassGovernedRuntime
+  readonly audit: AuditSink
+  readonly telemetry: TelemetrySink
+} {
+  const audit = options.audit ?? new RecordingAuditSink()
+  const telemetry = options.telemetry ?? new RecordingTelemetrySink()
+  return {
+    runtime: new SinglePassGovernedRuntime({
+      orchestrator: options.orchestrator ?? orchestrator(options.decision),
+      modelGateway: options.modelGateway ?? defaultModel,
+      policy: options.policy ?? new ScriptedPolicyEngine(),
+      approvals: options.approvals ?? new InMemoryApprovalEngine(),
+      tools: options.tools ?? registry(),
+      ...(options.capabilityFingerprint
+        ? { capabilityFingerprint: options.capabilityFingerprint }
+        : {}),
+      audit,
+      telemetry
+    }),
+    audit,
+    telemetry
+  }
+}
+
+function input(overrides: Partial<RuntimeInput> = {}): RuntimeInput {
+  return phase3RuntimeInput({
+    agent: phase3AgentProfile({ tools: [] }),
+    runtimeProfile: 'single_pass',
+    ...overrides
+  })
+}
+
+describe('single-pass governed runtime boundaries', () => {
+  it('fails closed for invalid identity, exhausted budgets, and mismatched capabilities', async () => {
+    const { runtime } = build({
+      decision: { action: 'RESPOND', response: 'ok' }
+    })
+    await expect(
+      runtime.execute(
+        input({ agent: phase3AgentProfile({ id: '' as never, tools: [] }) })
+      )
+    ).resolves.toMatchObject({ stopReason: 'UNSAFE_REQUEST', steps: 1 })
+    await expect(
+      runtime.execute(input({ budget: { ...input().budget, maxSteps: 0 } }))
+    ).resolves.toMatchObject({ stopReason: 'MAX_STEPS' })
+    await expect(
+      runtime.execute(
+        input({ budget: { ...input().budget, maxDurationMs: 0 } })
+      )
+    ).resolves.toMatchObject({
+      stopReason: 'MAX_DURATION',
+      response: 'Execution duration budget is not available.'
+    })
+  })
+
+  it('maps every non-tool orchestrator action to a governed result', async () => {
+    const cases: Array<[OrchestratorDecision, string]> = [
+      [{ action: 'ASK_USER', response: 'need date' }, 'NEEDS_USER_INPUT'],
+      [
+        { action: 'REQUEST_APPROVAL', reason: 'approve first' },
+        'APPROVAL_REQUIRED'
+      ],
+      [{ action: 'HANDOFF', reason: 'human required' }, 'HUMAN_TAKEOVER'],
+      [{ action: 'STOP', reason: 'stop now' }, 'INSUFFICIENT_EVIDENCE'],
+      [{ action: 'RETRIEVE' }, 'INSUFFICIENT_EVIDENCE'],
+      [{ action: 'VERIFY' }, 'INSUFFICIENT_EVIDENCE']
+    ]
+    for (const [decision, stopReason] of cases) {
+      const { runtime } = build({ decision })
+      await expect(runtime.execute(input())).resolves.toMatchObject({
+        stopReason
+      })
+    }
+  })
+
+  it('returns direct responses, model responses, model failures, and model budget stops', async () => {
+    await expect(
+      build({
+        decision: { action: 'RESPOND', response: 'direct' }
+      }).runtime.execute(input())
+    ).resolves.toMatchObject({ stopReason: 'COMPLETED', response: 'direct' })
+
+    await expect(
+      build({ decision: { action: 'RESPOND' } }).runtime.execute(input())
+    ).resolves.toMatchObject({
+      stopReason: 'COMPLETED',
+      response: 'model response'
+    })
+
+    await expect(
+      build({
+        decision: { action: 'RESPOND' },
+        modelGateway: {
+          complete: async () => {
+            throw new Error('synthetic model failure')
+          }
+        }
+      }).runtime.execute(input())
+    ).resolves.toMatchObject({ stopReason: 'MODEL_FAILURE' })
+
+    await expect(
+      build({ decision: { action: 'RESPOND' } }).runtime.execute(
+        input({ budget: { ...input().budget, maxModelCalls: 0 } })
+      )
+    ).resolves.toMatchObject({ stopReason: 'MAX_MODEL_CALLS' })
+
+    await expect(
+      build({
+        decision: { action: 'RESPOND' },
+        modelGateway: {
+          complete: async () => ({
+            text: 'too many tokens',
+            provider: 'synthetic-provider',
+            model: 'synthetic-model',
+            inputTokens: 50,
+            outputTokens: 50,
+            costUsd: 2
+          })
+        }
+      }).runtime.execute(
+        input({ budget: { ...input().budget, maxTokens: 10 } })
+      )
+    ).resolves.toMatchObject({ stopReason: 'MAX_TOKENS' })
+
+    await expect(
+      build({
+        decision: { action: 'RESPOND' },
+        modelGateway: {
+          complete: async () => ({
+            text: 'too expensive',
+            provider: 'synthetic-provider',
+            model: 'synthetic-model',
+            inputTokens: 1,
+            outputTokens: 1,
+            costUsd: 2
+          })
+        }
+      }).runtime.execute(input())
+    ).resolves.toMatchObject({ stopReason: 'MAX_COST' })
+  })
+
+  it('rejects missing, unavailable, unexposed, and over-budget tool calls', async () => {
+  }
+}
+
+function workerCapabilityRegistration(counter: {
+  value: number
+}): CapabilityRegistration {
+  return {
+    descriptor: {
+      id: workerCapabilityId,
+      version: 'v1',
+      description: 'Synthetic worker capability',
+      inputSchema: { type: 'object' },
+      outputSchema: { type: 'object' },
+      risk: 'LOW',
+      sideEffect: 'WRITE',
+      idempotent: false,
+      requiresApproval: false,
+      origin: 'core',
+      providerId: 'synthetic-worker-provider',
+      providerVersion: 'v1'
+    },
+    implementation: {
+      validateInput: (input) => typeof input === 'object' && input !== null,
+      execute: async () => {
+        counter.value += 1
+        return { status: 'SUCCEEDED', output: { applied: true } }
+      },
+      validateOutput: (output) => typeof output === 'object' && output !== null
+    }
+  }
+}
+
+function harnessOptions(decision: 'RESPOND' | 'REQUEST_APPROVAL' = 'RESPOND'): {
+  options: {
+    orchestrator: Orchestrator
+    modelGateway: ModelGateway
+    policy: PolicyEngine
+    approvals: ApprovalEngine
+    tools: ToolRegistry
+    audit: { append: (event: AuditEvent) => Promise<void> }
+    telemetry: { record: (event: TelemetryEvent) => void }
+  }
+  auditEvents: AuditEvent[]
+  telemetryEvents: TelemetryEvent[]
+} {
+  const auditEvents: AuditEvent[] = []
+  const telemetryEvents: TelemetryEvent[] = []
+  const modelGateway: ModelGateway = {
+    complete: async () => ({
+      text: 'model fixture',
+      provider: 'deterministic-v1',
+      model: 'fixture',
+      inputTokens: 1,
+      outputTokens: 1,
+      costUsd: 0
+    })
+  }
+  const policy: PolicyEngine = {
+    evaluate: async () => ({
+      outcome: 'ALLOW',
+      reason: 'synthetic allow',
+      policyVersion: 'synthetic-v1'
+    })
+  }
+  const approvals: ApprovalEngine = {
+    request: async () => ({
+      status: 'PENDING',
+      reason: 'synthetic approval pending'
+    })
+  }
+  const tools: ToolRegistry = {
+    list: () => [],
+    resolve: () => undefined
+  }
+  const orchestrator: Orchestrator = {
+    decideNextStep: async () =>
+      decision === 'RESPOND'
+        ? { action: 'RESPOND', response: 'synthetic complete' }
+        : { action: 'REQUEST_APPROVAL', reason: 'approval required' }
+  }
+  return {
+    options: {
+      orchestrator,
+      modelGateway,
+      policy,
+      approvals,
+import type {
+  ApprovalEngine,
+  AuditSink,
+  HarnessRuntime,
+  ModelGateway,
+  Orchestrator,
+  PolicyEngine,
+  RuntimeInput,
+  RuntimeResult,
+  SandboxGate,
+  TelemetrySink,
+  ToolRegistry
+} from '@cvg/harness-contracts'
+import { createKernelRuntime } from './kernel/profile.ts'
+import type { KernelRuntime } from './kernel/kernel-runtime.ts'
+import type { EffectLedger, KernelLog, PauseSwitch } from './kernel/types.ts'
+
+export { ALL_AGENT_TOOLS, agentExposesTool } from './kernel/kernel-runtime.ts'
+
+export interface HarnessRuntimeOptions {
+  readonly orchestrator: Orchestrator
+  readonly modelGateway: ModelGateway
+  readonly policy: PolicyEngine
+  readonly approvals: ApprovalEngine
+  readonly tools: ToolRegistry
+  readonly capabilityFingerprint?: string
+  readonly audit: AuditSink
+  readonly telemetry: TelemetrySink
+  /** Kernel controls; in-memory defaults when omitted. */
+  readonly pause?: PauseSwitch
+  readonly log?: KernelLog
+  readonly effects?: EffectLedger
+  /** Optional containment gate; absent means fail-closed for contained tools. */
+  readonly sandbox?: SandboxGate
+}
+
+/**
+ * Single-pass profile, now a thin facade over the plugin kernel (SPEC 0181,
+ * decision D-0181-3). Governance runs as kernel control plugins; this class
+ * only keeps the public name and constructor while consumers migrate.
+ */
+export class SinglePassGovernedRuntime implements HarnessRuntime {
+  readonly #kernel: KernelRuntime
+
+  public constructor(options: HarnessRuntimeOptions) {
+    this.#kernel = createKernelRuntime({
+      ...options,
+      eventName: 'harness.single_pass'
+    })
+  }
+
+  public execute(input: RuntimeInput): Promise<RuntimeResult> {
+    return this.#kernel.execute(input)
+  }
+}

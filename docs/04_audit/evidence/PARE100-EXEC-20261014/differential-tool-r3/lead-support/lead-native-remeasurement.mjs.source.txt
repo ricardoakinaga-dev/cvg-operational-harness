@@ -1,0 +1,18 @@
+import fs from 'node:fs'
+import {measureToolTurn} from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tests/differential/compare-tool-turn.mjs'
+import {readReferenceInventory} from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tests/differential/reference-inventory.mjs'
+const p='/tmp/cvg-pare100-exec-20261014-6az3hlay/differential-tool-r3',r=p+'/review-r3', rows=[]
+for(const id of ['tool-ascii','tool-unicode','tool-json']) {
+ const {fixture,reference,cvg}=JSON.parse(fs.readFileSync(r+'/outputs/independent/'+id+'-native.json'))
+ const measurement=measureToolTurn(reference,cvg,fixture)
+ rows.push({id,measurement})
+}
+const independentlyReported=JSON.parse(fs.readFileSync(r+'/outputs/independent-inventory.json')).artifacts
+const actual=readReferenceInventory()
+for(const row of independentlyReported) {
+ const matched=actual.find(x=>x.package===row.package && x.file===row.file && x.sha256===row.sha256)
+ if(!matched) throw Error('Inventory mismatch: '+row.package)
+}
+if(actual.length!==9||independentlyReported.length!==9)throw Error('inventory count')
+fs.writeFileSync(p+'/lead-native-remeasurement.json',JSON.stringify({rows,actualReferenceInventory:actual,scope:'same three finite cases; no full parity'},null,2)+'\n')
+console.log('3 independent native observations remeasured;9 runtime export hashes authenticated')

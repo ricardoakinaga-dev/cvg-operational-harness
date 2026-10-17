@@ -1,0 +1,18 @@
+import fs from 'node:fs'
+import { measureToolTurn } from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tests/differential/compare-tool-turn.mjs'
+const parent='/tmp/cvg-pare100-exec-20261014-6az3hlay'
+const review=`${parent}/differential-tool-r1/review-r1`
+const base=JSON.parse(fs.readFileSync(`${parent}/differential-tool-r1/observed/focused-r1/tool-turn/tool-ascii.native.json`))
+const checks=[]
+for(const mode of ['missing-tools','wrong-schema','wrong-routing']){
+ const reference=JSON.parse(fs.readFileSync(`${review}/raw/request-${mode}.stdout.log`))
+ checks.push({finding:'F01',mode,accepted:measureToolTurn(reference,base.cvg,base.fixture).status})
+}
+for(const item of JSON.parse(fs.readFileSync(`${review}/raw/cvg-model-results-probe.json`))){
+ checks.push({finding:item.mode==='baseline'?'POSITIVE':'F02',mode:item.mode,accepted:measureToolTurn(base.reference,item.cvg,base.fixture).status})
+}
+const bad=structuredClone(base.reference);bad.native.events[0].time=Number.MAX_SAFE_INTEGER
+checks.push({finding:'F03',mode:'invalid-epoch',accepted:measureToolTurn(bad,base.cvg,base.fixture).status})
+if(checks.length!==7 || checks.some(x=>x.accepted!=='MEASURED_BOUNDED_NATIVE_TOOL_TURN'))throw new Error('RED control did not reproduce')
+fs.writeFileSync(`${parent}/differential-tool-r2/red-reproduced.json`,JSON.stringify({kind:'VERIFIED_FALSE_ACCEPTANCES_BEFORE_REPAIR',checks,noNewEngineExecutions:true},null,2)+'\n')
+process.stdout.write(JSON.stringify({falseAcceptancesReproduced:checks.filter(x=>x.finding!=='POSITIVE').length,positiveBaseline:1})+'\n')

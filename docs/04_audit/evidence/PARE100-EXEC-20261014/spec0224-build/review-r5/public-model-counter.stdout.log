@@ -1,0 +1,101 @@
+185:             toolInput:
+186:               options.echoText === undefined ? {} : { text: options.echoText }
+187:           }
+188:       const text = JSON.stringify(decision)
+189:       expect(tokens(text)).toBeLessThanOrEqual(512)
+190:       return {
+191:         text,
+192:         provider: 'synthetic.complete',
+193:         model: 'toy64-v1',
+194:         inputTokens: tokens(request),
+195:         outputTokens: options.modelFault === 'usage' ? 513 : tokens(text),
+196:         costUsd: 0
+197:       }
+198:     }
+199:   }
+200:   const counter: DecisionInputCounter = {
+201:     measure: async (request) => ({
+202:       counterId: 'toy64',
+203:       counterVersion: '1',
+204:       provider: 'synthetic.complete',
+205:       model: 'toy64-v1',
+206:       formattingVersion: '1',
+207:       inputUpperBoundTokens: tokens(request),
+208:       contextWindowTokens: 100_000,
+209:       costUpperBoundUsd: 0
+210:     })
+211:   }
+212:   const steps = new InMemoryExecutionStepStore()
+213:   const cas = steps.compareAndSwapCheckpoint.bind(steps)
+214:   steps.compareAndSwapCheckpoint = async (input) => {
+215:     options.checkpointGuard?.(input.next)
+216:     return cas(input)
+217:   }
+218:   const audit = new RecordingAuditSink()
+219:   const approvals = new InMemoryApprovalEngine()
+220:   const harness = createOperationalHarness({
+221:     toolResultContext: { version: 1 },
+222:     capabilities,
+223:     effectJournal: new InMemoryEffectJournal(),
+224:     stepStore: steps,
+225:     ...(options.contextEngine ? { contextEngine: options.contextEngine } : {}),
+226:     iterativeOrchestrator: new HybridOrchestrator({
+227:       decisionModel: model,
+228:       ...(options.rules ? { rules: options.rules } : {}),
+229:       ...(options.counter === false ? {} : { decisionInputCounter: counter }),
+230:       decisionModelSupportsMaxOutputTokens: true
+231:     }),
+232:     modelGateway: model,
+233:     policy: new ScriptedPolicyEngine(),
+234:     approvals,
+235:     audit,
+236:     telemetry: new RecordingTelemetrySink()
+237:   })
+238:   const base = phase3RuntimeInput()
+239:   const input: RuntimeInput = {
+240:     ...base,
+241:     capabilityFingerprint: capabilities.compositionFingerprint(),
+242:     agent: phase3AgentProfile({
+243:       tools: options.sensitiveAttempt ? [id, sensitiveId] : [id]
+244:     }),
+245:     userMessage: 'Read the synthetic tool and return its full output.',
+246:     budget: { ...base.budget, maxTokens: options.maxTokens ?? 10_000 }
+247:   }
+248:   return {
+249:     harness,
+250:     input,
+251:     requests,
+252:     steps,
+253:     audit,
+254:     toolBodies,
+255:     approvals,
+256:     sensitiveBodies: () => sensitiveBodies,
+257:     bodies: () => bodies
+258:   }
+259: }
+260: 
+261: describe('SPEC0224 public capability factory integration', () => {
+262:   it.each([
+263:     ['complete-ascii4096', 'x'.repeat(4096)],
+264:     ['complete-unicode4096bytes', '🙂'.repeat(1024)],
+265:     ['complete-escapes', '"\\\n\u0000'.repeat(100)],
+266:     ['original-ascii', 'synthetic echo'],
+267:     ['original-unicode', 'Olá 🐾 — ação'],
+268:     ['original-json', '{"literal":"\\path"}']
+269:   ])(
+270:     'compares actual pinned reference and complete public factory outputs: %s',
+271:     async (name, text) => {
+272:       const home = mkdtempSync(join(tmpdir(), 'cvg-complete-differential-'))
+273:       const fixture = {
+274:         version: 1,
+275:         id: name,
+276:         message: 'Run the pure synthetic echo',
+277:         text
+278:       }
+279:       const script = resolve('tests/differential/reference-tool-driver.mjs')
+280:       try {
+281:         const file = join(home, 'fixture.json')
+282:         writeFileSync(file, JSON.stringify(fixture))
+283:         const environment = {
+284:           PATH: [dirname(process.execPath), '/usr/bin', '/bin'].join(delimiter),
+285:           HOME: home,

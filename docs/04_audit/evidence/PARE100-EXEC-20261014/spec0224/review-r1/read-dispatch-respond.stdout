@@ -1,0 +1,221 @@
+    const sufficiency = await ctx.options.sufficiencyEvaluator.evaluate({
+      query,
+      requestedCategories: decision.knowledgeCategories ?? [],
+      observations: run.observations.filter(
+        (entry) => entry.type === 'KNOWLEDGE_RESULT'
+      )
+    })
+    run.lastSufficiency = sufficiency.level
+    await ctx.recordObservation(
+      run,
+      ctx.makeObservation(run, {
+        stepId: `step_${run.executionId}_${stepNumber}_knowledge`,
+        stepNumber,
+        type: 'SUFFICIENCY',
+        source: 'SYSTEM',
+        trust: 'TRUSTED',
+        payload: sufficiency,
+        summary: `Evidence sufficiency is ${sufficiency.level}.`,
+        provenance: { sourceId: 'sufficiency-evaluator' }
+      })
+    )
+  }
+  return { kind: 'continue' }
+}
+
+export async function dispatchRespond(
+  ctx: IterativeDispatchContext,
+  run: LoopRun,
+  decision: LoopDecision,
+  stepNumber: number
+): Promise<DispatchOutcome> {
+  let response = decision.responseText?.trim() ?? ''
+  if (!response && decision.responseIntent?.trim()) {
+    const composed = await ctx.composeResponse(run, decision)
+    if ('stopReason' in composed) {
+      return ctx.stop(composed.stopReason, composed.response)
+    }
+    response = composed.response
+  }
+  if (!response) {
+    return ctx.stop(
+      'INSUFFICIENT_EVIDENCE',
+      'The orchestrator attempted to respond without content.'
+    )
+  }
+  run.responseText = response
+
+  const implicitVerification = ctx.validateClaims(run, response)
+  if (!implicitVerification.valid) {
+    const limit =
+      run.input.budget.maxVerificationCalls ?? run.input.budget.maxSteps
+    if (run.usage.verificationCalls + 1 > limit) {
+      await ctx.recordStep(run, {
+        stepNumber,
+        stepType: 'RESPOND',
+        status: 'FAILED',
+        sideEffecting: false,
+        reasonCode: decision.reasonCode,
+        errorCode: 'verification_failed'
+      })
+      return ctx.stop(
+        'VERIFICATION_FAILED',
+        `Response claims are not supported by evidence: ${implicitVerification.unsupportedClaims.join('; ')}`
+      )
+    }
+    run.usage.verificationCalls += 1
+    await ctx.persistCheckpoint(run)
+    await ctx.recordObservation(
+      run,
+      ctx.makeObservation(run, {
+        stepId: `step_${run.executionId}_${stepNumber}_respond`,
+        stepNumber,
+        type: 'VERIFICATION',
+        source: 'SYSTEM',
+        trust: 'TRUSTED',
+        payload: {
+          target: 'response-claims',
+          valid: false,
+          unsupportedClaims: implicitVerification.unsupportedClaims
+        },
+        summary: 'Response contains claims without evidence references.',
+        provenance: { sourceId: 'runtime-verifier' }
+      })
+    )
+    await ctx.recordStep(run, {
+      stepNumber,
+      stepType: 'RESPOND',
+      status: 'FAILED',
+      sideEffecting: false,
+      reasonCode: decision.reasonCode,
+      errorCode: 'verification_failed'
+    })
+    const revisionEvaluation = {
+      outcome: 'INCOMPLETE' as const,
+      reasonCode: 'VERIFICATION_FAILED' as const,
+      deterministic: true,
+      detail: 'The response must be revised with grounded claims.'
+    }
+    run.state = { ...run.state, lastEvaluation: revisionEvaluation }
+    run.lastEvaluation = revisionEvaluation
+    run.skipEvaluationOnce = true
+    return { kind: 'continue' }
+  }
+
+  await ctx.recordStep(run, {
+    stepNumber,
+    stepType: 'RESPOND',
+    status: 'SUCCEEDED',
+    sideEffecting: false,
+    reasonCode: decision.reasonCode
+  })
+  return { kind: 'continue' }
+}
+
+export async function composeResponse(
+  ctx: IterativeDispatchContext,
+  run: LoopRun,
+  decision: LoopDecision
+): Promise<
+  { response: string } | { stopReason: StopReason; response: string }
+> {
+  const remaining = ctx.remainingDuration(run)
+  if (remaining <= 0) {
+    return {
+      stopReason: 'MAX_DURATION',
+      response: 'Duration budget exhausted before the response was composed.'
+    }
+  }
+  const turn = ctx.turn(run)
+  const outcome = await runModelCall(ctx.kernel(run), turn, {
+    messages: [
+      {
+        role: 'system',
+        content: [
+          'Compose the final user-facing answer.',
+          'Use only the structured observations as facts.',
+          'Never claim an external action succeeded without an effect observation.',
+          `Response intent: ${decision.responseIntent ?? ''}`
+        ].join(' ')
+      },
+      { role: 'user', content: run.input.userMessage }
+    ],
+    context: run.input.context,
+    budget: run.input.budget,
+    correlationId: run.input.correlationId,
+    purpose: 'RESPONSE'
+  })
+  switch (outcome.kind) {
+    case 'stopped':
+      return {
+        stopReason: outcome.gate.stopReason,
+        response: outcome.gate.response
+      }
+    case 'deadline':
+      return {
+        stopReason: 'MAX_DURATION',
+        response: 'Duration budget exhausted during response composition.'
+      }
+    case 'cancelled':
+      return { stopReason: 'CANCELLED', response: CANCELLED_RESPONSE }
+    case 'failed':
+      return {
+        stopReason: 'MODEL_FAILURE',
+        response: `Response composition failed: ${outcome.error}.`
+      }
+    case 'unrecorded':
+      // F04: the call happened; count it, but never treat it as an answer.
+      run.usage.modelCalls += 1
+      run.usage.inputTokens += outcome.result.inputTokens
+      run.usage.outputTokens += outcome.result.outputTokens
+      run.usage.costUsd += outcome.result.costUsd
+      return {
+        stopReason: outcome.gate.stopReason,
+        response: outcome.gate.response
+      }
+    case 'completed':
+      return { response: outcome.result.text }
+  }
+}
+
+export async function evaluate(
+  ctx: IterativeDispatchContext,
+  run: LoopRun,
+  decision: LoopDecision
+): Promise<Extract<DispatchOutcome, { kind: 'stop' }> | null> {
+  const evaluation = await ctx.evaluatorFor(run).evaluate({
+    goal: run.state.goal,
+    state: { ...run.state, observations: run.observations },
+    observations: run.observations,
+    lastDecision: decision,
+    ...(run.responseText ? { result: run.responseText } : {})
+  })
+  if (evaluation.usage) {
+    run.usage.modelCalls += evaluation.usage.modelCalls
+    run.usage.inputTokens += evaluation.usage.inputTokens
+    run.usage.outputTokens += evaluation.usage.outputTokens
+    run.usage.costUsd += evaluation.usage.costUsd
+  }
+  run.lastEvaluation = evaluation
+  run.state = { ...run.state, lastEvaluation: evaluation }
+  await ctx.safeAudit(run, 'evaluation.completed', {
+    result: `${evaluation.outcome}:${evaluation.reasonCode}`
+  })
+  if (evaluation.usage) {
+    const afterEvaluation = ctx.checkAfterUsage(run)
+    if (afterEvaluation) {
+      return ctx.stop(afterEvaluation.reason, afterEvaluation.response)
+    }
+  }
+
+  if (evaluation.outcome === 'COMPLETE') {
+    if (decision.decisionType === 'RESPOND') {
+      return ctx.stop('COMPLETED', run.responseText ?? 'Execution completed.')
+    }
+    if (
+      decision.decisionType === 'STOP' &&
+      decision.reasonCode === 'USER_REQUESTED_STOP'
+    ) {
+      return ctx.stop('COMPLETED', 'Execution stopped at the user request.')
+    }
+    // Completion requires an explicit RESPOND step.

@@ -1,0 +1,9 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import crypto from 'node:crypto'
+import {spawnSync} from 'node:child_process'
+import {measureToolTurn} from './tests/differential/compare-tool-turn.mjs'
+const root=process.cwd(),data=JSON.parse(fs.readFileSync('evidence/focus-explicit-with-primary-extra/tool-turn/tool-ascii.native.json','utf8')),home=fs.mkdtempSync(root+'/tmp/signal-native-'),file=home+'/fixture.json';fs.writeFileSync(file,JSON.stringify(data.fixture))
+const env={PATH:path.dirname(process.execPath)+':/usr/bin:/bin',HOME:home,TMPDIR:home,TMP:home,TEMP:home,XDG_CONFIG_HOME:home+'/config',XDG_CACHE_HOME:home+'/cache',XDG_DATA_HOME:home+'/data',XDG_STATE_HOME:home+'/state',DSH_HOME:home+'/dsh',LANG:'C.UTF-8',NODE_ENV:'test'},args=[root+'/critic-reference-signal.mjs',file,'signal-spoof'],started=Date.now(),r=spawnSync(process.execPath,args,{cwd:home,env,timeout:5000,maxBuffer:1048576,killSignal:'SIGKILL',encoding:'utf8'})
+const dir=root+'/evidence/critic/';fs.writeFileSync(dir+'signal-spoof.stdout',r.stdout??'');fs.writeFileSync(dir+'signal-spoof.stderr',r.stderr??'');const meta={argv:[process.execPath,...args],cwd:home,env,elapsedMs:Date.now()-started,timeoutMs:5000,maxBuffer:1048576,pid:r.pid,status:r.status,signal:r.signal,error:r.error?.message??null,exitObserved:r.status!==null||r.signal!==null,stdoutSHA256:crypto.createHash('sha256').update(r.stdout??'').digest('hex'),stderrSHA256:crypto.createHash('sha256').update(r.stderr??'').digest('hex'),diagnostic:fs.existsSync(home+'/signal-diagnostic.json')?JSON.parse(fs.readFileSync(home+'/signal-diagnostic.json')):null}
+try{meta.measurement={accepted:true,value:measureToolTurn(JSON.parse(r.stdout),data.cvg,data.fixture)}}catch(e){meta.measurement={accepted:false,error:String(e)}}fs.rmSync(home,{recursive:true,force:true});meta.homeRemoved=!fs.existsSync(home);fs.writeFileSync(dir+'signal-spoof.command.json',JSON.stringify(meta,null,2));console.log(meta)

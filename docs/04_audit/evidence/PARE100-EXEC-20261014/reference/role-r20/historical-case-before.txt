@@ -1,0 +1,75 @@
+  it('R12 D persists payload context while preserving genuine tool/schema names and selectors', () => {
+    const name = 'declared R12 tool'
+    const payloadName = 'throw/ROLE_R12/'
+    const payload = {
+      name: payloadName,
+      nested: [{ type: 'string', required: [payloadName] }]
+    }
+    const payloadText = JSON.stringify(JSON.parse(serializeCatalog(payload)))
+    const schema = {
+      name,
+      type: 'object',
+      required: ['worker'],
+      properties: {
+        worker: {
+          name,
+          type: 'string',
+          default: payload,
+          const: payload,
+          examples: [payload],
+          unclassified: payload
+        }
+      }
+    }
+    const f = fixture({
+      'packages/core/example/src/worker.schema.json': JSON.stringify(schema),
+      'docs/tool-catalog.md':
+        '# Tools\n## `@synthetic/example`\nSource: [types](../packages/core/example/src/types.ts)\n```json\n' +
+        JSON.stringify({ name, parameters: schema }) +
+        '\n```\n'
+    })
+    const catalog = f.collect()
+    const entries = catalog.entries.filter((entry) =>
+      ['json-schema-data', 'document-json'].includes(entry.kind)
+    )
+    expect(entries).toHaveLength(2)
+    for (const entry of entries) {
+      const projected =
+        entry.kind === 'document-json' ? entry.shape.parameters : entry.shape
+      expect(entry.shape.name).toBe(name)
+      expect(projected).toMatchObject({
+        name,
+        type: 'object',
+        required: ['worker']
+      })
+      const worker = projected.properties.worker
+      expect(worker).toMatchObject({ name, type: 'string' })
+      for (const value of [worker.default, worker.const, worker.examples[0]]) {
+        expect(JSON.stringify(value)).not.toContain(payloadName)
+        expect(value).toMatchObject({
+          status: 'UNKNOWN',
+          value_sha256: sha(payloadText),
+          byte_length: Buffer.byteLength(payloadText)
+        })
+        expect(value.reason).toBeTruthy()
+      }
+      const memberText = JSON.stringify(
+        JSON.parse(serializeCatalog({ unclassified: payload }))
+      )
+      expect(worker.unclassified_members).toMatchObject({
+        status: 'UNKNOWN',
+        value_sha256: sha(memberText),
+        byte_length: Buffer.byteLength(memberText)
+      })
+      expect(worker.unclassified_members.reason).toBeTruthy()
+      expect(JSON.stringify(worker.unclassified_members)).not.toContain(
+        payloadName
+      )
+      expect(entry.extraction_status).toBe('UNKNOWN')
+      expect(entry.owner_task).toBe('P100-012')
+      expect(entry.source_sha256).toBe(
+        sha(fs.readFileSync(path.join(f.root, entry.source)))
+      )
+      expect(entry.parity_status).toBe('NOT_VERIFIED')
+    }
+  })

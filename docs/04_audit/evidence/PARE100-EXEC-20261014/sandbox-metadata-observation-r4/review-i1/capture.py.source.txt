@@ -1,0 +1,20 @@
+import os,sys,json,time,datetime,subprocess,pathlib,signal
+D=pathlib.Path(__file__).parent; name=sys.argv[1]; argv=sys.argv[2:]; private=D/'private'; private.mkdir(exist_ok=True)
+for sub in ('home','tmp','xdg-cache','xdg-config','xdg-data'):(private/sub).mkdir(exist_ok=True)
+env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','HOME':str(private/'home'),'TMPDIR':str(private/'tmp'),'XDG_CACHE_HOME':str(private/'xdg-cache'),'XDG_CONFIG_HOME':str(private/'xdg-config'),'XDG_DATA_HOME':str(private/'xdg-data'),'NODE_DISABLE_COMPILE_CACHE':'1','PYTHONDONTWRITEBYTECODE':'1','TSX_DISABLE_CACHE':'1'}
+start=time.time(); mono=time.monotonic(); p=subprocess.Popen(argv,cwd=D,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+timed=False
+try: out,err=p.communicate(timeout=180)
+except subprocess.TimeoutExpired:
+ timed=True;os.killpg(p.pid,signal.SIGKILL);out,err=p.communicate()
+(D/(name+'.stdout')).write_bytes(out);(D/(name+'.stderr')).write_bytes(err)
+r={'argv':argv,'cwd':str(D),'env':env,'pid':p.pid,'startedEpoch':start,'finishedEpoch':time.time(),'elapsedMonotonic':time.monotonic()-mono,'exit':p.returncode,'timedOut':timed,'stdoutFile':name+'.stdout','stderrFile':name+'.stderr','stdoutBytes':len(out),'stderrBytes':len(err),'truncated':False}
+(D/(name+'.command.json')).write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r));print(out.decode(errors='replace'));print(err.decode(errors='replace'),file=sys.stderr)
+if name=='manifest-close':
+ import hashlib
+ P=D.parent; target=D/'artifact-manifest.json'
+ paths=sorted({q for q in D.rglob('*') if q.is_file() and q!=target}|{q for q in (P/'runs/i1-01').rglob('*') if q.is_file()}|{P/'receipt-i1-01.json'})
+ entries=[{'path':str(q),'bytes':q.stat().st_size,'sha256':hashlib.sha256(q.read_bytes()).hexdigest()} for q in paths]
+ target.write_text(json.dumps({'schema':'i1-artifact-manifest-v1','scope':'All D artifacts plus own actual raw run/receipt; copied diagnostics retain TEST_ONLY scope','files':entries,'fileCount':len(entries),'excluded':[str(target)],'manifestHash':'Lead to compute externally after close'},indent=2)+'\n')
+sys.exit(p.returncode if not timed else 124)
+

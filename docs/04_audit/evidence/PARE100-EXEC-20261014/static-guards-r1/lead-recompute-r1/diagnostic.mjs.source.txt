@@ -1,0 +1,139 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import vm from 'node:vm'
+import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
+
+const inputRoot = '/tmp/cvg-pare100-exec-20261014-6az3hlay/static-guards-r1/review-packet-r1'
+const outputRoot = '/tmp/cvg-pare100-exec-20261014-6az3hlay/static-guards-r1/lead-recompute-r1'
+const read = p => fs.readFileSync(path.join(inputRoot, p), 'utf8')
+const checks = []
+const failures = []
+function check(name, fn) {
+  try { checks.push({ name, status: 'passed', detail: fn() ?? null }) }
+  catch (e) {
+    const failure = { name, status: 'failed', error: String(e), stack: e.stack }
+    checks.push(failure)
+    failures.push(failure)
+  }
+}
+check('diagnostic runtime is standard Node 22', () => assert.equal(process.versions.node.split('.')[0], '22'))
+
+const manifest = JSON.parse(read('manifest.json'))
+check('all 27 listed inputs match declared bytes and SHA256', () => {
+  assert.equal(manifest.inputs.length, 27)
+  for (const i of manifest.inputs) {
+    const b = fs.readFileSync(path.join(inputRoot, i.path))
+    assert.equal(b.length, i.bytes)
+    assert.equal(crypto.createHash('sha256').update(b).digest('hex'), i.sha256)
+  }
+})
+
+for (const filename of ['complete-admission-capacity-public.test.ts', 'complete-checkpoint-capacity-public.test.ts']) {
+  const rel = 'packages/harness/src/__tests__/' + filename
+  check(filename + ': exactly one evidence string substitution', () => {
+    const before = read('before/' + rel), after = read('after/' + rel)
+    assert.equal(before.split('PG/process restart').length - 1, 1)
+    assert.equal(after, before.replace('PG/process restart', 'database/process restart'))
+    return { preserved: 'All bytes outside the one literal substitution, including imports, assertions, loops, thresholds and timeouts' }
+  })
+}
+
+check('dependency guard has exactly the declared classifier edit', () => {
+  const before = read('before/tests/workspace-dependency-manifest.test.js')
+  const after = read('after/tests/workspace-dependency-manifest.test.js')
+  const oldLine = '    const bucket = /\\.test\\.[jt]sx?$/.test(file) ? test : runtime'
+  const newLines = [
+    '    const bucket =',
+    "      file.split(path.sep).includes('__tests__') ||",
+    '      /\\.test\\.[jt]sx?$/.test(file)',
+    '        ? test',
+    '        : runtime'
+  ].join('\n')
+  assert.equal(after, before.replace(oldLine, newLines))
+})
+
+check('package manifest has only the one dev dependency addition', () => {
+  const before = JSON.parse(read('before/packages/persistence/package.json'))
+  const after = JSON.parse(read('after/packages/persistence/package.json'))
+  assert.equal(after.devDependencies['@cvg/harness-orchestrator'], '0.1.0')
+  delete after.devDependencies['@cvg/harness-orchestrator']
+  assert.deepEqual(after, before)
+})
+
+check('entire lock unchanged after removing matching dev metadata addition', () => {
+  const before = JSON.parse(read('before/package-lock.json'))
+  const after = JSON.parse(read('after/package-lock.json'))
+  assert.equal(Object.keys(before.packages).length, 411)
+  assert.equal(Object.keys(after.packages).length, 411)
+  assert.equal(after.packages['packages/persistence'].devDependencies['@cvg/harness-orchestrator'], '0.1.0')
+  delete after.packages['packages/persistence'].devDependencies['@cvg/harness-orchestrator']
+  assert.deepEqual(after, before)
+  return { packageEntries: 411, changedRuntimeDependencies: 0, changedResolvedLinksVersionsIntegrityOrFlags: 0 }
+})
+
+const guard = read('architecture-guard-unchanged.test.ts')
+const forbiddenBlock = guard.match(/const forbidden = \[([\s\S]*?)\n    \]/)[1]
+const forbidden = [...forbiddenBlock.matchAll(/'([^']+)'/g)].map(m => m[1])
+check('unchanged original forbidden-token predicate on both fixture copies', () => {
+  const rows = []
+  for (const phase of ['before', 'after']) for (const file of ['complete-admission-capacity-public.test.ts', 'complete-checkpoint-capacity-public.test.ts']) {
+    const text = read(phase + '/packages/harness/src/__tests__/' + file).toLowerCase()
+    const matches = forbidden.filter(token => text.includes(token.toLowerCase()))
+    assert.deepEqual(matches, phase === 'before' ? ['pg'] : [])
+    rows.push({ phase, file, forbiddenMatches: matches })
+  }
+  return { method: 'Original lower-case substring predicate and token list; only the two supplied fixture files, not a project-wide guard rerun', rows }
+})
+
+const dep = '@cvg/harness-orchestrator'
+const code = `import { HybridOrchestrator } from '${dep}'\n`
+const runtimeViolation = `packages/probe: runtime import '${dep}' is not declared in dependencies`
+const testViolation = `packages/probe: test import '${dep}' is not declared in dependencies or devDependencies`
+const scenarios = [
+  { id: 'helper-dev', files: { '__tests__/fixtures/helper.ts': code }, dev: true, before: [runtimeViolation], after: [] },
+  { id: 'helper-undeclared', files: { '__tests__/helper.ts': code }, before: [runtimeViolation], after: [testViolation] },
+  { id: 'suffix-dev', files: { 'unit.test.ts': code }, dev: true, before: [], after: [] },
+  { id: 'suffix-undeclared', files: { 'unit.test.ts': code }, before: [testViolation], after: [testViolation] },
+  { id: 'runtime-dev', files: { 'index.ts': code }, dev: true, before: [runtimeViolation], after: [runtimeViolation] },
+  { id: 'runtime-dependency', files: { 'index.ts': code }, prod: true, before: [], after: [] },
+  { id: 'mixed-dev', files: { 'index.ts': code, '__tests__/helper.ts': code }, dev: true, before: [runtimeViolation], after: [runtimeViolation] },
+  { id: 'similar-directory', files: { '__tests__extra/helper.ts': code }, dev: true, before: [runtimeViolation], after: [runtimeViolation] },
+  { id: 'similar-filename', files: { '__tests__.ts': code }, dev: true, before: [runtimeViolation], after: [runtimeViolation] },
+  { id: 'dynamic-and-require', files: { '__tests__/fixture.cts': `const x = import('${dep}/subpath')\nconst y = require('${dep}')\n` }, dev: true, before: [runtimeViolation], after: [] }
+]
+
+for (const scenario of scenarios) {
+  const fixtureRoot = path.join(outputRoot, 'probe-fixtures', scenario.id)
+  fs.mkdirSync(path.join(fixtureRoot, 'apps'), { recursive: true })
+  fs.mkdirSync(path.join(fixtureRoot, 'packages/probe/src'), { recursive: true })
+  const pkg = { name: '@review/probe', dependencies: scenario.prod ? { [dep]: '0.1.0' } : {}, devDependencies: scenario.dev ? { [dep]: '0.1.0' } : {} }
+  fs.writeFileSync(path.join(fixtureRoot, 'packages/probe/package.json'), JSON.stringify(pkg, null, 2) + '\n')
+  for (const [rel, contents] of Object.entries(scenario.files)) {
+    const target = path.join(fixtureRoot, 'packages/probe/src', rel)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, contents)
+  }
+  for (const phase of ['before', 'after']) check(phase + ' classifier: ' + scenario.id, () => {
+    let captured
+    const source = read(phase + '/tests/workspace-dependency-manifest.test.js')
+      .replace(/^import .* from .*\n/gm, '')
+      .replace(/^const rootDir = .*$/m, 'const rootDir = REVIEW_ROOT')
+    const context = {
+      fs, path, REVIEW_ROOT: fixtureRoot,
+      describe: (_name, fn) => fn(), it: (_name, fn) => fn(),
+      expect: actual => ({ toEqual: expected => {
+        assert.deepEqual(JSON.parse(JSON.stringify(expected)), [])
+        captured = JSON.parse(JSON.stringify(actual))
+      } })
+    }
+    vm.runInNewContext(source, context, { timeout: 1000, filename: phase + '-copied-dependency-guard.js' })
+    assert.deepEqual(captured, scenario[phase])
+    return { actualViolations: captured, expectedViolations: scenario[phase], method: 'Copied scanner and assertion body; only imports/root/Vitest bindings adapted; synthetic file tree' }
+  })
+}
+
+const result = { runtime: process.version, scope: 'Local copied-input structural and synthetic classification diagnostics only', checks, total: checks.length, passed: checks.length - failures.length, failures }
+fs.writeFileSync(path.join(outputRoot, 'diagnostic-results.json'), JSON.stringify(result, null, 2) + '\n')
+console.log(JSON.stringify(result, null, 2))
+process.exitCode = failures.length ? 1 : 0

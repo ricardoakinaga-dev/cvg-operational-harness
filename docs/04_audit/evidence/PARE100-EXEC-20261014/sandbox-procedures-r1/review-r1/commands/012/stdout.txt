@@ -1,0 +1,165 @@
+
+### reference/sandbox/index.ts
+105: /**
+106:  * A {@link SandboxProvider.confine} result: the argv to spawn in place of
+107:  * the caller's own, plus the enforcement completeness the selected backend
+108:  * achieves for it.
+109:  */
+110: export interface ConfinedArgv {
+111:   /** The wrapped argv (runner, profile, separator, then the caller's argv). */
+112:   argv: string[]
+113:   /** How completely the selected backend enforces the policy's file effects. */
+114:   enforcement: SandboxEnforcement
+115:   /**
+116:    * The selected backend's denial DIALECT: the case-insensitive stderr
+117:    * substrings a file effect denied by THIS backend produces (EROFS text
+118:    * under bwrap's read-only binds, EACCES under Landlock, EPERM under
+119:    * Seatbelt). A consumer that infers denials from a failed run's stderr
+120:    * matches against exactly these rather than a cross-backend union — the
+121:    * union claims denials a given backend never produces.
+122:    */
+123:   denialSignatures: readonly string[]
+124:   /**
+125:    * Structured runner-failure evidence rules. Consumers require a matching
+126:    * fatal stderr line (after informational exclusions) and any rule-specific
+127:    * exit-code gate before checking denial signatures: runner failure means the
+128:    * command never ran, while denial means confinement worked and blocked it.
+129:    */
+130:   runnerFailureRules: readonly RunnerFailureRule[]
+131: }
+132: 
+133: /**
+134:  * Error code for a requested confined mode when no backend is usable. The
+135:  * provider fails closed, and `HarnessError` carries the code through
+136:  * `tool/result` so callers can distinguish missing confinement from command
+137:  * failure.
+138:  */
+139: export const SANDBOX_UNAVAILABLE = 'SANDBOX_UNAVAILABLE'
+140: 
+141: /**
+142:  * Thrown when {@link SandboxProvider.confine} cannot enforce the requested
+143:  * mode. Carries {@link SANDBOX_UNAVAILABLE} through the structured error
+144:  * channel.
+145:  */
+146: export class SandboxUnavailableError extends HarnessError {
+147:   constructor(mode: ConfinedSandboxMode, detail?: string) {
+148:     super(
+149:       `sandbox mode "${mode}" is requested but no sandbox backend is usable on this host; `
+150:       + 'refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing '
+151:       + 'kernel (Linux), ensure sandbox-exec is usable (macOS), or ensure the ACL '
+152:       + 'restricted-token runner can start (Windows) — otherwise switch the consumer to '
+153:       + 'danger-full-access.'
+154:       + (detail === undefined ? '' : ` Runner failure: ${detail}`),
+155:       SANDBOX_UNAVAILABLE,
+156:     )
+157:     this.name = 'SandboxUnavailableError'
+158:   }
+159: }
+160: 
+161: declare module '@deepseek-ai/cordis' {
+162:   interface Context {
+163:     sandbox: SandboxProvider
+164:   }
+165: }
+166: 
+167: /**
+168:  * Abstract process-sandbox service. {@link confine} must return enforcing argv
+169:  * or fail closed at wrap or runner-execution time; silent unconfined passthrough
+170:  * is forbidden. Functional probes arbitrate multi-runner chains and may be
+171:  * skipped for a sole candidate, whose own refusal remains the fail-closed end.
+172:  */
+173: export abstract class SandboxProvider extends Service {
+174:   /*! v8 ignore next -- abstract service construction is covered through concrete provider packages. */
+175:   constructor(ctx: Context) {
+176:     super(ctx, 'sandbox')
+177:   }
+178: 
+179:   /**
+180:    * Describe the runner selected for a policy without launching a user command.
+181:    * Providers may perform bounded selection probes. Absence makes no claim about execution-world semantics.
+182:    * @param policy - fully resolved confined policy.
+183:    * @returns provider facts, or undefined when the provider offers no descriptor.
+184:    */
+185:   describe(policy: SandboxPolicy): SandboxExecutionEnvironment | undefined {
+186:     void policy
+187:     return undefined
+188:   }
+189: 
+190:   /**
+191:    * Wrap `argv` so it executes confined under `policy` on this host; the
+192:    * caller spawns the returned argv in place of its own.
+193:    * @param argv - the exact argv the caller is about to spawn (program plus
+194:    *   arguments), NOT a shell string — a shell-shaped consumer passes
+195:    *   `['bash', '-c', command]`.
+196:    * @param policy - the file-effect policy this execution runs under,
+197:    *   carried per call (see {@link SandboxPolicy}).
+198:    * @param signal - cancellation while the provider resolves the policy and runner.
+199:    * @returns the argv to spawn instead, plus the enforcement completeness
+200:    *   the selected backend achieves for it.
+201:    */
+202:   abstract confine(argv: readonly string[], policy: SandboxPolicy, signal?: AbortSignal): Promise<ConfinedArgv>
+203: }
+204: 
+205: export default SandboxProvider
+206: 
+207: export { classifyRunnerFailure, isRunnerSpawnFailure, matchesSignature } from './diagnostics.ts'
+
+### cvg/contracts.ts
+440: /* Sandbox seam (PDSH-010 / SPEC 0195).                                       */
+441: /*                                                                            */
+442: /* The sandbox decides under what containment an already-allowed effect runs. */
+443: /* It never decides whether the effect is permitted (policy/approval do) and  */
+444: /* never downgrades: an unavailable required mode fails closed as a denied    */
+445: /* outcome, never as silent in-process execution.                             */
+446: /* -------------------------------------------------------------------------- */
+447: 
+448: export type SandboxMode =
+449:   | 'NONE'
+450:   | 'IN_PROCESS'
+451:   | 'WORKSPACE'
+452:   | 'PROCESS'
+453:   | 'EGRESS'
+454: 
+455: /** Resolved containment for one tool call; the only channel to fs/net/exec. */
+456: export interface SandboxHandle {
+457:   readonly mode: SandboxMode
+458:   /** Present only in WORKSPACE; the tenant-scoped writable root. */
+459:   readonly workspaceRoot?: string
+460:   readonly allowNetwork: boolean
+461:   readonly allowSubprocess: boolean
+462:   readonly deadlineMs?: number
+463: }
+464: 
+465: export type SandboxGateOutcome =
+466:   | {
+467:       readonly kind: 'allowed'
+468:       readonly mode: SandboxMode
+469:       readonly handle: SandboxHandle
+470:     }
+471:   | { readonly kind: 'denied'; readonly reason: string }
+472:   | { readonly kind: 'unavailable'; readonly reason: string }
+473: 
+474: export interface SandboxPolicy {
+475:   readonly requiredMode: SandboxMode
+476:   readonly workspaceScoped: boolean
+477:   readonly networkAllowed: boolean
+478:   readonly subprocessAllowed: boolean
+479:   readonly timeoutMs?: number
+480: }
+481: 
+482: export interface SandboxEvaluationInput {
+483:   readonly descriptor: ToolDescriptor
+484:   readonly context: ToolExecutionContext
+485:   readonly policy?: SandboxPolicy
+486: }
+487: 
+488: /** Enforcement port the harness calls between decision and capability body. */
+489: export interface SandboxGate {
+490:   evaluate(input: SandboxEvaluationInput): Promise<SandboxGateOutcome>
+491: }
+492: 
+
+MATRIX filtered count 427 schema ['id', 'contract_sha256', 'source', 'source_sha256', 'owner_task', 'scope', 'extraction_status', 'parity_status', 'procedure', 'procedure_status', 'evidence']
+MATRIX one original row {"id": "contract:016ebb98f829b2641bc9f1b948c0e8d6dd85cf63736db21e675657caffbb8e2e", "contract_sha256": "01b3ffe5cf2681b0aa10c1039ba9fb11dd986ea553e2328c065270c0a180455f", "source": "packages/sandbox/sandbox-windows-acl/src/win32-abi.ts", "source_sha256": "054c85c9703014d9615a5832b1d98d99042f2e970d2cd5add3f7ad4a13a64f7e", "owner_task": "P100-024", "scope": "CONTRACT", "extraction_status": "UNKNOWN", "parity_status": "NOT_VERIFIED", "procedure": null, "procedure_status": "PENDING_BEHAVIORAL_CONTRACT", "evidence": []}
+CATALOG root type dict
+CATALOG root keys/types [('artifact_closures', 'list'), ('catalog_sha256', 'str'), ('entries', 'list'), ('limitations', 'list'), ('owner_map_sha256', 'str'), ('parity_status', 'str'), ('reference', 'dict'), ('schema_version', 'int'), ('sources', 'list'), ('summary', 'dict')]

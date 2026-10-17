@@ -1,0 +1,83 @@
+# I1 R21 static proposed-source review
+
+**Verdict: REVISE.** One HIGH finding remains in a changed Python role-classification path. The supplied top-level repairs are supported by static tracing, and the old 117 cases/assertions are preserved in source. This is neither an executable test result nor full P100-003 acceptance.
+
+## I1-R21-01 — HIGH: local `__all__` is incorrectly privileged as export metadata
+
+Evidence: `scripts/reference-contract-catalog.mjs:1013–1022`, with `export_targets` at 1006–1009, annotation traversal at 1029–1031, `typ` at 1051–1055, declaration emission at 1070–1084, and extraction status at 1692–1693.
+
+`runtime_literals` recursively visits function bodies, but its `export_metadata` predicate checks only the target spelling and literal-list syntax. It does not establish that an assignment is module-level export metadata. The early return therefore hides function-local runtime values. The proposal retains this inherited defect in the modified function; this is not described as a new regression.
+
+Minimal inert witness for the existing synthetic source path `python/sdk/src/sdk.py`:
+
+```python
+def run(value: "debugger") -> None:
+    __all__: list[str] = ["debugger"]
+    exec(__all__[0])
+```
+
+**Never executed.** The witness is source data only. Removing `: list[str]` from the local assignment demonstrates the same inherited issue.
+
+Static trace:
+
+1. The local annotated assignment satisfies `export_metadata`: sole Name target `__all__`, literal list of identifier strings, pure annotation `list[str]`. `visit` returns without visiting the value at 1022.
+2. The signature string is skipped as pure annotation metadata. The `exec` argument contains a Name and integer subscript; no separate runtime string occurrence adds the missing digest.
+3. Consequently `typ` sees no source-local collision and returns the exact annotation spelling `'debugger'` in `run.shape.parameters[0].type`. The explicit `None` return annotation leaves this function shape without UNKNOWN; its predicted extraction status is STATIC.
+4. The enclosing python-surface UNKNOWN does not mask the function payload or retain its value digest. Nested assignments do not emit a separate python-exports row, because row extraction iterates module `tree.body`.
+
+The list is a local runtime value used as executable input, not an authenticated module export declaration. Frozen C requires that payload to remain opaque in the mirrored type; frozen B requires unresolved dual roles to remain UNKNOWN. This conclusion does not infer payload status from the spelling `debugger`. The local assignment and executable use establish the role in the same physical source.
+
+Expected annotation projection: UNKNOWN, nonempty reason, byte length **8**, and value SHA-256 `4c44d7c28ec0f6ca3e2624c6af1d3be324576d01ef6f6c2dc0af7e61664b8c2c`. Retain the function requirement, source path/hash, owner, stable identity, and NOT_VERIFIED parity.
+
+Bounded repair: restrict the export-metadata early-return privilege to established module-level assignments. Traverse function-local same-named assignments as runtime expressions. Add annotated/unannotated local-scope collision fixtures and retain the clean module-level controls. This requires lexical scope classification, not sink-name blacklisting, guest execution, cross-file analysis, or a general dataflow engine.
+
+## Preservation and concrete repairs
+
+The complete baseline test source is reproduced byte-for-byte after removing the proposal's new 253-line block and restoring only the evidence directory string from `role-r21` to `role-r20b`. All old fixtures, assertions, test helpers and test bodies are otherwise unchanged. Static enumeration gives 117 baseline cases and 130 proposed cases: 59 ordinary baseline `it` sites, 57 literal `it.each` rows, and one additional expansion of the two-item conversion loop. The proposal adds 13 cases. No case was executed; source preservation does not establish a passing suite.
+
+Both authoritative historical clarifications remain intact: r18's identical runtime initializer alongside the original alias and old assertions, and r20's UNKNOWN digest/length/reason refinement for the old R12 D worker type. Neither decision authorizes a denominator or parity reduction, and none is introduced by this test diff.
+
+The following supplied concrete repairs trace correctly:
+
+- Plain `ts`, `typescript`, `js`, and `javascript` fences join the physical Markdown source's runtime-literal prepass at helper 1329–1334 and 1382–1400. The complete prepass precedes emission. Existing unrecognized-fence projection remains UNKNOWN at 1578–1585 and 1645–1654. New tests 244–312 cover both TS orders, JS, and declaration-only TS preservation.
+- Top-level `__all__` collision values are projected per element at 1082. Clean neighbors remain exact, while collisions retain reason/hash/length. New tests 314–376 exercise direct collisions and mixed clean/colliding values.
+- `export_targets` adds AnnAssign support; the top-level extraction branch at 1078–1084 now emits the named annotated export requirement. New tests 378–412 compare surrounding identities with the unannotated control.
+- Dynamic annotation expressions on valid export metadata are visited before the early return at 1021, while pure annotations and clean export values do not self-contaminate. New tests 190–242 cover dynamic and pure controls; 414–441 preserve source separation. The local-scope witness above remains uncovered.
+
+## Changed functions and adjacent return paths reviewed
+
+| Path | Static assessment |
+| --- | --- |
+| Python `export_targets` (1006–1009) | Handles Assign/AnnAssign without evaluation; other nodes return no targets. |
+| Python `runtime_literals`, `export_metadata`, `visit` (1010–1041) | Dynamic annotation traversal is repaired; scope-blind metadata early return yields I1-R21-01. Pure annotation, docstring, type-parameter, and ordinary runtime traversal paths were inspected. |
+| Python module row extraction (1065–1086), adjacent `typ`/`sig` | Top-level export collisions use the per-source index; annotated requirements are added. Invalid/dynamic export values retain existing opaque/UNKNOWN behavior. The local early return defeats `typ` collision projection in the witness. |
+| Plain fence kind table and document prepass | Finite language kinds add parsing evidence; no program-spelling blacklist. `documentTypeScript` wrapping, parse-error catch, index completion, and subsequent projection were inspected. No execution path was added. |
+| Adjacent TS/JSON/document outputs | Inspected `indexRuntimeLiterals`, `printed`, declaration-name projection, static initializers, JSON role prepass/projection, document identities, graph outputs and unparsed outputs. Existing default/const/examples/unclassified payload roles remain absorbing; no further bounded finding recorded. |
+| Tests and unchanged guards | Reviewed every added test block, complete baseline/proposal diff, authentication/provenance/owner/identity/parity and freeze guards. No old assertion weakening or auth/provenance reduction found. |
+
+Frozen A's genuine names and B's declaration-only selectors are not rejected merely for program-shaped spelling. D's nested JSON payload handling is unchanged. Exact authenticated relative filenames remain provenance; no path identity migration is proposed. No requirement removal or owner/source reduction was found in the diff; this is not a live denominator audit.
+
+## Integrity
+
+All eight files matched the adjacent sentinel at the initial read and final static-review snapshot. Pre/post SHA-256 values:
+
+| Sealed packet-relative file | Pre SHA-256 | Post SHA-256 |
+| --- | --- | --- |
+| `baseline/reference-contract-catalog.mjs.source.txt` | `54534859ba431676663d3567d55dc9c95893c9a20a43f7bbd451b68804ab021e` | `54534859ba431676663d3567d55dc9c95893c9a20a43f7bbd451b68804ab021e` |
+| `baseline/reference-contract-catalog.test.js.source.txt` | `c33cf275dfbc322347c387a1cf053847255efb83184d377117a265ddaded3c75` | `c33cf275dfbc322347c387a1cf053847255efb83184d377117a265ddaded3c75` |
+| `docs/02_spec/0209_pare100_reference_catalog.md` | `6183bb50a4e9711fe13b21a3f97601d3c94dab2de46eb4a10d5328fc58871b94` | `6183bb50a4e9711fe13b21a3f97601d3c94dab2de46eb4a10d5328fc58871b94` |
+| `docs/04_audit/evidence/PARE100-EXEC-20261014/lead/collector-fixture-r18-decision.json` | `3fcbd074c483bd329bbb6f433b78e26ec95ef81300b921912c91fbceb3f1ed30` | `3fcbd074c483bd329bbb6f433b78e26ec95ef81300b921912c91fbceb3f1ed30` |
+| `docs/04_audit/evidence/PARE100-EXEC-20261014/lead/collector-fixture-r20-decision.json` | `16e6f6e877c568fa69eabf3bc39e35c4bcf25dc83d7cff02321d11e9425cfb49` | `16e6f6e877c568fa69eabf3bc39e35c4bcf25dc83d7cff02321d11e9425cfb49` |
+| `docs/04_audit/evidence/PARE100-EXEC-20261014/adjudicate-reference-r11/role-decisions.json` | `af4a8f72da413c41567ce4e5c7aab14d6f596829329d486f60c4d0a67376787a` | `af4a8f72da413c41567ce4e5c7aab14d6f596829329d486f60c4d0a67376787a` |
+| `scripts/reference-contract-catalog.mjs` | `c9bfb785210b2112d92ec0d34948be1ad9c6d5baa8f7bfde3701e2b4036f7e93` | `c9bfb785210b2112d92ec0d34948be1ad9c6d5baa8f7bfde3701e2b4036f7e93` |
+| `tests/reference-contract-catalog.test.js` | `69f09634ebe09ab53397ec529204a9f877f5c0c6bf498b153f414e800b0d6e3e` | `69f09634ebe09ab53397ec529204a9f877f5c0c6bf498b153f414e800b0d6e3e` |
+
+Adjacent `critic-reference-r21-packet.sentinel.json`: pre/post SHA-256 `f860ca14ed74ba7f4ff3b5f74e3ccb04aa8df93ca2c3c5a67c0dbe73b08837d5`, unchanged. Machine-readable hashes are also in `verdict.json`.
+
+## Method and limits
+
+Read only the eight sealed file contents and the packet-specific adjacent sentinel. The helper's embedded Python and every test/guest source remained inert text. Used standard reads, diff/search, hashing and a pure-data source comparison/case enumeration script. No helper/test/witness execution, source imports, reference access, network/DB/runtime access, descendant reviews or live candidate writes occurred. Writes are confined to the designated result directory.
+
+Access accounting: the first generic adjacent `sentinel.json` lookup returned ENOENT. A sibling-name glob exposed other sentinel basenames while locating the packet-specific sentinel; no other sibling file contents or packet directories were read.
+
+Behavior stated above is predicted by static source tracing. No claim is made that 117/130 tests pass, that every executable representation is universally opaque, or that whole-program/cross-file semantics have been proved. The original SPEC and exact frozen A–D decisions are the bar; r18/r20 are retained measurement clarifications. One concrete adjacent-path violation is sufficient for REVISE. The bounded review ends here; parity, release and full P100-003 acceptance remain ungranted.

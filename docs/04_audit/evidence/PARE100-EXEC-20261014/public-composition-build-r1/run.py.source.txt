@@ -1,0 +1,65 @@
+from pathlib import Path
+import os,json,hashlib,subprocess,datetime,time,signal,shutil
+base=Path(__file__).parent; parent=base.parent; w=parent/'worktree'
+sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+now=lambda:datetime.datetime.now(datetime.timezone.utc).isoformat()
+assert not (base/'command.json').exists(),'Never overwrite a build'
+task=json.loads((base/'task-short-spec.json').read_text())
+assert sha(w/'scripts/build-public-workspace.mjs')==task['driverSHA256']
+candidate=json.loads((parent/'static-guards-r1/candidate81.json').read_text())
+assert all(sha(Path(x['live']))==x['sha256'] for x in candidate['sourceBindings'])
+def source_snapshot():
+    result={}
+    for dirname in ['apps','packages','products','legacy','scripts','tests','examples']:
+        for p in (w/dirname).rglob('*'):
+            if p.is_file() and not p.is_symlink() and p.suffix in {'.ts','.tsx','.js','.mjs','.cjs','.mts','.cts','.json','.py','.sh','.css','.html'} and not any(x in p.parts for x in ['node_modules','dist','__pycache__','.cache']):
+                result[str(p.relative_to(w))]={'bytes':p.stat().st_size,'sha256':sha(p)}
+    for pattern in ['package*.json','tsconfig*.json','vitest*.mts','vitest*.mjs']:
+        for p in w.glob(pattern):result[str(p.relative_to(w))]={'bytes':p.stat().st_size,'sha256':sha(p)}
+    return result
+def emitted_snapshot():
+    result={}
+    for workspace in task['workspaces']:
+        root=w/workspace/'dist'
+        assert not root.is_symlink()
+        for p in root.rglob('*'):
+            assert not p.is_symlink(),str(p)
+            if p.is_file():result[str(p.relative_to(w))]={'bytes':p.stat().st_size,'sha256':sha(p)}
+    return result
+before=source_snapshot()
+assert before==json.loads((parent/'global-units-static-r1/source-after.json').read_text())
+(base/'source-before.json').write_text(json.dumps(before,indent=2)+'\n')
+emits_before=emitted_snapshot()
+(base/'emits-before.json').write_text(json.dumps(emits_before,indent=2)+'\n')
+for workspace in task['workspaces']:
+    source=w/workspace/'dist'
+    if source.exists():shutil.copytree(source,base/'before-emits'/workspace/'dist',symlinks=True)
+for n in ['home','tmp','cache','config','state']:(base/n).mkdir()
+env={'PATH':'/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin','LANG':'C.UTF-8','TZ':'UTC','NODE_ENV':'test','CI':'1',
+     'HOME':str(base/'home'),'TMPDIR':str(base/'tmp'),'XDG_CACHE_HOME':str(base/'cache'),'XDG_CONFIG_HOME':str(base/'config'),'XDG_STATE_HOME':str(base/'state')}
+argv=task['command'];t=time.monotonic()
+record={'status':'RUNNING','startedAt':now(),'argv':argv,'cwd':str(w),'environment':env,'deadlineSeconds':300,
+        'sourceBeforeSHA256':sha(base/'source-before.json'),'sourceFiles':len(before),'emitsBefore':len(emits_before),
+        'candidate81SHA256':sha(parent/'static-guards-r1/candidate81.json'),'expectedWorkspaces':task['workspaces']}
+with (base/'stdout.log').open('xb') as stdout,(base/'stderr.log').open('xb') as stderr:
+    process=subprocess.Popen(argv,cwd=w,env=env,stdout=stdout,stderr=stderr,start_new_session=True)
+    record['pid']=process.pid;(base/'command.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps({'status':'RUNNING','pid':process.pid,'sourceFiles':len(before),'emitsBackedUp':len(emits_before)}),flush=True)
+    timedout=False
+    try:code=process.wait(timeout=300)
+    except subprocess.TimeoutExpired:
+        timedout=True;os.killpg(process.pid,signal.SIGTERM)
+        try:code=process.wait(timeout=10)
+        except subprocess.TimeoutExpired:os.killpg(process.pid,signal.SIGKILL);code=process.wait(timeout=10)
+after=source_snapshot();emits_after=emitted_snapshot()
+(base/'source-after.json').write_text(json.dumps(after,indent=2)+'\n')
+(base/'emits-after.json').write_text(json.dumps(emits_after,indent=2)+'\n')
+source_changes=[{'path':k,'before':before.get(k),'after':after.get(k)} for k in sorted(set(before)|set(after)) if before.get(k)!=after.get(k)]
+emit_changes=[{'path':k,'before':emits_before.get(k),'after':emits_after.get(k)} for k in sorted(set(emits_before)|set(emits_after)) if emits_before.get(k)!=emits_after.get(k)]
+(base/'source-changes.json').write_text(json.dumps(source_changes,indent=2)+'\n');(base/'emits-changes.json').write_text(json.dumps(emit_changes,indent=2)+'\n')
+record.update({'status':'FINISHED','finishedAt':now(),'durationSeconds':time.monotonic()-t,'exit':code,'timedOut':timedout,'sourceChanges':len(source_changes),
+               'candidate81Unchanged':all(sha(Path(x['live']))==x['sha256'] for x in candidate['sourceBindings']),
+               'emitsAfter':len(emits_after),'emitChanges':len(emit_changes),'streams':{n:{'bytes':(base/n).stat().st_size,'sha256':sha(base/n)} for n in ['stdout.log','stderr.log']}})
+if code==0:
+    try:record['actualDriverResult']=json.loads((base/'stdout.log').read_text().splitlines()[-1])
+    except (ValueError,IndexError):record['actualDriverResult']='UNPARSED_KEEP_RAW'
+(base/'command.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record),flush=True)

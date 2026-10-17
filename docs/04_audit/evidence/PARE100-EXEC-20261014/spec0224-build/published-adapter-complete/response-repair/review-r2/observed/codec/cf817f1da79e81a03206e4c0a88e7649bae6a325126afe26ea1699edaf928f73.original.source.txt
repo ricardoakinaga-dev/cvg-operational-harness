@@ -1,0 +1,9 @@
+import {it,expect} from 'vitest';import fs from 'node:fs';import {sealCheckpoint} from '@cvg/harness';
+it('qualifies checkpoint step invariant with unchanged and mismatched accounting',()=>{
+const rows=JSON.parse(fs.readFileSync(process.env.I1_REVIEW+'/raw/replay-cases.json','utf8'));const cp=rows.find(x=>x.case==='REPLAY_EMPTY').checkpoint;
+const {checkpointId,createdAt,digest,...unsigned}=cp; const healthy=sealCheckpoint(unsigned);
+const bad=structuredClone(unsigned);bad.stepNumber=2;bad.state.stepNumber=2;bad.state.stopReason='INSUFFICIENT_EVIDENCE';delete bad.state.toolResultContext.acceptedDecision;
+let error;try{sealCheckpoint(bad)}catch(e){error={name:e.name,code:e.code,message:e.message,stack:e.stack}}
+fs.writeFileSync(process.env.SPEC0224_RESPONSE_EVIDENCE,JSON.stringify({healthyUnsigned:unsigned,healthy,badUnsigned:bad,error},null,2)+'\n');
+expect(healthy.digest).toBe(cp.digest);expect(error?.message).toBe('Checkpoint step mismatch');
+});

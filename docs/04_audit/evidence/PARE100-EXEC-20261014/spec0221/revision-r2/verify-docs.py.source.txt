@@ -1,0 +1,112 @@
+import hashlib
+import json
+import re
+import shutil
+from pathlib import Path
+
+ROOT = Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+PRIVATE = Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0221-r1/revision-r2')
+WORK = Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree')
+BASE = Path('docs/04_audit/evidence/PARE100-EXEC-20261014')
+OUT = ROOT / BASE / 'spec0221/revision-r2'
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n')
+
+
+def valid_bindings(rows, originals):
+    if len(rows) != 75 or len({r['id'] for r in rows}) != 75:
+        return False
+    actual = {r['id']: r for r in rows}
+    return all(all(actual.get(r['id'], {}).get(k) == v for k, v in r.items()) for r in originals)
+
+
+originals = json.loads((ROOT / BASE / 'matrix/session-durable-r3/leaf-bindings.json').read_text())
+rows = json.loads((OUT / 'leaf-bindings.json').read_text())
+assert valid_bindings(rows, originals)
+assert not valid_bindings(rows[:-1], originals)
+bad = json.loads(json.dumps(rows))
+unknown = next(r for r in bad if r['extraction_status'] == 'UNKNOWN')
+unknown['extraction_status'] = 'STATIC'
+assert not valid_bindings(bad, originals)
+bad = json.loads(json.dumps(rows))
+bad[0]['contract_sha256'] = '0' * 64
+assert not valid_bindings(bad, originals)
+manifest = json.loads((PRIVATE / 'sentinel-pre.json').read_text())
+drift = []
+for item in manifest:
+    for path in [Path(item['live']), PRIVATE / 'review-packet' / item['copy']]:
+        if sha(path) != item['sha256']:
+            drift.append(str(path))
+assert not drift, drift
+spec = ROOT / 'docs/02_spec/0221_pare100_public_session_persistence.md'
+sp = re.findall(r'^\| (SP\d\d)\s*\|', spec.read_text(), re.M)
+assert sp == [f'SP{i:02}' for i in range(1, 23)], sp
+crosswalk = json.loads((OUT / 'procedure-crosswalk.json').read_text())
+assert len(crosswalk['procedures']) == 18
+assert all(p['status'] == 'NOT_RUN' for p in crosswalk['procedures'])
+assert all(set(p['sp_ids']) <= set(sp) for p in crosswalk['procedures'])
+prior = json.loads((ROOT / BASE / 'differential-failure-r2/program-scope-retention.json').read_text())
+backlog = ROOT / 'docs/03_build/0378_backlog_paridade_integral.md'
+parts = re.split(r'^#{2,3} (P100-\d+) — .*$', backlog.read_text(), flags=re.M)
+tasks = {}
+for i in range(1, len(parts), 2):
+    ident, body = parts[i:i+2]
+    state = re.search(r'^- Estado: `([^`]+)`', body, re.M)
+    criterion = re.search(r'^- Pronto: (.+)$', body, re.M)
+    assert state and criterion, ident
+    tasks[ident] = {'state': state[1], 'criterion': criterion[1]}
+assert tasks == prior['tasks'], 'Original36 task status/criteria changed'
+bar = json.loads((WORK / '.gauntlet/bar.json').read_text())
+bar_hash = hashlib.sha256(json.dumps(bar, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+assert bar_hash == prior['barCanonicalSHA256']
+scope = {
+    'scope': 'Original36 IDs/status/criteria compared, no functional parity measurement',
+    'barCanonicalSHA256': bar_hash, 'currentBacklogSHA256': sha(backlog),
+    'priorEvidenceSHA256': sha(ROOT / BASE / 'differential-failure-r2/program-scope-retention.json'),
+    'cards': len(tasks), 'phases': 8,
+    'doneLocal': sum(v['state'] == 'DONE_LOCAL' for v in tasks.values()),
+    'open': sum(v['state'] != 'DONE_LOCAL' for v in tasks.values()),
+    'tasks': tasks, 'allCriteriaRetained': True,
+    'parity': 'NOT_MEASURED', 'fullGoalComplete': False,
+}
+assert scope['cards'] == 36 and scope['doneLocal'] == 2 and scope['open'] == 34
+write(OUT / 'program-scope-retention.json', scope)
+write(OUT / 'documentary-checks.json', {
+    'kind': 'DOCUMENTARY_INTEGRITY_ONLY', 'status': 'PASS',
+    'source_and_copy_pairs': len(manifest), 'source_drift': drift,
+    'original_records_exactly_retained': len(rows), 'unknown': 4,
+    'pending_surface': sum(bool(r['semantic_surface_review_pending']) for r in rows),
+    'procedure_crosswalk_count': 18, 'future_sp_count': len(sp),
+    'runtime_tests_run': 0, 'functional_parity_verified': False,
+    'known_bad_document_controls_rejected': ['removed_binding', 'UNKNOWN_promoted', 'contract_hash_changed'],
+})
+frozen = json.loads((WORK.parent / 'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json').read_text())
+permitted = {'docs/99_runtime_state.md', 'docs/20_master_execution_log.md', 'docs/30_backlog_master.md', 'docs/08_runtime/agent_coordination.md'}
+pin_bad = [p for p, h in frozen['newGroups'][0]['pins'].items() if sha(WORK / p) != h]
+input_bad = [p for p, h in frozen['inputs'].items() if sha(WORK / p) != h]
+assert not pin_bad and set(input_bad) <= permitted, (pin_bad, input_bad)
+protected_specs = {}
+for n, expected in [('0217', '1e5df50255e1634c06e09b46e2fc40da3a51a6e15be10ae4856e092bf910a905'), ('0220', '211d341fed2bb70d07ab525e5e23279803d9fe387295bb14d4669ad22aa4d9a5')]:
+    paths = list((ROOT / 'docs/02_spec').glob(n + '_*.md'))
+    assert len(paths) == 1
+    rel = paths[0].relative_to(ROOT)
+    assert sha(paths[0]) == sha(WORK / rel) == expected
+    protected_specs[n] = expected
+write(OUT / 'protected-post.json', {
+    'composition_pins': 465, 'pin_drift': pin_bad, 'observational_inputs': 497,
+    'ledger_input_drift': input_bad, 'nonledger_input_drift': [],
+    'immutable_specs': protected_specs,
+})
+for path in OUT.iterdir():
+    if path.is_file():
+        target = WORK / path.relative_to(ROOT)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+print(json.dumps({'documentary': 'PASS', 'bindings': 75, 'procedures': 18, 'sp_NOT_RUN': len(sp), 'original_cards': len(tasks), 'pins': 465}))

@@ -1,0 +1,14 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import crypto from 'node:crypto'
+import {execFileSync} from 'node:child_process'
+import {collectReferenceCatalog} from './packet/scripts/reference-contract-catalog.mjs'
+const base='/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-reference-scratch';const result='/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-reference-result'
+const root=fs.mkdtempSync(path.join(base,'execution-fixture-'));const marker=path.join(root,'fsmonitor-executed.txt')
+const files={'package.json':'{"name":"@probe/root","version":"fixture-v1"}','packages/core/probe/package.json':'{"name":"@probe/core","main":"src/index.ts"}','packages/core/probe/src/index.ts':'export interface A { safe: true }','contract-monitor.sh':'#!/bin/sh\nprintf "%s\\n" "REFERENCE_COMMAND_EXECUTED" > fsmonitor-executed.txt\nprintf "token\\000"\n'}
+for(const [name,text]of Object.entries(files)){fs.mkdirSync(path.dirname(path.join(root,name)),{recursive:true});fs.writeFileSync(path.join(root,name),text)}fs.chmodSync(path.join(root,'contract-monitor.sh'),0o755)
+const run=(args,input)=>execFileSync('git',['-C',root,...args],{input,encoding:'utf8',env:{...process.env,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_AUTHOR_NAME:'Independent',GIT_AUTHOR_EMAIL:'probe@example.invalid',GIT_COMMITTER_NAME:'Independent',GIT_COMMITTER_EMAIL:'probe@example.invalid'}}).trim()
+run(['init','-q','-b','main']);run(['add','--',...Object.keys(files)]);const commit=run(['commit-tree',run(['write-tree'])],'independent command boundary fixture\n');run(['update-ref','refs/heads/main',commit]);run(['config','core.fsmonitor','./contract-monitor.sh'])
+const sha=x=>crypto.createHash('sha256').update(x).digest('hex');const manifest='packages/core/probe/package.json';const ownerMap={reference_commit:commit,reference_version:'fixture-v1',inventory_coverage:{packages:1,families:1},family_owners:{core:'P100-012'},package_owners:[{reference_package:'@probe/core',manifest,manifest_sha256:sha(files[manifest]),group:'core',owner_task:'P100-012'}],additional_surfaces:[]}
+let status,error;try{status=collectReferenceCatalog({root,expectedCommit:commit,expectedVersion:'fixture-v1',ownerMap}).parity_status}catch(e){error=e.message}
+const row={name:'known-bad reference configured fsmonitor execution',expected:'NO_REFERENCE_COMMAND_EXECUTION',actual:fs.existsSync(marker)?'REFERENCE_COMMAND_EXECUTED':'NO_REFERENCE_COMMAND_EXECUTION',passed:!fs.existsSync(marker),root,marker,markerText:fs.existsSync(marker)?fs.readFileSync(marker,'utf8'):null,catalogStatus:status,error};console.log(JSON.stringify(row));fs.writeFileSync(path.join(result,'execution-boundary-probe.json'),JSON.stringify(row,null,2)+'\n');process.exitCode=row.passed?0:1

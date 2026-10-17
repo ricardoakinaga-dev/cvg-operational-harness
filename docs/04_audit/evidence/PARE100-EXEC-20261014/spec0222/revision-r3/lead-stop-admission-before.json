@@ -1,0 +1,57 @@
+{
+  "level": "I0_STATIC_DESIGN_ANALYSIS_NOT_RUNTIME_PROOF",
+  "status": "NORMATIVE_ADMISSION_AMBIGUITY_REQUIRES_EXPLICIT_RESOLUTION",
+  "candidateSpecSHA256": "56d83417454759073dbe4dec56507d803306b838f989d5d8b98d8805fb8bdc8f",
+  "bindings": [
+    {
+      "path": "packages/harness/src/kernel/kernel-runtime.ts",
+      "sha256": "b8ad04c7999524e44ffbecfc637d58463ab1224c367c9748ad4a2456c19e21d0",
+      "lines": [
+        281,
+        302
+      ],
+      "excerpt": "281:       const decision = await race(this.#state, () =>\n282:         this.#host.get('planner').decideNextStep({\n283:           runtime: input,\n284:           availableTools: this.#availableTools(),\n285:           step: 1\n286:         })\n287:       )\n288:       if (decision === CANCELLED) {\n289:         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))\n290:       }\n291:       if (decision === DEADLINE) {\n292:         return this.#finish(\n293:           fromStop(\n294:             stop('MAX_DURATION', 'Duration budget exhausted while planning.')\n295:           )\n296:         )\n297:       }\n298:       switch (decision.action) {\n299:         case 'RESPOND':\n300:           return await this.#respond(decision.response)\n301:         case 'CALL_TOOL':\n302:           return await this.#callTool(decision.toolInvocation)"
+    },
+    {
+      "path": "packages/harness/src/kernel/pipeline.ts",
+      "sha256": "b5c6d187bb0c3ec9cbcd58ceca5480f016b379535e578e6692f3578d22fbc272",
+      "lines": [
+        139,
+        154
+      ],
+      "excerpt": "139: export async function race<T>(\n140:   turn: TurnState,\n141:   operation: () => Promise<T>\n142: ): Promise<T | typeof DEADLINE | typeof CANCELLED> {\n143:   const signal = turn.signal\n144:   if (signal.aborted) return CANCELLED\n145:   let onAbort!: () => void\n146:   const cancelled = new Promise<typeof CANCELLED>((resolve) => {\n147:     onAbort = () => resolve(CANCELLED)\n148:     signal.addEventListener('abort', onAbort, { once: true })\n149:   })\n150:   try {\n151:     return await Promise.race([turn.budget.withDeadline(operation), cancelled])\n152:   } finally {\n153:     signal.removeEventListener('abort', onAbort)\n154:   }"
+    },
+    {
+      "path": "packages/harness/src/kernel/controls.ts",
+      "sha256": "68fe8d65d8a425461c5ac404c29d5ac988f5e9081aeccc3327092d7070a6d35c",
+      "lines": [
+        739,
+        754
+      ],
+      "excerpt": "739: export function plannerCapability(planner: Orchestrator): KernelPlugin {\n740:   return {\n741:     name: 'capability.planner',\n742:     kind: 'capability',\n743:     provides: ['planner'],\n744:     apply: (ctx) => void ctx.provide('planner', planner)\n745:   }\n746: }\n747: \n748: export function modelCapability(model: ModelGateway): KernelPlugin {\n749:   return {\n750:     name: 'capability.model',\n751:     kind: 'capability',\n752:     provides: ['model'],\n753:     apply: (ctx) => void ctx.provide('model', model)\n754:   }"
+    },
+    {
+      "path": "packages/harness/src/iterative-runtime.ts",
+      "sha256": "1b31a582225fa905e931dd7d7ba053da6bea2e4c81686f9502884b8dd2cd81d3",
+      "lines": [
+        991,
+        1015
+      ],
+      "excerpt": "991:     const decisionAbortController = new AbortController()\n992:     const decisionOrDeadline = await this.withDeadline(\n993:       this.options.orchestrator.decide({\n994:         context,\n995:         signal: decisionAbortController.signal\n996:       }),\n997:       remaining\n998:     )\n999:     if (decisionOrDeadline === DEADLINE_EXCEEDED) {\n1000:       decisionAbortController.abort()\n1001:       return {\n1002:         outcome: this.stop(\n1003:           'MAX_DURATION',\n1004:           'Duration budget exhausted while deciding the next step.'\n1005:         )\n1006:       }\n1007:     }\n1008:     const turn = decisionOrDeadline\n1009:     const usage = turn.usage ?? EMPTY_MODEL_USAGE\n1010:     this.accountUsage(run, usage)\n1011:     const usageStop = this.checkAfterUsage(run)\n1012:     if (usageStop) {\n1013:       return { outcome: this.stop(usageStop.reason, usageStop.response) }\n1014:     }\n1015:     return { decision: turn.decision }"
+    },
+    {
+      "path": "packages/orchestrator/src/hybrid-orchestrator.ts",
+      "sha256": "77341ff087f814490d25e69797149077523cb3f5c2be7fba41d203a143d0848c",
+      "lines": [
+        178,
+        213
+      ],
+      "excerpt": "178:     while (true) {\n179:       if (input.signal?.aborted) {\n180:         throw new OrchestratorDecisionError(\n181:           'orchestrator_unavailable',\n182:           'Decision was cancelled by the runtime deadline'\n183:         )\n184:       }\n185:       const prompt = buildDecisionPrompt({\n186:         ...context,\n187:         ...(repairAttempt > 0\n188:           ? {\n189:               decisionRepair: {\n190:                 attempt: repairAttempt,\n191:                 errors: lastErrors\n192:               }\n193:             }\n194:           : {})\n195:       })\n196:       const modelResult = await this.decisionModel.complete({\n197:         messages: [\n198:           { role: 'system', content: prompt },\n199:           { role: 'user', content: context.userMessage }\n200:         ],\n201:         context: {\n202:           values: { goal: context.goal },\n203:           sourceIds: ['hybrid-orchestrator'],\n204:           capturedAt: new Date().toISOString()\n205:         },\n206:         budget: context.budget,\n207:         correlationId: context.correlationId,\n208:         purpose: repairAttempt > 0 ? 'REPAIR' : 'ORCHESTRATION',\n209:         ...(input.signal ? { signal: input.signal } : {})\n210:       })\n211:       usage = addUsage(usage, modelResult)\n212:       let parsed: unknown\n213:       try {"
+    }
+  ],
+  "deduction": "The native race can return while its original planner/orchestrator promise remains pending. Current Hybrid checks its signal, which covers its own normal path, but the managed catalog also admits other planners/orchestrators and native service ports do not themselves authenticate turn-terminal admission. R2 keeps an original producer ACTIVE for liveness, and concretely denies new child work on owner.close; it does not explicitly distinguish that liveness from permission to create a new model/tool callback after a native turn result/deadline/cancel while owner remains OPEN. A broad no-budget-bypass clause is not a concrete latch placement.",
+  "scope": "No engine exploitation claimed; source tests and hypothetical schedule NOT_RUN. Ordinary native Hybrid signal guard is preserved as positive boundary; do not label it broken.",
+  "requiredBeforeHumanPresentation": "State the separate monotonic per-turn body-admission latch and signal/budget checks at the real invocation boundary, while retaining liveness/settlement tokens for original pending operations. Verify native scheduler/outcomes and include known-bad schedules in ML11/ML15/ML20; if source changes necessary, wait for current critic terminal then reseal/review.",
+  "candidateUnchangedDuringCritique": true,
+  "notSentToFreshCritic": true
+}

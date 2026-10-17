@@ -1,0 +1,77 @@
+from auditlib import *
+
+test=(P/'current/tests/ci-coverage-defaults.test.js').read_text()
+producer=test.split('const producer = `',1)[1].split('\n`',1)[0].replace('${process.execPath}',str(NODE))
+producer=producer.replace("argv: process.argv.slice(2),", "pid:process.pid, env:process.env, argv: process.argv.slice(2),")
+scope={'kind':'harness-core','testScope':'core','excludedProductRoots':['products/']}
+# Read the public constant, rather than reconstructing the scope object.
+for line in (P/'current/scripts/ci-bar-contract.mjs').read_text().splitlines()[:45]:
+    print(line)
+
+def summary(root):
+    dims=['statements','branches','functions','lines']
+    metric=lambda t,c:dict(total=t,covered=c,skipped=0,pct=100*c/t)
+    return {'total':{k:metric(100,85 if k=='branches' else 90) for k in dims},
+            str(root/'packages/contracts/src/synthetic.ts'):{k:metric(20,20) for k in dims},
+            str(root/'packages/other/src/synthetic.ts'):{k:metric(80,65 if k=='branches' else 70) for k in dims}}
+
+def fixture(name,mode='missing',flag='garbage',gate='coverage',prior='file',snapshot=False):
+    root=O/'fixtures'/name;root.mkdir(parents=True);graph('scripts/ci-bar.mjs',root)
+    (root/'package.json').write_text('{"type":"module"}\n');(root/'bin').mkdir()
+    (root/'bin/npm').write_text(producer);(root/'bin/npm').chmod(0o700)
+    a=root/'artifacts';(a/'gates').mkdir(parents=True)
+    dump(a/'ci-bar-state.json',{'scope':scope,'runId':'synthetic-i1-r2','candidateId':'a'*64,'nodeVersion':'22.23.2','npmVersion':'synthetic','startedAt':'2026-10-16T00:00:00Z','candidateFiles':[],'gates':[]})
+    (root/'coverage').mkdir();(root/'coverage/untouched.txt').write_text('coverage sibling must survive')
+    report=root/'coverage/coverage-summary.json';target=root/'previous-target.json'
+    dump(target,summary(root));target_before=sha(target)
+    if prior=='file':shutil.copyfile(target,report)
+    elif prior=='symlink':report.symlink_to(target)
+    elif prior=='dangling':report.symlink_to(root/'nonexistent.json')
+    elif prior=='directory':report.mkdir();(report/'child').write_text('directory child must survive')
+    elif prior!='none':raise ValueError(prior)
+    if snapshot:dump(a/'gate-outputs/coverage/coverage/coverage-summary.json',summary(root))
+    e=env(name);e.update(PATH=str(root/'bin')+':'+e['PATH'],CI_ARTIFACT_DIR=str(a),CVG_TEST_SCOPE='all',SYNTHETIC_REPORT=mode,I1_PRESERVE_ENV='unmodified')
+    if flag is not None:e['CVG_COVERAGE_PER_FILE']=flag
+    code,logs=run(name,[NODE,'scripts/ci-bar.mjs','gate',gate],root,e,15)
+    observed=json.loads((root/'observed.json').read_text()) if (root/'observed.json').exists() else None
+    entry=json.loads(logs['stdout']) if logs['stdout'].strip() else None
+    facts={'name':name,'exit':code,'entry':entry,'observed':observed,'report_exists':report.exists(),'report_is_symlink':report.is_symlink(),
+           'target_unchanged':target_before==sha(target),'sibling_unchanged':(root/'coverage/untouched.txt').read_text()=='coverage sibling must survive',
+           'directory_child_survives':(report/'child').exists() if report.is_dir() else None}
+    dump(O/'observations'/f'{name}.json',facts)
+    assert facts['target_unchanged'] and facts['sibling_unchanged']
+    if observed:
+        assert observed['env']['I1_PRESERVE_ENV']=='unmodified' and observed['scope']=='core'
+        if gate in ['coverage','certify']:assert observed['perFile']=='1'
+        else:assert observed['perFile']==flag
+    return facts
+
+if __name__=='__main__':
+    # scope in the hand-written state does not drive the production gate checks;
+    # it is retained solely as explicit synthetic, nonqualifying fixture metadata.
+    results=[]
+    for prior in ['symlink','dangling','file']:
+        f=fixture('stale-'+prior,prior=prior,snapshot=True)
+        assert f['exit']==1 and f['entry']['status']=='FAIL'
+        assert 'missing_artifact:coverage/coverage-summary.json' in f['entry']['outputFailures']
+        assert not f['report_exists'] and not f['report_is_symlink'];results.append(f)
+    f=fixture('symlink-new-emission',prior='symlink',mode='good')
+    assert f['exit']==0 and f['entry']['status']=='PASS' and not f['report_is_symlink'];results.append(f)
+    f=fixture('directory-nonrecursive',prior='directory')
+    assert f['exit']!=0 and f['observed'] is None and f['directory_child_survives'];results.append(f)
+    f=fixture('symlink-exit7',prior='symlink',mode='exit7')
+    assert f['exit']==7 and f['entry']['exitCode']==7 and f['entry']['outputFailures']==[];results.append(f)
+    for gate in ['format','typecheck','lint']:
+        f=fixture('unrelated-'+gate,prior='file',gate=gate)
+        assert f['exit']==0 and f['report_exists'];results.append(f)
+    for i,flag in enumerate([None,'0','garbage','false','1']):
+        f=fixture('nested-env-'+str(i),prior='file',flag=flag,gate='certify')
+        assert f['exit']==1 and f['entry']['status']=='FAIL' and f['report_exists'];results.append(f)
+    root=O/'fixtures/bootstrap';root.mkdir(parents=True);graph('scripts/ci-bar.mjs',root)
+    (root/'package.json').write_text('{"type":"module"}\n');(root/'bin').mkdir()
+    (root/'bin/npm').write_text('#!/bin/sh\n[ "$1" = "--version" ] && echo synthetic-bootstrap-npm\n');(root/'bin/npm').chmod(0o700)
+    (root/'bin/git').write_text('#!/bin/sh\n[ "$1" = "ls-files" ] && exit 0\nexit 78\n');(root/'bin/git').chmod(0o700)
+    e=env('bootstrap');e.update(PATH=str(root/'bin')+':'+e['PATH'],CI_ARTIFACT_DIR=str(root/'artifacts'))
+    code,logs=run('bootstrap-no-deps',[NODE,'scripts/ci-bar.mjs','init'],root,e,15)
+    assert code==0 and not (root/'node_modules').exists()
+    dump(O/'probe-summary.json',{'probes':len(results)+1,'all_passed':True,'fixtures':'synthetic private only; nested certify npm is a producer stub, never qualification','cases':[{'name':f['name'],'exit':f['exit']} for f in results],'bootstrap_exit':code})

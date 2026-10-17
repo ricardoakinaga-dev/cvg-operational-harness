@@ -1,0 +1,732 @@
+/** Private SPEC224 fixtures only. No shell, arbitrary argv or runtime authority. */
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { constants } from 'node:fs'
+import {
+  lstat,
+  realpath,
+  open,
+  readFile,
+  mkdir,
+  mkdtemp,
+  rm
+} from 'node:fs/promises'
+import { dirname, join, resolve, sep } from 'node:path'
+import { trackPare217Process } from '../../../../../apps/worker/src/__tests__/fixtures/pare217-process-lifecycle.ts'
+
+export const COMPLETE_NODE =
+  '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+const NODE_SHA =
+  '3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327'
+const TASK = 'PARE100-EXEC:BUILD-TEST-RESOURCE-HARDENING-0224'
+const BASE = '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/'
+const TESTS = 'packages/persistence/src/__tests__/'
+export const completeProfiles = {
+  'store-restart': {
+    target: TESTS + 'complete-tool-process-restart.test.ts',
+    roles: [
+      'writer',
+      'reader',
+      'initial-a',
+      'initial-b',
+      'reservation-a',
+      'reservation-b'
+    ],
+    readinessMs: 20000,
+    maxRuntimeMs: 25000
+  },
+  'public-restart': {
+    target: TESTS + 'complete-tool-public-restart.test.ts',
+    roles: ['writer', 'reader', 'race-a', 'race-b'],
+    readinessMs: 45000,
+    maxRuntimeMs: 75000
+  },
+  'bound-admission': {
+    target: TESTS + 'complete-bound-admission-postgres.integration.ts',
+    roles: ['assigned-child-input-only'],
+    readinessMs: 15000,
+    maxRuntimeMs: 45000
+  }
+} as const
+export type CompleteProfile = keyof typeof completeProfiles
+type ResourceKind = CompleteProfile | 'capacity' | 'settlement'
+const sha = (bytes: Buffer | string) =>
+  createHash('sha256').update(bytes).digest('hex')
+
+export async function physicalPath(path: string, kind: 'file' | 'directory') {
+  if (resolve(path) !== path) throw new Error('Noncanonical path')
+  // realpath equality alone misses ancestor symlinks that resolve back inside.
+  for (let current = path; ; current = dirname(current)) {
+    const stat = await lstat(current)
+    if (stat.isSymbolicLink()) throw new Error('Symlink path component')
+    if (current === dirname(current)) break
+  }
+  const stat = await lstat(path)
+  if (
+    (kind === 'file' ? !stat.isFile() : !stat.isDirectory()) ||
+    (await realpath(path)) !== path
+  )
+    throw new Error('Wrong physical path type')
+  return stat
+}
+export async function ownedPath(
+  root: string,
+  path: string,
+  kind: 'file' | 'directory',
+  fresh = false
+) {
+  await physicalPath(root, 'directory')
+  if (resolve(path) !== path || !path.startsWith(root + sep))
+    throw new Error('Path outside assigned root')
+  if (fresh) {
+    await physicalPath(dirname(path), 'directory')
+    try {
+      await lstat(path)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    throw new Error('Owned new path already exists')
+  }
+  const stat = await physicalPath(path, kind)
+  if (stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0)
+    throw new Error('Private path ownership/mode required')
+}
+export async function privateBytes(root: string, path: string) {
+  await ownedPath(root, path, 'file')
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const stat = await handle.stat()
+    if (
+      !stat.isFile() ||
+      stat.size > 1048576 ||
+      stat.uid !== process.getuid?.() ||
+      (stat.mode & 0o077) !== 0
+    )
+      throw new Error('Private file exceeds bounds or ownership')
+    const bytes = Buffer.alloc(stat.size + 1)
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0)
+    if (bytesRead !== stat.size)
+      throw new Error('Private file changed while reading')
+    return bytes.subarray(0, bytesRead)
+  } finally {
+    await handle.close()
+  }
+}
+export async function privateEnvironment(root: string) {
+  await physicalPath(root, 'directory')
+  const home = await mkdtemp(join(root, 'complete-home-'))
+  try {
+    for (const part of ['tmp', 'config', 'cache', 'data', 'state'])
+      await mkdir(join(home, part), { mode: 0o700 })
+  } catch (error) {
+    await rm(home, { recursive: true })
+    throw error
+  }
+  const env: NodeJS.ProcessEnv = {
+    PATH: '/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin',
+    HOME: home,
+    TMPDIR: join(home, 'tmp'),
+    TMP: join(home, 'tmp'),
+    TEMP: join(home, 'tmp'),
+    XDG_CONFIG_HOME: join(home, 'config'),
+    XDG_CACHE_HOME: join(home, 'cache'),
+    XDG_DATA_HOME: join(home, 'data'),
+    XDG_STATE_HOME: join(home, 'state'),
+    LANG: 'C.UTF-8',
+    TZ: 'UTC',
+    NODE_ENV: 'test',
+    CI: '1'
+  }
+  return { home, env }
+}
+
+/** Import-free static config; JSON data cannot smuggle setup/loader code.
+ * Future Lead seals these exact bytes in the resource claim before execution. */
+export function completeChildConfig(
+  profile: CompleteProfile,
+  cwd: string,
+  scratch: string
+) {
+  const alias = {
+    '@cvg/harness-contracts': join(cwd, 'packages/contracts/src/index.ts'),
+    '@cvg/harness-orchestrator': join(
+      cwd,
+      'packages/orchestrator/src/index.ts'
+    ),
+    '@cvg/harness': join(cwd, 'packages/harness/src/index.ts'),
+    '@cvg/shared': join(cwd, 'packages/shared/src/index.ts'),
+    '@cvg/platform': join(cwd, 'packages/platform/src/index.ts')
+  }
+  return (
+    'export default ' +
+    JSON.stringify({
+      cacheDir: join(scratch, 'vite-cache'),
+      test: {
+        environment: 'node',
+        pool: 'threads',
+        maxWorkers: 1,
+        fileParallelism: false,
+        include: [completeProfiles[profile].target]
+      },
+      resolve: { alias }
+    }) +
+    '\n'
+  )
+}
+type Claim = {
+  task: string
+  claimId: string
+  kind: ResourceKind
+  root: string
+  cwd: string
+  resource: string
+  resourceSHA256: string
+  evidence: string
+  service?: string
+  config?: string
+  configSHA256?: string
+  containerId: string
+  containerName: string
+  imageId: string
+  port: string
+  database: string
+  user: string
+  schema: string
+  role: string
+  docker: '/usr/bin/docker'
+  dockerSHA256: string
+  dockerHost: string
+}
+export async function assignedResource(
+  kind: ResourceKind,
+  resourcePath: string,
+  expectedRoot = dirname(resourcePath)
+) {
+  const root = expectedRoot
+  if (
+    !root.startsWith(BASE) ||
+    !/^[-a-zA-Z0-9_/]+$/.test(root) ||
+    resolve(root) !== root
+  )
+    throw new Error('Unassigned resource root')
+  const rootStat = await physicalPath(root, 'directory')
+  if (rootStat.uid !== process.getuid?.() || (rootStat.mode & 0o077) !== 0)
+    throw new Error('Private owned root required')
+  const claim = JSON.parse(
+    (
+      await privateBytes(root, join(root, 'complete-process-claim.json'))
+    ).toString()
+  ) as Claim
+  if (
+    claim.task !== TASK ||
+    claim.kind !== kind ||
+    claim.root !== root ||
+    claim.resource !== resourcePath ||
+    claim.claimId !== `${TASK}:${kind}:${root}`
+  )
+    throw new Error('Exact Lead resource claim required')
+  const bytes = await privateBytes(root, resourcePath)
+  if (sha(bytes) !== claim.resourceSHA256)
+    throw new Error('Resource bytes differ from claim')
+  const resource = JSON.parse(bytes.toString())
+  const url = new URL(resource.test_database_url)
+  if (
+    resource.synthetic !== true ||
+    resource.exclusiveClaim !== claim.claimId ||
+    resource.containerId !== claim.containerId ||
+    !/^[a-f0-9]{64}$/.test(claim.containerId) ||
+    resource.containerName !== claim.containerName ||
+    claim.containerName !== '/cvg-pare100-224-pg' ||
+    resource.imageId !== claim.imageId ||
+    !/^sha256:[a-f0-9]{64}$/.test(claim.imageId) ||
+    resource.schemaName !== claim.schema ||
+    !/^pare224_[a-z0-9_]{1,50}$/.test(claim.schema) ||
+    resource.roleName !== claim.role ||
+    claim.role !== claim.schema + '_service' ||
+    url.protocol !== 'postgresql:' ||
+    url.hostname !== '127.0.0.1' ||
+    url.port !== claim.port ||
+    !/^[1-9][0-9]{0,4}$/.test(claim.port) ||
+    Number(claim.port) > 65535 ||
+    claim.database !== 'pare224_synthetic' ||
+    claim.user !== 'pare224' ||
+    url.pathname !== '/' + claim.database ||
+    url.username !== claim.user ||
+    url.search ||
+    url.hash ||
+    resource.hostPort?.HostIp !== '127.0.0.1' ||
+    resource.hostPort?.HostPort !== claim.port
+  )
+    throw new Error('Resource identity differs from owned claim')
+  await physicalPath(claim.cwd, 'directory')
+  if (claim.cwd !== resolve(import.meta.dirname, '../../../../..'))
+    throw new Error('Wrong fixture worktree')
+  await ownedPath(root, claim.evidence, 'directory')
+  if (kind in completeProfiles) {
+    if (!claim.config || !claim.configSHA256) throw new Error('Unsealed config')
+    const config = await privateBytes(root, claim.config)
+    if (
+      sha(config) !== claim.configSHA256 ||
+      config.toString() !==
+        completeChildConfig(kind as CompleteProfile, claim.cwd, root)
+    )
+      throw new Error('Wrong static config')
+  }
+  return { root, claim, resource, url }
+}
+export async function assignedService(
+  resourcePath: string,
+  root: string,
+  service: string,
+  evidence: string,
+  fresh = false
+) {
+  const assigned = await assignedResource('bound-admission', resourcePath, root)
+  const { claim } = assigned
+  if (claim.service !== service || claim.evidence !== evidence)
+    throw new Error('Wrong service/evidence assignment')
+  await ownedPath(root, service, 'file', fresh)
+  if (fresh) return assigned
+  const value = JSON.parse((await privateBytes(root, service)).toString())
+  if (
+    value.host !== '127.0.0.1' ||
+    value.port !== Number(claim.port) ||
+    value.database !== claim.database ||
+    value.user !== claim.role ||
+    typeof value.password !== 'string' ||
+    !value.password ||
+    value.options !==
+      `-c search_path=${claim.schema} -c statement_timeout=10000 -c lock_timeout=3000`
+  )
+    throw new Error('Wrong service connection/options')
+  return assigned
+}
+export function completeArgv(
+  profile: CompleteProfile,
+  role: string,
+  config: string,
+  cwd: string
+) {
+  const spec = completeProfiles[profile]
+  if (!spec || !(spec.roles as readonly string[]).includes(role))
+    throw new Error('Unknown finite fixture role/profile')
+  return [
+    join(cwd, 'node_modules/vitest/vitest.mjs'),
+    'run',
+    '--config',
+    config,
+    ...(profile === 'bound-admission' ? ['--configLoader', 'native'] : []),
+    spec.target
+  ]
+}
+
+/** Raw bounded bytes. Once partial, no retained prefix can be a transcript. */
+export function completeCollector(onLimit: (error: Error) => void) {
+  const chunks: Record<'stdout' | 'stderr', Buffer[]> = {
+    stdout: [],
+    stderr: []
+  }
+  const counts = { stdout: 0, stderr: 0 }
+  let failure: Error | undefined
+  return {
+    push(stream: 'stdout' | 'stderr', bytes: Buffer) {
+      if (failure) return
+      counts[stream] += bytes.length
+      if (counts[stream] > 1048576 || counts.stdout + counts.stderr > 2097152) {
+        failure = new Error('OUTPUT_LIMIT: partial transcript is not proof')
+        chunks.stdout = []
+        chunks.stderr = []
+        onLimit(failure)
+      } else chunks[stream].push(Buffer.from(bytes))
+    },
+    bytes(stream: 'stdout' | 'stderr') {
+      if (failure) throw failure
+      return Buffer.concat(chunks[stream])
+    },
+    get failure() {
+      return failure
+    }
+  }
+}
+type LifecycleOptions = Parameters<typeof trackPare217Process>[1]
+export function observeCompleteChild(
+  child: ChildProcess,
+  home: string,
+  options: LifecycleOptions
+) {
+  // First operation after spawn. Tracker bytes remain frozen at 42d57db0.
+  const lifecycle = trackPare217Process(child, options)
+  let failure: Error | undefined
+  let closed = false
+  let rejectFailure!: (error: Error) => void
+  const failed = new Promise<never>((_, reject) => {
+    rejectFailure = reject
+  })
+  void failed.catch(() => {})
+  const latch = (error: Error) => {
+    failure ??= error
+    rejectFailure(failure)
+    void lifecycle.stop().catch(() => {})
+  }
+  const deadline = setTimeout(
+    () =>
+      latch(
+        new Error(`Fixture maxRuntimeMs ${options?.maxRuntimeMs}ms exceeded`)
+      ),
+    options?.maxRuntimeMs ?? 180000
+  )
+  const output = completeCollector(latch)
+  child.stdout!.on('data', (bytes: Buffer) => output.push('stdout', bytes))
+  child.stderr!.on('data', (bytes: Buffer) => output.push('stderr', bytes))
+  child.once('close', () => {
+    closed = true
+    clearTimeout(deadline)
+  })
+  let disposePromise: Promise<void> | undefined
+  const dispose = () =>
+    (disposePromise ??= (async () => {
+      if (!closed) throw new Error('Preserving HOME: stdio close unconfirmed')
+      if (child.pid) {
+        try {
+          process.kill(child.pid, 0)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+            await rm(home, { recursive: true })
+            return
+          }
+          throw error
+        }
+        throw new Error('Preserving HOME: PID absence unconfirmed')
+      }
+      await rm(home, { recursive: true })
+    })())
+  const combine = async <T>(action: () => Promise<T>): Promise<T> => {
+    let primary: unknown
+    let result: T | undefined
+    try {
+      result = await action()
+      if (failure) throw failure
+    } catch (error) {
+      primary = error
+    }
+    let cleanup: unknown
+    try {
+      await lifecycle.stop()
+    } catch (error) {
+      cleanup = error
+    }
+    // An async spawn error rejects tracker.stop even after confirmed close.
+    // That original error does not prevent safe removal of an unused HOME.
+    if (closed) {
+      try {
+        await dispose()
+      } catch (error) {
+        cleanup =
+          cleanup && cleanup !== error
+            ? new AggregateError([cleanup, error], 'Join/disposal failed', {
+                cause: cleanup
+              })
+            : error
+      }
+    }
+    clearTimeout(deadline)
+    if (cleanup) {
+      if (primary && primary !== cleanup)
+        throw new AggregateError(
+          [primary, cleanup],
+          'Fixture failed; cleanup also failed',
+          { cause: primary }
+        )
+      throw primary ?? cleanup
+    }
+    if (primary) throw primary
+    return result as T
+  }
+  const done = Promise.race([lifecycle.closed, failed]).then(
+    () => combine(lifecycle.finish),
+    (error: unknown) =>
+      combine(async () => {
+        throw error
+      })
+  )
+  void done.catch(() => {})
+  return {
+    proc: child,
+    output,
+    done,
+    finish: () => combine(lifecycle.finish),
+    stop: () =>
+      combine(async () => {
+        await lifecycle.stop()
+        return lifecycle.finish()
+      }),
+    fail: latch
+  }
+}
+export async function startCompleteChild(args: {
+  profile: CompleteProfile
+  role: string
+  resource: string
+  config: string
+  input: string
+  dir: string
+  root?: string
+  service?: string
+  evidence?: string
+}) {
+  const assigned = await assignedResource(
+    args.profile,
+    args.resource,
+    args.root
+  )
+  const { root, claim } = assigned
+  const argv = completeArgv(args.profile, args.role, args.config, claim.cwd)
+  if (args.config !== claim.config || !claim.configSHA256)
+    throw new Error('Unsealed child config')
+  const config = await privateBytes(root, args.config)
+  if (
+    sha(config) !== claim.configSHA256 ||
+    config.toString() !== completeChildConfig(args.profile, claim.cwd, root)
+  )
+    throw new Error('Wrong static child config bytes')
+  await privateBytes(root, args.input)
+  await ownedPath(root, args.dir, 'directory')
+  if (!args.dir.startsWith(claim.evidence + sep))
+    throw new Error('Wrong child evidence path')
+  if (args.profile === 'bound-admission') {
+    if (!args.service || !args.evidence)
+      throw new Error('Bound service required')
+    await assignedService(args.resource, root, args.service, args.evidence)
+  }
+  await physicalPath(COMPLETE_NODE, 'file')
+  if (sha(await readFile(COMPLETE_NODE)) !== NODE_SHA)
+    throw new Error('Node binary binding differs')
+  const { home, env } = await privateEnvironment(root)
+  if (args.profile === 'store-restart')
+    Object.assign(env, {
+      SPEC0224_PG_REQUIRED: '1',
+      SPEC0224_PG_RESOURCE: args.resource,
+      SPEC0224_PG_CHILD_CONFIG: args.config,
+      SPEC0224_PG_CHILD_ROLE: args.role,
+      SPEC0224_PG_CHILD_INPUT: args.input,
+      SPEC0224_PG_CHILD_DIR: args.dir
+    })
+  else if (args.profile === 'public-restart')
+    Object.assign(env, {
+      SPEC0224_PUBLIC_PG_REQUIRED: '1',
+      SPEC0224_PUBLIC_PG_RESOURCE: args.resource,
+      SPEC0224_PUBLIC_CHILD_CONFIG: args.config,
+      SPEC0224_PUBLIC_CHILD_ROLE: args.role,
+      SPEC0224_PUBLIC_CHILD_INPUT: args.input,
+      SPEC0224_PUBLIC_CHILD_DIR: args.dir
+    })
+  else
+    Object.assign(env, {
+      SPEC0224_BOUND_ASSIGNED_ROOT: root,
+      SPEC0224_BOUND_RESOURCE: args.resource,
+      SPEC0224_BOUND_SERVICE_RESOURCE: args.service,
+      SPEC0224_BOUND_EVIDENCE: args.evidence,
+      SPEC0224_BOUND_CHILD_CONFIG: args.config,
+      SPEC0224_BOUND_CHILD_INPUT: args.input
+    })
+  let child: ChildProcess
+  try {
+    child = spawn(COMPLETE_NODE, argv, {
+      cwd: claim.cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+  } catch (error) {
+    await rm(home, { recursive: true })
+    throw error
+  }
+  const owned = observeCompleteChild(child, home, {
+    label: args.profile,
+    maxRuntimeMs: completeProfiles[args.profile].maxRuntimeMs,
+    exitTimeoutMs: 5000,
+    termGraceMs: 1000,
+    killGraceMs: 2000
+  })
+  return { ...owned, argv }
+}
+
+/** Only finite Docker inspect variants; a future Lead claim binds executable/socket. */
+export async function inspectCompleteResource(
+  kind: 'capacity' | 'bound-admission' | 'settlement',
+  resource: string,
+  root: string,
+  format: 'object' | 'array'
+) {
+  const { claim } = await assignedResource(kind, resource, root)
+  if (
+    claim.docker !== '/usr/bin/docker' ||
+    !/^unix:\/\/\//.test(claim.dockerHost)
+  )
+    throw new Error('Owned local Docker identity required')
+  await physicalPath(claim.docker, 'file')
+  const executable = await open(claim.docker, 'r')
+  try {
+    if (sha(await executable.readFile()) !== claim.dockerSHA256)
+      throw new Error('Docker executable differs from claim')
+  } finally {
+    await executable.close()
+  }
+  const socket = claim.dockerHost.slice('unix://'.length)
+  if (
+    resolve(socket) !== socket ||
+    (await realpath(socket)) !== socket ||
+    !(await lstat(socket)).isSocket()
+  )
+    throw new Error('Wrong physical Docker socket')
+  const { home, env } = await privateEnvironment(root)
+  env.DOCKER_HOST = claim.dockerHost
+  const argv =
+    format === 'object'
+      ? ['inspect', '--format', '{{json .}}', claim.containerId]
+      : ['inspect', claim.containerId]
+  let child: ChildProcess
+  let yes!: (bytes: Buffer) => void
+  let no!: (error: Error) => void
+  const callback = new Promise<Buffer>((resolve, reject) => {
+    yes = resolve
+    no = reject
+  })
+  void callback.catch(() => {})
+  try {
+    child = execFile(
+      '/usr/bin/docker',
+      argv,
+      {
+        cwd: root,
+        env,
+        timeout: 5000,
+        maxBuffer: 1048576,
+        killSignal: 'SIGKILL',
+        encoding: 'buffer'
+      },
+      (error, stdout) => (error ? no(error) : yes(stdout))
+    )
+  } catch (error) {
+    await rm(home, { recursive: true })
+    throw error
+  }
+  const owned = observeCompleteChild(child, home, {
+    label: 'Docker inspect',
+    maxRuntimeMs: 5000,
+    exitTimeoutMs: 1000,
+    termGraceMs: 1000,
+    killGraceMs: 2000
+  })
+  let primary: unknown
+  try {
+    const stdout = await Promise.race([
+      callback,
+      owned.done.then(() => {
+        throw new Error('Inspect closed without native callback')
+      })
+    ])
+    const exit = await owned.done
+    if (exit.code !== 0 || exit.signal)
+      throw new Error('Inspect did not exit successfully')
+    const parsed = JSON.parse(stdout.toString())
+    const object =
+      format === 'array'
+        ? Array.isArray(parsed) && parsed.length === 1
+          ? parsed[0]
+          : undefined
+        : !Array.isArray(parsed)
+          ? parsed
+          : undefined
+    if (
+      !object ||
+      object.Id !== claim.containerId ||
+      object.Name !== claim.containerName ||
+      object.Image !== claim.imageId
+    )
+      throw new Error('Inspect identity/shape mismatch')
+    return stdout.toString()
+  } catch (error) {
+    primary = error
+    throw error
+  } finally {
+    try {
+      await owned.stop()
+    } catch (error) {
+      if (primary && primary !== error)
+        throw new AggregateError(
+          [primary, error],
+          'Inspect failed; cleanup also failed',
+          { cause: primary }
+        )
+      throw error
+    }
+  }
+}
+
+/** Join every owned child before callers clean any DB/role; retain primary cause. */
+export async function stopCompleteChildren(
+  children: { stop: () => Promise<unknown> }[],
+  primary?: unknown
+) {
+  const results = await Promise.allSettled(
+    children.map((child) => child.stop())
+  )
+  const errors = results.flatMap((result) =>
+    result.status === 'rejected' ? [result.reason] : []
+  )
+  if (errors.length)
+    throw new AggregateError(
+      primary === undefined ? errors : [primary, ...errors],
+      'Owned child cleanup failed; DB cleanup forbidden',
+      { cause: primary ?? errors[0] }
+    )
+}
+
+export function completeReadiness(
+  owned: ReturnType<typeof observeCompleteChild>,
+  profile: 'store-restart' | 'public-restart'
+) {
+  const marker = profile === 'store-restart' ? 'PG224_READY' : 'PUBLIC224_READY'
+  let resolveReady!: (value: string) => void
+  let rejectReady!: (error: unknown) => void
+  const ready = new Promise<string>((yes, no) => {
+    resolveReady = yes
+    rejectReady = no
+  })
+  void ready.catch(() => {})
+  const timer = setTimeout(() => {
+    const error = new Error('Child readiness timeout')
+    if (profile === 'public-restart') resolveReady('timeout')
+    else rejectReady(error)
+    owned.fail(error)
+  }, completeProfiles[profile].readinessMs)
+  owned.proc.stdout!.on('data', () => {
+    try {
+      const stdout = owned.output.bytes('stdout')
+      if (stdout.includes(marker)) {
+        if (profile === 'store-restart') clearTimeout(timer)
+        resolveReady('ready')
+      } else if (
+        profile === 'public-restart' &&
+        stdout.includes('PUBLIC224_FINISHED')
+      )
+        resolveReady('finished')
+      if (profile === 'public-restart' && stdout.includes('PUBLIC224_FINISHED'))
+        void owned.finish().catch((error) => owned.fail(error as Error))
+    } catch (error) {
+      rejectReady(error)
+    }
+  })
+  void owned.done.then(
+    () => {
+      clearTimeout(timer)
+      resolveReady('exited')
+    },
+    (error) => {
+      clearTimeout(timer)
+      rejectReady(error)
+    }
+  )
+  return ready
+}

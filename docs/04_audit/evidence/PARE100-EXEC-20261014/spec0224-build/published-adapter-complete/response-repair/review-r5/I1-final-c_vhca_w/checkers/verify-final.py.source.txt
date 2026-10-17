@@ -1,0 +1,64 @@
+import json,hashlib,pathlib,copy,sys
+r=pathlib.Path(__file__).resolve().parent.parent
+
+def canonical(x):return json.dumps(x,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()
+def sha(x):return hashlib.sha256(canonical(x)).hexdigest()
+def framecheck(x):
+ errors=[]
+ for req in x['requests']:
+  if req['purpose']!='RESPONSE' or x['scenario'].get('legacy'):continue
+  frame=json.loads(req['messages'][1]['content']);items=[i for i in frame['items'] if i['priority']=='FRESH_TOOL_RESULTS']
+  if len(items)!=1:errors.append('complete result missing');continue
+  o=items[0]['value'];p=o['payload'];out=p['output']
+  for condition,label in [(out==x['output'],'full output'),(p['outputSha256']==sha(out),'output hash'),(p['outputBytes']==len(canonical(out)),'output bytes'),(p['completion']=='COMPLETE','complete status'),(items[0]['trust']=='UNTRUSTED','data trust'),(o['executionId']==x['input']['executionId'],'execution binding'),(o['provenance']['sourceId']==items[0]['source'],'source binding')]:
+   if not condition:errors.append(label)
+  if any(t in req['messages'][0]['content'] for t in ['UNTRUSTED_INTENT_224','UNTRUSTED_TOOL_224','UNTRUSTED_USER_224']):errors.append('system promotion')
+ return errors
+
+def nativecheck(x):
+ errors=[];b=x['before'];a=x['after'];f=x['fault']
+ if not x.get('continuation') and not x['legacy']:
+  if a['requests']!=b['requests']:errors.append('provider replay')
+  if a['checkpoint']!=b['checkpoint']:errors.append('checkpoint mutation')
+  if a['journals']!=b['journals']:errors.append('journal mutation')
+  if x['replay']['stopReason']!='STATE_CONFLICT':errors.append('recovery opened')
+ if not x['legacy']:
+  for e in x['entries']:
+   if e['checkpoint']['budgetUsage']['modelCalls']!=1:errors.append('slot not once')
+   if not any(s['stepType']=='RESPOND' and s['status']=='RUNNING' for s in e['steps']):errors.append('missing intent before provider')
+ if f.startswith('model-throw'):
+  if 'I1_PROVIDER_THROW_NO_OBSERVED_USAGE' not in x['first']['response']:errors.append('first model failure erased')
+  if not x['legacy'] and not f.endswith('lostack') and b['checkpoint']['state'].get('stopReason')!='MODEL_FAILURE':errors.append('original MODEL_FAILURE class replaced')
+ return errors
+
+def run():
+ focused=json.load(open(r/'raw/focused-cases.json'));ind=json.load(open(r/'raw/independent-v5-cases.json'))['records'];checks=[]
+ for x in focused:
+  errors=framecheck(x);actual=x['modelResults'];cp=x['checkpoint'];result=x['result'];case=x['case'];usage={k:sum(m[k] for m in actual) for k in ['inputTokens','outputTokens','costUsd']}
+  if result['usage']!=usage:errors.append('returned known usage not exactly once')
+  if case not in ['RR16','RR17','RR18'] and any(cp['budgetUsage'][k]!=v for k,v in usage.items()):errors.append('committed usage not exactly once')
+  if case in ['RR16','RR17','RR18'] and any(cp['budgetUsage'][k]!=0 for k in usage):errors.append('invented billing under outage')
+  replay=x.get('replay')
+  if replay:
+   for actualval,expected,label in [(replay['checkpoint'],cp,'checkpoint changed'),(replay['journals'],x['journals'],'journal changed'),(replay['requests'],x['requests'],'provider replay')]:
+    if actualval!=expected:errors.append(label)
+  checks.append(dict(criterion=case,status='FAIL' if errors else 'PASS',errors=errors,confidence='HIGH local synthetic; focused rerun plus independent raw verifier'))
+ for x in ind:checks.append(dict(criterion='I1 '+x['fault']+' max='+str(x['maxCalls'])+(' '+x.get('continuation') if x.get('continuation') else '')+(' legacy' if x['legacy'] else ''),status='FAIL' if nativecheck(x) else 'PASS',errors=nativecheck(x),confidence='HIGH raw before/after/after2 public-factory snapshots; no provider billing inference'))
+ # Qualification uses exact serialized good/known-bad artifacts, never in-place producer input edits.
+ good=next(x for x in focused if x['case']=='RR02');controls=[]
+ for name,mutation in [('good-full-frame',None),('bad-drop-result',lambda x: x['requests'][0]['messages'].__setitem__(1,dict(role='user',content=json.dumps({'items':[]})))),('bad-output-hash',lambda x:mutate_hash(x))]:
+  x=copy.deepcopy(good)
+  if mutation:mutation(x)
+  path=r/'controls/verification-final'/f'verifier-{name}.json';json.dump(x,open(path,'x'),indent=2);errors=framecheck(json.load(open(path)));controls.append(dict(name=name,expected='PASS' if mutation is None else 'FAIL',actual='FAIL' if errors else 'PASS',errors=errors))
+ good=next(x for x in ind if x['fault']=='model-throw' and x['maxCalls']==5 and not x['legacy'])
+ for name,kind in [('good-native-failure',None),('bad-first-error-erased','error'),('bad-replay-mutation','replay'),('bad-double-slot','slot')]:
+  x=copy.deepcopy(good)
+  if kind=='error':x['first']['response']='checkpoint error only';x['before']['checkpoint']['state']['stopReason']='INTERNAL_FAILURE'
+  if kind=='replay':x['after']['checkpoint']['budgetUsage']['modelCalls']+=1
+  if kind=='slot':x['entries'][0]['checkpoint']['budgetUsage']['modelCalls']=2
+  path=r/'controls/verification-final'/f'verifier-{name}.json';json.dump(x,open(path,'x'),indent=2);errors=nativecheck(json.load(open(path)));controls.append(dict(name=name,expected='PASS' if kind is None else 'FAIL',actual='FAIL' if errors else 'PASS',errors=errors))
+ json.dump(dict(checks=checks,qualification=controls,qualified=all(c['expected']==c['actual'] for c in controls)),open(r/'derived/verifier-final-results.json','x'),indent=2)
+ print('FOCUSED',sum(x['status']=='PASS' for x in checks[:30]),'/30; native verifier failed',[(x['criterion'],x['errors']) for x in checks[30:] if x['status']=='FAIL']);print('QUALIFICATION',controls)
+def mutate_hash(x):
+ req=x['requests'][0];f=json.loads(req['messages'][1]['content']);next(i for i in f['items'] if i['priority']=='FRESH_TOOL_RESULTS')['value']['payload']['outputSha256']='0'*64;req['messages'][1]['content']=json.dumps(f)
+if __name__=='__main__':run()

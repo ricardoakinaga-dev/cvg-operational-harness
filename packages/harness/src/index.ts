@@ -1,4 +1,5 @@
 export * from './createOperationalHarness.ts'
+export * from './complete-checkpoint.ts'
 export * from './compaction.ts'
 export * from './session/index.ts'
 export {
@@ -11,7 +12,19 @@ export type {
   CapabilityComposition,
   CapabilityRegistryErrorCode
 } from './capability-boundary.ts'
-export * from './effect-journal.ts'
+export {
+  createEffectAttemptId,
+  createJournaledToolRegistry,
+  EffectJournalError,
+  InMemoryEffectJournal
+} from './effect-journal.ts'
+export type {
+  EffectAttemptIdFactory,
+  EffectJournal,
+  EffectJournalRecord,
+  EffectJournalState,
+  JournaledToolRegistryOptions
+} from './effect-journal.ts'
 export * from './execution-spine.ts'
 export * from './runtime.ts'
 export {

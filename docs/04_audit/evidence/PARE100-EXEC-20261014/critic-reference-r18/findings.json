@@ -1,0 +1,251 @@
+{
+  "schema_version": 1,
+  "verdict": "FAIL",
+  "reproduction_mode": "INERT_SOURCE_WITNESSES_ONLY_NOT_EXECUTED",
+  "notation": "SHA256 is UTF-8 unless explicitly bytes; canonicalJSON recursively sorts object keys, uses compact JSON, and preserves array order. Source/contract/catalog hashes and IDs are formula-derived, not collected artifacts.",
+  "findings": [
+    {
+      "id": "I1-R18-01",
+      "severity": "HIGH",
+      "status": "CONFIRMED_STATIC",
+      "title": "Executable annotation arguments are excluded from Python payload indexing and leak through a mirrored annotation",
+      "rules": [
+        "C-actual-program-source-with-mirrored-type",
+        "SPEC0209 implementation/body prohibition and UNKNOWN provenance"
+      ],
+      "locations": [
+        {
+          "file": "scripts/reference-contract-catalog.mjs",
+          "lines": "987-1001",
+          "role": "Annotation and return fields skipped wholesale by runtime_literals"
+        },
+        {
+          "file": "scripts/reference-contract-catalog.mjs",
+          "lines": "1004-1012",
+          "role": "Dynamic annotation loses literals; mirrored string is unparsed without collision evidence"
+        },
+        {
+          "file": "scripts/reference-contract-catalog.mjs",
+          "lines": "1023-1032,1683-1691,1717-1728,1581-1606",
+          "role": "Connected Python extraction and catalog emission"
+        }
+      ],
+      "inert_witness": {
+        "application": "Hypothetical replacement of python/sdk/src/sdk.py in the sealed synthetic fixture; do not execute.",
+        "source": "python/sdk/src/sdk.py",
+        "text": "def run(value: eval(\"40 + 2\")) -> \"40 + 2\":\n    pass\n",
+        "payload_sha256": "0fcd24935d76f7d5eda64ffde9e33f08079ca2c7e398557915a7e25d60bae721",
+        "payload_byte_length": 6
+      },
+      "expected": {
+        "parameter_type": "UNKNOWN with reason and payload digest/length",
+        "return_type": "UNKNOWN with reason and payload digest/length",
+        "raw_payload_in_contract": false,
+        "requirements": "Keep python-surface and run entries, source digest, P100-025 ownership, original IDs and NOT_VERIFIED parity"
+      },
+      "derived_output": {
+        "kind": "python-function",
+        "symbol": "run",
+        "shape": {
+          "parameters": [
+            {
+              "name": "value",
+              "type": {
+                "status": "UNKNOWN",
+                "reason": "Dynamic Python annotation/base expression"
+              },
+              "optional": false,
+              "positional_only": false
+            }
+          ],
+          "returns": "'40 + 2'",
+          "async": false
+        },
+        "extraction_status": "UNKNOWN",
+        "parity_status": "NOT_VERIFIED",
+        "owner_task": "P100-025",
+        "source": "python/sdk/src/sdk.py"
+      },
+      "source_level_derivation": [
+        "The complete witness contains an explicit built-in eval call in an annotation and has no binding that shadows eval. Its argument is executable Python expression source. No execution or cross-file resolution is needed to identify this source role.",
+        "runtime_literals visits FunctionDef.args but skips ast.arg.annotation; it also skips FunctionDef.returns (994). It therefore never indexes either string and produces an empty payload_literals set for this witness.",
+        "typ of the parameter sees ast.Call, fails its allowed-node test (1006-1007), and returns only the generic UNKNOWN above, without a digest/length.",
+        "typ of the return sees an allowed ast.Constant string, finds no collision (1010), and returns ast.unparse(n) at 1012: the exact string representation shown above.",
+        "sig and the python-function row (1013-1028) transport that return string through the Python result to emitFor. Identity projection affects symbol only; neither it nor validateCatalog redacts shape. The source contributes two entries (python-surface and python-function), and the run entry remains UNKNOWN but still copies the payload."
+      ],
+      "test_gap": {
+        "inspected": [
+          "tests/reference-contract-catalog.test.js:335-398",
+          "tests/reference-contract-catalog.test.js:1489-1500",
+          "tests/reference-contract-catalog.test.js:247-301"
+        ],
+        "assessment": "Tests cover ordinary runtime calls and dynamic annotation/base rejection separately. The dynamic-annotation fixture also repeats its marker in a base/body, so it does not test a runtime source literal whose sole runtime occurrence is inside an annotation. Tests were read, never run."
+      },
+      "action": "Traverse runtime expression descendants inside dynamic annotation/return nodes for source-local payload evidence while preserving genuine declaration-only strings. Retain literal provenance on dynamic UNKNOWN projections, then cover this same-source mirror without executing eval.",
+      "confidence": "Source-level control/data-flow derivation only; no observed execution result."
+    },
+    {
+      "id": "I1-R18-02",
+      "severity": "HIGH",
+      "status": "CONFIRMED_STATIC",
+      "title": "JSON $ref bypasses existing same-source payload collision evidence",
+      "rules": [
+        "C-actual-program-source-with-mirrored-type",
+        "B-genuine-literal-selector: unresolved dual role stays UNKNOWN"
+      ],
+      "locations": [
+        {
+          "file": "scripts/reference-contract-catalog.mjs",
+          "lines": "1207-1225",
+          "role": "$ref OR branch omits payloadLiterals collision check"
+        },
+        {
+          "file": "scripts/reference-contract-catalog.mjs",
+          "lines": "1313-1368,1421-1450",
+          "role": "Physical Markdown prepass and connected JSON/TypeScript projection"
+        },
+        {
+          "file": "scripts/reference-contract-catalog.mjs",
+          "lines": "1581-1606",
+          "role": "Catalog emission retains leaked shape"
+        }
+      ],
+      "inert_witness": {
+        "application": "Hypothetical replacement of docs/tool-catalog.md in the sealed synthetic fixture; never construct a Worker.",
+        "source": "docs/tool-catalog.md",
+        "text": "# Contracts\n## Runtime\n```ts public-api\nexport type Mirror = \"/C_ROUTE/\";\nnew Worker(\"/C_ROUTE/\", { eval: true });\n```\n## Locator\n```json\n{\"$ref\":\"/C_ROUTE/\"}\n```\n",
+        "payload_sha256": "eda35a8f91ad7edde711ff4511ceb740073e4c56d41c4172097b565d7e62889d",
+        "payload_byte_length": 9
+      },
+      "expected": {
+        "document_type": "UNKNOWN collision with hash/length",
+        "document_json": {
+          "$ref": {
+            "status": "UNKNOWN",
+            "reason": "Unresolved executable payload / declaration locator role; bytes not copied",
+            "value_sha256": "eda35a8f91ad7edde711ff4511ceb740073e4c56d41c4172097b565d7e62889d",
+            "byte_length": 9
+          }
+        },
+        "raw_payload_in_contract": false,
+        "requirements": "Retain document-type, document-json and document-surface entries, all source/owner fields, stable identities and NOT_VERIFIED parity"
+      },
+      "derived_output": {
+        "document_json": {
+          "kind": "document-json",
+          "symbol": "Contracts/Locator",
+          "shape": {
+            "$ref": "/C_ROUTE/"
+          },
+          "extraction_status": "STATIC",
+          "parity_status": "NOT_VERIFIED",
+          "owner_task": "P100-003",
+          "source": "docs/tool-catalog.md"
+        },
+        "document_type": {
+          "kind": "document-type",
+          "symbol": "Contracts/Runtime/Mirror",
+          "type": {
+            "status": "UNKNOWN",
+            "reason": "Unclassified literal in a declared type; bytes not copied",
+            "literals": [
+              {
+                "value_sha256": "eda35a8f91ad7edde711ff4511ceb740073e4c56d41c4172097b565d7e62889d",
+                "byte_length": 9
+              }
+            ]
+          }
+        }
+      },
+      "source_level_derivation": [
+        "/C_ROUTE/ is an inert example of valid JavaScript program source (a regexp expression statement), explicitly supplied as Worker source with eval:true. The audit does not execute it.",
+        "The Markdown prepass parses the recognized TS fence and indexRuntimeLiterals records the Worker argument (1332-1339,735-770), skipping only the type representation. All fences share that same map.",
+        "The TypeScript Mirror becomes UNKNOWN via printed (557-582), demonstrating the collision is already known to the connected extraction.",
+        "The JSON projection receives the map (1431-1436). $ref is a known vocabulary member (1048,1130-1154). Its string passes the $ref regexp at 1223. That disjunct lacks the !payloadLiterals.has(hash(value)) condition used for name/required at 1222, so 1225 returns the raw string despite the known collision.",
+        "The context Contracts/Locator is identityVocabulary-compatible and does not contain the payload. Both identity projections leave it unchanged. emitFor copies the shape, marks it STATIC because no UNKNOWN remains there, retains P100-003/source SHA and NOT_VERIFIED parity, and validateCatalog accepts the internally consistent shape. Three document entries remain."
+      ],
+      "test_gap": {
+        "inspected": [
+          "tests/reference-contract-catalog.test.js:635-787",
+          "tests/reference-contract-catalog.test.js:979-1013",
+          "tests/reference-contract-catalog.test.js:1110-1184"
+        ],
+        "assessment": "Tests cover same-source TS/JSON sharing and JSON name collisions, but not $ref collisions. The current $ref branch is visibly different from name/required."
+      },
+      "action": "Require collision clearance for the $ref vocabulary branch, retaining UNKNOWN reason/hash/length when the role is unresolved. Add a direct connected Markdown regression for an already-indexed payload mirrored into $ref; preserve genuine locator-only declarations.",
+      "confidence": "Exact source-level branch derivation; no helper or fixture execution."
+    },
+    {
+      "id": "I1-R18-03",
+      "severity": "MEDIUM",
+      "status": "CONFIRMED_STATIC",
+      "title": "Genuine quoted ambient module selectors lose their exact declaration spelling",
+      "rules": [
+        "B-genuine-literal-selector",
+        "SPEC0209 declaration/contract shape retention; no identity migration required"
+      ],
+      "locations": [
+        {
+          "file": "scripts/reference-contract-catalog.mjs",
+          "lines": "588-596",
+          "role": "nodeName makes quoted names with spaces opaque"
+        },
+        {
+          "file": "scripts/reference-contract-catalog.mjs",
+          "lines": "800-813,893-911,957-962",
+          "role": "Module name used only as projected context; child shape lacks exact enclosing selector"
+        },
+        {
+          "file": "scripts/reference-contract-catalog.mjs",
+          "lines": "26-41,1581-1606",
+          "role": "Final identity projection retains only digest-based identity"
+        }
+      ],
+      "inert_witness": {
+        "application": "Hypothetical replacement of packages/core/example/src/types.ts in the sealed synthetic fixture; declaration only.",
+        "source": "packages/core/example/src/types.ts",
+        "text": "declare module \"opaque module one\" { export const asset: number; }\n",
+        "selector": "opaque module one"
+      },
+      "expected": "Keep existing opaque IDs/symbol projection, but preserve the exact authenticated ambient module selector in inert declaration metadata. No payload collision exists; whitespace is not a reason to discard genuine contract spelling.",
+      "derived_output": {
+        "kind": "value",
+        "symbol_formula": "opaque-symbol:SHA256(raw_symbol)",
+        "raw_symbol_formula": "canonicalJSON(opaqueLiteral(\"opaque module one\", \"Unclassified literal name; bytes not copied\")) + \".asset\"",
+        "shape_before_final_identity_projection": {
+          "declarations": [
+            {
+              "type": "number",
+              "value": {
+                "status": "UNKNOWN",
+                "reason": "Initializer absent"
+              }
+            }
+          ]
+        },
+        "identity_projection_formula": "opaqueLiteral(raw_symbol, \"Unclassified identity text; stable digest replaces literal bytes\")",
+        "source": "packages/core/example/src/types.ts",
+        "owner_task": "P100-012",
+        "extraction_status": "UNKNOWN",
+        "parity_status": "NOT_VERIFIED"
+      },
+      "source_level_derivation": [
+        "The static ModuleDeclaration string is a genuine external-module contract selector. There are no runtime expressions or unclassified payloads in the witness.",
+        "indexRuntimeLiterals excludes declaration names, leaving the payload index empty. Nevertheless nodeName applies identityVocabulary to the quoted module name (590-593); the space fails the regular expression at 20, so only its digest/length/reason is returned.",
+        "visitStatements canonicalizes that object into the module symbol and constructs the child prefix at 802-811. It emits no module record or declared_name/context field for the module selector.",
+        "The public asset declaration emits type:number and value:UNKNOWN Initializer absent (893-911). Its raw symbol contains the opaque parent object, not the original selector. Any generic name_resolution UNKNOWN added at 785-794 likewise carries no original spelling.",
+        "emitFor projectIdentity hashes the punctuation-containing raw symbol and adds identity_projection with another digest/length. Neither the value shape, symbol, source path, nor the separate source hash preserves the selector text. There are two entries (value plus source-surface); no requirement deletion or ID migration is needed to repair the lost declaration metadata."
+      ],
+      "test_gap": {
+        "inspected": [
+          "tests/reference-contract-catalog.test.js:1852-1867",
+          "tests/reference-contract-catalog.test.js:906-951",
+          "tests/reference-contract-catalog.test.js:723-747"
+        ],
+        "assessment": "The opaque-module test checks distinct entries/IDs/UNKNOWN only. It never asserts exact module-selector preservation. Quoted event/class names receive declared_name metadata elsewhere, illustrating a compatible remedy while retaining opaque identities."
+      },
+      "action": "Carry the exact authenticated quoted module selector in declaration context metadata when no same-source payload collision exists; leave opaque IDs unchanged. Add positive space/punctuation/module-selector cases and collision negatives.",
+      "confidence": "Static derivation; no TypeScript parsing/execution performed by the auditor."
+    }
+  ]
+}

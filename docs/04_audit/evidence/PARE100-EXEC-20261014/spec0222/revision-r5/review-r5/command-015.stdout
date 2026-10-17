@@ -1,0 +1,128 @@
+EXTRA_SOURCE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/contracts/src/canonical-json.ts PRE_SHA256 133301a83cbf3996122cec66dc02b88642f851c89c88419a9a197acd11853b77
+
+
+RG_EXIT 1
+1: /**
+2:  * Canonical JSON serialization (RFC 8785 subset) used for deterministic
+3:  * payload hashing, approval binding and evidence digests. Owned by neutral contracts.
+4:  *
+5:  * Rules:
+6:  * - object keys sorted by UTF-16 code units;
+7:  * - arrays keep order, `undefined` becomes `null`;
+8:  * - `undefined` object members are omitted;
+9:  * - numbers must be finite, `-0` serializes as `0`;
+10:  * - only plain objects/null-prototype objects are accepted;
+11:  * - depth and node budgets fail closed.
+12:  */
+13: export const CANONICAL_JSON_MAX_DEPTH = 64
+14: export const CANONICAL_JSON_MAX_NODES = 20_000
+15: 
+16: export class CanonicalJsonError extends Error {
+17:   readonly code: string
+18: 
+19:   constructor(code: string, message: string) {
+20:     super(message)
+21:     this.name = 'CanonicalJsonError'
+22:     this.code = code
+23:   }
+24: }
+25: 
+26: function isPlainObject(value: object): boolean {
+27:   const prototype = Object.getPrototypeOf(value)
+28:   return prototype === Object.prototype || prototype === null
+29: }
+30: 
+31: export function canonicalizeJson(value: unknown): string {
+32:   let nodes = 0
+33:   const seen = new WeakSet<object>()
+34: 
+35:   const visit = (input: unknown, depth: number, inArray: boolean): string => {
+36:     nodes += 1
+37:     if (nodes > CANONICAL_JSON_MAX_NODES) {
+38:       throw new CanonicalJsonError(
+39:         'canonical_json_node_limit',
+40:         'Canonical JSON payload exceeded the node budget'
+41:       )
+42:     }
+43:     if (depth > CANONICAL_JSON_MAX_DEPTH) {
+44:       throw new CanonicalJsonError(
+45:         'canonical_json_depth_limit',
+46:         'Canonical JSON payload exceeded the depth budget'
+47:       )
+48:     }
+49: 
+50:     if (input === null) return 'null'
+51: 
+52:     switch (typeof input) {
+53:       case 'string':
+54:         return JSON.stringify(input)
+55:       case 'boolean':
+56:         return input ? 'true' : 'false'
+57:       case 'number':
+58:         if (!Number.isFinite(input)) {
+59:           throw new CanonicalJsonError(
+60:             'canonical_json_non_finite_number',
+61:             'Canonical JSON does not allow non-finite numbers'
+62:           )
+63:         }
+64:         return JSON.stringify(input)
+65:       case 'undefined':
+66:         if (inArray) return 'null'
+67:         throw new CanonicalJsonError(
+68:           'canonical_json_unsupported_value',
+69:           'Canonical JSON does not allow top-level undefined'
+70:         )
+71:       case 'bigint':
+72:       case 'function':
+73:       case 'symbol':
+74:         throw new CanonicalJsonError(
+75:           'canonical_json_unsupported_type',
+76:           `Canonical JSON does not support ${typeof input} values`
+77:         )
+78:       case 'object': {
+79:         if (seen.has(input)) {
+80:           throw new CanonicalJsonError(
+81:             'canonical_json_cycle',
+82:             'Canonical JSON does not support cyclic structures'
+83:           )
+84:         }
+85:         seen.add(input)
+86:         try {
+87:           if (Array.isArray(input)) {
+88:             const items = input.map((item) => visit(item, depth + 1, true))
+89:             return `[${items.join(',')}]`
+90:           }
+91:           if (!isPlainObject(input)) {
+92:             throw new CanonicalJsonError(
+93:               'canonical_json_unsupported_object',
+94:               'Canonical JSON only accepts plain objects'
+95:             )
+96:           }
+97:           const record = input as Record<string, unknown>
+98:           const parts: string[] = []
+99:           for (const key of Object.keys(record).sort()) {
+100:             const item = record[key]
+101:             if (item === undefined) continue
+102:             parts.push(
+103:               `${JSON.stringify(key)}:${visit(item, depth + 1, false)}`
+104:             )
+105:           }
+106:           return `{${parts.join(',')}}`
+107:         } finally {
+108:           seen.delete(input)
+109:         }
+110:       }
+111:       // Unreachable: `typeof` is exhausted by the cases above.
+112:       /* v8 ignore start */
+113:       default:
+114:         throw new CanonicalJsonError(
+115:           'canonical_json_unsupported_type',
+116:           'Canonical JSON received an unsupported value'
+117:         )
+118:       /* v8 ignore stop */
+119:     }
+120:   }
+121: 
+122:   return visit(value, 0, false)
+123: }
+POST_SHA256 133301a83cbf3996122cec66dc02b88642f851c89c88419a9a197acd11853b77 UNCHANGED True

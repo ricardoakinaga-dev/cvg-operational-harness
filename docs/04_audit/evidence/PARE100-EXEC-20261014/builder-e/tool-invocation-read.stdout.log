@@ -1,0 +1,159 @@
+packages/harness/src/kernel/pipeline.ts:199:    if (typeof verdict === 'string') return stop('POLICY_DENIED', verdict)
+packages/contracts/src/contracts.ts:37:  'APPROVAL_REQUIRED',
+packages/contracts/src/contracts.ts:39:  'POLICY_DENIED',
+packages/contracts/src/contracts.ts:97:export interface ToolInvocation {
+packages/contracts/src/contracts.ts:130:  readonly requiresApproval: boolean
+export interface SkillDefinition {
+  readonly id: string
+  readonly version: string
+  readonly description: string
+  readonly requiredTools: readonly string[]
+  readonly requiredKnowledge: readonly string[]
+  readonly riskLevel: RiskLevel
+}
+
+export interface ToolInvocation {
+  readonly toolId: string
+  readonly toolVersion?: string
+  readonly input: unknown
+  readonly operationKey: string
+}
+
+export interface ToolResult {
+  readonly status: 'SUCCEEDED' | 'FAILED' | 'REJECTED'
+  readonly output?: unknown
+  readonly error?: string
+}
+
+export interface ToolExecutionContext {
+    ).resolves.toMatchObject({ stopReason: 'TOOL_FAILURE' })
+
+    const runtimeTool = tool()
+    await expect(
+      build({
+        decision: {
+          action: 'CALL_TOOL',
+          toolInvocation: {
+            toolId: runtimeTool.id,
+            input: {},
+            operationKey: 'hidden-op'
+          }
+        },
+        tools: registry(runtimeTool)
+      }).runtime.execute(
+        input({ agent: phase3AgentProfile({ tools: ['another.tool'] }) })
+      )
+    ).resolves.toMatchObject({ stopReason: 'POLICY_DENIED' })
+
+    await expect(
+      build({
+        decision: {
+          action: 'CALL_TOOL',
+          toolInvocation: {
+            toolId: runtimeTool.id,
+            input: {},
+            operationKey: 'budget-op'
+          }
+        },
+        tools: registry(runtimeTool)
+      }).runtime.execute(
+        input({
+          agent: phase3AgentProfile({ tools: [runtimeTool.id] }),
+          budget: { ...input().budget, maxToolCalls: 0 }
+        })
+      )
+    ).resolves.toMatchObject({ stopReason: 'MAX_TOOL_CALLS' })
+  })
+
+  it('enforces policy outcomes before execution', async () => {
+    const runtimeTool = tool()
+    const decision: OrchestratorDecision = {
+      action: 'CALL_TOOL',
+      toolInvocation: {
+        toolId: runtimeTool.id,
+        input: { value: 'synthetic' },
+        operationKey: 'policy-op'
+      }
+    }
+    const toolInput = input({
+      agent: phase3AgentProfile({ tools: [runtimeTool.id] })
+    })
+
+    await expect(
+      build({
+        decision,
+        tools: registry(runtimeTool),
+        policy: new ScriptedPolicyEngine([runtimeTool.id])
+      }).runtime.execute(toolInput)
+    ).resolves.toMatchObject({ stopReason: 'POLICY_DENIED' })
+    await expect(
+      build({
+        decision,
+        tools: registry(runtimeTool),
+        policy: new ScriptedPolicyEngine([], [runtimeTool.id])
+      }).runtime.execute(toolInput)
+    ).resolves.toMatchObject({ stopReason: 'HUMAN_TAKEOVER' })
+    await expect(
+      build({
+        decision,
+        tools: registry(runtimeTool),
+        policy: { evaluate: async () => ({ outcome: 'UNKNOWN' }) as never }
+      }).runtime.execute(toolInput)
+    ).resolves.toMatchObject({ stopReason: 'INSUFFICIENT_EVIDENCE' })
+    await expect(
+      build({
+        decision,
+        tools: registry(runtimeTool),
+        policy: {
+          evaluate: async () => {
+            throw new Error('synthetic policy outage')
+          }
+        }
+      }).runtime.execute(toolInput)
+    ).resolves.toMatchObject({ stopReason: 'INSUFFICIENT_EVIDENCE' })
+  })
+
+  it('handles approval states and capability-bound payloads', async () => {
+    const approvedTool = tool({ requiresApproval: true })
+    const decision: OrchestratorDecision = {
+      action: 'CALL_TOOL',
+      toolInvocation: {
+        toolId: approvedTool.id,
+        input: { value: 'synthetic' },
+        operationKey: 'approval-op'
+      }
+    }
+    const runtimeInput = input({
+      agent: phase3AgentProfile({ tools: [approvedTool.id] }),
+      capabilityFingerprint: 'cap-a'
+    })
+
+    const pending = new InMemoryApprovalEngine()
+    await expect(
+      build({
+        decision,
+        tools: registry(approvedTool),
+        approvals: pending,
+        capabilityFingerprint: 'cap-a'
+      }).runtime.execute(runtimeInput)
+    ).resolves.toMatchObject({ stopReason: 'APPROVAL_REQUIRED' })
+    expect(pending.requests[0]?.payload).toEqual({
+      capabilityFingerprint: 'cap-a',
+      input: { value: 'synthetic' }
+    })
+
+    const approved = new InMemoryApprovalEngine()
+    approved.approveOnRequest = true
+    await expect(
+      build({
+        decision,
+        tools: registry(approvedTool),
+        approvals: approved
+      }).runtime.execute(runtimeInput)
+    ).resolves.toMatchObject({ stopReason: 'COMPLETED', toolCalls: 1 })
+
+    await expect(
+      build({
+        decision,
+        tools: registry(approvedTool),
+        approvals: {

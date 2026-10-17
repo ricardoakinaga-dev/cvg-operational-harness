@@ -1,0 +1,52 @@
+          remainingMs: () => 1000,
+          beginModelRequest: () => undefined,
+          recordModelResult: () => undefined,
+          withDeadline: async (operation) =>
+            original === 'deadline' ? DEADLINE : operation()
+        }
+        const runtimeTool = tool(async () => {
+          events.push('body')
+          vi.setSystemTime(1025)
+          if (original === 'threw') throw new Error('original executor failure')
+          if (original === 'cancelled') controller.abort()
+          return original === 'failed'
+            ? { status: 'FAILED', error: 'original failed result' }
+            : { status: 'SUCCEEDED' }
+        })
+        const turn = createTurnState(
+          phase3RuntimeInput(),
+          1000,
+          budget,
+          controller.signal
+        )
+        const result = await runToolCall(host, {
+          turn,
+          tool: runtimeTool,
+          needsApproval: false,
+          invocation: {
+            toolId: runtimeTool.id,
+            input: {},
+            operationKey: 'synthetic-matrix'
+          }
+        })
+        expect(result).toMatchObject({
+          kind: 'settled',
+          outcome: {
+            kind: 'threw',
+            error: 'unknown_effect: effect_settlement_failed',
+            durationMs: 25
+          }
+        })
+        expect(events).toEqual([
+          'started',
+          'body',
+          'finished:' + original,
+          'post:threw'
+        ])
+        await host.dispose()
+      } finally {
+        vi.useRealTimers()
+      }
+    }
+  )
+})

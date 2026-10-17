@@ -1,0 +1,309 @@
+/* Budgets and checkpoints                                                    */
+/* -------------------------------------------------------------------------- */
+
+export interface BudgetUsage {
+  readonly steps: number
+  readonly modelCalls: number
+  readonly toolCalls: number
+  readonly knowledgeCalls: number
+  readonly verificationCalls: number
+  readonly replans: number
+  readonly decisionRepairs: number
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly costUsd: number
+  /** Accumulated active processing time across attempts; pauses are excluded. */
+  readonly activeDurationMs: number
+}
+
+export const EMPTY_BUDGET_USAGE: BudgetUsage = {
+  steps: 0,
+  modelCalls: 0,
+  toolCalls: 0,
+  knowledgeCalls: 0,
+  verificationCalls: 0,
+  replans: 0,
+  decisionRepairs: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  costUsd: 0,
+  activeDurationMs: 0
+}
+
+export interface AgentLoopState {
+  readonly goal: string
+  /** Immutable capability composition binding for checkpoint/replay safety. */
+  readonly capabilityFingerprint?: string
+  /** Number of the last completed step. */
+  readonly stepNumber: number
+  readonly observations: readonly Observation[]
+  readonly openQuestions: readonly string[]
+  readonly pendingQuestion?: QuestionRequest | undefined
+  readonly pendingApprovalId?: string | undefined
+  /** Persisted decision reused after restart instead of regenerating. */
+  readonly pendingDecision?: LoopDecision | undefined
+  readonly pendingStepNumber?: number | undefined
+  readonly selectedCapability?: string | undefined
+  readonly resolvedInputs: Readonly<Record<string, unknown>>
+  readonly loopSignatures: readonly string[]
+  readonly stopReason?: StopReason | undefined
+  readonly lastEvaluation?: CompletionEvaluation | undefined
+}
+
+export interface ExecutionCheckpoint {
+  readonly checkpointId: string
+  readonly executionId: string
+  readonly tenantId: string
+  readonly checkpointVersion: number
+  readonly runtimeProfile: RuntimeProfile
+  readonly runtimeVersion: string
+  readonly orchestratorVersion: string
+  readonly stepNumber: number
+  readonly state: AgentLoopState
+  readonly budgetUsage: BudgetUsage
+  readonly createdAt: string
+  readonly digest: string
+}
+
+export interface ExecutionStepStore {
+  recordStep(step: ExecutionStep): Promise<void>
+  listSteps(
+    tenantId: string,
+    executionId: string
+  ): Promise<readonly ExecutionStep[]>
+  saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void>
+  loadCheckpoint(
+    tenantId: string,
+    executionId: string
+  ): Promise<ExecutionCheckpoint | null>
+}
+
+/* -------------------------------------------------------------------------- */
+/* Completion / sufficiency evaluation                                        */
+/* -------------------------------------------------------------------------- */
+
+export const COMPLETION_OUTCOMES = [
+  'COMPLETE',
+  'INCOMPLETE',
+  'NEEDS_USER',
+  'WAITING_APPROVAL',
+  'INSUFFICIENT_EVIDENCE',
+  'FAILED'
+] as const
+export type CompletionOutcome = (typeof COMPLETION_OUTCOMES)[number]
+
+export type CompletionStrategy = 'DETERMINISTIC' | 'EVIDENCE_BASED' | 'HYBRID'
+
+export interface CompletionEvaluation {
+  readonly outcome: CompletionOutcome
+  readonly reasonCode:
+    | DecisionReasonCode
+    | 'COMPLETION_CONFIRMED'
+    | 'EVALUATOR_UNAVAILABLE'
+  readonly deterministic: boolean
+  readonly detail?: string
+  /** Model/evaluation usage reported by a hybrid evaluator. */
+  readonly usage?: {
+    readonly modelCalls: number
+    readonly inputTokens: number
+    readonly outputTokens: number
+    readonly costUsd: number
+  }
+}
+
+export interface CompletionEvaluationInput {
+  readonly goal: string
+  readonly state: AgentLoopState
+  readonly observations: readonly Observation[]
+  readonly lastDecision?: LoopDecision
+  readonly result?: unknown
+}
+
+export interface CompletionEvaluator {
+  evaluate(input: CompletionEvaluationInput): Promise<CompletionEvaluation>
+}
+
+export const SUFFICIENCY_LEVELS = [
+  'SUFFICIENT',
+  'PARTIAL',
+  'INSUFFICIENT',
+  'CONFLICTING'
+] as const
+export type SufficiencyLevel = (typeof SUFFICIENCY_LEVELS)[number]
+
+export interface SufficiencyEvaluation {
+  readonly level: SufficiencyLevel
+  readonly reasonCode: string
+  readonly missingCategories: readonly string[]
+  readonly conflictingSources: readonly string[]
+  readonly coveredCategories: readonly string[]
+}
+
+export interface SufficiencyEvaluator {
+  evaluate(input: {
+    readonly query: string
+    readonly requestedCategories: readonly string[]
+    readonly observations: readonly Observation[]
+  }): Promise<SufficiencyEvaluation>
+}
+
+/* -------------------------------------------------------------------------- */
+/* Evidence model                                                             */
+/* -------------------------------------------------------------------------- */
+
+export interface EvidenceReference {
+  readonly evidenceId: string
+  readonly sourceId: string
+  readonly sourceVersion?: string
+  readonly chunkRef?: string
+  readonly provenance: ObservationProvenance
+}
+
+export interface EvidenceSet {
+  readonly items: readonly EvidenceReference[]
+  readonly coverage: SufficiencyLevel
+}
+
+export interface Claim {
+  readonly text: string
+  readonly evidenceRefs: readonly string[]
+}
+
+export interface ClaimValidation {
+  readonly valid: boolean
+  readonly unsupportedClaims: readonly string[]
+}
+
+/* -------------------------------------------------------------------------- */
+/* Context engine                                                             */
+/* -------------------------------------------------------------------------- */
+
+export const CONTEXT_PRIORITIES = [
+  'SYSTEM',
+  'AGENT_PROFILE',
+  'CURRENT_GOAL',
+  'CURRENT_STATE',
+  'FRESH_TOOL_RESULTS',
+  'TRUSTED_KNOWLEDGE',
+  'RELEVANT_HISTORY',
+  'OLDER_CONTEXT'
+] as const
+export type ContextPriority = (typeof CONTEXT_PRIORITIES)[number]
+
+export interface ContextItem {
+  readonly contextId: string
+  readonly priority: ContextPriority
+  readonly trust: ObservationTrust
+  readonly source: string
+  readonly content: string
+  readonly tokenEstimate: number
+  readonly evidenceRefs?: readonly string[]
+}
+
+export interface StepContext {
+  readonly executionId: string
+  readonly tenantId: string
+  readonly conversationId: string
+  readonly stepNumber: number
+  readonly runtimeProfile: RuntimeProfile
+  readonly agentId: AgentId
+  readonly agentVersion: string
+  readonly objective: string
+  readonly instructions: readonly string[]
+  readonly goal: string
+  readonly userMessage: string
+  readonly stateSummary: string
+  readonly observations: readonly Observation[]
+  readonly capabilities: readonly ToolDescriptor[]
+  readonly knowledgeAvailable: boolean
+  readonly completionStrategy: CompletionStrategy
+  readonly allowedDecisionTypes: readonly DecisionType[]
+  readonly budget: ExecutionBudget
+  readonly budgetUsage: BudgetUsage
+  readonly tokenBudget: number
+  readonly contextItems: readonly ContextItem[]
+  readonly pendingApprovalId?: string
+  readonly pendingQuestion?: QuestionRequest
+  readonly lastEvaluation?: CompletionEvaluation
+  readonly correlationId: CorrelationId
+  readonly traceId: TraceId
+  readonly decisionRepair?: {
+    readonly attempt: number
+    readonly errors: readonly string[]
+  }
+}
+
+export interface ContextBuildInput {
+  readonly runtime: {
+    readonly executionId?: string
+    readonly tenantId: TenantId
+    readonly conversationId: string
+    readonly correlationId: CorrelationId
+    readonly traceId: TraceId
+    readonly userMessage: string
+    readonly context: ContextSnapshot
+    readonly objective: string
+    readonly instructions: readonly string[]
+    readonly agentId: AgentId
+    readonly agentVersion: string
+  }
+  readonly profile: RuntimeProfile
+  readonly stepNumber: number
+  readonly goal: string
+  readonly state: AgentLoopState
+  readonly capabilities: readonly ToolDescriptor[]
+  readonly knowledgeAvailable: boolean
+  readonly completionStrategy: CompletionStrategy
+  readonly allowedDecisionTypes: readonly DecisionType[]
+  readonly budget: ExecutionBudget
+  readonly budgetUsage: BudgetUsage
+  readonly decisionRepair?: {
+    readonly attempt: number
+    readonly errors: readonly string[]
+  }
+}
+
+export interface ContextEngine {
+  build(input: ContextBuildInput): Promise<StepContext>
+}
+
+/* -------------------------------------------------------------------------- */
+/* Iterative orchestrator and knowledge boundaries                            */
+/* -------------------------------------------------------------------------- */
+
+export interface IterativeOrchestratorInput {
+  readonly context: StepContext
+  /** Aborted by the runtime when the decision deadline passes. */
+  readonly signal?: AbortSignal
+}
+
+export interface ModelUsage {
+  readonly modelCalls: number
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly costUsd: number
+}
+
+export const EMPTY_MODEL_USAGE: ModelUsage = {
+  modelCalls: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  costUsd: 0
+}
+
+/**
+ * The orchestrator reports its own model usage so the runtime can enforce
+ * budgets deterministically without reaching into orchestrator internals.
+ */
+export interface IterativeOrchestratorTurn {
+  readonly decision: LoopDecision
+  readonly usage?: ModelUsage
+}
+
+export interface IterativeOrchestrator {
+  decide(input: IterativeOrchestratorInput): Promise<IterativeOrchestratorTurn>
+}
+
+export interface KnowledgeSearchRequest {
+  readonly query: string
+  readonly categories?: readonly string[]

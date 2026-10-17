@@ -1,0 +1,140 @@
+from pathlib import Path
+import os, shutil, json, hashlib, subprocess, time, signal, sys
+P=Path(__file__).resolve().parent; W=P.parent.parent/'worktree'; T=P/'toolchain'; S=P/'originals'
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def write(p,s): p.parent.mkdir(parents=True,exist_ok=True); p.write_text(s)
+def dump(p,v): write(p,json.dumps(v,indent=2)+'\n')
+BASE=P/'private'; BASE.mkdir(exist_ok=True)
+for x in ['home','tmp','xdg-cache','xdg-config','xdg-data','xdg-state','npm-cache','npm-prefix','xdg-runtime']: (BASE/x).mkdir(exist_ok=True)
+for x in ['npm-userconfig','npm-globalconfig']: write(BASE/x,'')
+env={'PATH':str(T/'bin')+':/usr/bin:/bin','HOME':str(BASE/'home'),'TMPDIR':str(BASE/'tmp'),'TMP':str(BASE/'tmp'),'TEMP':str(BASE/'tmp'),'XDG_CACHE_HOME':str(BASE/'xdg-cache'),'XDG_CONFIG_HOME':str(BASE/'xdg-config'),'XDG_DATA_HOME':str(BASE/'xdg-data'),'XDG_STATE_HOME':str(BASE/'xdg-state'),'XDG_RUNTIME_DIR':str(BASE/'xdg-runtime'),'NPM_CONFIG_USERCONFIG':str(BASE/'npm-userconfig'),'NPM_CONFIG_GLOBALCONFIG':str(BASE/'npm-globalconfig'),'NPM_CONFIG_CACHE':str(BASE/'npm-cache'),'NPM_CONFIG_PREFIX':str(BASE/'npm-prefix'),'NPM_CONFIG_UPDATE_NOTIFIER':'false','NPM_CONFIG_AUDIT':'false','NPM_CONFIG_FUND':'false','NPM_CONFIG_OFFLINE':'true','NPM_CONFIG_REGISTRY':'http://127.0.0.1:1','CI':'true','LANG':'C.UTF-8','TZ':'UTC','CVG_TEST_SCOPE':'core','GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_AUTHOR_NAME':'Synthetic private fixture','GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_NAME':'Synthetic private fixture','GIT_COMMITTER_EMAIL':'fixture@example.invalid'}
+dump(P/'environment-base.json',env)
+# npx always fails locally. It never delegates to real npx.
+write(T/'bin/npx','#!/bin/sh\necho "SAFE_STUB unrelated npx refused: $*" >&2\nexit 79\n'); (T/'bin/npx').chmod(0o755)
+# Block accidental services/network tools on child PATH too.
+for x in ['docker','curl','wget','psql','pg_ctl']:
+ write(T/'bin'/x,'#!/bin/sh\necho "SAFE_STUB forbidden external tool refused" >&2\nexit 80\n'); (T/'bin'/x).chmod(0o755)
+
+def run(args,cwd,e,log,bound=90):
+ log.parent.mkdir(parents=True,exist_ok=True)
+ start=time.monotonic(); seen={}; reason=None
+ with log.open('wb') as out:
+  p=subprocess.Popen(args,cwd=cwd,env=e,stdout=out,stderr=subprocess.STDOUT,start_new_session=True)
+  def scan():
+   for q in Path('/proc').iterdir():
+    if not q.name.isdigit():continue
+    try:
+     fields=(q/'stat').read_text().rsplit(')',1)[1].split()
+     if int(fields[3])==p.pid:
+      seen[q.name]={'pid':int(q.name),'ppid':int(fields[1]),'cmdline':(q/'cmdline').read_bytes().replace(b'\0',b' ').decode(errors='replace')}
+    except (OSError,ValueError,IndexError): pass
+  while p.poll() is None:
+   scan()
+   if time.monotonic()-start>bound:reason='deadline';break
+   if log.stat().st_size>2097152:reason='output_limit';break
+   time.sleep(.05)
+  scan()
+  if reason:
+   os.killpg(p.pid,signal.SIGTERM)
+   try:p.wait(timeout=2)
+   except subprocess.TimeoutExpired:os.killpg(p.pid,signal.SIGKILL);p.wait(timeout=3)
+  p.wait(timeout=3)
+  # terminate lingering owned group descendants, if any, and preserve observation.
+  live=[]
+  for pid in seen:
+   try:
+    stat=(Path('/proc')/pid/'stat').read_text().rsplit(')',1)[1].split()
+    if int(stat[3])==p.pid and stat[0]!='Z':live.append(int(pid))
+   except OSError:pass
+  if live:
+   os.killpg(p.pid,signal.SIGTERM);time.sleep(.15)
+   try:os.killpg(p.pid,signal.SIGKILL)
+   except ProcessLookupError:pass
+ result={'argv':args,'cwd':str(cwd),'environment':e,'environment_sha256':hashlib.sha256(json.dumps(e,sort_keys=True,separators=(',',':')).encode()).hexdigest(),'pid':p.pid,'process_group':p.pid,'children_observed':list(seen.values()),'elapsed_seconds':round(time.monotonic()-start,3),'bound_seconds':bound,'output_bound_bytes':2097152,'exit':p.returncode,'termination_reason':reason,'live_descendants_after_exit_before_cleanup':live,'log':str(log.relative_to(P)),'log_sha256':sha(log)}
+ dump(log.with_suffix('.command.json'),result);return result
+
+def fixture(name,artifact,variant):
+ R=P/'cases'/name/'fixture'; R.mkdir(parents=True)
+ shutil.copytree(S/'scripts',R/'scripts')
+ for driver in ['ci-bar.mjs','phase10-certify.mjs']:shutil.copy2(artifact/'scripts'/driver,R/'scripts'/driver)
+ shutil.copy2(S/'vitest.config.mts',R/'vitest.config.mts')
+ # dependency symlink is confined to the physically owned toolchain.
+ (R/'node_modules').symlink_to(T/'node_modules',target_is_directory=True)
+ # Keep dependency/workspace/engine declarations. Replace unrelated script commands
+ # with explicit refusal, preserving actual test:core/test:coverage command bytes.
+ package=json.loads((S/'package.json').read_text()); orig=package['scripts']; cmds={k:'node scripts/safe-stub.mjs refuse '+k for k in orig}
+ for k in ['test:core','test:coverage','coverage:critical']:cmds[k]=orig[k]
+ cmds.update({'pretest:core':'node scripts/capture-env.mjs','pretest:coverage':'node scripts/capture-env.mjs','precoverage:critical':'node scripts/capture-env.mjs','mutation:guard':'node scripts/safe-stub.mjs mutation','certify':'node scripts/phase10-certify.mjs','precertify':'node scripts/capture-env.mjs'})
+ package['scripts']=cmds;dump(R/'package.json',package)
+ shutil.copy2(S/'package-lock.json',R/'package-lock.json')
+ write(R/'.gitignore','node_modules/\ncoverage/\ncertification/\n')
+ write(R/'scripts/capture-env.mjs',"import fs from 'node:fs';\nconst record={kind:'REAL_NPM_LIFECYCLE_CHILD_ENV',pid:process.pid,ppid:process.ppid,node:process.version,execPath:process.execPath,event:process.env.npm_lifecycle_event,env:process.env}; fs.appendFileSync(process.env.PROOF_ENV_LOG, JSON.stringify(record)+'\\n'); console.log('ENV_CAPTURE '+JSON.stringify({pid:record.pid,node:record.node,event:record.event,perFile:process.env.CVG_COVERAGE_PER_FILE??null,scope:process.env.CVG_TEST_SCOPE}));\n")
+ write(R/'scripts/safe-stub.mjs',"import fs from 'node:fs'; const mode=process.argv[2]; const r={kind:'DECLARED_SAFE_STUB',argv:process.argv,pid:process.pid,mode}; fs.appendFileSync(process.env.PROOF_STUB_LOG,JSON.stringify(r)+'\\n');console.error(JSON.stringify(r)); if(process.argv.includes('test')) console.log('SYNTHETIC failing unit stub metadata only\\nTest Files 1 failed (1)\\nTests 1 failed (1)');process.exitCode=mode==='mutation'?0:78;\n")
+ for x in ['run-e2e-evidence.mjs','generate-sbom.mjs','check-licenses.mjs']:write(R/'scripts'/x,"import './safe-stub.mjs';\n")
+ for pkg in ['contracts','observability']:
+  write(R/f'packages/{pkg}/src/toy.ts','// SYNTHETIC toy; never project coverage\n'+''.join(f'export function f{i}(flag: boolean) {{ return flag ? {i} : {-i-1}; }}\n' for i in range(100)))
+ nc=99 if variant=='perfilebad' else 100; oc=1 if variant=='aggregatebad' else 100
+ write(R/'tests/toy.test.ts',"import { test, expect } from 'vitest';\nimport * as neutral from '../packages/contracts/src/toy';\nimport * as other from '../packages/observability/src/toy';\ntest('SYNTHETIC two toy modules only', () => {\n"+''.join(f' expect(neutral.f{i}(true)).toBe({i}); expect(neutral.f{i}(false)).toBe({-i-1});\n' for i in range(nc))+''.join(f' expect(other.f{i}(true)).toBe({i}); expect(other.f{i}(false)).toBe({-i-1});\n' for i in range(oc))+'});\n')
+ dump(R/'scripts/critical-coverage-manifest.json',{'schemaVersion':1,'kind':'aud20-critical-coverage-manifest','branchThreshold':95,'groups':[{'id':'SYNTHETIC-neutral-only','paths':['packages/contracts/src/toy.ts']}]})
+ dump(R/'scripts/skip-catalog.json',{'schemaVersion':1,'kind':'aud20-skip-catalog','entries':[]})
+ audit='docs/04_audit/0566_comprehensive_repository_audit_2026-09-21.md'
+ write(R/audit,'# SYNTHETIC PRIVATE FIXTURE: all findings OPEN; never qualification\n### Médio impacto\n'+''.join(f'{i}. **A21-F{i:02} — Synthetic open fixture finding {i}**\n' for i in range(1,27)))
+ dump(R/'docs/04_audit/evidence/AUD-20260921/REM21-019/finding-closure.json',{'schemaVersion':1,'kind':'a21-closure-registry','source':{'path':audit,'sha256':sha(R/audit)},'entries':[{'id':f'A21-F{i:02}','status':'OPEN_INTERNAL','task':'SYNTHETIC-NO-GO','rationale':'Private coverage fixture has no qualification authority','evidence':[]} for i in range(1,27)]})
+ dump(R/'certification/external-gates.json',{k:'PENDING' for k in ['modelProvider','channel','externalIdentity','humanSignoff']})
+ E=dict(env,PROOF_ENV_LOG=str(R.parent/'child-env.jsonl'),PROOF_STUB_LOG=str(R.parent/'safe-stubs.jsonl'))
+ for i,args in enumerate([['git','init','--initial-branch=fixture'],['git','add','--','package.json','.gitignore'],['git','commit','-m','Synthetic private coverage fixture only']]):
+  r=run(args,R,E,R.parent/f'git-{i}.log',10)
+  if r['exit']!=0:raise RuntimeError(r)
+ dump(R.parent/'fixture-input-manifest.json',[{'path':str(f.relative_to(R)),'sha256':sha(f),'size':f.stat().st_size} for f in sorted(R.rglob('*')) if f.is_file() and '.git' not in f.parts and 'node_modules' not in f.parts])
+ return R,E
+
+def case(phase,path,variant,flag,artifact):
+ name=f'{phase}-{path}-{variant}-{flag}';R,E=fixture(name,artifact,variant)
+ if flag=='flag0': E['CVG_COVERAGE_PER_FILE']='0'
+ E['CI_RUN_ID']='run-synthetic-'+name
+ if path in ['ci','ci-certify']:
+  A=R.parent/'ci-artifacts'; (A/'gates').mkdir(parents=True)
+  E['CI_ARTIFACT_DIR']=str(A)
+  # Deliberately nonqualifying synthetic state; no init/finalization claims.
+  candidate_id='a'*64
+  if path=='ci-certify':
+   c=run([str(T/'bin/node'),'--input-type=module','-e',"import {collectCandidateFiles,computeCandidateId} from './scripts/lib/certification-rules.mjs'; console.log(computeCandidateId(collectCandidateFiles(process.cwd())));"],R,E,R.parent/'candidate-id.log',10)
+   assert c['exit']==0
+   candidate_id=(R.parent/'candidate-id.log').read_text().strip()
+  dump(A/'ci-bar-state.json',{'schemaVersion':1,'kind':'SYNTHETIC_NONQUALIFYING','runId':E['CI_RUN_ID'],'candidateId':candidate_id,'nodeVersion':'22.23.2','gates':[]})
+  args=[str(T/'bin/node'),'scripts/ci-bar.mjs','gate','certify' if path=='ci-certify' else 'coverage']
+ else:args=[str(T/'bin/node'),'scripts/phase10-certify.mjs']
+ result=run(args,R,E,R.parent/'driver.log')
+ result.update({'name':name,'variant':variant,'flag':flag,'driver_sha256':sha(R/'scripts'/('ci-bar.mjs' if path in ['ci','ci-certify'] else 'phase10-certify.mjs')),'config_sha256':sha(R/'vitest.config.mts')})
+ summary=R/'coverage/coverage-summary.json'
+ if summary.exists():result['summary']=json.loads(summary.read_text())
+ if path in ['ci','ci-certify']: result['gate']=json.loads((A/'ci-bar-state.json').read_text())['gates'][-1]
+ if path!='ci':
+  final=R/'certification/phase10-result.json'
+  if final.exists():
+   d=json.loads(final.read_text());result['coverage_subgate']=next(g for g in d['gates'] if g['id']=='coverage');result['decision']=d['decision'];result['certification']=d['certification']
+  else:result['limitation']='phase10-result not emitted; see exact driver.log'
+ if path=='phase10' and 'coverage_subgate' in result:result['gate']=result['coverage_subgate']
+ dump(R.parent/'observation.json',result)
+ print(json.dumps({k:result.get(k) for k in ['name','exit','elapsed_seconds','decision','certification','limitation']}),flush=True)
+ return result
+
+if __name__=='__main__':
+ mode=sys.argv[1]
+ if mode=='red':
+  for path in ['ci','phase10']:
+   for flag in ['default','flag0']:case('red-r2',path,'perfilebad',flag,P/'preimages')
+ elif mode=='green':
+  ready=json.loads((P/'READY.json').read_text())
+  for d in ['ci-bar.mjs','phase10-certify.mjs']:
+   assert sha(W/'scripts'/d)==ready[d]
+  current=P/'ready-artifacts';(current/'scripts').mkdir(parents=True)
+  for d in ['ci-bar.mjs','phase10-certify.mjs']:shutil.copy2(W/'scripts'/d,current/'scripts'/d)
+  for path in ['ci','phase10']:
+   for flag in ['default','flag0']:
+    for variant in ['perfilebad','aggregatebad','good']:case('green',path,variant,flag,current)
+ elif mode=='ci-certify':
+  for flag in ['default','flag0']:
+   for variant in ['perfilebad','good']:case('green-r2','ci-certify',variant,flag,P/'ready-artifacts')
+ elif mode=='versions':
+  for n,args in enumerate([[str(T/'bin/node'),'--version'],[str(T/'bin/npm'),'--version'],[str(T/'bin/node'),str(T/'node_modules/vitest/vitest.mjs'),'--version']]):run(args,P,env,P/f'version-{n}.log',10)

@@ -1,0 +1,153 @@
+{
+  "verdict": "FAIL",
+  "scope": "Independent STATIC bounded ordinary library QA against SPEC0209; packet only",
+  "packet": "/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-ref-r5-packet",
+  "report": "/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-ref-r5-result/report.md",
+  "sentinel_sha256": "ee5d3170462240f730db6d08b242dfeee8cdef31b5e26ca7b8f36cc388c0b5e3",
+  "integrity_before": "MATCH",
+  "integrity_after": "MATCH",
+  "exact_file_set_before_after": true,
+  "severity_counts": {
+    "P1": 3
+  },
+  "findings": [
+    {
+      "id": "R5-F01",
+      "severity": "P1",
+      "title": "Document row identities bypass cell redaction and copy literal bodies",
+      "path": "scripts/reference-contract-catalog.mjs",
+      "lines": [
+        1065,
+        1081,
+        1127
+      ],
+      "related_lines": [
+        931,
+        1045,
+        1083,
+        1086
+      ],
+      "spec_lines": [
+        10,
+        12
+      ],
+      "evidence": "extractDocument constructs key from raw context()/columns[0], passes it as the symbol, and emitFor stores symbol verbatim. projectJsonContract only redacts the shape cells. Heading text is also copied into context without classification.",
+      "static_counterexample": "A declared persistence-catalog table whose first data cell is function guest() { return 1; /* DOC_BODY_MARKER */ } copies that body into entry.symbol even though the corresponding shape cell becomes UNKNOWN. A code-bearing heading has the same path.",
+      "impact": "Generated catalog still copies guest implementation text through document metadata. UNKNOWN shape classification does not remove leaked symbol bytes.",
+      "test_gap": {
+        "path": "tests/reference-contract-catalog.test.js",
+        "lines": [
+          712,
+          718,
+          725
+        ],
+        "detail": "Existing other-channel test puts the body in the second cell and uses safe headings/first cell, so it does not cover the identity path."
+      },
+      "remediation": "Classify all document-derived identity text; use a stable opaque digest for unsafe row/heading/anchor components, retain owner/source/UNKNOWN metadata and requirement entries, and check absence across the entire serialized catalog.",
+      "verification": "STATIC_SOURCE_TRACE_ONLY; counterexample NOT_RUN"
+    },
+    {
+      "id": "R5-F02",
+      "severity": "P1",
+      "title": "TypeScript literal property/member names still copy implementation strings",
+      "path": "scripts/reference-contract-catalog.mjs",
+      "lines": [
+        479,
+        484,
+        526,
+        666,
+        676
+      ],
+      "related_lines": [
+        723,
+        753,
+        761,
+        1127
+      ],
+      "spec_lines": [
+        10,
+        12
+      ],
+      "evidence": "nodeName returns string-literal node.text without the filtering used by staticData or printed. Object initializer property names go straight into shape.properties[].name; interface/class literal names go straight into the serialized symbol.",
+      "static_counterexample": "export const Options: Record<string, boolean> = {\"function guest(){return 1;/* TS_NAME_BODY_MARKER */}\": true}; The body is copied into the property name. An interface method with that quoted name similarly copies it into the member symbol.",
+      "impact": "The no-implementation-copy boundary can be bypassed through a literal key inside an otherwise static initializer or declaration. Protecting literal values/types alone is insufficient.",
+      "test_gap": {
+        "path": "tests/reference-contract-catalog.test.js",
+        "lines": [
+          513,
+          590,
+          597,
+          633
+        ],
+        "detail": "Tests cover executable AST nodes, initializer values and schema defaults/examples, but not string-literal keys/member names."
+      },
+      "remediation": "Apply bounded name projection to string-literal keys/member/module/export names too. Preserve unsafe names as UNKNOWN hash/length metadata and use stable digest-based identities rather than raw source text.",
+      "verification": "STATIC_SOURCE_TRACE_ONLY; counterexample NOT_RUN"
+    },
+    {
+      "id": "R5-F03",
+      "severity": "P1",
+      "title": "Python bytes annotation literals bypass opaque literal projection",
+      "path": "scripts/reference-contract-catalog.mjs",
+      "lines": [
+        802,
+        805,
+        806
+      ],
+      "related_lines": [
+        811,
+        815,
+        823,
+        826
+      ],
+      "spec_lines": [
+        10,
+        12
+      ],
+      "evidence": "Python typ permits every ast.Constant, but only inspects constant values that are str before ast.unparse. A bytes constant therefore reaches unparse unchanged and is returned as annotation/base text.",
+      "static_counterexample": "def run(value: b'function guest() { return 1; /* PY_BYTES_BODY_MARKER */ }') -> int:\n    pass\n",
+      "impact": "Literal guest implementation bytes are copied into Python annotation metadata. With ordinary parameter/return annotations this path also has no UNKNOWN marker for that literal.",
+      "test_gap": {
+        "path": "tests/reference-contract-catalog.test.js",
+        "lines": [
+          464,
+          712,
+          716
+        ],
+        "detail": "Tests cover lambda expressions and str annotation literals/__all__, not bytes annotation literals."
+      },
+      "remediation": "Handle bytes constants explicitly as opaque hash/byte-length UNKNOWN values, or reject all non-vocabulary literal kinds before unparse; retain the declaration, owner and source provenance.",
+      "verification": "STATIC_SOURCE_TRACE_ONLY; counterexample NOT_RUN"
+    }
+  ],
+  "prior_r3_checks": {
+    "schema_document_json_values": "ADDRESSED_IN_SOURCE; NOT_RUN",
+    "live_root_validator_pinned_blobs": "ADDRESSED_IN_SOURCE; NOT_RUN",
+    "rootless_validator": "CHECKSUM_ONLY; NOT_AUTHENTICATION"
+  },
+  "performed_checks": [
+    "Full packet source/spec/test reading",
+    "Static data/control-flow review",
+    "New regression assertions inspected without execution",
+    "Sentinel and exact file set/hashes checked before and after",
+    "No symlinks/special entries; directory set unchanged"
+  ],
+  "execution_status": {
+    "collector": "NOT_RUN",
+    "tests": "NOT_RUN",
+    "counterexamples": "NOT_RUN",
+    "reference_collection": "NOT_RUN",
+    "git_or_config_or_hooks": "NOT_RUN",
+    "network": "NOT_RUN",
+    "future_execution": "NOT_SCHEDULED"
+  },
+  "descendants": 0,
+  "limitations": [
+    "Static review cannot establish executable correctness.",
+    "No external reference, live worktree code/history or separate builder reports inspected.",
+    "No full36-card parity or release established or authorized.",
+    "Rootless validateCatalog is not live/pin authentication.",
+    "Actual owner-map, 318 manifests/55 families and generated distribution provenance not verified."
+  ],
+  "completed_utc": "2026-10-15T03:11:34.566044+00:00"
+}

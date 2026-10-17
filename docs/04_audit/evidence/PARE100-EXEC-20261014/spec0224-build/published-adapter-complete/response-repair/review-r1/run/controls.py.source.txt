@@ -1,0 +1,22 @@
+from driver import *
+manifest=[]
+for name,rel,before,after in [
+ ('omit-response-data','packages/harness/src/iterative-dispatch.ts','items: completeContext.contextItems.map((item) => ({','items: [].map((item: any) => ({'),
+ ('lose-terminal-refusal','packages/harness/src/iterative-dispatch.ts',"if (ctx.options.toolResultContext) {\n        // The accepted RESPOND step", "if (false) {\n        // The accepted RESPOND step")]:
+ src=(A/rel).read_text();assert src.count(before)==1
+ target=R/'controls'/name/'iterative-dispatch.ts';target.parent.mkdir(parents=True,exist_ok=True);target.write_text(src.replace(before,after));
+ (target.parent/'tmp').mkdir(exist_ok=True);(target.parent/'nodecache').mkdir(exist_ok=True)
+ config=(R/'run/vitest.config.mjs').read_text().replace('/cache/frozen','/cache/'+name)
+ resolver='''
+import path from 'node:path';
+const original=__ORIGINAL__, variant=__VARIANT__;
+config.plugins.unshift({name:'i1-control-resolver',enforce:'pre',resolveId(source,importer){
+ if(importer===variant && source.startsWith('.'))return path.resolve(path.dirname(original),source);
+ if(importer && source.startsWith('.') && path.resolve(path.dirname(importer.split('?')[0]),source)===original)return variant;
+ if(source===original)return variant;
+}});
+'''.replace('__ORIGINAL__',json.dumps(str(A/rel))).replace('__VARIANT__',json.dumps(str(target)))
+ config=config.replace('export default config;',resolver+'\nexport default config;');cfg=target.parent/'vitest.config.mjs';cfg.write_text(config)
+ manifest.append(dict(name=name,source=str(target),originalIdentifier=rel,originalCopySha256=hashlib.sha256(src.encode()).hexdigest(),variantSha256=hashlib.sha256(target.read_bytes()).hexdigest(),edit=dict(before=before,after=after)))
+ run('control-'+name,[N,str(P/'node_modules/vitest/vitest.mjs'),'run','--config',str(cfg),'--configLoader','native'],dict(SPEC0224_RESPONSE_EVIDENCE=str(target.parent/'cases-private.json'),NODE_COMPILE_CACHE=str(target.parent/'nodecache'),TMPDIR=str(target.parent/'tmp'),TMP=str(target.parent/'tmp'),TEMP=str(target.parent/'tmp')))
+write('controls/control-manifest.json',json.dumps(manifest,indent=2))

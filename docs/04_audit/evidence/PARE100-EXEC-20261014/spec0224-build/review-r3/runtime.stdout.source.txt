@@ -1,0 +1,2338 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/iterative-runtime.ts SHA256 00e0300fb359e2f91ba737801047c226eed1e27a61e3437d2dc2d9a01825c29d
+     1 import { randomUUID } from 'node:crypto'
+     2 import type {
+     3   AgenticKnowledgeProvider,
+     4   ApprovalId,
+     5   Claim,
+     6   ClaimValidation,
+     7   CompletionEvaluation,
+     8   CompletionEvaluator,
+     9   CompleteToolContextConfiguration,
+    10   CompleteToolContextState,
+    11   CheckpointToken,
+    12   ContextBuildInput,
+    13   ContextEngine,
+    14   DecisionValidationResult,
+    15   ExecutionCheckpoint,
+    16   ExecutionStep,
+    17   ExecutionStepStore,
+    18   IterativeOrchestrator,
+    19   LoopDecision,
+    20   ModelUsage,
+    21   Observation,
+    22   RuntimeInput,
+    23   RuntimeResult,
+    24   SandboxGate,
+    25   StopReason,
+    26   SufficiencyEvaluator
+    27 } from '@cvg/harness-contracts'
+    28 import {
+    29   EMPTY_BUDGET_USAGE,
+    30   EMPTY_MODEL_USAGE,
+    31   MAX_CHECKPOINT_OBSERVATIONS,
+    32   RUNTIME_V2_VERSION,
+    33   HYBRID_ORCHESTRATOR_VERSION,
+    34   sanitizeLoopDecision
+    35 } from '@cvg/harness-contracts'
+    36 import {
+    37   canonicalizeCompleteJson,
+    38   COMPLETE_CHECKPOINT_MAX_BYTES,
+    39   ToolResultContextError
+    40 } from '@cvg/harness-contracts'
+    41 import { CompleteDecisionAdmission } from './complete-decision-admission.ts'
+    42 import {
+    43   assertCompleteToolObservation,
+    44   completeSnapshot,
+    45   completeToolPayload,
+    46   retainCompleteObservations,
+    47   validateCompleteStepContext
+    48 } from './complete-tool-results.ts'
+    49 import type {
+    50   ApprovalEngine,
+    51   AuditSink,
+    52   ModelGateway,
+    53   PolicyEngine,
+    54   TelemetryEvent,
+    55   TelemetrySink,
+    56   ToolDefinition,
+    57   ToolDescriptor,
+    58   ToolRegistry
+    59 } from '@cvg/harness-contracts'
+    60 import { DefaultContextEngine } from './context-engine.ts'
+    61 import { DeterministicCompletionEvaluator } from './completion.ts'
+    62 import { decisionSignature, detectDecisionCycle } from './loop-detection.ts'
+    63 import { sealCheckpoint } from './step-store.ts'
+    64 import { agentExposesTool } from './runtime.ts'
+    65 import { KernelHost } from './kernel/host.ts'
+    66 import {
+    67   CANCELLED_RESPONSE,
+    68   createTurnState,
+    69   runGate
+    70 } from './kernel/pipeline.ts'
+    71 import {
+    72   approvalsControl,
+    73   auditControl,
+    74   budgetControl,
+    75   effectsControl,
+    76   logControl,
+    77   modelCapability,
+    78   pauseControl,
+    79   policyControl,
+    80   sandboxControl,
+    81   telemetryCapability,
+    82   toolsCapability
+    83 } from './kernel/controls.ts'
+    84 import {
+    85   CONTROL_SERVICES,
+    86   DEADLINE,
+    87   type EffectLedger,
+    88   type KernelLog,
+    89   type PauseSwitch,
+    90   type ServiceKey,
+    91   type TurnState
+    92 } from './kernel/types.ts'
+    93 import {
+    94   applyResume,
+    95   composeResponse,
+    96   dispatchKnowledge,
+    97   dispatchRespond,
+    98   dispatchTool,
+    99   evaluate,
+   100   pause,
+   101   validateDecision,
+   102   type IterativeDispatchContext
+   103 } from './iterative-dispatch.ts'
+   104 
+   105 export { decisionSignature, detectDecisionCycle } from './loop-detection.ts'
+   106 
+   107 export interface IterativeGovernedRuntimeOptions {
+   108   readonly toolResultContext?: CompleteToolContextConfiguration
+   109   readonly orchestrator: IterativeOrchestrator
+   110   readonly modelGateway: ModelGateway
+   111   readonly policy: PolicyEngine
+   112   readonly approvals: ApprovalEngine
+   113   readonly tools: ToolRegistry
+   114   readonly capabilityFingerprint?: string
+   115   readonly audit: AuditSink
+   116   readonly telemetry: TelemetrySink
+   117   readonly stepStore: ExecutionStepStore
+   118   readonly contextEngine?: ContextEngine
+   119   readonly knowledge?: AgenticKnowledgeProvider
+   120   readonly sufficiencyEvaluator?: SufficiencyEvaluator
+   121   readonly completionEvaluator?: CompletionEvaluator
+   122   readonly claimExtractor?: (response: string) => readonly Claim[]
+   123   readonly loopDetection?: {
+   124     readonly repeatThreshold?: number
+   125     readonly maxSignatures?: number
+   126   }
+   127   readonly maxObservationPayloadChars?: number
+   128   readonly clock?: () => Date
+   129   readonly orchestratorVersion?: string
+   130   /** Kernel controls (SPEC 0181); in-memory defaults when omitted. */
+   131   readonly pause?: PauseSwitch
+   132   readonly log?: KernelLog
+   133   readonly effects?: EffectLedger
+   134   readonly sandbox?: SandboxGate
+   135 }
+   136 
+   137 /** Services the iterative mode needs from the kernel (no single-pass planner). */
+   138 const ITERATIVE_REQUIRED_SERVICES: readonly ServiceKey[] = [
+   139   ...CONTROL_SERVICES,
+   140   'model',
+   141   'tools',
+   142   'telemetry'
+   143 ]
+   144 
+   145 export const DEADLINE_EXCEEDED = Symbol('iterative-deadline-exceeded')
+   146 
+   147 const AUDIT_GRACE_MS = 200
+   148 
+   149 const TERMINAL_STOPS = new Set<StopReason>([
+   150   'COMPLETED',
+   151   'HUMAN_TAKEOVER',
+   152   'POLICY_DENIED',
+   153   'INSUFFICIENT_EVIDENCE',
+   154   'MAX_STEPS',
+   155   'MAX_COST',
+   156   'MAX_DURATION',
+   157   'MAX_TOKENS',
+   158   'MAX_MODEL_CALLS',
+   159   'MAX_TOOL_CALLS',
+   160   'MAX_REPLANS',
+   161   'MAX_KNOWLEDGE_CALLS',
+   162   'MAX_VERIFICATION_CALLS',
+   163   'VERIFICATION_FAILED',
+   164   'LOOP_DETECTED',
+   165   'STATE_CONFLICT',
+   166   'UNSAFE_REQUEST',
+   167   'CANCELLED'
+   168 ])
+   169 
+   170 export function errorMessage(error: unknown): string {
+   171   return error instanceof Error ? error.message : 'unknown failure'
+   172 }
+   173 
+   174 function isNonEmptyString(value: unknown): value is string {
+   175   return typeof value === 'string' && value.trim().length > 0
+   176 }
+   177 
+   178 export function bindCapabilityFingerprint(
+   179   payload: unknown,
+   180   capabilityFingerprint: string | undefined
+   181 ): unknown {
+   182   return capabilityFingerprint
+   183     ? { capabilityFingerprint, input: payload }
+   184     : payload
+   185 }
+   186 
+   187 function hasValidBoundaryInput(input: RuntimeInput): boolean {
+   188   const identityValues = [
+   189     input.agent?.id,
+   190     input.agent?.version,
+   191     input.tenantId,
+   192     input.conversationId,
+   193     input.sessionId,
+   194     input.correlationId,
+   195     input.traceId
+   196   ]
+   197   const budgetValues = [
+   198     input.budget?.maxSteps,
+   199     input.budget?.maxModelCalls,
+   200     input.budget?.maxToolCalls,
+   201     input.budget?.maxDurationMs,
+   202     input.budget?.maxCostUsd,
+   203     input.budget?.maxTokens
+   204   ]
+   205   const optionalBudgetValues = [
+   206     input.budget?.maxKnowledgeCalls,
+   207     input.budget?.maxReplans,
+   208     input.budget?.maxVerificationCalls,
+   209     input.budget?.maxDecisionRepairs
+   210   ].filter((value): value is number => value !== undefined)
+   211   return (
+   212     identityValues.every(isNonEmptyString) &&
+   213     budgetValues.every(
+   214       (value) =>
+   215         typeof value === 'number' && Number.isFinite(value) && value >= 0
+   216     ) &&
+   217     optionalBudgetValues.every((value) => Number.isFinite(value) && value >= 0)
+   218   )
+   219 }
+   220 
+   221 function describeTool(tool: ToolDefinition): ToolDescriptor {
+   222   const { execute, ...descriptor } = tool
+   223   void execute
+   224   return descriptor
+   225 }
+   226 
+   227 export function mapEvaluationToStopReason(
+   228   evaluation: CompletionEvaluation
+   229 ): StopReason {
+   230   if (evaluation.reasonCode === 'HANDOFF_REQUIRED') return 'HUMAN_TAKEOVER'
+   231   if (evaluation.outcome === 'INSUFFICIENT_EVIDENCE') {
+   232     return 'INSUFFICIENT_EVIDENCE'
+   233   }
+   234   if (evaluation.outcome === 'NEEDS_USER') return 'NEEDS_USER_INPUT'
+   235   if (evaluation.outcome === 'WAITING_APPROVAL') return 'APPROVAL_REQUIRED'
+   236   if (evaluation.outcome === 'FAILED') return 'VERIFICATION_FAILED'
+   237   return 'INSUFFICIENT_EVIDENCE'
+   238 }
+   239 
+   240 export function boundedPayload(value: unknown, maxChars: number): unknown {
+   241   let serialized: string
+   242   try {
+   243     serialized = JSON.stringify(value) ?? ''
+   244   } catch {
+   245     return '[unserializable payload]'
+   246   }
+   247   if (serialized.length <= maxChars) return value
+   248   return `${serialized.slice(0, maxChars)}…[truncated]`
+   249 }
+   250 
+   251 function defaultClaimValidation(
+   252   claims: readonly Claim[],
+   253   observations: readonly Observation[]
+   254 ): ClaimValidation {
+   255   const evidence = new Set<string>()
+   256   for (const observation of observations) {
+   257     if (observation.provenance.effectRef) {
+   258       evidence.add(observation.provenance.effectRef)
+   259     }
+   260     if (observation.provenance.operationKey) {
+   261       evidence.add(observation.provenance.operationKey)
+   262     }
+   263     const payload = observation.payload as {
+   264       items?: readonly { itemId?: unknown }[]
+   265     } | null
+   266     if (payload && Array.isArray(payload.items)) {
+   267       for (const item of payload.items) {
+   268         /* v8 ignore next -- defensive: catalog items always carry a string itemId */
+   269         if (typeof item?.itemId === 'string') evidence.add(item.itemId)
+   270       }
+   271     }
+   272   }
+   273   const unsupported = claims
+   274     .filter(
+   275       (claim) =>
+   276         claim.evidenceRefs.length === 0 ||
+   277         claim.evidenceRefs.some((ref) => !evidence.has(ref))
+   278     )
+   279     .map((claim) => claim.text.slice(0, 240))
+   280   return { valid: unsupported.length === 0, unsupportedClaims: unsupported }
+   281 }
+   282 
+   283 interface MutableState {
+   284   toolResultContext?: CompleteToolContextState | undefined
+   285   goal: string
+   286   stepNumber: number
+   287   observations: Observation[]
+   288   openQuestions: string[]
+   289   pendingQuestion?:
+   290     | {
+   291         questionType:
+   292           | 'CLARIFICATION'
+   293           | 'MISSING_FIELD'
+   294           | 'CONFIRMATION'
+   295           | 'CHOICE'
+   296         missingFields: readonly string[]
+   297         promptIntent: string
+   298         choices?: readonly string[]
+   299       }
+   300     | undefined
+   301   pendingApprovalId?: string | undefined
+   302   pendingDecision?: LoopDecision | undefined
+   303   pendingStepNumber?: number | undefined
+   304   selectedCapability?: string | undefined
+   305   resolvedInputs: Record<string, unknown>
+   306   loopSignatures: string[]
+   307   stopReason?: StopReason | undefined
+   308   lastEvaluation?: CompletionEvaluation | undefined
+   309 }
+   310 
+   311 interface MutableUsage {
+   312   steps: number
+   313   modelCalls: number
+   314   toolCalls: number
+   315   knowledgeCalls: number
+   316   verificationCalls: number
+   317   replans: number
+   318   decisionRepairs: number
+   319   inputTokens: number
+   320   outputTokens: number
+   321   costUsd: number
+   322   activeDurationMs: number
+   323 }
+   324 
+   325 export interface LoopRun {
+   326   /** Current resume input, bounded to one live observation outside the checkpoint. */
+   327   resumeObservation?: Observation
+   328   checkpointToken?: CheckpointToken | null
+   329   checkpointConflict?: boolean
+   330   readonly input: RuntimeInput
+   331   readonly executionId: string
+   332   readonly startedAtMs: number
+   333   stepNumber: number
+   334   state: MutableState
+   335   usage: MutableUsage
+   336   observations: Observation[]
+   337   responseText: string | null
+   338   lastDecision: LoopDecision | null
+   339   lastEvaluation: CompletionEvaluation | null
+   340   lastToolObservation: Observation | null
+   341   lastSufficiency: string | null
+   342   lastDecisionErrors: readonly string[]
+   343   skipEvaluationOnce: boolean
+   344   countedSteps: Set<number>
+   345   /**
+   346    * The checkpoint holds a step that already passed the dispatch checkpoint
+   347    * (its tool call was counted) but never settled: a crash or an operator
+   348    * pause. Resuming it must not spend the tool budget again.
+   349    */
+   350   inFlightCounted: boolean
+   351 }
+   352 
+   353 export type DispatchOutcome =
+   354   | { readonly kind: 'continue' }
+   355   | {
+   356       readonly kind: 'stop'
+   357       readonly stopReason: StopReason
+   358       readonly response: string
+   359       readonly approvalId?: ApprovalId
+   360       /**
+   361        * A rejected resume binding must not overwrite the durable pause with a
+   362        * terminal checkpoint; the operator can retry the correct binding.
+   363        */
+   364       readonly preserveCheckpoint?: boolean
+   365     }
+   366   | {
+   367       readonly kind: 'pause'
+   368       readonly pausedKind: 'NEEDS_USER_INPUT' | 'APPROVAL_REQUIRED'
+   369       readonly decision: LoopDecision | null
+   370       readonly approvalId?: ApprovalId
+   371       readonly pauseStepNumber?: number
+   372     }
+   373 
+   374 /**
+   375  * Iterative governed runtime: the durable execution spine owns claiming,
+   376  * leases and transitions; this runtime owns the cognitive loop, step
+   377  * checkpoints, deterministic budgets and the completion evaluation. It never
+   378  * claims jobs, never persists SQL directly and never executes a tool after a
+   379  * rejected decision.
+   380  */
+   381 export class IterativeGovernedRuntime {
+   382   public readonly runtimeVersion = RUNTIME_V2_VERSION
+   383   public readonly orchestratorVersion: string
+   384   private readonly contextEngine: ContextEngine
+   385   private readonly completionEvaluatorOverride: CompletionEvaluator | undefined
+   386   private readonly completionEvaluators = new Map<string, CompletionEvaluator>()
+   387   private readonly clock: () => Date
+   388   private readonly repeatThreshold: number
+   389   private readonly maxSignatures: number
+   390   private readonly maxObservationPayloadChars: number
+   391   #kernel: Promise<KernelHost> | undefined
+   392   readonly #turns = new WeakMap<
+   393     LoopRun,
+   394     { host: KernelHost; signal: AbortSignal }
+   395   >()
+   396 
+   397   public constructor(
+   398     private readonly options: IterativeGovernedRuntimeOptions
+   399   ) {
+   400     if (
+   401       options.toolResultContext &&
+   402       (options.toolResultContext.version !== 1 ||
+   403         options.maxObservationPayloadChars !== undefined ||
+   404         options.orchestrator.contextProtocol !== 'complete-tool-v1' ||
+   405         typeof options.stepStore.compareAndSwapCheckpoint !== 'function')
+   406     ) {
+   407       throw new Error(
+   408         'complete-tool-v1 requires protocol1, atomic checkpoint CAS and no legacy payload truncation option.'
+   409       )
+   410     }
+   411     this.contextEngine = options.contextEngine ?? new DefaultContextEngine()
+   412     this.completionEvaluatorOverride = options.completionEvaluator
+   413     this.clock = options.clock ?? (() => new Date())
+   414     this.repeatThreshold = Math.max(
+   415       1,
+   416       options.loopDetection?.repeatThreshold ?? 2
+   417     )
+   418     this.maxSignatures = options.loopDetection?.maxSignatures ?? 12
+   419     this.maxObservationPayloadChars =
+   420       options.maxObservationPayloadChars ?? 4_000
+   421     this.orchestratorVersion =
+   422       options.orchestratorVersion ?? HYBRID_ORCHESTRATOR_VERSION
+   423   }
+   424 
+   425   /**
+   426    * Dependency surface handed to the extracted dispatch domain. It is built
+   427    * here, where private members are accessible, so the exported class keeps
+   428    * its exact public contract and the module never touches instance state
+   429    * directly.
+   430    */
+   431   private get dispatchContext(): IterativeDispatchContext {
+   432     return {
+   433       options: this.options,
+   434       maxObservationPayloadChars: this.maxObservationPayloadChars,
+   435       stop: (stopReason, response) => this.stop(stopReason, response),
+   436       operationKey: (run, stepNumber, toolId) =>
+   437         this.operationKey(run, stepNumber, toolId),
+   438       remainingDuration: (run) => this.remainingDuration(run),
+   439       makeObservation: (run, input) => this.makeObservation(run, input),
+   440       checkAfterUsage: (run) => this.checkAfterUsage(run),
+   441       allowedDecisionTypes: (run) => this.allowedDecisionTypes(run),
+   442       evaluatorFor: (run) => this.evaluatorFor(run),
+   443       validateClaims: (run, responseText) =>
+   444         this.validateClaims(run, responseText),
+   445       withDeadline: (operation, remainingMs) =>
+   446         this.withDeadline(operation, remainingMs),
+   447       recordObservation: (run, observation) =>
+   448         this.recordObservation(run, observation),
+   449       recordStep: (run, input) => this.recordStep(run, input),
+   450       persistCheckpoint: (run) => this.persistCheckpoint(run),
+   451       preflightCompleteTool: (run, decision, stepNumber) =>
+   452         this.preflightCompleteTool(run, decision, stepNumber),
+   453       safeAudit: (run, action, extras) => this.safeAudit(run, action, extras),
+   454       composeResponse: (run, decision) => this.composeResponse(run, decision),
+   455       kernel: (run) => this.kernelFor(run),
+   456       turn: (run) => this.turnFor(run)
+   457     }
+   458   }
+   459 
+   460   /** Boots the kernel profile of the iterative mode once (SPEC 0181). */
+   461   private bootKernel(): Promise<KernelHost> {
+   462     this.#kernel ??= KernelHost.boot(
+   463       [
+   464         budgetControl(),
+   465         pauseControl(this.options.pause),
+   466         logControl(this.options.log),
+   467         effectsControl(this.options.effects),
+   468         ...(this.options.sandbox ? [sandboxControl(this.options.sandbox)] : []),
+   469         policyControl(this.options.policy),
+   470         approvalsControl(
+   471           this.options.approvals,
+   472           this.options.capabilityFingerprint
+   473             ? { capabilityFingerprint: this.options.capabilityFingerprint }
+   474             : {}
+   475         ),
+   476         auditControl(this.options.audit, { action: 'harness.iterative' }),
+   477         modelCapability(this.options.modelGateway),
+   478         toolsCapability(this.options.tools),
+   479         telemetryCapability(this.options.telemetry, {
+   480           name: 'harness.iterative'
+   481         })
+   482       ],
+   483       ITERATIVE_REQUIRED_SERVICES
+   484     )
+   485     return this.#kernel
+   486   }
+   487 
+   488   private kernelFor(run: LoopRun): KernelHost {
+   489     const entry = this.#turns.get(run)
+   490     /* v8 ignore next -- defensive: the loop only asks for its own bound run */
+   491     if (!entry) throw new Error('Kernel turn is not bound to this run.')
+   492     return entry.host
+   493   }
+   494 
+   495   /**
+   496    * Kernel view of the current run: the iterative active-duration budget and
+   497    * the caller's cancel signal drive the shared pipelines.
+   498    */
+   499   private turnFor(run: LoopRun): TurnState {
+   500     const entry = this.#turns.get(run)
+   501     /* v8 ignore next -- defensive: the loop only asks for its own bound run */
+   502     if (!entry) throw new Error('Kernel turn is not bound to this run.')
+   503     return createTurnState(
+   504       run.input,
+   505       run.startedAtMs,
+   506       {
+   507         remainingMs: () => this.remainingDuration(run),
+   508         withDeadline: async (operation, ms = this.remainingDuration(run)) => {
+   509           const outcome = await this.withDeadline(
+   510             ms <= 0 ? new Promise<never>(() => undefined) : operation(),
+   511             ms
+   512           )
+   513           return outcome === DEADLINE_EXCEEDED ? DEADLINE : outcome
+   514         },
+   515         beginModelRequest: () => {
+   516           // Single pre-model gate (PDSH-004 / I11): consume one slot.
+   517           if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
+   518             return {
+   519               kind: 'stop',
+   520               stopReason: 'MAX_MODEL_CALLS',
+   521               response:
+   522                 'Model-call budget exhausted before the call was started.'
+   523             }
+   524           }
+   525           this.accountUsage(run, {
+   526             modelCalls: 1,
+   527             inputTokens: 0,
+   528             outputTokens: 0,
+   529             costUsd: 0
+   530           })
+   531           return undefined
+   532         },
+   533         recordModelResult: (result) => {
+   534           // Single post-result accounting site (PDSH-004).
+   535           this.accountUsage(run, {
+   536             modelCalls: 0,
+   537             inputTokens: result.inputTokens,
+   538             outputTokens: result.outputTokens,
+   539             costUsd: result.costUsd
+   540           })
+   541           if (
+   542             run.usage.inputTokens + run.usage.outputTokens >
+   543             run.input.budget.maxTokens
+   544           ) {
+   545             return {
+   546               kind: 'stop',
+   547               stopReason: 'MAX_TOKENS',
+   548               response:
+   549                 'Token budget exhausted before a response could be completed.'
+   550             }
+   551           }
+   552           if (run.usage.costUsd > run.input.budget.maxCostUsd) {
+   553             return {
+   554               kind: 'stop',
+   555               stopReason: 'MAX_COST',
+   556               response:
+   557                 'Cost budget exhausted before a response could be completed.'
+   558             }
+   559           }
+   560           return undefined
+   561         }
+   562       },
+   563       entry.signal
+   564     )
+   565   }
+   566 
+   567   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
+   568     const startedAtMs = Date.now()
+   569     const executionId = input.executionId ?? `execution_${input.correlationId}`
+   570 
+   571     if (!hasValidBoundaryInput(input)) {
+   572       return this.earlyFinish(
+   573         input,
+   574         'Runtime identity or execution budget is invalid.',
+   575         'UNSAFE_REQUEST',
+   576         startedAtMs
+   577       )
+   578     }
+   579     if (
+   580       this.options.capabilityFingerprint &&
+   581       input.capabilityFingerprint !== this.options.capabilityFingerprint
+   582     ) {
+   583       return this.earlyFinish(
+   584         input,
+   585         'Capability composition fingerprint does not match the runtime.',
+   586         'STATE_CONFLICT',
+   587         startedAtMs
+   588       )
+   589     }
+   590     if (input.budget.maxSteps < 1) {
+   591       return this.earlyFinish(
+   592         input,
+   593         'Execution budget exhausted before the first step.',
+   594         'MAX_STEPS',
+   595         startedAtMs
+   596       )
+   597     }
+   598     if (input.budget.maxDurationMs < 1) {
+   599       return this.earlyFinish(
+   600         input,
+   601         'Execution duration budget is not available.',
+   602         'MAX_DURATION',
+   603         startedAtMs
+   604       )
+   605     }
+   606 
+   607     let host: KernelHost
+   608     try {
+   609       host = await this.bootKernel()
+   610     } catch (error) {
+   611       /* v8 ignore start -- defensive: the fixed plugin list always satisfies the boot contract */
+   612       return this.earlyFinish(
+   613         input,
+   614         `Kernel could not start: ${errorMessage(error)}.`,
+   615         'INTERNAL_FAILURE',
+   616         startedAtMs
+   617       )
+   618       /* v8 ignore stop */
+   619     }
+   620 
+   621     let checkpoint: ExecutionCheckpoint | null = null
+   622     try {
+   623       checkpoint = await this.options.stepStore.loadCheckpoint(
+   624         input.tenantId,
+   625         executionId
+   626       )
+   627     } catch (error) {
+   628       return this.earlyFinish(
+   629         input,
+   630         `Execution checkpoint could not be trusted: ${errorMessage(error)}.`,
+   631         'STATE_CONFLICT',
+   632         startedAtMs
+   633       )
+   634     }
+   635 
+   636     if (checkpoint) {
+   637       if (
+   638         this.options.toolResultContext &&
+   639         checkpoint.checkpointVersion === 1 &&
+   640         checkpoint.state.observations.some(
+   641           (value) => value.type === 'TOOL_RESULT'
+   642         )
+   643       ) {
+   644         return this.earlyFinish(
+   645           input,
+   646           'LEGACY_RESULT_UNKNOWN: old tool results cannot be promoted to complete.',
+   647           'INSUFFICIENT_EVIDENCE',
+   648           startedAtMs
+   649         )
+   650       }
+   651       const rejection = this.rejectCheckpoint(checkpoint, input)
+   652       if (rejection) {
+   653         return this.earlyFinish(input, rejection, 'STATE_CONFLICT', startedAtMs)
+   654       }
+   655     }
+   656 
+   657     const run: LoopRun = {
+   658       checkpointToken: checkpoint
+   659         ? { checkpointId: checkpoint.checkpointId, digest: checkpoint.digest }
+   660         : null,
+   661       input,
+   662       executionId,
+   663       startedAtMs,
+   664       stepNumber: checkpoint?.state.stepNumber ?? 0,
+   665       state: checkpoint
+   666         ? {
+   667             ...checkpoint.state,
+   668             observations: [...checkpoint.state.observations],
+   669             openQuestions: [...checkpoint.state.openQuestions],
+   670             resolvedInputs: { ...checkpoint.state.resolvedInputs },
+   671             loopSignatures: [...checkpoint.state.loopSignatures]
+   672           }
+   673         : {
+   674             goal: input.agent.objective,
+   675             ...(this.options.capabilityFingerprint
+   676               ? { capabilityFingerprint: this.options.capabilityFingerprint }
+   677               : {}),
+   678             stepNumber: 0,
+   679             observations: [],
+   680             openQuestions: [],
+   681             resolvedInputs: {},
+   682             loopSignatures: []
+   683           },
+   684       usage: checkpoint
+   685         ? { ...checkpoint.budgetUsage }
+   686         : { ...EMPTY_BUDGET_USAGE },
+   687       observations: checkpoint ? [...checkpoint.state.observations] : [],
+   688       responseText: null,
+   689       lastDecision: null,
+   690       lastEvaluation: null,
+   691       lastToolObservation: null,
+   692       lastSufficiency: null,
+   693       lastDecisionErrors: [],
+   694       skipEvaluationOnce: false,
+   695       countedSteps: new Set<number>(),
+   696       inFlightCounted: Boolean(
+   697         checkpoint?.state.pendingDecision && !checkpoint.state.stopReason
+   698       )
+   699     }
+   700     run.state.observations = run.observations
+   701     if (this.options.toolResultContext) {
+   702       run.state.toolResultContext ??= {
+   703         version: 1,
+   704         deliveredThroughStep: 0,
+   705         pendingDecisionAdmission: null,
+   706         decisionAdmissions: []
+   707       }
+   708     }
+   709     const controller = new AbortController()
+   710     if (input.signal?.aborted) controller.abort()
+   711     input.signal?.addEventListener('abort', () => controller.abort(), {
+   712       once: true
+   713     })
+   714     this.#turns.set(run, { host, signal: controller.signal })
+   715 
+   716     // Payloads and summaries are bounded, untrusted presentation. The step
+   717     // store owns the lossless governed outcome of the pending dispatch,
+   718     // including the exact settlement failure cause. Generic TOOL_FAILURE or
+   719     // unknown_effect records alone do not prove that this ledger failed.
+   720     if (
+   721       checkpoint?.state.pendingStepNumber &&
+   722       (checkpoint.state.pendingDecision?.decisionType === 'CALL_TOOL' ||
+   723         checkpoint.state.pendingDecision?.decisionType === 'REQUEST_APPROVAL')
+   724     ) {
+   725       let steps: readonly ExecutionStep[]
+   726       try {
+   727         steps = await this.options.stepStore.listSteps(
+   728           input.tenantId,
+   729           executionId
+   730         )
+   731       } catch {
+   732         return this.finalize(
+   733           run,
+   734           {
+   735             kind: 'stop',
+   736             stopReason: 'INSUFFICIENT_EVIDENCE',
+   737             response:
+   738               'Pending tool outcome could not be read; reconciliation is required.',
+   739             preserveCheckpoint: true
+   740           },
+   741           startedAtMs
+   742         )
+   743       }
+   744       if (
+   745         steps.some(
+   746           (step) =>
+   747             step.tenantId === input.tenantId &&
+   748             step.executionId === executionId &&
+   749             step.stepNumber === checkpoint.state.pendingStepNumber &&
+   750             step.stepType === 'TOOL' &&
+   751             step.status === 'FAILED' &&
+   752             step.errorCode === 'unknown_effect: effect_settlement_failed'
+   753         )
+   754       ) {
+   755         return this.finalize(
+   756           run,
+   757           {
+   758             kind: 'stop',
+   759             stopReason: 'TOOL_FAILURE',
+   760             response: 'unknown_effect: effect_settlement_failed',
+   761             preserveCheckpoint: true
+   762           },
+   763           startedAtMs
+   764         )
+   765       }
+   766       if (
+   767         this.options.toolResultContext &&
+   768         checkpoint.state.pendingStepNumber
+   769       ) {
+   770         const pendingStep = checkpoint.state.pendingStepNumber
+   771         const settledStep = steps.find(
+   772           (step) =>
+   773             step.tenantId === input.tenantId &&
+   774             step.executionId === executionId &&
+   775             step.stepNumber === pendingStep &&
+   776             step.stepType === 'TOOL' &&
+   777             step.status === 'SUCCEEDED'
+   778         )
+   779         const savedResult = checkpoint.state.observations.find(
+   780           (observation) =>
+   781             observation.type === 'TOOL_RESULT' &&
+   782             observation.stepNumber === pendingStep
+   783         )
+   784         if (
+   785           settledStep &&
+   786           (!savedResult ||
+   787             (savedResult.payload as { completion?: string }).completion !==
+   788               'COMPLETE')
+   789         ) {
+   790           return this.finalize(
+   791             run,
+   792             {
+   793               kind: 'stop',
+   794               stopReason: 'INSUFFICIENT_EVIDENCE',
+   795               preserveCheckpoint: true,
+   796               response:
+   797                 'RESULT_UNAVAILABLE: a settled tool step has no complete saved result; reconciliation is required.'
+   798             },
+   799             startedAtMs
+   800           )
+   801         }
+   802         if (settledStep && savedResult) {
+   803           const pending = checkpoint.state.pendingDecision!
+   804           if (
+   805             savedResult.stepId !== settledStep.stepId ||
+   806             !settledStep.observationRefs.includes(savedResult.observationId) ||
+   807             savedResult.provenance.sourceId !== pending.toolId ||
+   808             savedResult.provenance.sourceVersion !== pending.toolVersion ||
+   809             savedResult.provenance.operationKey !==
+   810               this.operationKey(run, pendingStep, pending.toolId!)
+   811           ) {
+   812             return this.finalize(
+   813               run,
+   814               {
+   815                 kind: 'stop',
+   816                 stopReason: 'STATE_CONFLICT',
+   817                 preserveCheckpoint: true,
+   818                 response:
+   819                   'Saved tool result does not match the settled native step.'
+   820               },
+   821               startedAtMs
+   822             )
+   823           }
+   824           // The acknowledged result and successful step complete this dispatch.
+   825           // Never reopen it or call its journal/tool again on process recreation.
+   826           run.stepNumber = pendingStep
+   827           run.inFlightCounted = false
+   828           run.countedSteps.add(pendingStep)
+   829           run.lastToolObservation = savedResult
+   830           run.state = {
+   831             ...run.state,
+   832             stepNumber: pendingStep,
+   833             pendingDecision: undefined,
+   834             pendingStepNumber: undefined,
+   835             pendingApprovalId: undefined,
+   836             selectedCapability: pending.toolId,
+   837             loopSignatures: [
+   838               ...run.state.loopSignatures,
+   839               decisionSignature(pending)
+   840             ].slice(-this.maxSignatures),
+   841             toolResultContext: {
+   842               ...run.state.toolResultContext!,
+   843               acceptedDecision: undefined
+   844             }
+   845           }
+   846         }
+   847       }
+   848     }
+   849 
+   850     const resumeOutcome = this.applyResume(run, checkpoint)
+   851     if (resumeOutcome) {
+   852       return this.finalize(run, resumeOutcome, startedAtMs)
+   853     }
+   854     run.lastDecision = run.state.pendingDecision ?? null
+   855     run.lastEvaluation = run.state.lastEvaluation ?? null
+   856 
+   857     try {
+   858       if (this.options.toolResultContext) {
+   859         const state = run.state.toolResultContext!
+   860         const orphaned = state.decisionAdmissions.filter(
+   861           (value) =>
+   862             value.status === 'RESERVED' ||
+   863             (value.status === 'SETTLED' &&
+   864               value.stepNumber > run.state.stepNumber &&
+   865               !state.acceptedDecision &&
+   866               !run.state.pendingDecision)
+   867         )
+   868         if (
+   869           orphaned.length > 0 ||
+   870           state.decisionAdmissions.some((value) => value.status === 'UNKNOWN')
+   871         ) {
+   872           const ids = new Set(
+   873             orphaned
+   874               .filter((value) => value.status === 'RESERVED')
+   875               .map((value) => value.admissionId)
+   876           )
+   877           for (const record of orphaned) {
+   878             if (record.status === 'SETTLED' && record.actual) {
+   879               run.usage.inputTokens +=
+   880                 Math.max(
+   881                   record.reserved.inputTokens,
+   882                   record.actual.inputTokens
+   883                 ) - record.actual.inputTokens
+   884               run.usage.outputTokens +=
+   885                 Math.max(
+   886                   record.reserved.outputTokens,
+   887                   record.actual.outputTokens
+   888                 ) - record.actual.outputTokens
+   889               run.usage.costUsd +=
+   890                 Math.max(record.reserved.costUsd, record.actual.costUsd) -
+   891                 record.actual.costUsd
+   892             }
+   893           }
+   894           run.state.toolResultContext = {
+   895             ...state,
+   896             pendingDecisionAdmission: null,
+   897             decisionAdmissions: state.decisionAdmissions.map((value) =>
+   898               ids.has(value.admissionId)
+   899                 ? {
+   900                     ...value,
+   901                     status: 'UNKNOWN',
+   902                     unknownReason: 'process_lost_before_decision'
+   903                   }
+   904                 : value
+   905             )
+   906           }
+   907           // A settled receipt is immutable: a crash before acceptedDecision is
+   908           // evidence of an unresolved decision, not permission to replay a model.
+   909           // Keep the acknowledged checkpoint and return conservative live usage.
+   910           return await this.finalize(
+   911             run,
+   912             {
+   913               ...this.stop(
+   914                 'INSUFFICIENT_EVIDENCE',
+   915                 'DECISION_USAGE_UNKNOWN: unresolved decision needs handoff.'
+   916               ),
+   917               ...(orphaned.some((value) => value.status === 'SETTLED')
+   918                 ? { preserveCheckpoint: true }
+   919                 : {})
+   920             },
+   921             startedAtMs
+   922           )
+   923         }
+   924         await this.persistCheckpoint(run)
+   925       }
+   926       await this.safeAudit(run, 'runtime_v2.started', {
+   927         result: checkpoint ? 'resumed' : 'started'
+   928       })
+   929       const outcome = await this.runLoop(run)
+   930       return await this.finalize(run, outcome, startedAtMs)
+   931     } catch (error) {
+   932       return await this.finalize(
+   933         run,
+   934         {
+   935           kind: 'stop',
+   936           stopReason:
+   937             error instanceof ToolResultContextError
+   938               ? error.stopReason
+   939               : 'INTERNAL_FAILURE',
+   940           response:
+   941             error instanceof ToolResultContextError
+   942               ? `${error.code}: ${error.message}`
+   943               : `Execution failed internally: ${errorMessage(error)}.`,
+   944           ...(run.checkpointConflict ? { preserveCheckpoint: true } : {})
+   945         },
+   946         startedAtMs
+   947       )
+   948     }
+   949   }
+   950 
+   951   private rejectCheckpoint(
+   952     checkpoint: ExecutionCheckpoint,
+   953     input: RuntimeInput
+   954   ): string | null {
+   955     if (checkpoint.checkpointVersion === 2 && !this.options.toolResultContext) {
+   956       return 'Complete checkpoint requires the explicitly configured complete-tool-v1 mode.'
+   957     }
+   958     if (checkpoint.runtimeProfile !== 'iterative') {
+   959       return 'Execution checkpoint belongs to a different runtime profile.'
+   960     }
+   961     if (checkpoint.runtimeVersion !== RUNTIME_V2_VERSION) {
+   962       return `Execution checkpoint requires runtime ${checkpoint.runtimeVersion}, this runtime is ${RUNTIME_V2_VERSION}.`
+   963     }
+   964     if (
+   965       this.options.toolResultContext &&
+   966       checkpoint.orchestratorVersion !== this.orchestratorVersion
+   967     ) {
+   968       return 'Execution checkpoint belongs to a different orchestrator version.'
+   969     }
+   970     if (input.runtimeProfile && input.runtimeProfile !== 'iterative') {
+   971       return 'Execution checkpoint conflicts with the requested runtime profile.'
+   972     }
+   973     if (
+   974       this.options.capabilityFingerprint &&
+   975       checkpoint.state.capabilityFingerprint !==
+   976         this.options.capabilityFingerprint
+   977     ) {
+   978       return 'Execution checkpoint belongs to a different capability composition.'
+   979     }
+   980     if (
+   981       checkpoint.state.stopReason &&
+   982       TERMINAL_STOPS.has(checkpoint.state.stopReason) &&
+   983       checkpoint.state.stopReason !== 'NEEDS_USER_INPUT' &&
+   984       checkpoint.state.stopReason !== 'APPROVAL_REQUIRED'
+   985     ) {
+   986       return 'Terminal execution cannot be resumed.'
+   987     }
+   988     return null
+   989   }
+   990 
+   991   private applyResume(
+   992     run: LoopRun,
+   993     checkpoint: ExecutionCheckpoint | null
+   994   ): Extract<DispatchOutcome, { kind: 'stop' }> | null {
+   995     return applyResume(this.dispatchContext, run, checkpoint)
+   996   }
+   997 
+   998   private async runLoop(
+   999     run: LoopRun
+  1000   ): Promise<Extract<DispatchOutcome, { kind: 'stop' }>> {
+  1001     if (run.state.pendingQuestion) {
+  1002       // Deterministic rule: a pending question must not be answered by a new
+  1003       // model decision. Re-pause without spending a model call.
+  1004       return this.pause(run, Math.max(1, run.state.stepNumber), {
+  1005         kind: 'pause',
+  1006         pausedKind: 'NEEDS_USER_INPUT',
+  1007         decision: null
+  1008       })
+  1009     }
+  1010     while (true) {
+  1011       // I8: cancellation is honored before every step.
+  1012       if (this.#turns.get(run)?.signal.aborted) {
+  1013         return this.stop('CANCELLED', CANCELLED_RESPONSE)
+  1014       }
+  1015       // I12: pause (and any other step control) is checked before each step.
+  1016       const beforeStep = await runGate(
+  1017         this.kernelFor(run),
+  1018         'turn/before-step',
+  1019         this.turnFor(run)
+  1020       )
+  1021       if (beforeStep.kind === 'stop') {
+  1022         // An operator pause is not terminal: the durable checkpoint, with any
+  1023         // pending approval or question, stays resumable (AUD-0597 F03).
+  1024         return {
+  1025           ...this.stop(beforeStep.stopReason, beforeStep.response),
+  1026           /* v8 ignore next -- the pause control is the only before-step control */
+  1027           ...(beforeStep.cause === 'operator_paused'
+  1028             ? { preserveCheckpoint: true }
+  1029             : {})
+  1030         }
+  1031       }
+  1032       const budgetStop = this.checkBudget(run)
+  1033       if (budgetStop) return this.stop(budgetStop.reason, budgetStop.response)
+  1034 
+  1035       let decision: LoopDecision
+  1036       let stepNumber: number
+  1037       let decisionAdmissionIds: readonly string[] | undefined
+  1038       let modelDecision = false
+  1039 
+  1040       if (run.state.pendingDecision && run.state.pendingStepNumber) {
+  1041         decision = run.state.pendingDecision
+  1042         stepNumber = run.state.pendingStepNumber
+  1043         run.lastDecision = decision
+  1044       } else if (
+  1045         this.options.toolResultContext &&
+  1046         run.state.toolResultContext?.acceptedDecision
+  1047       ) {
+  1048         const accepted = run.state.toolResultContext.acceptedDecision
+  1049         if (accepted.stepNumber !== run.stepNumber + 1)
+  1050           throw new ToolResultContextError(
+  1051             'STATE_CONFLICT',
+  1052             'Accepted decision is bound to another step.',
+  1053             'STATE_CONFLICT'
+  1054           )
+  1055         decision = accepted.decision
+  1056         stepNumber = accepted.stepNumber
+  1057         decisionAdmissionIds = accepted.decisionAdmissionIds
+  1058         run.lastDecision = decision
+  1059       } else {
+  1060         stepNumber = run.stepNumber + 1
+  1061         if (stepNumber > run.input.budget.maxSteps) {
+  1062           return this.stop('MAX_STEPS', 'Step budget exhausted.')
+  1063         }
+  1064         const decisionResult = await this.decide(run, stepNumber)
+  1065         if (decisionResult.outcome) return decisionResult.outcome
+  1066         decision = sanitizeLoopDecision(decisionResult.decision)
+  1067         decisionAdmissionIds = decisionResult.decisionAdmissionIds
+  1068         modelDecision = decisionResult.modelDecision ?? false
+  1069         run.lastDecision = decision
+  1070       }
+  1071 
+  1072       const validation = this.validateDecision(run, decision)
+  1073       if (!validation.valid) {
+  1074         if (!this.options.toolResultContext) run.usage.decisionRepairs += 1
+  1075         run.lastDecisionErrors = validation.errors
+  1076         const repairBudget = run.input.budget.maxDecisionRepairs ?? 1
+  1077         if (
+  1078           (this.options.toolResultContext
+  1079             ? run.usage.decisionRepairs + 1
+  1080             : run.usage.decisionRepairs) <= repairBudget &&
+  1081           !run.state.pendingDecision
+  1082         ) {
+  1083           continue
+  1084         }
+  1085         const capabilityOnly = validation.errors.every((error) =>
+  1086           error.startsWith('capability:')
+  1087         )
+  1088         return this.stop(
+  1089           capabilityOnly ? 'STATE_CONFLICT' : 'MODEL_FAILURE',
+  1090           `Orchestrator decision was rejected: ${validation.errors.join('; ')}`
+  1091         )
+  1092       }
+  1093       run.lastDecisionErrors = []
+  1094       if (this.options.toolResultContext && !run.state.pendingDecision) {
+  1095         const state = run.state.toolResultContext!
+  1096         run.state.toolResultContext = {
+  1097           ...state,
+  1098           deliveredThroughStep: modelDecision
+  1099             ? Math.max(
+  1100                 state.deliveredThroughStep,
+  1101                 ...run.observations
+  1102                   .filter((value) => value.type === 'TOOL_RESULT')
+  1103                   .map((value) => value.stepNumber)
+  1104               )
+  1105             : state.deliveredThroughStep,
+  1106           acceptedDecision: {
+  1107             stepNumber,
+  1108             decision,
+  1109             decisionAdmissionIds: decisionAdmissionIds ?? []
+  1110           }
+  1111         }
+  1112         await this.persistCheckpoint(run)
+  1113       }
+  1114 
+  1115       const signature = decisionSignature(decision)
+  1116       if (decision.decisionType !== 'STOP') {
+  1117         const repeats = run.state.loopSignatures.filter(
+  1118           (candidate) => candidate === signature
+  1119         ).length
+  1120         const threshold = this.effectiveRepeatThreshold(run, decision)
+  1121         const cycle = detectDecisionCycle(run.state.loopSignatures, signature)
+  1122         if (repeats >= threshold || cycle) {
+  1123           await this.recordStep(run, {
+  1124             stepNumber,
+  1125             stepType: 'POLICY',
+  1126             status: 'FAILED',
+  1127             sideEffecting: false,
+  1128             errorCode: 'loop_detected',
+  1129             reasonCode: 'LOOP_SUSPECTED'
+  1130           })
+  1131           return this.stop(
+  1132             'LOOP_DETECTED',
+  1133             cycle
+  1134               ? 'A repeated decision cycle was detected; the loop stopped without executing another effect.'
+  1135               : 'Repeated identical decisions were detected; the loop stopped without executing another effect.'
+  1136           )
+  1137         }
+  1138       }
+  1139 
+  1140       await this.safeAudit(run, 'orchestrator.decided', {
+  1141         result: `${decision.decisionType}:${decision.reasonCode}`,
+  1142         tool: decision.toolId ?? null
+  1143       })
+  1144 
+  1145       const dispatch = await this.dispatch(run, decision, stepNumber)
+  1146       if (dispatch.kind === 'pause') {
+  1147         return await this.pause(run, stepNumber, dispatch)
+  1148       }
+  1149       if (dispatch.kind === 'stop') {
+  1150         run.stepNumber = stepNumber
+  1151         if (this.options.toolResultContext) {
+  1152           run.state.stepNumber = stepNumber
+  1153           run.state.toolResultContext = {
+  1154             ...run.state.toolResultContext!,
+  1155             acceptedDecision: undefined
+  1156           }
+  1157         }
+  1158         return dispatch
+  1159       }
+  1160 
+  1161       const signatures = [...run.state.loopSignatures, signature].slice(
+  1162         -this.maxSignatures
+  1163       )
+  1164       run.stepNumber = stepNumber
+  1165       run.state = {
+  1166         ...run.state,
+  1167         stepNumber,
+  1168         loopSignatures: signatures,
+  1169         pendingDecision: undefined,
+  1170         pendingStepNumber: undefined,
+  1171         selectedCapability:
+  1172           decision.toolId ??
+  1173           decision.selectedCapability ??
+  1174           run.state.selectedCapability
+  1175       }
+  1176       if (this.options.toolResultContext) {
+  1177         run.state.toolResultContext = {
+  1178           ...run.state.toolResultContext!,
+  1179           acceptedDecision: undefined
+  1180         }
+  1181       }
+  1182       await this.persistCheckpoint(run)
+  1183 
+  1184       if (run.skipEvaluationOnce) {
+  1185         run.skipEvaluationOnce = false
+  1186         continue
+  1187       }
+  1188       const evaluationOutcome = await this.evaluate(run, decision)
+  1189       if (evaluationOutcome) return evaluationOutcome
+  1190     }
+  1191   }
+  1192 
+  1193   private checkBudget(
+  1194     run: LoopRun
+  1195   ): { reason: StopReason; response: string } | null {
+  1196     if (this.effectiveDuration(run) > run.input.budget.maxDurationMs) {
+  1197       return { reason: 'MAX_DURATION', response: 'Duration budget exhausted.' }
+  1198     }
+  1199     // An in-flight step persisted before a pause/crash is allowed to settle
+  1200     // even when it consumed the last step slot.
+  1201     if (
+  1202       run.stepNumber >= run.input.budget.maxSteps &&
+  1203       !run.state.pendingDecision
+  1204     ) {
+  1205       return { reason: 'MAX_STEPS', response: 'Step budget exhausted.' }
+  1206     }
+  1207     return null
+  1208   }
+  1209 
+  1210   private stop(
+  1211     stopReason: StopReason,
+  1212     response: string
+  1213   ): Extract<DispatchOutcome, { kind: 'stop' }> {
+  1214     return { kind: 'stop', stopReason, response }
+  1215   }
+  1216 
+  1217   private async decide(
+  1218     run: LoopRun,
+  1219     stepNumber: number
+  1220   ): Promise<{
+  1221     outcome?: Extract<DispatchOutcome, { kind: 'stop' }>
+  1222     decision?: LoopDecision
+  1223     decisionAdmissionIds?: readonly string[]
+  1224     modelDecision?: boolean
+  1225   }> {
+  1226     const remaining = this.remainingDuration(run)
+  1227     if (remaining <= 0) {
+  1228       return {
+  1229         outcome: this.stop(
+  1230           'MAX_DURATION',
+  1231           'Duration budget exhausted before the next decision.'
+  1232         )
+  1233       }
+  1234     }
+  1235 
+  1236     const stateForContext: MutableState = {
+  1237       ...run.state,
+  1238       observations:
+  1239         run.resumeObservation &&
+  1240         !run.observations.some(
+  1241           (value) =>
+  1242             value.observationId === run.resumeObservation!.observationId
+  1243         )
+  1244           ? [...run.observations, run.resumeObservation]
+  1245           : run.observations
+  1246     }
+  1247     const buildInput: ContextBuildInput = {
+  1248       runtime: {
+  1249         executionId: run.executionId,
+  1250         tenantId: run.input.tenantId,
+  1251         conversationId: run.input.conversationId,
+  1252         correlationId: run.input.correlationId,
+  1253         traceId: run.input.traceId,
+  1254         userMessage:
+  1255           this.options.toolResultContext &&
+  1256           run.input.resume?.kind === 'user_input'
+  1257             ? run.input.resume.message
+  1258             : run.input.userMessage,
+  1259         context: run.input.context,
+  1260         objective: run.input.agent.objective,
+  1261         instructions: run.input.agent.instructions,
+  1262         agentId: run.input.agent.id,
+  1263         agentVersion: run.input.agent.version
+  1264       },
+  1265       ...(this.options.toolResultContext
+  1266         ? { toolResultContext: this.options.toolResultContext }
+  1267         : {}),
+  1268       profile: 'iterative',
+  1269       stepNumber,
+  1270       goal: run.state.goal,
+  1271       state: stateForContext,
+  1272       capabilities: this.availableTools(run),
+  1273       knowledgeAvailable: Boolean(this.options.knowledge),
+  1274       completionStrategy: run.input.agent.completionStrategy ?? 'DETERMINISTIC',
+  1275       allowedDecisionTypes: this.allowedDecisionTypes(run),
+  1276       budget: run.input.budget,
+  1277       budgetUsage: run.usage,
+  1278       ...((
+  1279         this.options.toolResultContext
+  1280           ? run.lastDecisionErrors.length > 0
+  1281           : run.usage.decisionRepairs > 0
+  1282       )
+  1283         ? {
+  1284             decisionRepair: {
+  1285               attempt: this.options.toolResultContext
+  1286                 ? run.usage.decisionRepairs + 1
+  1287                 : run.usage.decisionRepairs,
+  1288               errors: run.lastDecisionErrors
+  1289             }
+  1290           }
+  1291         : {})
+  1292     }
+  1293     const complete = Boolean(this.options.toolResultContext)
+  1294     const nativeInput = complete ? structuredClone(buildInput) : buildInput
+  1295     const building = this.contextEngine.build(
+  1296       complete ? structuredClone(nativeInput) : nativeInput
+  1297     )
+  1298     const built = complete
+  1299       ? await this.withDeadline(building, this.remainingDuration(run))
+  1300       : await building
+  1301     if (built === DEADLINE_EXCEEDED) {
+  1302       return {
+  1303         outcome: this.stop(
+  1304           'MAX_DURATION',
+  1305           'Context assembly exceeded the execution deadline.'
+  1306         )
+  1307       }
+  1308     }
+  1309     const context = built
+  1310     if (complete) {
+  1311       const native = await new DefaultContextEngine({
+  1312         tokenBudget: context.tokenBudget
+  1313       }).build(nativeInput)
+  1314       validateCompleteStepContext(context, native)
+  1315       for (const observation of run.observations) {
+  1316         if (observation.type === 'TOOL_RESULT') {
+  1317           assertCompleteToolObservation(observation)
+  1318           if (
+  1319             (observation.payload as { completion: string }).completion ===
+  1320             'UNAVAILABLE'
+  1321           ) {
+  1322             throw new ToolResultContextError(
+  1323               'RESULT_UNAVAILABLE',
+  1324               'A complete tool result is unavailable.'
+  1325             )
+  1326           }
+  1327         }
+  1328       }
+  1329     }
+  1330     const decisionAbortController = new AbortController()
+  1331     const parentSignal = this.#turns.get(run)?.signal
+  1332     const abort = () => decisionAbortController.abort()
+  1333     if (parentSignal?.aborted) abort()
+  1334     parentSignal?.addEventListener('abort', abort, { once: true })
+  1335     const priorIds = new Set(
+  1336       run.state.toolResultContext?.decisionAdmissions.map(
+  1337         (value) => value.admissionId
+  1338       )
+  1339     )
+  1340     const admission = complete
+  1341       ? new CompleteDecisionAdmission({
+  1342           run,
+  1343           stepNumber,
+  1344           tokenBudget: context.tokenBudget,
+  1345           signal: decisionAbortController.signal,
+  1346           remainingMs: () => this.remainingDuration(run),
+  1347           persist: () => this.persistCheckpoint(run),
+  1348           audit: (action, result) => this.safeAudit(run, action, { result })
+  1349         })
+  1350       : undefined
+  1351     let failed = false
+  1352     try {
+  1353       const decisionOrDeadline = await this.withDeadline(
+  1354         this.options.orchestrator.decide({
+  1355           context,
+  1356           ...(admission ? { decisionAdmission: admission } : {}),
+  1357           signal: decisionAbortController.signal
+  1358         }),
+  1359         complete ? this.remainingDuration(run) : remaining
+  1360       )
+  1361       if (decisionOrDeadline === DEADLINE_EXCEEDED) {
+  1362         decisionAbortController.abort()
+  1363         return {
+  1364           outcome: this.stop(
+  1365             'MAX_DURATION',
+  1366             'Duration budget exhausted while deciding the next step.'
+  1367           )
+  1368         }
+  1369       }
+  1370       const turn = decisionOrDeadline
+  1371       if (complete) {
+  1372         const state = run.state.toolResultContext!
+  1373         const expected = state.decisionAdmissions
+  1374           .filter(
+  1375             (value) =>
+  1376               value.stepNumber === stepNumber && value.status === 'SETTLED'
+  1377           )
+  1378           .map((value) => value.admissionId)
+  1379         if (
+  1380           turn.usage !== undefined ||
+  1381           !Array.isArray(turn.decisionAdmissionIds) ||
+  1382           completeSnapshot(turn.decisionAdmissionIds) !==
+  1383             completeSnapshot(expected) ||
+  1384           state.pendingDecisionAdmission ||
+  1385           state.decisionAdmissions.some((value) => value.status === 'UNKNOWN')
+  1386         ) {
+  1387           throw new ToolResultContextError(
+  1388             'STATE_CONFLICT',
+  1389             'Decision receipts or usage ownership are inconsistent.',
+  1390             'STATE_CONFLICT'
+  1391           )
+  1392         }
+  1393         return {
+  1394           decision: turn.decision,
+  1395           decisionAdmissionIds: expected,
+  1396           modelDecision: expected.some((value) => !priorIds.has(value))
+  1397         }
+  1398       }
+  1399       const usage = turn.usage ?? EMPTY_MODEL_USAGE
+  1400       this.accountUsage(run, usage)
+  1401       const usageStop = this.checkAfterUsage(run)
+  1402       if (usageStop)
+  1403         return { outcome: this.stop(usageStop.reason, usageStop.response) }
+  1404       return { decision: turn.decision }
+  1405     } catch (error) {
+  1406       failed = true
+  1407       throw error
+  1408     } finally {
+  1409       decisionAbortController.abort()
+  1410       parentSignal?.removeEventListener('abort', abort)
+  1411       try {
+  1412         await admission?.close(failed ? 'decision_failed' : 'decision_closed')
+  1413       } catch (error) {
+  1414         if (!failed) throw error
+  1415       }
+  1416     }
+  1417   }
+  1418 
+  1419   /**
+  1420    * A non-idempotent tool must never be invoked twice for the same decision;
+  1421    * the safe threshold is one repeat (stop before the second effect).
+  1422    */
+  1423   private effectiveRepeatThreshold(
+  1424     run: LoopRun,
+  1425     decision: LoopDecision
+  1426   ): number {
+  1427     if (
+  1428       decision.decisionType === 'CALL_TOOL' ||
+  1429       decision.decisionType === 'REQUEST_APPROVAL'
+  1430     ) {
+  1431       const tool = this.options.tools.resolve(
+  1432         decision.toolId as string,
+  1433         decision.toolVersion
+  1434       )
+  1435       if (tool && tool.idempotent === false && tool.sideEffect !== 'NONE') {
+  1436         return 1
+  1437       }
+  1438     }
+  1439     return this.repeatThreshold
+  1440   }
+  1441 
+  1442   private validateDecision(
+  1443     run: LoopRun,
+  1444     decision: LoopDecision
+  1445   ): DecisionValidationResult {
+  1446     return validateDecision(this.dispatchContext, run, decision)
+  1447   }
+  1448 
+  1449   private allowedDecisionTypes(run: LoopRun): LoopDecision['decisionType'][] {
+  1450     const allowed: LoopDecision['decisionType'][] = ['RESPOND', 'ASK_USER']
+  1451     if (this.availableTools(run).length > 0) {
+  1452       allowed.push('CALL_TOOL', 'REQUEST_APPROVAL')
+  1453     }
+  1454     if (this.options.knowledge && this.remaining(run, 'knowledge') > 0) {
+  1455       allowed.push('SEARCH_KNOWLEDGE')
+  1456     }
+  1457     if (this.remaining(run, 'verification') > 0) {
+  1458       allowed.push('VERIFY')
+  1459     }
+  1460     if (this.remaining(run, 'replan') > 0) {
+  1461       allowed.push('REPLAN')
+  1462     }
+  1463     allowed.push('HANDOFF', 'STOP')
+  1464     return allowed
+  1465   }
+  1466 
+  1467   private remaining(
+  1468     run: LoopRun,
+  1469     kind: 'knowledge' | 'verification' | 'replan'
+  1470   ): number {
+  1471     const budget = run.input.budget
+  1472     if (kind === 'knowledge') {
+  1473       return Math.max(
+  1474         0,
+  1475         (budget.maxKnowledgeCalls ?? budget.maxSteps) - run.usage.knowledgeCalls
+  1476       )
+  1477     }
+  1478     if (kind === 'verification') {
+  1479       return Math.max(
+  1480         0,
+  1481         (budget.maxVerificationCalls ?? budget.maxSteps) -
+  1482           run.usage.verificationCalls
+  1483       )
+  1484     }
+  1485     return Math.max(
+  1486       0,
+  1487       (budget.maxReplans ?? budget.maxSteps) - run.usage.replans
+  1488     )
+  1489   }
+  1490 
+  1491   private availableTools(run: LoopRun): readonly ToolDescriptor[] {
+  1492     return this.options.tools
+  1493       .list()
+  1494       .filter((tool) => agentExposesTool(run.input.agent.tools, tool.id))
+  1495       .map(describeTool)
+  1496   }
+  1497 
+  1498   private async dispatch(
+  1499     run: LoopRun,
+  1500     decision: LoopDecision,
+  1501     stepNumber: number
+  1502   ): Promise<DispatchOutcome> {
+  1503     switch (decision.decisionType) {
+  1504       case 'CALL_TOOL':
+  1505         return this.dispatchTool(run, decision, stepNumber, false)
+  1506       case 'REQUEST_APPROVAL':
+  1507         return this.dispatchTool(run, decision, stepNumber, true)
+  1508       case 'SEARCH_KNOWLEDGE':
+  1509         return this.dispatchKnowledge(run, decision, stepNumber)
+  1510       case 'VERIFY':
+  1511         return this.dispatchVerify(run, decision, stepNumber)
+  1512       case 'REPLAN':
+  1513         return this.dispatchReplan(run, decision, stepNumber)
+  1514       case 'RESPOND':
+  1515         return this.dispatchRespond(run, decision, stepNumber)
+  1516       case 'ASK_USER':
+  1517         return {
+  1518           kind: 'pause',
+  1519           pausedKind: 'NEEDS_USER_INPUT',
+  1520           decision
+  1521         }
+  1522       case 'HANDOFF':
+  1523         await this.recordStep(run, {
+  1524           stepNumber,
+  1525           stepType: 'HANDOFF',
+  1526           status: 'SUCCEEDED',
+  1527           sideEffecting: false,
+  1528           reasonCode: decision.reasonCode
+  1529         })
+  1530         return this.stop(
+  1531           'HUMAN_TAKEOVER',
+  1532           'Execution handed off to a human operator.'
+  1533         )
+  1534       case 'STOP':
+  1535         await this.recordStep(run, {
+  1536           stepNumber,
+  1537           stepType: 'STOP',
+  1538           status: 'SUCCEEDED',
+  1539           sideEffecting: false,
+  1540           reasonCode: decision.reasonCode
+  1541         })
+  1542         return { kind: 'continue' }
+  1543     }
+  1544   }
+  1545 
+  1546   private async dispatchTool(
+  1547     run: LoopRun,
+  1548     decision: LoopDecision,
+  1549     stepNumber: number,
+  1550     forceApproval: boolean
+  1551   ): Promise<DispatchOutcome> {
+  1552     return dispatchTool(
+  1553       this.dispatchContext,
+  1554       run,
+  1555       decision,
+  1556       stepNumber,
+  1557       forceApproval
+  1558     )
+  1559   }
+  1560 
+  1561   private async dispatchKnowledge(
+  1562     run: LoopRun,
+  1563     decision: LoopDecision,
+  1564     stepNumber: number
+  1565   ): Promise<DispatchOutcome> {
+  1566     return dispatchKnowledge(this.dispatchContext, run, decision, stepNumber)
+  1567   }
+  1568 
+  1569   private async dispatchVerify(
+  1570     run: LoopRun,
+  1571     decision: LoopDecision,
+  1572     stepNumber: number
+  1573   ): Promise<DispatchOutcome> {
+  1574     const verificationLimit =
+  1575       run.input.budget.maxVerificationCalls ?? run.input.budget.maxSteps
+  1576     /* v8 ignore next -- defensive: the allowed-decision gate already stops at the bound */
+  1577     if (run.usage.verificationCalls + 1 > verificationLimit) {
+  1578       return this.stop(
+  1579         'MAX_VERIFICATION_CALLS',
+  1580         'Verification budget exhausted.'
+  1581       )
+  1582     }
+  1583     run.usage.verificationCalls += 1
+  1584     await this.persistCheckpoint(run)
+  1585     const target = decision.verificationTarget as string
+  1586     const verification = this.verify(run, target)
+  1587     await this.recordObservation(
+  1588       run,
+  1589       this.makeObservation(run, {
+  1590         stepId: `step_${run.executionId}_${stepNumber}_verify`,
+  1591         stepNumber,
+  1592         type: 'VERIFICATION',
+  1593         source: 'SYSTEM',
+  1594         trust: 'TRUSTED',
+  1595         payload: { target, ...verification },
+  1596         summary: `Verification ${verification.valid ? 'passed' : 'failed'} for target ${target}.`,
+  1597         provenance: { sourceId: 'runtime-verifier' }
+  1598       })
+  1599     )
+  1600     await this.recordStep(run, {
+  1601       stepNumber,
+  1602       stepType: 'VERIFY',
+  1603       status: verification.valid ? 'SUCCEEDED' : 'FAILED',
+  1604       sideEffecting: false,
+  1605       reasonCode: decision.reasonCode,
+  1606       ...(verification.valid ? {} : { errorCode: 'verification_failed' })
+  1607     })
+  1608     if (!verification.valid) {
+  1609       run.skipEvaluationOnce = true
+  1610       const revisionEvaluation = {
+  1611         outcome: 'INCOMPLETE' as const,
+  1612         reasonCode: 'VERIFICATION_FAILED' as const,
+  1613         deterministic: true,
+  1614         detail: verification.details.join('; ')
+  1615       }
+  1616       run.state = { ...run.state, lastEvaluation: revisionEvaluation }
+  1617       run.lastEvaluation = revisionEvaluation
+  1618     }
+  1619     return { kind: 'continue' }
+  1620   }
+  1621 
+  1622   private verify(
+  1623     run: LoopRun,
+  1624     target: string
+  1625   ): { valid: boolean; details: readonly string[] } {
+  1626     if (target === 'tool-result') {
+  1627       const succeeded =
+  1628         run.lastToolObservation !== null &&
+  1629         (run.lastToolObservation.payload as { status?: string } | null)
+  1630           ?.status === 'SUCCEEDED'
+  1631       return {
+  1632         valid: succeeded,
+  1633         details: succeeded ? [] : ['no successful tool result is available']
+  1634       }
+  1635     }
+  1636     if (target === 'evidence-coverage') {
+  1637       const valid = run.lastSufficiency === 'SUFFICIENT'
+  1638       return {
+  1639         valid,
+  1640         details: valid
+  1641           ? []
+  1642           : [`evidence sufficiency is ${run.lastSufficiency ?? 'unknown'}`]
+  1643       }
+  1644     }
+  1645     if (target === 'response-claims') {
+  1646       const validation = this.validateClaims(run, run.responseText ?? '')
+  1647       return {
+  1648         valid: validation.valid,
+  1649         details: validation.unsupportedClaims
+  1650       }
+  1651     }
+  1652     return {
+  1653       valid: false,
+  1654       details: [`unsupported verification target ${target}`]
+  1655     }
+  1656   }
+  1657 
+  1658   private validateClaims(run: LoopRun, responseText: string): ClaimValidation {
+  1659     const extractor = this.options.claimExtractor
+  1660     if (!extractor || !responseText.trim()) {
+  1661       return { valid: true, unsupportedClaims: [] }
+  1662     }
+  1663     return defaultClaimValidation(extractor(responseText), run.observations)
+  1664   }
+  1665 
+  1666   private async dispatchReplan(
+  1667     run: LoopRun,
+  1668     decision: LoopDecision,
+  1669     stepNumber: number
+  1670   ): Promise<DispatchOutcome> {
+  1671     const replanLimit = run.input.budget.maxReplans ?? run.input.budget.maxSteps
+  1672     /* v8 ignore next -- defensive: the allowed-decision gate already stops at the bound */
+  1673     if (run.usage.replans + 1 > replanLimit) {
+  1674       return this.stop('MAX_REPLANS', 'Replan budget exhausted.')
+  1675     }
+  1676     run.usage.replans += 1
+  1677     await this.persistCheckpoint(run)
+  1678     await this.recordObservation(
+  1679       run,
+  1680       this.makeObservation(run, {
+  1681         stepId: `step_${run.executionId}_${stepNumber}_replan`,
+  1682         stepNumber,
+  1683         type: 'SYSTEM_EVENT',
+  1684         source: 'SYSTEM',
+  1685         trust: 'TRUSTED',
+  1686         payload: { event: 'replan', reasonCode: decision.reasonCode },
+  1687         summary: `Strategy changed: ${decision.reasonCode}.`,
+  1688         provenance: { sourceId: 'runtime-replan' }
+  1689       })
+  1690     )
+  1691     await this.recordStep(run, {
+  1692       stepNumber,
+  1693       stepType: 'MODEL',
+  1694       status: 'SUCCEEDED',
+  1695       sideEffecting: false,
+  1696       reasonCode: decision.reasonCode
+  1697     })
+  1698     await this.safeAudit(run, 'runtime.replanned', {
+  1699       result: decision.reasonCode
+  1700     })
+  1701     return { kind: 'continue' }
+  1702   }
+  1703 
+  1704   private async dispatchRespond(
+  1705     run: LoopRun,
+  1706     decision: LoopDecision,
+  1707     stepNumber: number
+  1708   ): Promise<DispatchOutcome> {
+  1709     return dispatchRespond(this.dispatchContext, run, decision, stepNumber)
+  1710   }
+  1711 
+  1712   private async composeResponse(
+  1713     run: LoopRun,
+  1714     decision: LoopDecision
+  1715   ): Promise<
+  1716     { response: string } | { stopReason: StopReason; response: string }
+  1717   > {
+  1718     return composeResponse(this.dispatchContext, run, decision)
+  1719   }
+  1720 
+  1721   private evaluatorFor(run: LoopRun): CompletionEvaluator {
+  1722     if (this.completionEvaluatorOverride) {
+  1723       return this.completionEvaluatorOverride
+  1724     }
+  1725     const strategy = run.input.agent.completionStrategy ?? 'DETERMINISTIC'
+  1726     const cached = this.completionEvaluators.get(strategy)
+  1727     if (cached) return cached
+  1728     const evaluator = new DeterministicCompletionEvaluator({ strategy })
+  1729     this.completionEvaluators.set(strategy, evaluator)
+  1730     return evaluator
+  1731   }
+  1732 
+  1733   private async evaluate(
+  1734     run: LoopRun,
+  1735     decision: LoopDecision
+  1736   ): Promise<Extract<DispatchOutcome, { kind: 'stop' }> | null> {
+  1737     return evaluate(this.dispatchContext, run, decision)
+  1738   }
+  1739 
+  1740   private async pause(
+  1741     run: LoopRun,
+  1742     stepNumber: number,
+  1743     outcome: Extract<DispatchOutcome, { kind: 'pause' }>
+  1744   ): Promise<Extract<DispatchOutcome, { kind: 'stop' }>> {
+  1745     return pause(this.dispatchContext, run, stepNumber, outcome)
+  1746   }
+  1747 
+  1748   /**
+  1749    * Post-usage gate for orchestrator-reported usage (PDSH-004). The
+  1750    * beginModelRequest pre-model slot already gates the kernel's model call;
+  1751    * this catches reported overages so the loop still stops honestly.
+  1752    */
+  1753   private checkAfterUsage(
+  1754     run: LoopRun
+  1755   ): { reason: StopReason; response: string } | null {
+  1756     if (run.usage.modelCalls > run.input.budget.maxModelCalls) {
+  1757       return {
+  1758         reason: 'MAX_MODEL_CALLS',
+  1759         response: 'Model-call budget exhausted.'
+  1760       }
+  1761     }
+  1762     if (
+  1763       run.usage.inputTokens + run.usage.outputTokens >
+  1764       run.input.budget.maxTokens
+  1765     ) {
+  1766       return { reason: 'MAX_TOKENS', response: 'Token budget exhausted.' }
+  1767     }
+  1768     if (run.usage.costUsd > run.input.budget.maxCostUsd) {
+  1769       return { reason: 'MAX_COST', response: 'Cost budget exhausted.' }
+  1770     }
+  1771     return null
+  1772   }
+  1773 
+  1774   private accountUsage(run: LoopRun, usage: ModelUsage): void {
+  1775     run.usage.modelCalls += usage.modelCalls
+  1776     run.usage.inputTokens += usage.inputTokens
+  1777     run.usage.outputTokens += usage.outputTokens
+  1778     run.usage.costUsd += usage.costUsd
+  1779   }
+  1780 
+  1781   private effectiveDuration(run: LoopRun): number {
+  1782     return run.usage.activeDurationMs + (Date.now() - run.startedAtMs)
+  1783   }
+  1784 
+  1785   private remainingDuration(run: LoopRun): number {
+  1786     return run.input.budget.maxDurationMs - this.effectiveDuration(run)
+  1787   }
+  1788 
+  1789   private makeObservation(
+  1790     run: LoopRun,
+  1791     input: {
+  1792       stepId: string
+  1793       stepNumber: number
+  1794       type: Observation['type']
+  1795       source: Observation['source']
+  1796       trust: Observation['trust']
+  1797       payload: unknown
+  1798       summary: string
+  1799       provenance: Observation['provenance']
+  1800     }
+  1801   ): Observation {
+  1802     let payload = input.payload
+  1803     if (this.options.toolResultContext && input.type === 'TOOL_RESULT') {
+  1804       const value = payload as {
+  1805         schemaVersion?: number
+  1806         status?: string
+  1807         output?: unknown
+  1808         error?: unknown
+  1809       }
+  1810       const tool = this.options.tools.resolve(
+  1811         input.provenance.sourceId,
+  1812         input.provenance.sourceVersion
+  1813       )
+  1814       if (!tool)
+  1815         throw new ToolResultContextError(
+  1816           'STATE_CONFLICT',
+  1817           'Tool observation has no native registry binding.',
+  1818           'STATE_CONFLICT'
+  1819         )
+  1820       if (value.schemaVersion !== 1) {
+  1821         payload =
+  1822           value.status === 'SUCCEEDED'
+  1823             ? completeToolPayload(value.output, tool.sideEffect)
+  1824             : {
+  1825                 schemaVersion: 1,
+  1826                 status: value.status === 'REJECTED' ? 'REJECTED' : 'FAILED',
+  1827                 sideEffect: tool.sideEffect,
+  1828                 completion: 'NOT_APPLICABLE',
+  1829                 resultAvailability: 'UNAVAILABLE',
+  1830                 error:
+  1831                   typeof value.error === 'string'
+  1832                     ? value.error.slice(0, 512)
+  1833                     : 'tool_failed'
+  1834               }
+  1835       }
+  1836     }
+  1837     const observation: Observation = {
+  1838       observationId: `obs_${randomUUID()}`,
+  1839       executionId: run.executionId,
+  1840       stepId: input.stepId,
+  1841       stepNumber: input.stepNumber,
+  1842       type: input.type,
+  1843       source: input.source,
+  1844       trust: input.trust,
+  1845       payload:
+  1846         this.options.toolResultContext && input.type === 'TOOL_RESULT'
+  1847           ? payload
+  1848           : boundedPayload(payload, this.maxObservationPayloadChars),
+  1849       summary: input.summary.slice(0, 500),
+  1850       provenance: input.provenance,
+  1851       timestamp: this.clock().toISOString()
+  1852     }
+  1853     if (this.options.toolResultContext && input.type === 'TOOL_RESULT')
+  1854       assertCompleteToolObservation(observation)
+  1855     return observation
+  1856   }
+  1857 
+  1858   private async recordObservation(
+  1859     run: LoopRun,
+  1860     observation: Observation
+  1861   ): Promise<void> {
+  1862     run.observations = this.options.toolResultContext
+  1863       ? retainCompleteObservations([...run.observations, observation])
+  1864       : [...run.observations, observation].slice(-MAX_CHECKPOINT_OBSERVATIONS)
+  1865     run.state = { ...run.state, observations: run.observations }
+  1866     await this.safeAudit(run, 'observation.recorded', {
+  1867       result: `${observation.source}:${observation.type}`
+  1868     })
+  1869   }
+  1870 
+  1871   private async recordStep(
+  1872     run: LoopRun,
+  1873     input: {
+  1874       stepNumber: number
+  1875       stepType: ExecutionStep['stepType']
+  1876       status: ExecutionStep['status']
+  1877       sideEffecting: boolean
+  1878       decisionType?: ExecutionStep['decisionType']
+  1879       reasonCode?: ExecutionStep['reasonCode']
+  1880       errorCode?: string
+  1881       observationRefs?: readonly string[]
+  1882     }
+  1883   ): Promise<void> {
+  1884     const stepId = `step_${run.executionId}_${input.stepNumber}_${input.stepType.toLowerCase()}`
+  1885     const terminal = input.status === 'SUCCEEDED' || input.status === 'FAILED'
+  1886     const decisionType =
+  1887       input.decisionType ?? run.lastDecision?.decisionType ?? undefined
+  1888     await this.options.stepStore.recordStep({
+  1889       stepId,
+  1890       executionId: run.executionId,
+  1891       tenantId: run.input.tenantId,
+  1892       stepNumber: input.stepNumber,
+  1893       stepType: input.stepType,
+  1894       status: input.status,
+  1895       attempt: 1,
+  1896       sideEffecting: input.sideEffecting,
+  1897       startedAt: this.clock().toISOString(),
+  1898       ...(terminal ? { completedAt: this.clock().toISOString() } : {}),
+  1899       ...(decisionType ? { decisionType } : {}),
+  1900       ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+  1901       observationRefs: input.observationRefs ?? [],
+  1902       ...(input.errorCode ? { errorCode: input.errorCode } : {})
+  1903     })
+  1904     if (
+  1905       (terminal || input.status === 'WAITING') &&
+  1906       !run.countedSteps.has(input.stepNumber)
+  1907     ) {
+  1908       run.countedSteps.add(input.stepNumber)
+  1909       run.usage.steps += 1
+  1910     }
+  1911     await this.safeAudit(
+  1912       run,
+  1913       input.status === 'RUNNING' ? 'step.started' : 'step.completed',
+  1914       { result: `${input.stepType}:${input.status}`, tool: null }
+  1915     )
+  1916   }
+  1917 
+  1918   private async persistCheckpoint(run: LoopRun): Promise<void> {
+  1919     const checkpoint = sealCheckpoint({
+  1920       executionId: run.executionId,
+  1921       tenantId: run.input.tenantId,
+  1922       checkpointVersion: this.options.toolResultContext ? 2 : 1,
+  1923       runtimeProfile: 'iterative',
+  1924       runtimeVersion: RUNTIME_V2_VERSION,
+  1925       orchestratorVersion: this.orchestratorVersion,
+  1926       stepNumber: run.state.stepNumber,
+  1927       state: {
+  1928         ...run.state,
+  1929         observations: this.options.toolResultContext
+  1930           ? retainCompleteObservations(run.observations)
+  1931           : run.observations.slice(-MAX_CHECKPOINT_OBSERVATIONS)
+  1932       },
+  1933       budgetUsage: { ...run.usage }
+  1934     })
+  1935     if (this.options.toolResultContext) {
+  1936       const result = await this.options.stepStore.compareAndSwapCheckpoint!({
+  1937         tenantId: run.input.tenantId,
+  1938         executionId: run.executionId,
+  1939         expected: run.checkpointToken ?? null,
+  1940         next: checkpoint
+  1941       })
+  1942       if (
+  1943         result.status !== 'APPLIED' ||
+  1944         result.token.checkpointId !== checkpoint.checkpointId ||
+  1945         result.token.digest !== checkpoint.digest
+  1946       ) {
+  1947         run.checkpointConflict = true
+  1948         throw new ToolResultContextError(
+  1949           'STATE_CONFLICT',
+  1950           'Checkpoint compare-and-swap did not commit this writer.',
+  1951           'STATE_CONFLICT'
+  1952         )
+  1953       }
+  1954       run.checkpointToken = result.token
+  1955     } else {
+  1956       await this.options.stepStore.saveCheckpoint(checkpoint)
+  1957     }
+  1958   }
+  1959 
+  1960   private preflightCompleteTool(
+  1961     run: LoopRun,
+  1962     decision: LoopDecision,
+  1963     stepNumber: number
+  1964   ): void {
+  1965     if (!this.options.toolResultContext) return
+  1966     const tool = this.options.tools.resolve(
+  1967       decision.toolId ?? '',
+  1968       decision.toolVersion
+  1969     )
+  1970     if (!tool)
+  1971       throw new ToolResultContextError(
+  1972         'STATE_CONFLICT',
+  1973         'Missing native tool.',
+  1974         'STATE_CONFLICT'
+  1975       )
+  1976     if (
+  1977       run.observations.filter((value) => value.type === 'TOOL_RESULT').length >=
+  1978       MAX_CHECKPOINT_OBSERVATIONS
+  1979     ) {
+  1980       throw new ToolResultContextError(
+  1981         'CONTEXT_OVERFLOW',
+  1982         'No retention slot remains before tool dispatch.'
+  1983       )
+  1984     }
+  1985     const placeholder = this.makeObservation(run, {
+  1986       stepId: `step_${run.executionId}_${stepNumber}_tool`,
+  1987       stepNumber,
+  1988       type: 'TOOL_RESULT',
+  1989       source: 'TOOL',
+  1990       trust: 'UNTRUSTED',
+  1991       payload: { status: 'SUCCEEDED', output: 'x'.repeat(32_766) },
+  1992       summary: 'x'.repeat(500),
+  1993       provenance: {
+  1994         sourceId: tool.id,
+  1995         sourceVersion: tool.version,
+  1996         operationKey: this.operationKey(run, stepNumber, tool.id),
+  1997         effectRef: this.operationKey(run, stepNumber, tool.id)
+  1998       }
+  1999     })
+  2000     const prospective = {
+  2001       executionId: run.executionId,
+  2002       tenantId: run.input.tenantId,
+  2003       checkpointVersion: 2,
+  2004       runtimeProfile: 'iterative',
+  2005       runtimeVersion: RUNTIME_V2_VERSION,
+  2006       orchestratorVersion: this.orchestratorVersion,
+  2007       stepNumber: run.state.stepNumber,
+  2008       state: {
+  2009         ...run.state,
+  2010         pendingDecision: decision,
+  2011         pendingStepNumber: stepNumber,
+  2012         observations: retainCompleteObservations([
+  2013           ...run.observations,
+  2014           placeholder
+  2015         ])
+  2016       },
+  2017       budgetUsage: { ...run.usage, toolCalls: run.usage.toolCalls + 1 }
+  2018     }
+  2019     try {
+  2020       // Optional internal fields are absent on the wire. Real saves use the
+  2021       // stricter schema-owned checkpoint codec, not this size-only projection.
+  2022       canonicalizeCompleteJson(JSON.parse(JSON.stringify(prospective)), {
+  2023         maxBytes: COMPLETE_CHECKPOINT_MAX_BYTES - 65_536,
+  2024         maxDepth: 64,
+  2025         maxNodes: 1_000_000
+  2026       })
+  2027     } catch {
+  2028       throw new ToolResultContextError(
+  2029         'CONTEXT_OVERFLOW',
+  2030         'Prospective checkpoint cannot reserve full tool result and step overhead.'
+  2031       )
+  2032     }
+  2033   }
+  2034 
+  2035   private operationKey(
+  2036     run: LoopRun,
+  2037     stepNumber: number,
+  2038     toolId: string
+  2039   ): string {
+  2040     return `${run.executionId}:s${stepNumber}:${toolId}`
+  2041   }
+  2042 
+  2043   private async safeAudit(
+  2044     run: LoopRun,
+  2045     action: string,
+  2046     extras: { result: string; tool?: string | null }
+  2047   ): Promise<void> {
+  2048     try {
+  2049       await this.options.audit.append({
+  2050         actor: run.input.agent.id,
+  2051         agent: run.input.agent.id,
+  2052         tenant: run.input.tenantId,
+  2053         action,
+  2054         policy: null,
+  2055         approval:
+  2056           (run.state.pendingApprovalId as ApprovalId | undefined) ?? null,
+  2057         tool: extras.tool ?? null,
+  2058         result: extras.result,
+  2059         timestamp: this.clock().toISOString(),
+  2060         traceId: run.input.traceId,
+  2061         correlationId: run.input.correlationId
+  2062       })
+  2063     } catch {
+  2064       if (this.options.toolResultContext) {
+  2065         throw new ToolResultContextError(
+  2066           'ADMISSION_UNAVAILABLE',
+  2067           'Native audit could not record the governed step.'
+  2068         )
+  2069       }
+  2070       // Legacy semantics; terminal outcome auditing still owns its veto.
+  2071     }
+  2072   }
+  2073 
+  2074   /**
+  2075    * A terminal stop never leaves its pending tool step open (AUD-0600 F02).
+  2076    * A WAITING step never reached its effect (approval wait, or parked by an
+  2077    * operator pause), so it closes with the stop's own code. A step still
+  2078    * RUNNING here may have started its effect before a crash or a failure
+  2079    * after dispatch, so it is closed as `unknown_effect` for reconciliation
+  2080    * instead of being declared not executed.
+  2081    */
+  2082   private async closePendingStep(
+  2083     run: LoopRun,
+  2084     stopReason: StopReason
+  2085   ): Promise<void> {
+  2086     const stepNumber = run.state.pendingStepNumber
+  2087     if (!stepNumber) return
+  2088     const steps = await this.options.stepStore.listSteps(
+  2089       run.input.tenantId,
+  2090       run.executionId
+  2091     )
+  2092     const step = steps.find(
+  2093       (candidate) =>
+  2094         candidate.stepNumber === stepNumber && candidate.stepType === 'TOOL'
+  2095     )
+  2096     if (!step || (step.status !== 'WAITING' && step.status !== 'RUNNING')) {
+  2097       return
+  2098     }
+  2099     await this.recordStep(run, {
+  2100       stepNumber,
+  2101       stepType: 'TOOL',
+  2102       status: 'FAILED',
+  2103       sideEffecting: step.sideEffecting,
+  2104       ...(step.reasonCode ? { reasonCode: step.reasonCode } : {}),
+  2105       errorCode:
+  2106         step.status === 'RUNNING'
+  2107           ? 'unknown_effect'
+  2108           : stopReason === 'CANCELLED'
+  2109             ? 'cancelled'
+  2110             : stopReason === 'MAX_DURATION'
+  2111               ? 'deadline'
+  2112               : 'not_started'
+  2113     })
+  2114   }
+  2115 
+  2116   private async finalize(
+  2117     run: LoopRun,
+  2118     outcome: Extract<DispatchOutcome, { kind: 'stop' }>,
+  2119     startedAtMs: number
+  2120   ): Promise<RuntimeResult> {
+  2121     let stopReason: StopReason = outcome.stopReason
+  2122     run.usage.activeDurationMs += Date.now() - startedAtMs
+  2123     if (!outcome.preserveCheckpoint && TERMINAL_STOPS.has(stopReason)) {
+  2124       try {
+  2125         await this.closePendingStep(run, stopReason)
+  2126       } catch {
+  2127         // The open step could not be closed: the terminal checkpoint must not
+  2128         // claim a clean stop while the step store disagrees.
+  2129         stopReason = 'INSUFFICIENT_EVIDENCE'
+  2130       }
+  2131     }
+  2132     run.state = { ...run.state, stopReason }
+  2133     let checkpointProven = true
+  2134     if (outcome.preserveCheckpoint) {
+  2135       // Intentional no-write: the durable pause must stay resumable after a
+  2136       // rejected resume binding.
+  2137     } else {
+  2138       try {
+  2139         await this.persistCheckpoint(run)
+  2140       } catch {
+  2141         checkpointProven = false
+  2142       }
+  2143     }
+  2144     const claimedReason: StopReason = checkpointProven
+  2145       ? stopReason
+  2146       : 'INSUFFICIENT_EVIDENCE'
+  2147     if (!checkpointProven) {
+  2148       run.state = { ...run.state, stopReason: claimedReason }
+  2149     }
+  2150     const result: RuntimeResult = {
+  2151       response: outcome.response,
+  2152       stopReason: claimedReason,
+  2153       ...(outcome.kind === 'stop' && outcome.approvalId
+  2154         ? { approvalId: outcome.approvalId }
+  2155         : {}),
+  2156       steps: run.usage.steps,
+  2157       modelCalls: run.usage.modelCalls,
+  2158       toolCalls: run.usage.toolCalls,
+  2159       usage: {
+  2160         inputTokens: run.usage.inputTokens,
+  2161         outputTokens: run.usage.outputTokens,
+  2162         costUsd: run.usage.costUsd
+  2163       },
+  2164       ...(run.lastToolObservation
+  2165         ? {
+  2166             toolResult: {
+  2167               /* v8 ignore next -- only a successful tool observation is stored */
+  2168               status:
+  2169                 (run.lastToolObservation.payload as { status?: string } | null)
+  2170                   ?.status === 'SUCCEEDED'
+  2171                   ? ('SUCCEEDED' as const)
+  2172                   : ('REJECTED' as const),
+  2173               output: (
+  2174                 run.lastToolObservation.payload as {
+  2175                   output?: unknown
+  2176                 } | null
+  2177               )?.output
+  2178             }
+  2179           }
+  2180         : {})
+  2181     }
+  2182     const finalResult = await this.recordAuditOutcome(
+  2183       run,
+  2184       result,
+  2185       claimedReason
+  2186     )
+  2187     this.recordTelemetry(run, finalResult, startedAtMs)
+  2188     return finalResult
+  2189   }
+  2190 
+  2191   private async recordAuditOutcome(
+  2192     run: LoopRun,
+  2193     result: RuntimeResult,
+  2194     stopReason: StopReason
+  2195   ): Promise<RuntimeResult> {
+  2196     const action =
+  2197       stopReason === 'COMPLETED'
+  2198         ? 'runtime.completed'
+  2199         : stopReason === 'NEEDS_USER_INPUT' ||
+  2200             stopReason === 'APPROVAL_REQUIRED'
+  2201           ? 'runtime.paused'
+  2202           : 'runtime.stopped'
+  2203     // Audit always gets at least a bounded grace window, so a budget stop
+  2204     // (possibly after an effect) is still recorded. If even that fails, the
+  2205     // result is degraded like any other unaudited outcome (ENG-008).
+  2206     try {
+  2207       const deadlineMs = Math.max(this.remainingDuration(run), AUDIT_GRACE_MS)
+  2208       const auditOrDeadline = await this.withDeadline(
+  2209         this.options.audit.append({
+  2210           actor: run.input.agent.id,
+  2211           agent: run.input.agent.id,
+  2212           tenant: run.input.tenantId,
+  2213           action,
+  2214           policy: null,
+  2215           approval: (result.approvalId as ApprovalId | undefined) ?? null,
+  2216           tool: run.lastToolObservation?.provenance.sourceId ?? null,
+  2217           result: stopReason,
+  2218           timestamp: this.clock().toISOString(),
+  2219           traceId: run.input.traceId,
+  2220           correlationId: run.input.correlationId
+  2221         }),
+  2222         deadlineMs
+  2223       )
+  2224       if (auditOrDeadline === DEADLINE_EXCEEDED) {
+  2225         throw new Error('audit deadline exceeded')
+  2226       }
+  2227       return result
+  2228     } catch {
+  2229       return {
+  2230         ...result,
+  2231         response:
+  2232           'Execution could not be completed because audit recording failed.',
+  2233         stopReason: 'INSUFFICIENT_EVIDENCE'
+  2234       }
+  2235     }
+  2236   }
+  2237 
+  2238   private recordTelemetry(
+  2239     run: LoopRun,
+  2240     result: RuntimeResult,
+  2241     startedAtMs: number
+  2242   ): void {
+  2243     const telemetry: TelemetryEvent = {
+  2244       name: 'harness.iterative',
+  2245       latencyMs: Date.now() - startedAtMs,
+  2246       errors: result.stopReason === 'COMPLETED' ? 0 : 1,
+  2247       costUsd: result.usage.costUsd,
+  2248       inputTokens: result.usage.inputTokens,
+  2249       outputTokens: result.usage.outputTokens,
+  2250       provider: null,
+  2251       toolDurationMs: 0,
+  2252       steps: result.steps,
+  2253       traceId: run.input.traceId,
+  2254       correlationId: run.input.correlationId,
+  2255       attributes: {
+  2256         outcome: result.stopReason,
+  2257         model_calls: result.modelCalls,
+  2258         tool_calls: result.toolCalls,
+  2259         knowledge_calls: run.usage.knowledgeCalls,
+  2260         replans: run.usage.replans,
+  2261         verification_calls: run.usage.verificationCalls
+  2262       }
+  2263     }
+  2264     try {
+  2265       this.options.telemetry.record(telemetry)
+  2266     } catch {
+  2267       // telemetry is best effort
+  2268     }
+  2269   }
+  2270 
+  2271   private async earlyFinish(
+  2272     input: RuntimeInput,
+  2273     response: string,
+  2274     stopReason: StopReason,
+  2275     startedAtMs: number
+  2276   ): Promise<RuntimeResult> {
+  2277     void startedAtMs
+  2278     const result: RuntimeResult = {
+  2279       response,
+  2280       stopReason,
+  2281       steps: 0,
+  2282       modelCalls: 0,
+  2283       toolCalls: 0,
+  2284       usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+  2285     }
+  2286     try {
+  2287       await this.options.audit.append({
+  2288         actor: input.agent.id,
+  2289         agent: input.agent.id,
+  2290         tenant: input.tenantId,
+  2291         action: 'runtime.stopped',
+  2292         policy: null,
+  2293         approval: null,
+  2294         tool: null,
+  2295         result: stopReason,
+  2296         timestamp: this.clock().toISOString(),
+  2297         traceId: input.traceId,
+  2298         correlationId: input.correlationId
+  2299       })
+  2300     } catch {
+  2301       return {
+  2302         ...result,
+  2303         response:
+  2304           'Execution could not be completed because audit recording failed.',
+  2305         stopReason: 'INSUFFICIENT_EVIDENCE'
+  2306       }
+  2307     }
+  2308     return result
+  2309   }
+  2310 
+  2311   private async withDeadline<T>(
+  2312     operation: Promise<T>,
+  2313     remainingMs: number
+  2314   ): Promise<T | typeof DEADLINE_EXCEEDED> {
+  2315     if (remainingMs <= 0) return DEADLINE_EXCEEDED
+  2316     let timer!: ReturnType<typeof setTimeout>
+  2317     const deadline = new Promise<typeof DEADLINE_EXCEEDED>((resolve) => {
+  2318       timer = setTimeout(() => resolve(DEADLINE_EXCEEDED), remainingMs)
+  2319     })
+  2320     try {
+  2321       return await Promise.race([operation, deadline])
+  2322     } finally {
+  2323       clearTimeout(timer)
+  2324     }
+  2325   }
+  2326 }
+  2327 
+  2328 export function stringifySummary(value: unknown, fallback: string): string {
+  2329   if (value === undefined || value === null) return fallback
+  2330   if (typeof value === 'string') return value.slice(0, 300)
+  2331   try {
+  2332     return (JSON.stringify(value) ?? fallback).slice(0, 300)
+  2333   } catch {
+  2334     return fallback
+  2335   }
+  2336 }
+

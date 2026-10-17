@@ -1,0 +1,1 @@
+Owned tests based on enumerated public factory test scaffolding; implementation aliases still point to immutable packet artifact. fault variants are injected through public trusted ports, not implementation changes.

@@ -1,0 +1,85 @@
+# TECHNICAL SPEC — Crítico final independente I1
+
+**Veredito: REVISE.** O pacote r2 ainda precisa fechar três lacunas antes de ser apresentado como candidato pronto para revisão humana canônica exata T3. Este é um parecer documental sobre a proposta, não aceite runtime, aprovação do autor, decisão humana ou autoridade BUILD.
+
+Identidade: Codex, crítico I1 desta sessão, modelo herdado; não afirmo uma versão de modelo que não foi exposta. Sem descendentes, delegação ou comunicação com outros agentes. Não fui o autor destes documentos nesta sessão; não consultei pareceres anteriores, retorno do autor, notas de pontuação, árvores de críticos runtime, histórico, coordenação, ledgers, `.gauntlet`, originais ou repositório vivo. A independência aqui é a da lane e do contexto consultado; não é atestação externa do treinamento/modelo.
+
+O primeiro tool call leu **somente** o manifesto fornecido. Seu SHA-256 é `13e29710e0055ffed26955b85ae8d03e6aed49b672a3159ac15de0492e31c99b`. Depois foram lidas exclusivamente as 53 cópias enumeradas e os resultados próprios desta lane. Os 53 tamanhos/hashes conferem antes e depois; manifesto também inalterado. O manifesto interno liga exatamente as 49 fontes diretas esperadas. A cobertura semântica foi dirigida aos contratos, call graph, validators e seams relevantes; todos os arquivos foram integralmente lidos para fingerprint/decodificação, sem alegar inspeção humana uniforme de cada linha.
+
+As instruções explícitas READ ONLY/WRITE ONLY desta tarefa prevalecem sobre as rotinas de atualizar estado/log/coordenação presentes nos AGENTS copiados. Nenhum arquivo canônico ou de outro agente foi escrito. Os únicos outputs estão na árvore atribuída a I1.
+
+## Autoridade e limites
+
+- 0217 e 0224 são as cópias exatas aprovadas, conforme a autoridade dada pelo usuário. Estados históricos dentro dos documentos não revogam nem ampliam essa autoridade.
+- 0225 é a proposta **PENDING** `04b92ba4d13b1ed58157a24258cade87d8d6d31df833ef6c1969059772cc6da5`, sem autoridade de implementação. A cadeia 0225/0030 → 0031 continua requisito separado.
+- O reparo genérico RESPONSE é dependência separada, sem aceite inferido dos hashes ou dos testes copiados. Não o julguei como critic runtime nem o aprovei.
+- Todos os testes, injeções, probes PG, gates e cenários futuros citados neste parecer estão **NOT_RUN**. Nenhum código da aplicação, DDL, SQL, PG, Docker, provider ou rede foi executado. Somente Python stdlib para leitura, fingerprints e checks textuais próprios.
+- Não há claim de runtime, billing, tokenizer real, paridade, desempenho, domínio completo, produção ou release. Nenhuma conclusão depende de usar dado real ou ampliar a fatia sintética declarada.
+
+## Lacunas materiais, em prioridade
+
+### I1-F01 — P1 / confiança alta — ciclo de vida de acceptedDecision não fecha com o runtime/validator nativos
+
+**Proposta:** [§5.1 e §5.3](../published-contract-review-packet-r2/proposal/PROPOSED-SPEC.md:366), especialmente linhas 386–393, exige conservar acceptedDecision até a próxima decisão aceita. O caminho nativo já grava a decisão de regra RESPOND com lista vazia antes do dispatch. Durante esse dispatch a proposta cria uma reserva RESPONSE pendente.
+
+**Fonte:** [N02: seleção do acceptedDecision](../published-contract-review-packet-r2/artifact/packages/harness/src/iterative-runtime.ts:1153) trata qualquer slot presente como decisão executável e exige `accepted.stepNumber === run.stepNumber + 1`; [N02: aceite pré-dispatch](../published-contract-review-packet-r2/artifact/packages/harness/src/iterative-runtime.ts:1207) persiste o slot; [N04: validator](../published-contract-review-packet-r2/artifact/packages/harness/src/complete-checkpoint.ts:423) proíbe acceptedDecision enquanto houver qualquer pending admission. A proposta altera a associação por purpose, mas não fixa as exceções/transições correspondentes desses dois checks.
+
+**Consequência concreta:** no reserve de M1/M2, a decisão RESPOND já aceita coexiste com a reserva pendente que o validator atual recusa. Depois de C1, conservar a decisão1 histórica faz o seletor atual recusar o próximo passo2 antes de chamar o planner; C2 apresenta o mesmo problema para passo3. Isso não é prova de falha de uma implementação futura inexistente: é uma incompatibilidade dos invariantes nativos que o contrato de reuso ainda não resolve expressamente. Somente dizer “validators discriminados” ou conservar o slot não define quando ele é histórico versus executável.
+
+**Correção precisa proposta:** fixar no perfil admitted que acceptedDecision com step igual ao passo concluído é histórico e preservado, não é redispatch; a execução segue para planner(step+1) somente com passo terminal/ACK e checkpoint coerentes. Slot de step+1 continua sendo decisão executável uma única vez sob os fences já exigidos. Permitir a coexistência de decisão determinística RESPOND com `[]` e exatamente sua reserva RESPONSE pendente do mesmo passo/attempt0, sem considerar a resposta aceita. Manter proibidas as demais reservas concorrentes, receipts de propósito errado, inconsistência pendingDecision e aceite de resposta com UNKNOWN/pending. Especificar também a conservação histórica no diagnóstico, sem relaxar a recusa RESPOND-ahead.
+
+**Oráculos rejeitadores — NOT_RUN:** positivo fresco M1 reserve/settle → C1 → tool2 → C2 → M2 reserve/settle → terminal, e restart real separado em C1/C2. Não aceitar apenas handoff conservador. Capturar acceptedDecision, pending admission, passo/row/ACK e chamada ao planner em cada fronteira. Negativos: redispatch da decisão histórica, slot futuro divergente, reserva de outro passo/purpose e acceptedResponse enquanto há pending/UNKNOWN. PA03/PA08/R12 devem incluir essas combinações explicitamente.
+
+### I1-F02 — P1 / confiança alta — falta uma transição autorizada para contabilizar o breach finito após fechar dispatch
+
+**Proposta:** [§4.1](../published-contract-review-packet-r2/proposal/PROPOSED-SPEC.md:206) manda qualquer ADMISSION_BREACH colocar o latch em QUARANTINED e fechar dispatch. [§5.2](../published-contract-review-packet-r2/proposal/PROPOSED-SPEC.md:311) exige UNKNOWN com actual diagnóstico finito e cobrança `max(reserved, actual)` por componente para uso acima da reserva. Entretanto [§6.2](../published-contract-review-packet-r2/proposal/PROPOSED-SPEC.md:451) requer local aberto para ACTIVE, proíbe novo actual em DIAGNOSTIC e proíbe qualquer mudança de receipt em TERMINAL.
+
+**Fonte:** [S11: unknown](../published-contract-review-packet-r2/artifact/packages/harness/src/complete-decision-admission.ts:296) incorpora actual e aumenta o usage conservador; [S11: breach](../published-contract-review-packet-r2/artifact/packages/harness/src/complete-decision-admission.ts:365) efetua essa persistência. [S06: closeLocal/run](../published-contract-review-packet-r2/artifact/packages/platform/src/controlled-kernel-continuation.ts:883) não permite voltar a uma operação ativa após o fechamento. O novo contrato corretamente pretende endurecer essas fases, mas suas regras em conjunto não oferecem o caminho para esse outcome exigido.
+
+**Consequência concreta:** se fechar local antes do await, como exigido, não se pode persistir o novo actual/cobrança por nenhuma das três classes. Se persistir por ACTIVE antes de fechar, mantém-se dispatch aberto através desse await após detectar o breach. Preservar só RESERVED pode ser correto quando o fence/armazenamento se perde, mas não satisfaz a cobrança maior expressamente exigida quando há fence e headroom saudáveis. A exceção por falta de autoridade não resolve esse caso saudável.
+
+**Correção precisa proposta:** manter o fechamento síncrono e definir um delta diagnóstico específico para o breach **observado na mesma tentativa viva**, validado antes de arithmetic: RESERVED→UNKNOWN, reason ADMISSION_BREACH, actual finito limitado ao resultado capturado/binding da chamada e usage monotônico `max` uma vez. Nenhum refund, aceite, cursor, observação, novo receipt, body ou modelo; recuperação sem esse testemunho não pode inventar actual. Fixar a ordem latch/close → join → diagnóstico CAS/ACK e seu comportamento de COMMIT desconhecido. Alterar coordenadamente §5.2, §6.2 e R07/C08; não transformar “settlement” em permissão geral de progresso.
+
+**Oráculos rejeitadores — NOT_RUN:** M2 retorna output units513 com reserva512 e fence válido. Antes do primeiro await diagnóstico, dispatch está fechado; no DB, se commit/ACK conhecidos, um único UNKNOWN conserva M1/tool e cobra513 nesse componente, sem SETTLED/acceptedResponse/M3. Repetição não soma de novo. Recovered attempt, raw NaN, foreign receipt, fence perdido e ACK perdido devem conservar apenas o que de fato foi confirmado. Alteração que mantém ACTIVE aberto ou diminui a contribuição reprova. R07/R08/PA17 continuam NOT_RUN.
+
+### I1-F03 — P2 / confiança alta no fato nativo; média-alta na abrangência pretendida — o oráculo Old ACK0 effects excede a proteção por triggers
+
+**Proposta:** [§8.4](../published-contract-review-packet-r2/proposal/PROPOSED-SPEC.md:733) declara corretamente `ack_prepare não escreve`; [W06](../published-contract-review-packet-r2/proposal/ACCEPTANCE-PLAN.md:145) exige “Old ACK0 mutations/effects”, no cenário de writer antigo sob o mesmo serving role de W01–W12. Nenhum mecanismo ali especificado intercepta SELECT antigo ou a invocação local de effect antes do primeiro write.
+
+**Fonte:** [N05: preparação](../published-contract-review-packet-r2/artifact/packages/persistence/src/postgres-outbox.ts:579) faz SELECT/locks/validação de ref/journal/takeover e COMMIT; [N05: callback](../published-contract-review-packet-r2/artifact/packages/persistence/src/postgres-outbox.ts:687) chama `rawInput.effect` fora da transação, antes do INSERT em outbox_effects na transação final. [N09](../published-contract-review-packet-r2/artifact/packages/persistence/src/postgres.ts:365) delega ackClaim a esse caminho. Triggers DML negam o write posterior, não retroativamente a chamada do callback.
+
+**Consequência concreta:** com ref outer corrente válido, sem journal e sem takeover, o adaptador antigo pode alcançar o effect callback antes de um trigger0031 recusar qualquer mutation. Não afirmo modelo/body ou efeito externo real nesse ramo; os guards internos podem ainda negá-los, e a ferramenta prometida é NONE. A lacuna é precisamente confundir entrada do callback, mutação durável e dispatch nativo. All-gen2/drain reduz o cenário operacional, mas não demonstra a asserção mais forte do teste same-role. Não é necessário inventar um provider/consumidor malicioso para mostrar essa fronteira.
+
+**Correção precisa proposta:** definir W06 separando `outerEffectCallbackEntered`, entrada de fábrica/modelo/corpo e mutations. Manter a garantia zero mutation contra old writers em bindings commitadas e o rollout exclusivo; só exigir callback0 quando um bloqueio anterior real for especificado e aplicável (por exemplo, credential antiga realmente revogada conforme o cutover225, sem atribuir esse resultado a0031). Para a sonda same-role com ref válido, reconhecer que o trigger só atua no primeiro DML e exigir os gates internos antes de qualquer dispatch nativo. Se callback0 for requisito indispensável mesmo nesse cenário, o contrato de barreira de leitura precisa ser revisto antes do gate; os três helpers/triggers atuais não o implementam.
+
+**Oráculos rejeitadores — NOT_RUN:** old ack congelado, binding complete commitada, ref válido, marker ausente, sessão BOT_ACTIVE. Observar prepare COMMIT, callback entry, primeiro DML negado/rollback e nenhum processed/effect marker. Teste separado com credential antiga revogada exige falha antes de callback. Reprovar atribuir callback0 aos triggers quando a falha observada veio de ref inválido, readiness, decoder, falta de grant ou handler interno. W06/PA11/PA12 precisam declarar qual fronteira medem.
+
+## Matriz de critérios
+
+PASS/FAIL abaixo julgam completude documental para revisão canônica, não execução. Cada cenário de aceitação associado permanece NOT_RUN.
+
+| Critério do manifesto | Parecer | Fundamentação | Execução futura |
+| --- | --- | --- | --- |
+| 1. Rota pública mínima, seleção confiável, projeção, 2 modelos/1 tool, bounds e par | FAIL | Topologia e limites concretos, mas F01 deixa o ciclo positivo incompleto. | NOT_RUN |
+| 2. Um dono contábil em todos os outcomes, raw/guard e legado | FAIL | O desvio de beginModelRequest, recordModelResult e adições unrecorded está descrito; F01/F02 impedem a máquina completa. | NOT_RUN |
+| 3. CAS+hostseal, ACTIVE/TERMINAL/DIAGNOSTIC, closure/evaluation/joins | FAIL | CAS on-client e ACK único bem fixados; F02 conflita com a autoridade diagnóstica. | NOT_RUN |
+| 4. Migration0031→0030, triggers/preflight/lookup e writers externos | FAIL | Inventário e prefixos concretos; a proteção prometida em W06 requer a distinção F03. | NOT_RUN |
+| 5. Ingress/worker/model/tool/guards/approval/callback/completion/outer ACK reais | FAIL | Rota pretendida é nativa, sem prepared fabricado; F01 e F03 impedem considerar os oráculos integralmente fechados. | NOT_RUN |
+| 6. Dependências, limites bounded/full-domain, ausência de claims indevidos, quarentena/reset | PASS | Cadeia225/0030/0031, R17 separado e latch de processo são explicitamente limitados. | NOT_RUN |
+| 7. Escolhas materiais resolvidas antes da revisão humana | FAIL | F01–F03 precisam de emenda normativa; não devem virar decisões silenciosas de BUILD. | NOT_RUN |
+
+Aspectos documentais que passaram individualmente: selector test-only/defaultlegacy e identidade persistida; ferramenta constante S14 e two-message frame; raw/result/response/guard digests separados; tratamento explícito de unrecorded e ACK desconhecido; CAS por ID+digest e seal atômico; evaluation eager ACK somente no perfil novo; ausência de CAS em CANCELLED; OPEN settlement-only versus CLOSED replay; callbacks awaited; ordem parent/binding/queue/event/attempt/session/pause; lookup sem locks no trigger; proibição de marker evasion/upgrade/downgrade/requeue; inventário13 row+13 truncate, tgtypes31/27/34 e preservação0029; primeira admissão exclusiva e rollback roll-forward. Esses PASS não qualificam a implementação nem removem as lacunas acima.
+
+## Checks, erros e correções de hipótese
+
+[check-results.json](check-results.json) registra 21 checks estáticos PASS: escopo literal, contagem/unicidade, fingerprints, igualdade antes/depois, bindings do source-manifest e âncoras das fontes. O PASS do checker **não** é o veredito da SPEC.
+
+O primeiro comando de fingerprint falhou com exit127 porque `python` não existe (`/bin/bash: line 1: python: command not found`). O corpo não executou e não escreveu outputs. Foi repetido com `python3`; a falha está preservada em check-results.json. Algumas leituras amplas foram truncadas pela apresentação da ferramenta; os seams que sustentam findings foram relidos em faixas menores.
+
+Hipótese descartada durante a análise: o argumento `terminal=true` em `state.io` do log/callback de ferramenta poderia, por si, fechar a execução durável. A leitura de S05:70–83 mostrou que o ramo durável passa `this.finalizing || this.closed` a run; o argumento terminal governa o ramo não durável. Portanto **não** emiti esse finding nem aleguei que o caminho atual fecha dispatch simplesmente ao confirmar a ferramenta.
+
+Nenhum erro de checker foi convertido em aceite; nenhuma prova copiada foi executada ou transferida. Este parecer não exige que as dependências pendentes estejam aprovadas para se revisar a SPEC documental. Exige somente que as transições e as fronteiras de proteção sejam coerentes no candidato apresentado ao humano.
+
+Próxima ação indicada: emendar os três pontos normativos, atualizar o plano de oráculos e submeter os novos bytes à revisão independente. Não canonicalizei arquivos, não pedi decisão225 e não concedi gate humano ou BUILD.
+
+Artefatos: [findings.json](findings.json), [read-coverage.json](read-coverage.json), [inventory.json](inventory.json), [seal.json](seal.json). O inventário cobre os artefatos precedentes; o selo destacado cobre todos eles e o próprio inventário, excluindo somente o selo de sua auto-hash. É integridade por hash, sem assinatura criptográfica de identidade.

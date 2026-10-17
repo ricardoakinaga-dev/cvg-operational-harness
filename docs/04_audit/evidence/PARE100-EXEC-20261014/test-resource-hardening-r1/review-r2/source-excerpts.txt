@@ -1,0 +1,276 @@
+packages/persistence/src/__tests__/fixtures/complete-process-support.ts:390-408
+ 390   const latch = (error: Error) => {
+ 391     failure ??= error
+ 392     rejectFailure(failure)
+ 393     void lifecycle.stop().catch(() => {})
+ 394   }
+ 395   const deadline = setTimeout(
+ 396     () =>
+ 397       latch(
+ 398         new Error(`Fixture maxRuntimeMs ${options?.maxRuntimeMs}ms exceeded`)
+ 399       ),
+ 400     options?.maxRuntimeMs ?? 180000
+ 401   )
+ 402   const output = completeCollector(latch)
+ 403   child.stdout!.on('data', (bytes: Buffer) => output.push('stdout', bytes))
+ 404   child.stderr!.on('data', (bytes: Buffer) => output.push('stderr', bytes))
+ 405   child.once('close', () => {
+ 406     closed = true
+ 407     clearTimeout(deadline)
+ 408   })
+
+packages/persistence/src/__tests__/fixtures/complete-process-support.ts:427-488
+ 427   const combine = async <T>(action: () => Promise<T>): Promise<T> => {
+ 428     let primary: unknown
+ 429     let result: T | undefined
+ 430     try {
+ 431       result = await action()
+ 432       if (failure) throw failure
+ 433     } catch (error) {
+ 434       primary = error
+ 435     }
+ 436     let cleanup: unknown
+ 437     try {
+ 438       await lifecycle.stop()
+ 439     } catch (error) {
+ 440       cleanup = error
+ 441     }
+ 442     // An async spawn error rejects tracker.stop even after confirmed close.
+ 443     // That original error does not prevent safe removal of an unused HOME.
+ 444     if (closed) {
+ 445       try {
+ 446         await dispose()
+ 447       } catch (error) {
+ 448         cleanup =
+ 449           cleanup && cleanup !== error
+ 450             ? new AggregateError([cleanup, error], 'Join/disposal failed', {
+ 451                 cause: cleanup
+ 452               })
+ 453             : error
+ 454       }
+ 455     }
+ 456     clearTimeout(deadline)
+ 457     if (cleanup) {
+ 458       if (primary && primary !== cleanup)
+ 459         throw new AggregateError(
+ 460           [primary, cleanup],
+ 461           'Fixture failed; cleanup also failed',
+ 462           { cause: primary }
+ 463         )
+ 464       throw primary ?? cleanup
+ 465     }
+ 466     if (primary) throw primary
+ 467     return result as T
+ 468   }
+ 469   const done = Promise.race([lifecycle.closed, failed]).then(
+ 470     () => combine(lifecycle.finish),
+ 471     (error: unknown) =>
+ 472       combine(async () => {
+ 473         throw error
+ 474       })
+ 475   )
+ 476   void done.catch(() => {})
+ 477   return {
+ 478     proc: child,
+ 479     output,
+ 480     done,
+ 481     finish: () => combine(lifecycle.finish),
+ 482     stop: () =>
+ 483       combine(async () => {
+ 484         await lifecycle.stop()
+ 485         return lifecycle.finish()
+ 486       }),
+ 487     fail: latch
+ 488   }
+
+packages/persistence/src/__tests__/fixtures/complete-process-support.ts:709-754
+ 709 export function completeReadiness(
+ 710   owned: ReturnType<typeof observeCompleteChild>,
+ 711   profile: 'store-restart' | 'public-restart'
+ 712 ) {
+ 713   const marker = profile === 'store-restart' ? 'PG224_READY' : 'PUBLIC224_READY'
+ 714   let resolveReady!: (value: string) => void
+ 715   let rejectReady!: (error: unknown) => void
+ 716   const ready = new Promise<string>((yes, no) => {
+ 717     resolveReady = yes
+ 718     rejectReady = no
+ 719   })
+ 720   void ready.catch(() => {})
+ 721   const timer = setTimeout(() => {
+ 722     const error = new Error('Child readiness timeout')
+ 723     if (profile === 'public-restart') resolveReady('timeout')
+ 724     else rejectReady(error)
+ 725     owned.fail(error)
+ 726   }, completeProfiles[profile].readinessMs)
+ 727   owned.proc.stdout!.on('data', () => {
+ 728     try {
+ 729       const stdout = owned.output.bytes('stdout')
+ 730       if (stdout.includes(marker)) {
+ 731         if (profile === 'store-restart') clearTimeout(timer)
+ 732         resolveReady('ready')
+ 733       } else if (
+ 734         profile === 'public-restart' &&
+ 735         stdout.includes('PUBLIC224_FINISHED')
+ 736       )
+ 737         resolveReady('finished')
+ 738       if (profile === 'public-restart' && stdout.includes('PUBLIC224_FINISHED'))
+ 739         void owned.finish().catch((error) => owned.fail(error as Error))
+ 740     } catch (error) {
+ 741       rejectReady(error)
+ 742     }
+ 743   })
+ 744   void owned.done.then(
+ 745     () => {
+ 746       clearTimeout(timer)
+ 747       resolveReady('exited')
+ 748     },
+ 749     (error) => {
+ 750       clearTimeout(timer)
+ 751       rejectReady(error)
+ 752     }
+ 753   )
+ 754   return ready
+
+packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:206-267
+ 206 async function child(childRole: string, dir: string, input: string) {
+ 207   const config = process.env.SPEC0224_PG_CHILD_CONFIG
+ 208   if (!config) throw new Error('Private child config required')
+ 209   const owned = await startCompleteChild({
+ 210     profile: 'store-restart',
+ 211     role: childRole,
+ 212     resource: resourcePath!,
+ 213     config,
+ 214     input: input,
+ 215     dir
+ 216   })
+ 217   const { proc, argv } = owned
+ 218   const readiness = completeReadiness(owned, 'store-restart')
+ 219   const ready = readiness.then((status) => {
+ 220     if (status !== 'ready') throw new Error('Child exited before readiness')
+ 221   })
+ 222   void ready.catch(() => {})
+ 223   const done = owned.done.then(async (exit) => {
+ 224     const omitted: string[] = []
+ 225     for (const name of ['stdout', 'stderr'] as const) {
+ 226       const bytes = owned.output.bytes(name)
+ 227       if (bytes.length)
+ 228         await writeFile(join(dir, `${childRole}.${name}.log`), bytes)
+ 229       else omitted.push(name)
+ 230     }
+ 231     await writeFile(
+ 232       join(dir, `${childRole}.command.json`),
+ 233       JSON.stringify(
+ 234         {
+ 235           executable: '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',
+ 236           argv,
+ 237           cwd: process.cwd(),
+ 238           pid: proc.pid,
+ 239           ...exit,
+ 240           emptyStreamsOmitted: omitted
+ 241         },
+ 242         null,
+ 243         2
+ 244       )
+ 245     )
+ 246     return exit
+ 247   })
+ 248   void done.catch(() => {})
+ 249   return {
+ 250     proc,
+ 251     ready,
+ 252     done,
+ 253     stop: async () => {
+ 254       await owned.stop()
+ 255       await done
+ 256     }
+ 257   }
+ 258 }
+ 259 
+ 260 if (role) {
+ 261   it(`synthetic PG child ${role}`, async () => {
+ 262     const dir = process.env.SPEC0224_PG_CHILD_DIR!
+ 263     const input = JSON.parse(
+ 264       (
+ 265         await privateBytes(
+ 266           dirname(resourcePath!),
+ 267           process.env.SPEC0224_PG_CHILD_INPUT!
+
+packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:408-415
+ 408         } catch (error) {
+ 409           primary = error
+ 410           throw error
+ 411         } finally {
+ 412           await stopCompleteChildren(ownedChildren, primary)
+ 413           await cleanup(pool, executionId)
+ 414           await pool.end()
+ 415         }
+
+packages/persistence/src/__tests__/complete-tool-process-restart.test.ts:489-496
+ 489         } catch (error) {
+ 490           primary = error
+ 491           throw error
+ 492         } finally {
+ 493           await stopCompleteChildren(processes, primary)
+ 494           await cleanup(pool, executionId)
+ 495           await pool.end()
+ 496         }
+
+packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:443-492
+ 443 async function child(childRole: string, dir: string, inputPath: string) {
+ 444   const config = process.env.SPEC0224_PUBLIC_CHILD_CONFIG
+ 445   if (!config) throw new Error('Private child config required')
+ 446   const owned = await startCompleteChild({
+ 447     profile: 'public-restart',
+ 448     role: childRole,
+ 449     resource: resourcePath!,
+ 450     config,
+ 451     input: inputPath,
+ 452     dir
+ 453   })
+ 454   const { proc, argv } = owned
+ 455   const readiness = completeReadiness(owned, 'public-restart')
+ 456   const ready = readiness
+ 457   void ready.catch(() => {})
+ 458   const done = owned.done.then(async (exit) => {
+ 459     const omitted: string[] = []
+ 460     for (const name of ['stdout', 'stderr'] as const) {
+ 461       const bytes = owned.output.bytes(name)
+ 462       if (bytes.length)
+ 463         await writeFile(join(dir, `${childRole}.${name}.log`), bytes)
+ 464       else omitted.push(name)
+ 465     }
+ 466     await writeFile(
+ 467       join(dir, `${childRole}.command.json`),
+ 468       JSON.stringify(
+ 469         {
+ 470           executable: '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',
+ 471           argv,
+ 472           cwd: process.cwd(),
+ 473           pid: proc.pid,
+ 474           ...exit,
+ 475           emptyStreamsOmitted: omitted
+ 476         },
+ 477         null,
+ 478         2
+ 479       )
+ 480     )
+ 481     return exit
+ 482   })
+ 483   void done.catch(() => {})
+ 484   return {
+ 485     proc,
+ 486     ready,
+ 487     done,
+ 488     stop: async () => {
+ 489       await owned.stop()
+ 490       await done
+ 491     }
+ 492   }
+
+packages/persistence/src/__tests__/complete-tool-public-restart.test.ts:661-666
+ 661           } catch (error) {
+ 662             primary = error
+ 663             throw error
+ 664           } finally {
+ 665             await stopCompleteChildren(ownedChildren, primary)
+ 666           }

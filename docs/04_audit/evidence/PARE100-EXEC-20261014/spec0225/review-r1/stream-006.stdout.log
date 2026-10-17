@@ -1,0 +1,402 @@
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/controlled-published-kernel-store.ts
+680:         return this.ackPhase(fence, p, v)
+681:       },
+682:       saveResumePoint: (f, s, c, q, r) => {
+683:         checked(f)
+684:         return this.saveResumePoint(fence, s, c, q, r)
+685:       },
+686:       poison: (f, p, r) => {
+687:         checked(f)
+688:         return this.poison(fence, p, r)
+689:       },
+690:       close: (f, s, r, t, v) => {
+691:         checked(f)
+692:         return this.close(fence, s, r, t, v)
+693:       }
+694:     }
+695:     return {
+696:       identity: claim.identity,
+697:       signal,
+698:       ...(fence.cancellation ? { cancelled: true } : {}),
+699:       expiresAt: claim.expiresAt,
+700:       state: claim.state,
+701:       continuation,
+702:       lifecycle,
+703:       approvalConsumption: {
+704:         consumeBoundApproval: (f, p, v) => {
+705:           checked(f)
+706:           return this.consumeBoundApproval(fence, p, v)
+707:         }
+708:       },
+709:       admission: {
+710:         readGuards: (f) => {
+711:           checked(f)
+712:           return this.readGuards(fence)
+713:         },
+714:         prepareDispatch: (f, p, v) => {
+715:           checked(f)
+716:           return this.prepareDispatch(fence, p, v)
+717:         }
+718:       },
+719:       ports: {
+720:         effectJournal: new PostgresOperationalEffectJournal(this.pool, {
+721:           fence
+722:         }),
+723:         stepStore: new PostgresExecutionStepStore(this.pool, { fence }),
+724:         audit: {
+725:           append: (event) =>
+726:             this.portEvent(fence, `audit/${event.action}`, event)
+727:         },
+728:         log: {
+729:           append: (event) => this.portEvent(fence, `log/${event.type}`, event)
+730:         },
+731:         effects: {
+732:           started: (ref) => this.portEvent(fence, 'effects/started', ref),
+733:           finished: (ref, outcome) =>
+734:             this.portEvent(fence, 'effects/finished', { ref, outcome })
+735:         },
+736:         pause: {
+737:           isPaused: () => {
+738:             throw new Error('controlled_published_async_pause_required')
+739:           }
+740:         },
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/controlled-published-kernel-store.ts
+1480:           if (tool.name !== 'find_available_slots')
+1481:             publishedFenceError('conflict')
+1482:           const callback = await client.query<{
+1483:             canonical_payload: Record<string, unknown>
+1484:           }>(
+1485:             `SELECT canonical_payload FROM controlled_published_evidence
+1486:           WHERE tenant_id=$1 AND execution_id=$2 AND event_key=$3`,
+1487:             [
+1488:               fence.tenantId,
+1489:               fence.executionId,
+1490:               `${fence.executionId}:s2:find_available_slots:callback/tool`
+1491:             ]
+1492:           )
+1493:           const receipt = callback.rows[0]?.canonical_payload
+1494:           if (!receipt && !success) continue
+1495:           if (typeof receipt?.mirrorAuditId !== 'string')
+1496:             publishedFenceError('conflict')
+1497:           const event = json<PluginAuditEvent>(receipt.event)
+1498:           if (
+1499:             event.type !== 'tool_call' ||
+1500:             event.tenantId !== fence.tenantId ||
+1501:             event.traceId !== b.trace_id ||
+1502:             event.correlationId !== b.correlation_id ||
+1503:             event.agentId !== b.agent_id ||
+1504:             event.versionId !== b.version_id ||
+1505:             event.toolName !== tool.name ||
+1506:             (success && event.status !== 'succeeded')
+1507:           )
+1508:             publishedFenceError('conflict')
+1509:           const mirror = await client.query<{
+1510:             type: string
+1511:             correlation_id: string
+1512:             payload: unknown
+1513:           }>(
+1514:             'SELECT type,correlation_id,payload FROM audit_events WHERE tenant_id=$1 AND id=$2',
+1515:             [fence.tenantId, receipt.mirrorAuditId]
+1516:           )
+1517:           const expectedMirror = sanitizeAuditEvidencePayload({
+1518:             event,
+1519:             tenantId: fence.tenantId,
+1520:             executionId: fence.executionId,
+1521:             operationKey: `${fence.executionId}:s2:find_available_slots`
+1522:           }).payload
+1523:           if (
+1524:             mirror.rowCount !== 1 ||
+1525:             mirror.rows[0]?.type !== 'tool_call' ||
+1526:             mirror.rows[0].correlation_id !== b.correlation_id ||
+1527:             controlledCanonicalJson(mirror.rows[0].payload) !==
+1528:               controlledCanonicalJson(expectedMirror)
+1529:           )
+1530:             publishedFenceError('conflict')
+1531:           if (success) {
+1532:             const journal = await client.query<{
+1533:               state: string
+1534:               result: unknown
+1535:             }>(
+1536:               `SELECT state,result FROM operational_effect_journal WHERE tenant_id=$1 AND operation_key=$2`,
+1537:               [fence.tenantId, `${fence.executionId}:s2:find_available_slots`]
+1538:             )
+1539:             const attempt = s?.attempts.find(
+1540:               (a) => a.command.execution.toolName === tool.name
+1541:             )
+1542:             if (
+1543:               tool.status !== 'succeeded' ||
+1544:               journal.rows[0]?.state !== 'CONFIRMED' ||
+1545:               !attempt?.callbackAcknowledged ||
+1546:               !attempt.resultAcknowledged ||
+1547:               !attempt.logAcknowledged
+1548:             )
+1549:               publishedFenceError('conflict')
+1550:             if (
+1551:               controlledCanonicalJson(journal.rows[0]!.result) !==
+1552:                 controlledCanonicalJson(attempt.command.output?.data) ||
+1553:               controlledCanonicalJson(event.payload) !==
+1554:                 controlledCanonicalJson(
+1555:                   sanitizeAuditEvidencePayload({
+1556:                     toolName: tool.name,
+1557:                     input: attempt.command.execution.input,
+1558:                     result: attempt.command.output?.data
+1559:                   }).payload
+1560:                 )
+1561:             )
+1562:               publishedFenceError('conflict')
+1563:           }
+1564:         }
+1565:         const now = await g.recheck()
+1566:         await this.appendEvidence(
+1567:           client,
+1568:           b,
+1569:           'execution:closed',
+1570:           'execution.closed',
+1571:           {
+1572:             stopReason: r.stopReason,
+1573:             traceDigest: controlledDigest(t),
+1574:             resultDigest: controlledDigest(r),
+1575:             stateDigest: controlledDigest(s),
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/controlled-published-kernel-store.ts
+1820:         versionId: b.version_id,
+1821:         actorId: v.actorId,
+1822:         consumedAt: consumed.record.consumedAt.toISOString()
+1823:       }
+1824:       await this.appendEvidence(
+1825:         client,
+1826:         b,
+1827:         `${p.phaseId}:approval`,
+1828:         'approval.consumed',
+1829:         base,
+1830:         fence.attempt
+1831:       )
+1832:       const ack = await this.ackOnClient(
+1833:         client,
+1834:         b,
+1835:         p,
+1836:         { phaseType: p.phaseType, completed: true },
+1837:         fence.attempt
+1838:       )
+1839:       const receipt: ControlledApprovalReceipt = { ...base, ...ack }
+1840:       // The receipt and single-use0002 transition commit together. OPEN is deliberately not a resume seal.
+1841:       attempt.approvalRequired = true
+1842:       attempt.policyAllowed = true
+1843:       attempt.approvalConsumed = true
+1844:       attempt.approvalReceipt = receipt
+1845:       await client.query(
+1846:         `UPDATE controlled_published_bindings SET approval_receipt=$3::jsonb,state=$4::jsonb,state_digest=$5
+1847:         WHERE tenant_id=$1 AND execution_id=$2`,
+1848:         [
+1849:           fence.tenantId,
+1850:           fence.executionId,
+1851:           controlledCanonicalJson(receipt),
+1852:           state === null ? null : controlledCanonicalJson(state),
+1853:           state === null ? null : controlledDigest(state)
+1854:         ]
+1855:       )
+1856:       await g.recheck()
+1857:       return { record: consumed.record, receipt }
+1858:     })
+1859:   }
+1860: 
+1861:   appendToolAudit(
+1862:     claim: ControlledPublishedClaim,
+1863:     event: PluginAuditEvent
+1864:   ): Promise<void> {
+1865:     const fence = claim.fence
+1866:     return this.run(
+1867:       fence,
+1868:       async (client, b, g) => {
+1869:         const p = phaseOf(b)
+1870:         if (
+1871:           !p ||
+1872:           p.phaseType !== 'callback.tool' ||
+1873:           b.open_phase_acked ||
+1874:           event.tenantId !== fence.tenantId ||
+1875:           event.traceId !== b.trace_id ||
+1876:           event.correlationId !== b.correlation_id ||
+1877:           event.agentId !== b.agent_id ||
+1878:           event.versionId !== b.version_id ||
+1879:           event.toolName !== 'find_available_slots'
+1880:         )
+1881:           publishedFenceError()
+1882:         const journal = (
+1883:           await client.query<{ state: string; result: unknown }>(
+1884:             'SELECT state,result FROM operational_effect_journal WHERE tenant_id=$1 AND operation_key=$2',
+1885:             [fence.tenantId, `${fence.executionId}:s2:find_available_slots`]
+1886:           )
+1887:         ).rows[0]
+1888:         if (event.status === 'succeeded' || journal?.state === 'CONFIRMED') {
+1889:           const attempt =
+1890:             b.state === null
+1891:               ? undefined
+1892:               : json<ControlledPublishedSnapshot>(b.state).attempts.find(
+1893:                   (a) => a.command.execution.toolName === event.toolName
+1894:                 )
+1895:           if (
+1896:             !attempt ||
+1897:             event.status !== 'succeeded' ||
+1898:             journal?.state !== 'CONFIRMED' ||
+1899:             controlledCanonicalJson(event.payload) !==
+1900:               controlledCanonicalJson(
+1901:                 sanitizeAuditEvidencePayload({
+1902:                   toolName: event.toolName,
+1903:                   input: attempt.command.execution.input,
+1904:                   result: journal.result
+1905:                 }).payload
+1906:               )
+1907:           )
+1908:             publishedFenceError('conflict')
+1909:         }
+1910:         const mirrorId = `audit_${randomUUID()}`
+1911:         const payload = sanitizeAuditEvidencePayload({
+1912:           event,
+1913:           tenantId: fence.tenantId,
+1914:           executionId: fence.executionId,
+1915:           operationKey: `${fence.executionId}:s2:find_available_slots`
+1916:         }).payload
+1917:         await client.query(
+1918:           `INSERT INTO audit_events(tenant_id,id,type,actor_type,actor_id,correlation_id,policy_version,payload,created_at)
+1919:         VALUES($1,$2,'tool_call','system','controlled-published-worker',$3,'controlled-published-v1',$4::jsonb,clock_timestamp())`,
+1920:           [
+1921:             fence.tenantId,
+1922:             mirrorId,
+1923:             b.correlation_id,
+1924:             controlledCanonicalJson(payload)
+1925:           ]
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/harness/src/createOperationalHarness.ts
+229: function resolveTools(
+230:   options: OperationalHarnessOptions,
+231:   capabilityFingerprint: string | undefined
+232: ): ToolRegistry {
+233:   if (options.capabilities && options.tools) {
+234:     throw new Error(
+235:       'Operational harness composition accepts capabilities or tools, not both'
+236:     )
+237:   }
+238:   const baseRegistry = options.capabilities
+239:     ? createCapabilityToolRegistry(
+240:         options.capabilities,
+241:         options.toolResultContext ? prepareCompleteToolResult : undefined
+242:       )
+243:     : options.tools
+244:   if (!baseRegistry) {
+245:     throw new Error(
+246:       'Operational harness composition requires an explicit capability or tool registry'
+247:     )
+248:   }
+249:   const registry = options.toolResultContext
+250:     ? prepareCompleteToolRegistry(baseRegistry)
+251:     : baseRegistry
+252:   if (!options.effectJournal) return registry
+253:   return createJournaledToolRegistry(registry, options.effectJournal, {
+254:     ...options.effectJournalOptions,
+255:     ...(capabilityFingerprint
+256:       ? { compositionFingerprint: capabilityFingerprint }
+257:       : {})
+258:   })
+259: }
+260: 
+261: async function safeAudit(
+262:   options: OperationalHarnessOptions,
+263:   input: RuntimeInput,
+264:   action: string,
+265:   result: string
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql
+161: -- Bind lookups to the trigger's schema, never a mutable caller search_path.
+162: CREATE FUNCTION cvg_controlled_bound_writer() RETURNS trigger LANGUAGE plpgsql AS $$
+163: DECLARE
+164:   t text; x text; bound boolean; parent record; mode text; owner text; fence text;
+165:   controlled boolean;
+166: BEGIN
+167:   t := COALESCE(to_jsonb(NEW)->>'tenant_id',to_jsonb(OLD)->>'tenant_id');
+168:   IF TG_TABLE_NAME='operational_executions' THEN
+169:     x := COALESCE(to_jsonb(NEW)->>'id',to_jsonb(OLD)->>'id');
+170:     controlled := COALESCE(to_jsonb(NEW)#>>'{request,runtime,context,values,adapterVersion}','')='controlled-published-v1'
+171:       OR COALESCE(to_jsonb(OLD)#>>'{request,runtime,context,values,adapterVersion}','')='controlled-published-v1';
+172:   ELSIF TG_TABLE_NAME='operational_effect_journal' THEN
+173:     EXECUTE format('SELECT id FROM %I.operational_executions WHERE tenant_id=$1 AND request#>>''{runtime,context,values,adapterVersion}''=''controlled-published-v1'' AND left($2,length(id)+2)=id||'':s'' LIMIT 1',TG_TABLE_SCHEMA)
+174:       INTO x USING t,COALESCE(to_jsonb(NEW)->>'operation_key',to_jsonb(OLD)->>'operation_key');
+175:     controlled := x IS NOT NULL;
+176:   ELSE
+177:     x := COALESCE(to_jsonb(NEW)->>'execution_id',to_jsonb(OLD)->>'execution_id');
+178:     EXECUTE format('SELECT EXISTS(SELECT 1 FROM %I.operational_executions WHERE tenant_id=$1 AND id=$2 AND request#>>''{runtime,context,values,adapterVersion}''=''controlled-published-v1'')',TG_TABLE_SCHEMA)
+179:       INTO controlled USING t,x;
+180:   END IF;
+181:   -- The reserved parent marker is only a deny discriminator. Ordinary roles
+182:   -- must not need grants on private sidecars to keep writing unbound work.
+183:   IF x IS NULL OR NOT controlled THEN RETURN COALESCE(NEW,OLD); END IF;
+184:   EXECUTE format('SELECT EXISTS(SELECT 1 FROM %I.controlled_published_bindings WHERE tenant_id=$1 AND execution_id=$2)',TG_TABLE_SCHEMA)
+185:     INTO bound USING t,x;
+186:   IF NOT bound THEN RETURN COALESCE(NEW,OLD); END IF;
+187:   mode := current_setting('cvg.published_mode',true);
+188:   owner := current_setting('cvg.published_worker',true);
+189:   fence := current_setting('cvg.published_attempt',true);
+190:   IF current_setting('cvg.published_execution',true) IS DISTINCT FROM x
+191:      OR current_setting('cvg.tenant_id',true) IS DISTINCT FROM t
+192:      OR mode IS NULL OR mode NOT IN ('active','settlement','claim','close','cancel','cancel_close')
+193:      OR fence IS NULL OR fence !~ '^[0-9]+$' THEN
+194:     RAISE EXCEPTION 'bound execution requires controlled fence context' USING ERRCODE='42501';
+195:   END IF;
+196:   EXECUTE format('SELECT state,attempt,lease_owner,lease_until FROM %I.operational_executions WHERE tenant_id=$1 AND id=$2',TG_TABLE_SCHEMA)
+197:     INTO parent USING t,x;
+198:   IF parent IS NULL THEN RAISE EXCEPTION 'bound execution parent missing' USING ERRCODE='42501'; END IF;
+199:   IF mode='cancel_close' THEN
+200:     IF TG_TABLE_NAME NOT IN ('controlled_published_bindings','controlled_published_evidence')
+201:        OR parent.state<>'CANCELLED' OR parent.attempt::text IS DISTINCT FROM fence THEN
+202:       RAISE EXCEPTION 'invalid cancellation closure writer' USING ERRCODE='42501';
+203:     END IF;
+204:     EXECUTE format('SELECT EXISTS(SELECT 1 FROM %I.operational_execution_events WHERE tenant_id=$1 AND execution_id=$2 AND event_type=''CANCELLED'' AND attempt=$3 AND sequence::text=$4)',TG_TABLE_SCHEMA)
+205:       INTO bound USING t,x,parent.attempt,current_setting('cvg.published_cancel_event',true);
+206:     IF NOT bound THEN RAISE EXCEPTION 'cancellation event binding missing' USING ERRCODE='42501'; END IF;
+207:   ELSIF mode='cancel' THEN
+208:     IF TG_TABLE_NAME NOT IN ('operational_executions','operational_execution_outbox','operational_execution_events')
+209:        OR parent.state NOT IN ('QUEUED','FAILED_RETRYABLE','CANCELLED')
+210:        OR parent.attempt::text IS DISTINCT FROM fence THEN
+211:       RAISE EXCEPTION 'invalid bound cancellation writer' USING ERRCODE='42501';
+212:     END IF;
+213:   ELSIF mode='claim' THEN
+214:     IF TG_TABLE_NAME NOT IN ('operational_executions','operational_execution_outbox','operational_execution_events','controlled_published_bindings','controlled_published_evidence')
+215:        OR parent.state NOT IN ('QUEUED','FAILED_RETRYABLE','CLAIMED','RUNNING')
+216:        OR parent.attempt > fence::bigint
+217:        OR parent.attempt < fence::bigint-1
+218:        OR (parent.state IN ('CLAIMED','RUNNING') AND parent.lease_until>clock_timestamp()
+219:             AND (parent.lease_owner IS DISTINCT FROM owner OR parent.attempt::text IS DISTINCT FROM fence)) THEN
+220:       RAISE EXCEPTION 'invalid bound claim writer' USING ERRCODE='42501';
+221:     END IF;
+222:   ELSIF mode='close' AND parent.state IN ('SUCCEEDED','FAILED_TERMINAL','CANCELLED') THEN
+223:     IF TG_TABLE_NAME NOT IN ('operational_execution_outbox','operational_execution_events')
+224:        OR parent.attempt::text IS DISTINCT FROM fence THEN
+225:       RAISE EXCEPTION 'closed execution rejects further writes' USING ERRCODE='42501';
+226:     END IF;
+227:   ELSE
+228:     IF parent.state NOT IN ('CLAIMED','RUNNING') OR parent.lease_owner IS DISTINCT FROM owner
+229:        OR parent.attempt::text IS DISTINCT FROM fence OR parent.lease_until<=clock_timestamp() THEN
+230:       RAISE EXCEPTION 'bound execution fence expired or lost' USING ERRCODE='42501';
+231:     END IF;
+232:   END IF;
+233:   IF TG_OP='DELETE' THEN RAISE EXCEPTION 'bound execution cannot be deleted' USING ERRCODE='42501'; END IF;
+234:   RETURN NEW;
+235: END $$;
+236: 
+237: CREATE TRIGGER controlled_bound_execution_writer BEFORE UPDATE OR DELETE ON operational_executions
+238:  FOR EACH ROW EXECUTE FUNCTION cvg_controlled_bound_writer();
+239: CREATE TRIGGER controlled_bound_queue_writer BEFORE INSERT OR UPDATE OR DELETE ON operational_execution_outbox
+240:  FOR EACH ROW EXECUTE FUNCTION cvg_controlled_bound_writer();
+241: CREATE TRIGGER controlled_bound_event_writer BEFORE INSERT OR UPDATE OR DELETE ON operational_execution_events
+242:  FOR EACH ROW EXECUTE FUNCTION cvg_controlled_bound_writer();
+243: CREATE TRIGGER controlled_bound_step_writer BEFORE INSERT OR UPDATE OR DELETE ON operational_execution_steps
+244:  FOR EACH ROW EXECUTE FUNCTION cvg_controlled_bound_writer();
+245: CREATE TRIGGER controlled_bound_checkpoint_writer BEFORE INSERT OR UPDATE OR DELETE ON operational_execution_checkpoints
+246:  FOR EACH ROW EXECUTE FUNCTION cvg_controlled_bound_writer();
+247: CREATE TRIGGER controlled_bound_journal_writer BEFORE INSERT OR UPDATE OR DELETE ON operational_effect_journal
+248:  FOR EACH ROW EXECUTE FUNCTION cvg_controlled_bound_writer();
+249: CREATE TRIGGER controlled_bound_binding_writer BEFORE UPDATE ON controlled_published_bindings
+250:  FOR EACH ROW EXECUTE FUNCTION cvg_controlled_bound_writer();
+251: CREATE TRIGGER controlled_bound_evidence_writer BEFORE INSERT ON controlled_published_evidence
+252:  FOR EACH ROW EXECUTE FUNCTION cvg_controlled_bound_writer();

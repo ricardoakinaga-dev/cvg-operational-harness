@@ -1,0 +1,363 @@
+FILE runtime.ts
+1: import type {
+2:   ApprovalEngine,
+3:   AuditSink,
+4:   HarnessRuntime,
+5:   ModelGateway,
+6:   Orchestrator,
+7:   PolicyEngine,
+8:   RuntimeInput,
+9:   RuntimeResult,
+10:   SandboxGate,
+11:   TelemetrySink,
+12:   ToolRegistry
+13: } from '@cvg/harness-contracts'
+14: import { createKernelRuntime } from './kernel/profile.ts'
+15: import type { KernelRuntime } from './kernel/kernel-runtime.ts'
+16: import type { EffectLedger, KernelLog, PauseSwitch } from './kernel/types.ts'
+17: 
+18: export { ALL_AGENT_TOOLS, agentExposesTool } from './kernel/kernel-runtime.ts'
+19: 
+20: export interface HarnessRuntimeOptions {
+21:   readonly orchestrator: Orchestrator
+22:   readonly modelGateway: ModelGateway
+23:   readonly policy: PolicyEngine
+24:   readonly approvals: ApprovalEngine
+25:   readonly tools: ToolRegistry
+26:   readonly capabilityFingerprint?: string
+27:   readonly audit: AuditSink
+28:   readonly telemetry: TelemetrySink
+29:   /** Kernel controls; in-memory defaults when omitted. */
+30:   readonly pause?: PauseSwitch
+31:   readonly log?: KernelLog
+32:   readonly effects?: EffectLedger
+33:   /** Optional containment gate; absent means fail-closed for contained tools. */
+34:   readonly sandbox?: SandboxGate
+35: }
+36: 
+37: /**
+38:  * Single-pass profile, now a thin facade over the plugin kernel (SPEC 0181,
+39:  * decision D-0181-3). Governance runs as kernel control plugins; this class
+40:  * only keeps the public name and constructor while consumers migrate.
+41:  */
+42: export class SinglePassGovernedRuntime implements HarnessRuntime {
+43:   readonly #kernel: KernelRuntime
+44: 
+45:   public constructor(options: HarnessRuntimeOptions) {
+46:     this.#kernel = createKernelRuntime({
+47:       ...options,
+48:       eventName: 'harness.single_pass'
+49:     })
+50:   }
+51: 
+52:   public execute(input: RuntimeInput): Promise<RuntimeResult> {
+53:     return this.#kernel.execute(input)
+54:   }
+55: }
+FILE kernel/profile.ts
+48:   readonly eventName?: string
+49:   /** Extra plugins mounted after the standard profile. */
+50:   readonly plugins?: readonly KernelPlugin[]
+51: }
+52: 
+53: /**
+54:  * The standard profile: every control the kernel requires (I1), in a fixed
+55:  * order, followed by the capabilities of the single-turn loop.
+56:  */
+57: export function standardKernelPlugins(
+58:   options: StandardKernelOptions
+59: ): KernelPlugin[] {
+60:   const eventName = options.eventName ?? 'harness.kernel'
+61:   return [
+62:     budgetControl(),
+63:     pauseControl(options.pause),
+64:     logControl(options.log),
+65:     effectsControl(options.effects),
+66:     policyControl(options.policy),
+67:     approvalsControl(
+68:       options.approvals,
+69:       options.capabilityFingerprint
+70:         ? { capabilityFingerprint: options.capabilityFingerprint }
+71:         : {}
+72:     ),
+73:     auditControl(options.audit, { action: eventName }),
+74:     ...(options.sandbox ? [sandboxControl(options.sandbox)] : []),
+75:     plannerCapability(options.orchestrator),
+76:     modelCapability(options.modelGateway),
+77:     toolsCapability(options.tools),
+78:     telemetryCapability(options.telemetry, { name: eventName }),
+79:     ...(options.plugins ?? [])
+80:   ]
+81: }
+82: 
+83: /** Kernel runtime with the standard profile, booted on first use. */
+84: export function createKernelRuntime(
+85:   options: StandardKernelOptions
+FILE kernel/pipeline.ts
+285:   ): Promise<ToolPipelineResult> => {
+286:     const unrecorded = await appendLog(host, {
+287:       type: 'tool/result',
+288:       correlationId,
+289:       toolId: tool.id,
+290:       outcome: 'not_started'
+291:     })
+292:     // A lost closing record is not hidden behind the denial (AUD-0598 R04):
+293:     // the call stays blocked, and the turn reports the missing evidence.
+294:     return unrecorded
+295:       ? { kind: 'stopped', gate: unrecordedBlock(unrecorded, blocked), blocked }
+296:       : { kind: 'stopped', gate: blocked }
+297:   }
+298: 
+299:   const gate = await runGate(host, 'tool/pre-execute', call)
+300:   if (gate.kind === 'stop') return closeNotStarted(gate)
+301: 
+302:   const denial = await revalidate(host, call)
+303:   if (denial) return closeNotStarted(denial)
+304: 
+305:   const sandbox = await enforceSandbox(host, call)
+306:   if (sandbox) return closeNotStarted(sandbox)
+307: 
+308:   let hooked: KernelStop | undefined
+309:   try {
+310:     hooked = await hooks.beforeDispatch?.(call)
+311:   } catch (error) {
+312:     // The loop's own checkpoint failed: the logged call is still closed once
+313:     // and the original failure reaches the loop unchanged (AUD-0598 R03).
+314:     await appendLog(host, {
+315:       type: 'tool/result',
+316:       correlationId,
+317:       toolId: tool.id,
+318:       outcome: 'not_started'
+319:     })
+320:     throw error
+340: /**
+341:  * Derives the containment a tool needs from its descriptor (SPEC 0195 §2/§5).
+342:  * EXTERNAL effects require an EGRESS gate; WRITE effects require WORKSPACE;
+343:  * READ effects require at least IN_PROCESS. A mode-`NONE` capability is pure
+344:  * in-memory and never reaches the sandbox gate.
+345:  */
+346: /**
+347:  * The mode is declared on the descriptor (SPEC 0195 §5). Absent or `'NONE'`
+348:  * means no gate; the harness never infers containment from `sideEffect`, so
+349:  * legacy side-effecting tools keep running until they opt in.
+350:  */
+351: export function requiredSandboxMode(descriptor: ToolDescriptor): SandboxMode {
+352:   return descriptor.sandbox ?? 'NONE'
+353: }
+354: 
+355: /**
+475:       return {
+476:         kind: 'not_started',
+477:         gate: stop(
+478:           'MAX_DURATION',
+479:           'Duration budget exhausted before tool execution.'
+480:         )
+481:       }
+482:     }
+483:     // Last decision point: after every wrapper (the approval reservation),
+484:     // a pause or a cancellation still prevents the effect (F01/F02).
+485:     const blocked = await revalidate(host, call)
+486:     if (blocked) return { kind: 'not_started', gate: blocked }
+487:     try {
+488:       await host.get('effects').started(ref)
+489:     } catch (error) {
+490:       return {
+491:         kind: 'not_started',
+492:         gate: stop(
+493:           'INSUFFICIENT_EVIDENCE',
+494:           `Effect ledger could not record the start: ${errorMessage(error)}.`
+495:         )
+496:       }
+497:     }
+498:     started = true
+499:     const startedAt = Date.now()
+500:     const toolController = new AbortController()
+501:     try {
+502:       // Past the decision point the body is always invoked, so a recorded
+503:       // start never pairs with a body that did not run.
+504:       const value = await raceInvoked(turn, () =>
+505:         call.tool.execute(call.invocation.input, {
+506:           tenantId: turn.input.tenantId,
+507:           agentId: turn.input.agent.id,
+508:           correlationId: turn.input.correlationId,
+509:           traceId: turn.input.traceId,
+510:           operationKey: call.invocation.operationKey,
+511:           ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
+512:           signal: AbortSignal.any([toolController.signal, turn.signal])
+513:         })
+514:       )
+515:       const durationMs = Date.now() - startedAt
+516:       if (value === DEADLINE || value === CANCELLED) {
+517:         toolController.abort()
+518:         return {
+519:           kind: value === DEADLINE ? 'deadline' : 'cancelled',
+520:           durationMs
+521:         }
+522:       }
+523:       return value.status === 'SUCCEEDED'
+524:         ? { kind: 'succeeded', result: value, durationMs }
+525:         : { kind: 'failed', result: value, durationMs }
+526:     } catch (error) {
+527:       return {
+528:         kind: 'threw',
+529:         error: errorMessage(error),
+530:         durationMs: Date.now() - startedAt
+531:       }
+532:     }
+533:   }
+534:   const listeners = host.listeners('tool/execute')
+535:   const run = (index: number): Promise<ToolOutcome> => {
+FILE kernel/controls.ts
+758:   return {
+759:     name: 'capability.tools',
+760:     kind: 'capability',
+761:     provides: ['tools'],
+762:     apply: (ctx) => void ctx.provide('tools', tools)
+763:   }
+764: }
+765: 
+766: export interface TelemetryCapabilityOptions {
+767:   readonly name?: string
+768: }
+769: 
+770: /** Observability never turns a governed result into an error. */
+771: export function telemetryCapability(
+772:   telemetry: TelemetrySink,
+773:   options: TelemetryCapabilityOptions = {}
+774: ): KernelPlugin {
+775:   const name = options.name ?? 'harness.kernel'
+776:   return {
+777:     name: 'capability.telemetry',
+778:     kind: 'capability',
+779:     provides: ['telemetry'],
+780:     apply(ctx) {
+781:       ctx.provide('telemetry', telemetry)
+782:       ctx.on('turn/end', async (turn, result) => {
+783:         const event: TelemetryEvent = {
+784:           name,
+785:           latencyMs: Date.now() - turn.startedAt,
+786:           errors: result.stopReason === 'COMPLETED' ? 0 : 1,
+787:           costUsd: result.usage.costUsd,
+788:           inputTokens: result.usage.inputTokens,
+789:           outputTokens: result.usage.outputTokens,
+790:           provider: turn.metadata.provider,
+791:           toolDurationMs: turn.metadata.toolDurationMs,
+792:           steps: result.steps,
+793:           traceId: turn.input.traceId,
+794:           correlationId: turn.input.correlationId
+795:         }
+796:         try {
+797:           telemetry.record(event)
+798:         } catch {
+799:           // Observability must not turn a governed result into an error.
+800:         }
+801:         return result
+802:       })
+803:     }
+804:   }
+805: }
+806: 
+807: export { PROCEED }
+FILE kernel/kernel-runtime.ts
+210:   }
+211: }
+212: 
+213: /** One execution of the loop over a booted, sealed host. */
+214: class Turn {
+215:   readonly #host: KernelHost
+216:   readonly #controller = new AbortController()
+217:   readonly #state: TurnState
+218: 
+219:   public constructor(host: KernelHost, input: RuntimeInput) {
+220:     this.#host = host
+221:     const startedAt = Date.now()
+222:     if (input.signal?.aborted) this.#controller.abort()
+223:     input.signal?.addEventListener('abort', () => this.#controller.abort(), {
+224:       once: true
+225:     })
+226:     this.#state = createTurnState(
+227:       input,
+228:       startedAt,
+229:       host.get('budget').begin(input, startedAt),
+230:       this.#controller.signal
+231:     )
+232:   }
+233: 
+234:   public async run(): Promise<RuntimeResult> {
+235:     const input = this.#state.input
+236:     if (!hasValidBoundaryInput(input)) {
+237:       return this.#finish(
+238:         result({
+239:           response: 'Runtime identity or execution budget is invalid.',
+240:           stopReason: 'UNSAFE_REQUEST',
+492:         fromStop(
+493:           stop(
+494:             'POLICY_DENIED',
+495:             `Tool "${tool.id}" is not exposed to this agent profile.`
+496:           )
+497:         )
+498:       )
+499:     }
+500: 
+501:     const call: ToolCallState = {
+502:       turn: this.#state,
+503:       tool,
+504:       invocation,
+505:       needsApproval: false
+506:     }
+507: 
+508:     const pipeline = await runToolCall(this.#host, call)
+509:     if (pipeline.kind === 'stopped') {
+510:       const approvalId = pipeline.gate.approvalId ?? call.grant?.approvalId
+511:       return this.#finish(
+512:         fromStop({
+513:           ...pipeline.gate,
+514:           ...(approvalId !== undefined ? { approvalId } : {})
+515:         })
+516:       )
+517:     }
+518:     const settled = pipeline.outcome
+519:     this.#state.metadata.toolDurationMs =
+520:       'durationMs' in settled ? settled.durationMs : 0
+521:     const toolResult = this.#toolResult(call, settled)
+522:     if (pipeline.logFailure) {
+523:       // F04: the effect fact stays in the result; the turn is not a success.
+524:       // A call blocked after its reservation keeps the reason it was blocked
+525:       // (AUD-0599 F01).
+526:       return this.#finish({
+527:         ...toolResult,
+528:         response:
+529:           settled.kind === 'not_started'
+530:             ? unrecordedBlock(pipeline.logFailure, settled.gate).response
+531:             : pipeline.logFailure.response,
+FILE capability-boundary.ts
+245:   }
+246: 
+247:   const inputSchema = cloneJsonValue(descriptor.inputSchema)
+248:   const outputSchema = cloneJsonValue(descriptor.outputSchema)
+249:   return deepFreeze({
+250:     id: descriptor.id,
+251:     version: descriptor.version,
+252:     description: descriptor.description.trim(),
+253:     inputSchema,
+254:     outputSchema,
+255:     risk: descriptor.risk,
+256:     sideEffect: descriptor.sideEffect,
+257:     idempotent: descriptor.idempotent,
+258:     requiresApproval: descriptor.requiresApproval,
+259:     origin: descriptor.origin,
+260:     providerId: descriptor.providerId,
+261:     providerVersion: descriptor.providerVersion
+262:   }) as CapabilityDescriptor
+263: }
+340: }
+341: 
+342: function toTool(registration: StoredRegistration): ToolDefinition {
+343:   const descriptor = cloneDescriptor(registration.descriptor)
+344:   return {
+345:     ...descriptor,
+346:     execute: (input: unknown, context: ToolExecutionContext) =>
+347:       executeBound(registration.implementation, input, context)
+348:   }
+349: }
+350: 

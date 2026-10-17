@@ -1,0 +1,15 @@
+from pathlib import Path
+import json,hashlib
+r=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4');w=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree')
+before=json.loads((r/'integrity-before.json').read_text());out=[]
+for x in before['transitiveCurrentSourceSentinel']:
+ p=Path(x['path']); b=p.read_bytes();assert hashlib.sha256(b).hexdigest()==x['sha256'] and len(b)==x['bytes'];q=r/'current-source'/p.relative_to(w);q.parent.mkdir(parents=True,exist_ok=True);q.write_bytes(b);out.append({'live':str(p),'copy':str(q),'sha256':x['sha256'],'bytes':len(b)})
+(r/'current-source-bindings.json').write_text(json.dumps(out,indent=2)+'\n')
+anchors={'packages/harness/src/iterative-runtime.ts':[(720,812),(1008,1020)],'packages/harness/src/effect-journal.ts':[(116,155),(250,262),(298,310),(320,362)],'packages/harness/src/complete-tool-results.ts':[(54,69)],'packages/harness/src/createOperationalHarness.ts':[(39,49),(230,258)],'packages/harness/src/index.ts':[(15,27)],'packages/harness/src/iterative-dispatch.ts':[(472,501)],'docs/02_spec/0224_pare100_complete_tool_result_context.md':[(193,205),(476,479)]}
+lines=[]
+for name,ranges in anchors.items():
+ content=(w/name).read_text().splitlines();lines.append('\nFILE '+name)
+ for a,b in ranges:
+  lines.extend(f'{i}: {content[i-1]}' for i in range(a,b+1))
+(r/'source-anchors.txt').write_text('\n'.join(lines)+'\n')
+print(json.dumps({'capturedCurrentSourceFiles':len(out),'anchorFiles':len(anchors)}))

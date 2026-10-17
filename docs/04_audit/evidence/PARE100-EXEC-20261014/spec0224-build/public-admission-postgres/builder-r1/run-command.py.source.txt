@@ -1,0 +1,13 @@
+import sys,subprocess,json,pathlib,hashlib,datetime,os
+b=pathlib.Path(__file__).resolve().parent
+w=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree')
+label=sys.argv[1];cmd=sys.argv[2:]
+s=w/'packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts'
+now=lambda:datetime.datetime.now(datetime.timezone.utc).isoformat()
+h=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+r={'label':label,'command':cmd,'cwd':str(w),'startedAt':now(),'sourceBeforeSHA256':h(s)}
+env=os.environ.copy();env['PATH']='/home/ricardo/.nvm/versions/node/v22.23.2/bin:'+env['PATH'];env['TMPDIR']=str(b/'tmp');(b/'tmp').mkdir(exist_ok=True)
+with (b/(label+'.log')).open('x') as f:
+ p=subprocess.run(cmd,cwd=w,stdout=f,stderr=subprocess.STDOUT,env=env)
+r.update(exit=p.returncode,finishedAt=now(),sourceAfterSHA256=h(s),log=label+'.log')
+(b/(label+'.command.json')).write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r));sys.exit(p.returncode)

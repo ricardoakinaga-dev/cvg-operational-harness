@@ -1,0 +1,30 @@
+import pathlib,subprocess,json,hashlib,sys,datetime
+r=pathlib.Path.cwd()
+p=subprocess.run(['python3','hash_packet.py','post'],capture_output=True,text=True,cwd=r)
+(r/'final-hash.stdout').write_text(p.stdout)
+if p.stderr:(r/'final-hash.stderr').write_text(p.stderr)
+if p.returncode:sys.exit(p.returncode)
+rs=json.loads((r/'addendum-hash-pre.json').read_text()); records=[]
+for x in rs:
+ for kind in ['live','copy']:
+  path=pathlib.Path(x[kind]); data=path.read_bytes();h=hashlib.sha256(data).hexdigest()
+  records.append(dict(path=str(path),kind=kind,bytes=len(data),sha256=h,ok=h==x['sha256'] and len(data)==x['bytes']))
+(r/'addendum-hash-post.json').write_text(json.dumps(records,indent=2)+'\n')
+assert all(x['ok'] for x in records)
+a=json.loads((r/'report.json').read_text());assert a['verdict']=='REJECT' and len(a['criteria'])==10
+for n in ['report.json','report.md','journal-null.observations.json']:assert (r/n).stat().st_size>0
+# Empty streams are explicit omissions in command records; omit their zero-byte files.
+for f in r.glob('cmd-*'):
+ if f.is_file() and f.stat().st_size==0:f.unlink()
+status=dict(verdict='REJECT',packetRecords=146,packetUnchanged=True,addendumUnchanged=True,reportsNonempty=True,processWriteBoundaryCompliant=False)
+stdout=json.dumps(status)+'\n'
+(r/'finalization.stdout').write_text(stdout)
+(r/'finalization.json').write_text(json.dumps(dict(argv=['python3','finalize.py'],cwd=str(r),exit=0,stdout='finalization.stdout',stderr='EMPTY',nestedHashCommand=dict(argv=['python3','hash_packet.py','post'],exit=p.returncode,stdout='final-hash.stdout',stderr='EMPTY' if not p.stderr else 'final-hash.stderr')),indent=2)+'\n')
+entries=[]
+for f in sorted(r.rglob('*')):
+ if not f.is_file() or f.name=='artifact-manifest.json':continue
+ b=f.read_bytes();entries.append(dict(path=str(f.relative_to(r)),bytes=len(b),sha256=hashlib.sha256(b).hexdigest()))
+manifest=dict(version=1,createdAt=datetime.datetime.now(datetime.timezone.utc).isoformat(),scope='Own persistent review artifacts, including private config/tests/cache. Manifest itself excluded to avoid self-reference. Empty command streams omitted and marked EMPTY in command records.',entries=entries)
+(r/'artifact-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+assert entries and (r/'artifact-manifest.json').stat().st_size>0
+print(stdout,end='')

@@ -1,0 +1,112 @@
+'use strict';
+const fs = require('node:fs');
+const net = require('node:net');
+const http = require('node:http');
+const dns = require('node:dns');
+const path = require('node:path');
+const root = __dirname;
+const results = [];
+const servers = [];
+const counts = {};
+let dnsCalls = 0;
+dns.lookup = (host, opts, cb) => { if (net.isIP(host)) { if (typeof opts === 'function') cb=opts; return process.nextTick(cb,null,host,net.isIP(host)); } dnsCalls++; throw new Error('FORBIDDEN_DNS_TRIPWIRE'); };
+function server(name) {
+  counts[name] = 0;
+  const s = net.createServer(socket => { counts[name]++; socket.end(name); });
+  servers.push(s);
+  return s;
+}
+function listen(s, ...args) {
+  return new Promise((resolve,reject) => {
+    s.once('error', reject);
+    s.listen(...args, () => { s.removeListener('error', reject); resolve(s.address()); });
+  });
+}
+function attempt(name, expected, invoke) {
+  return new Promise(resolve => {
+    let sync = true, socket, finished = false;
+    const finish = value => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (socket) socket.destroy();
+      const row = { name, expected, ...value, pass: value.result === expected && (expected !== 'CVG_GLOBAL_TEST_NETWORK_BLOCKED' || value.async === true) };
+      results.push(row); console.log(JSON.stringify(row)); resolve(row);
+    };
+    const timer = setTimeout(() => finish({result:'TIMEOUT'}), 1000);
+    try {
+      socket = invoke();
+      socket.once('error', error => finish({result:error.code || error.message, async:!sync}));
+      socket.once('connect', () => finish({result:'CONNECTED', async:!sync, remoteAddress:socket.remoteAddress, remotePort:socket.remotePort}));
+    } catch (error) { finish({result:error.code || error.message, async:false}); }
+    sync = false;
+  });
+}
+const blocked = 'CVG_GLOBAL_TEST_NETWORK_BLOCKED';
+function pin(ip, calls) {
+  return (host,opts,cb) => {
+    if (calls) calls.push({host,opts});
+    return opts.all ? cb(null,[{address:ip,family:net.isIP(ip)}]) : cb(null,ip,net.isIP(ip));
+  };
+}
+(async () => {
+  const unowned = server('unowned-ipv4');
+  const unownedAddress = await listen(unowned, 0, '127.0.0.1');
+  const ipcUnowned = server('unowned-ipc');
+  const ipcUnownedPath = path.join(root, 'unowned.sock');
+  await listen(ipcUnowned, ipcUnownedPath);
+  require('./network-guard.cjs');
+  const own = server('owned-ipv4');
+  const ownAddress = await listen(own,0,'127.0.0.1');
+  const port = ownAddress.port;
+  const ipc = server('owned-ipc');
+  const ipcPath = path.join(root, 'owned.sock');
+  await listen(ipc, ipcPath);
+  await attempt('net.connect object owned IPv4', 'CONNECTED', () => net.connect({host:'127.0.0.1',port}));
+  await attempt('net.connect positional port/host/callback', 'CONNECTED', () => net.connect(port,'127.0.0.1',()=>{}));
+  await attempt('Socket.connect positional string port', 'CONNECTED', () => new net.Socket().connect(String(port),'127.0.0.1'));
+  await attempt('Socket.connect numeric-string with plus', 'CONNECTED', () => new net.Socket().connect('+'+port,'127.0.0.1'));
+  await attempt('Socket.connect numeric-string with whitespace', 'CONNECTED', () => new net.Socket().connect(' '+port+' ','127.0.0.1'));
+  for (const autoSelectFamily of [true,false]) {
+    const calls=[];
+    const row=await attempt('owned pinned hostname autoSelectFamily='+autoSelectFamily,'CONNECTED',()=>net.connect({host:'provider.invalid',port,autoSelectFamily,lookup:pin('127.0.0.1',calls)}));
+    console.log(JSON.stringify({lookupCallsFor:row.name,calls}));
+  }
+  await attempt('localhost owned no DNS', 'CONNECTED', () => net.connect({host:'localhost',port}));
+  await attempt('owned TCP empty path Node falsy-path selection', 'CONNECTED', () => net.connect({path:'',host:'127.0.0.1',port}));
+  await attempt('unregistered live TCP direct',blocked,()=>net.connect({host:'127.0.0.1',port:unownedAddress.port}));
+  await attempt('unregistered live TCP pinned',blocked,()=>net.connect({host:'provider.invalid',port:unownedAddress.port,lookup:pin('127.0.0.1')}));
+  await attempt('unpinned hostname no DNS',blocked,()=>net.connect({host:'provider.invalid',port}));
+  await attempt('mixed lookup owned IPv4 plus unowned IPv6',blocked,()=>net.connect({host:'provider.invalid',port,autoSelectFamily:true,lookup:(_h,_o,cb)=>cb(null,[{address:'127.0.0.1',family:4},{address:'::1',family:6}])}));
+  await attempt('owned IPC string','CONNECTED',()=>net.connect(ipcPath));
+  await attempt('owned IPC options','CONNECTED',()=>new net.Socket().connect({path:ipcPath}));
+  await attempt('owned IPC plus unowned TCP chooses IPC','CONNECTED',()=>net.connect({path:ipcPath,host:'127.0.0.1',port:unownedAddress.port}));
+  await attempt('unowned IPC options',blocked,()=>net.connect({path:ipcUnownedPath}));
+  await attempt('unowned IPC plus owned TCP chooses IPC',blocked,()=>net.connect({path:ipcUnownedPath,host:'127.0.0.1',port}));
+  let ipv6;
+  try { ipv6=server('owned-ipv6'); await listen(ipv6,unownedAddress.port,'::1'); }
+  catch(error) { console.log(JSON.stringify({name:'IPv6 setup',result:'UNAVAILABLE',code:error.code})); ipv6=null; }
+  if(ipv6) {
+    await attempt('owned IPv6 literal control','CONNECTED',()=>net.connect({host:'::1',port:unownedAddress.port}));
+    await attempt('actual host ::1 ignores hostname','CONNECTED',()=>net.connect({host:'::1',hostname:'127.0.0.1',port:unownedAddress.port}));
+    const calls=[];
+    const before=counts['unowned-ipv4'];
+    await attempt('COUNTEREXAMPLE hostname-only validates IPv6 but Node uses localhost plus unowned IPv4 pin',blocked,()=>net.connect({hostname:'::1',port:unownedAddress.port,autoSelectFamily:false,lookup:pin('127.0.0.1',calls)}));
+    await new Promise(resolve=>setImmediate(resolve));
+    console.log(JSON.stringify({counterexampleLookupCalls:calls,unownedAcceptDelta:counts['unowned-ipv4']-before,unownedIPv4:unownedAddress,ownedIPv6:ipv6.address()}));
+  }
+  const web=http.createServer((req,res)=>res.end(req.headers.host)); servers.push(web);
+  const webAddress=await listen(web,0,'127.0.0.1');
+  const authority=await new Promise((resolve,reject)=>{
+    const req=http.get({hostname:'provider.invalid',port:webAddress.port,agent:false,path:'/synthetic',lookup:pin('127.0.0.1')},res=>{let s='';res.on('data',x=>s+=x);res.on('end',()=>resolve(s));});req.once('error',reject);
+  });
+  console.log(JSON.stringify({name:'HTTP original authority',actual:authority,expected:'provider.invalid:'+webAddress.port,pass:authority==='provider.invalid:'+webAddress.port}));
+  await new Promise(resolve=>own.close(resolve));
+  await attempt('closed previously owned TCP',blocked,()=>net.connect({host:'127.0.0.1',port}));
+  const summary={node:process.version,dnsCalls,results,counts,expectationFailures:results.filter(r=>!r.pass).length,scope:'local synthetic only; installed guard in same process; no child or external traffic'};
+  fs.writeFileSync(path.join(root,'probe-results.json'),JSON.stringify(summary,null,2)+'\n');
+  console.log(JSON.stringify({summary:{dnsCalls,counts,expectationFailures:summary.expectationFailures}}));
+  process.exitCode=summary.expectationFailures?1:0;
+})().catch(e=>{console.error(e);process.exitCode=2;}).finally(async()=>{
+  for(const s of servers) { if(s.closeAllConnections)s.closeAllConnections(); if(s.listening)await new Promise(resolve=>s.close(resolve)); }
+});

@@ -1,0 +1,22 @@
+import pathlib,json,hashlib,subprocess,os,time
+R=pathlib.Path(__file__).resolve().parents[1];P=R.parent/'review-packet-r1';M=json.loads((P/'manifest.json').read_text());A=pathlib.Path(M['artifactRoot']);N=M['node']
+def write(p,s):
+ p=R/p;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(s)
+def env(name):
+ e=os.environ.copy();e.update(TMPDIR=str(R/'tmp'),TMP=str(R/'tmp'),TEMP=str(R/'tmp'),NODE_COMPILE_CACHE=str(R/'nodecache'),VITE_CACHE_DIR=str(R/'cache'),I1_REVIEW=str(R),I1_READ_LOG=str(R/'logs'/f'{name}-reads.jsonl'),I1_SCOPE_PACKAGE=M['allowedScopeMetadata']['path'],I1_PACKET_DEPS=M['allowedDependencyMirror'],NODE_OPTIONS='--require='+str(P/'environment/trace-reads.cjs'),SPEC0224_RESPONSE_EVIDENCE=str(R/'run/cases-private.json'))
+ return e
+def run(name,argv,extra=None):
+ e=env(name);e.update(extra or {});start=time.time();res=subprocess.run(argv,cwd=A,env=e,stdout=subprocess.PIPE,stderr=subprocess.STDOUT);write(f'logs/{name}.log',res.stdout.decode(errors='replace'));write(f'logs/{name}-command.json',json.dumps(dict(argv=argv,cwd=str(A),environment={k:v for k,v in e.items() if k in env(name) and (k.startswith(('I1_','VITE','NODE_','SPEC0224')) or k in ['TMP','TEMP','TMPDIR'])},exit=res.returncode,seconds=time.time()-start),indent=2));print(name,'exit',res.returncode);print(res.stdout.decode(errors='replace')[-6000:]);return res.returncode
+if __name__=='__main__':
+ t=(P/'environment/vitest-template.mjs').read_text().replace('__I1_ASSIGNED_CACHE__',str(R/'cache/frozen'))
+ plugin='''
+import fs from 'node:fs';
+import {createHash} from 'node:crypto';
+const own=process.env.I1_REVIEW;
+function logStage(stage,code,id){const b=Buffer.from(code);const hash=createHash('sha256').update(b).digest('hex');fs.mkdirSync(own+'/logs/transformed-bytes',{recursive:true});fs.writeFileSync(own+'/logs/transformed-bytes/'+hash,b);fs.appendFileSync(own+'/logs/transform.jsonl',JSON.stringify({pid:process.pid,path:id,stage,bytes:b.length,sha256:hash})+'\\n');}
+config.plugins=[{name:'i1-pre',enforce:'pre',transform(code,id){logStage('pre',code,id);return null;}},{name:'i1-post',enforce:'post',transform(code,id){logStage('post',code,id);return null;}}];
+export default config;
+'''
+ write('run/vitest.config.mjs',t.replace('export default {','const config = {')+plugin)
+ write('probes/sentinel.cjs',"try {require('node:fs').readFileSync('/tmp/cvg-I1-FORBIDDEN-SENTINEL');process.exitCode=2}catch(e){console.log(e.message);if(!e.message.startsWith('I1 prohibited read '))process.exitCode=3}\n")
+ run('sentinel',[N,str(R/'probes/sentinel.cjs')]);run('frozen',[N,str(P/'node_modules/vitest/vitest.mjs'),'run','--config',str(R/'run/vitest.config.mjs'),'--configLoader','native'])

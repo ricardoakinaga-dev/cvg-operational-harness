@@ -1,0 +1,294 @@
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/common.py ===
+   1 from pathlib import Path
+   2 import hashlib
+   3 import json
+   4 
+   5 P = Path(__file__).resolve().parent
+   6 W = P.parent / 'worktree'
+   7 NODE = Path('/home/ricardo/.nvm/versions/node/v22.23.2/bin/node')
+   8 CAP = 1048576
+   9 
+  10 def require(ok, reason):
+  11     if not ok:
+  12         raise ValueError(reason)
+  13 
+  14 def digest(path):
+  15     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+  16 
+  17 def strict_load(raw):
+  18     def pairs(items):
+  19         result = {}
+  20         for key, value in items:
+  21             require(key not in result, 'duplicate JSON key: ' + key)
+  22             result[key] = value
+  23         return result
+  24     def invalid(value):
+  25         raise ValueError('invalid JSON number: ' + value)
+  26     return json.loads(raw, object_pairs_hook=pairs, parse_constant=invalid)
+  27 
+  28 def load(path):
+  29     return strict_load(Path(path).read_bytes())
+  30 
+  31 def put(path, value):
+  32     Path(path).write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + '\n')
+  33 
+  34 def integer(value, minimum=0, maximum=5000):
+  35     return type(value) is int and minimum <= value <= maximum
+  36 
+  37 def equal(actual, expected, reason):
+  38     # JSON equality must distinguish booleans from integers.
+  39     require(type(actual) is type(expected), reason + ': type')
+  40     if isinstance(expected, dict):
+  41         require(set(actual) == set(expected), reason + ': keys')
+  42         for key in expected:
+  43             equal(actual[key], expected[key], reason + '.' + key)
+  44     elif isinstance(expected, list):
+  45         require(len(actual) == len(expected), reason + ': length')
+  46         for a, b in zip(actual, expected):
+  47             equal(a, b, reason + '[]')
+  48     else:
+  49         require(actual == expected, reason)
+  50 
+  51 def env_for(folder):
+  52     return {
+  53         'PATH': f'{NODE.parent}:/usr/bin:/bin', 'HOME': str(folder / 'home'),
+  54         'TMPDIR': str(folder / 'tmp'), 'TMP': str(folder / 'tmp'), 'TEMP': str(folder / 'tmp'),
+  55         'XDG_CACHE_HOME': str(folder / 'cache'), 'XDG_CONFIG_HOME': str(folder / 'config'),
+  56         'XDG_DATA_HOME': str(folder / 'data'), 'TSX_DISABLE_CACHE': '1',
+  57         'NODE_DISABLE_COMPILE_CACHE': '1', 'PYTHONDONTWRITEBYTECODE': '1',
+  58         'TSX_TSCONFIG_PATH': str(W / 'tsconfig.base.json'),
+  59         'LANG': 'C.UTF-8', 'TZ': 'UTC', 'NO_COLOR': '1'
+  60     }
+  61 
+  62 def source_paths():
+  63     paths = set()
+  64     for tree in ['packages', 'apps', 'legacy/packages', 'products']:
+  65         for src in (W / tree).glob('*/src'):
+  66             paths.update(f for f in src.rglob('*') if f.is_file())
+  67     paths.update(f for f in (W / 'node_modules/tsx').rglob('*') if f.is_file())
+  68     paths.update([NODE, W / 'package.json', W / 'package-lock.json', W / 'tsconfig.base.json'])
+  69     frozen = load(P.parent / 'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json')
+  70     pins = frozen['newGroups'][0]['pins']
+  71     require(len(pins) == 465, 'pins count')
+  72     require(all(digest(W / name) == sha for name, sha in pins.items()), 'pin drift')
+  73     paths.update(W / name for name in pins)
+  74     paths.update(P / n for n in ['observe.mts', 'run.py', 'launcher.py', 'common.py', 'validate.py', 'checks.py', 'seal.py', 'fixture.json', 'tsconfig.json'])
+  75     return sorted(paths)
+  76 
+  77 def snapshot(paths):
+  78     return {str(f): digest(f) for f in paths}
+  79 
+  80 def authority(path, expected_sha):
+  81     require(len(expected_sha) == 64 and digest(path) == expected_sha, 'untrusted authority digest')
+  82     value = load(path)
+  83     require(set(value) == {'schema', 'sources', 'argv', 'cwd', 'pins', 'fixtureSHA256'}, 'authority schema')
+  84     require(value['schema'] == 'sandbox-observer-authority-v2' and value['pins'] == 465, 'authority version')
+  85     paths = source_paths()
+  86     equal(value['sources'], snapshot(paths), 'trusted source membership/digests')
+  87     require(value['fixtureSHA256'] == digest(P / 'fixture.json'), 'fixture authority')
+  88     require(value['cwd'] == str(P), 'trusted cwd')
+  89     loader = W / 'node_modules/tsx/dist/loader.mjs'
+  90     equal(value['argv'], [str(NODE), '--import', str(loader), str(P / 'observe.mts')], 'trusted argv')
+  91     return value
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/launcher.py ===
+   1 import ctypes
+   2 import os
+   3 import selectors
+   4 import signal
+   5 import subprocess
+   6 import time
+   7 from common import CAP
+   8 
+   9 def execute(argv, cwd, env, deadline_ms=5000, cap=CAP, read_fault=False):
+  10     """Only trusted test callers supply argv/faults; no observation JSON authority."""
+  11     libc = ctypes.CDLL(None, use_errno=True)
+  12     if libc.prctl(36, 1, 0, 0, 0) != 0:
+  13         raise OSError(ctypes.get_errno(), 'PR_SET_CHILD_SUBREAPER failed')
+  14     started = time.monotonic_ns()
+  15     deadline = started + deadline_ms * 1000000
+  16     child = None
+  17     selector = selectors.DefaultSelector()
+  18     streams = {'stdout': bytearray(), 'stderr': bytearray()}
+  19     eof = {'stdout': False, 'stderr': False}
+  20     errors = []
+  21     discarded = 0
+  22     exit_code = None
+  23     reaped = []
+  24     remaining_group = None
+  25     execution_end = None
+  26     cleanup_start = None
+  27     try:
+  28         child = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+  29                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+  30                                  start_new_session=True)
+  31         selector.register(child.stdout, selectors.EVENT_READ, 'stdout')
+  32         selector.register(child.stderr, selectors.EVENT_READ, 'stderr')
+  33         while selector.get_map():
+  34             remaining_ns = deadline - time.monotonic_ns()
+  35             if remaining_ns <= 0:
+  36                 raise TimeoutError('execution_deadline')
+  37             for key, _ in selector.select(min(0.02, remaining_ns / 1000000000)):
+  38                 if read_fault:
+  39                     raise OSError('synthetic_capture_error')
+  40                 data = os.read(key.fileobj.fileno(), min(65536, cap + 1))
+  41                 if not data:
+  42                     eof[key.data] = True
+  43                     selector.unregister(key.fileobj)
+  44                     key.fileobj.close()
+  45                     continue
+  46                 room = cap - sum(map(len, streams.values()))
+  47                 streams[key.data].extend(data[:room])
+  48                 discarded += max(0, len(data) - room)
+  49                 if discarded:
+  50                     raise OverflowError('combined_output_cap')
+  51         # EOF does not end the execution deadline.
+  52         remaining_ns = deadline - time.monotonic_ns()
+  53         if remaining_ns <= 0:
+  54             raise TimeoutError('execution_deadline_after_eof')
+  55         try:
+  56             exit_code = child.wait(timeout=remaining_ns / 1000000000)
+  57         except subprocess.TimeoutExpired as error:
+  58             raise TimeoutError('execution_deadline_after_eof') from error
+  59         execution_end = time.monotonic_ns()
+  60         if execution_end > deadline:
+  61             raise TimeoutError('execution_deadline_at_join')
+  62     except Exception as error:
+  63         errors.append({'type': type(error).__name__, 'message': str(error)})
+  64     finally:
+  65         execution_end = execution_end or time.monotonic_ns()
+  66         cleanup_start = time.monotonic_ns()
+  67         selector.close()
+  68         if child is not None:
+  69             # Always kill/reap this dedicated group; no unrelated resources.
+  70             stop_by = time.monotonic_ns() + 2000000000
+  71             while True:
+  72                 try:
+  73                     os.killpg(child.pid, signal.SIGKILL)
+  74                 except ProcessLookupError:
+  75                     break
+  76                 except OSError as error:
+  77                     errors.append({'type': type(error).__name__, 'message': str(error)})
+  78                     break
+  79                 if child.poll() is not None:
+  80                     exit_code = child.returncode
+  81                 while True:
+  82                     try:
+  83                         pid, status = os.waitpid(-child.pid, os.WNOHANG)
+  84                     except ChildProcessError:
+  85                         break
+  86                     if not pid:
+  87                         break
+  88                     if pid == child.pid:
+  89                         exit_code = os.waitstatus_to_exitcode(status)
+  90                         child.returncode = exit_code
+  91                     else:
+  92                         reaped.append({'pid': pid, 'waitStatus': status})
+  93                 if time.monotonic_ns() >= stop_by:
+  94                     errors.append({'type': 'TimeoutError', 'message': 'cleanup_deadline'})
+  95                     break
+  96                 time.sleep(0.005)
+  97             try:
+  98                 exit_code = child.wait(timeout=max(0.001, (stop_by-time.monotonic_ns())/1000000000))
+  99             except Exception as error:
+ 100                 errors.append({'type': type(error).__name__, 'message': str(error)})
+ 101             try:
+ 102                 os.killpg(child.pid, 0)
+ 103                 remaining_group = True
+ 104             except ProcessLookupError:
+ 105                 remaining_group = False
+ 106             except OSError as error:
+ 107                 errors.append({'type': type(error).__name__, 'message': str(error)})
+ 108             for stream in [child.stdout, child.stderr]:
+ 109                 if stream is not None:
+ 110                     stream.close()
+ 111         else:
+ 112             remaining_group = False
+ 113     finished = time.monotonic_ns()
+ 114     return {
+ 115         'argv': argv, 'cwd': str(cwd), 'env': env,
+ 116         'pid': child.pid if child else None, 'processGroup': child.pid if child else None,
+ 117         'spawned': child is not None, 'exitCode': exit_code,
+ 118         'joined': child is not None and exit_code is not None,
+ 119         'remainingProcessGroup': remaining_group, 'subreaper': True,
+ 120         'executionElapsedNs': execution_end-started,
+ 121         'cleanupElapsedNs': finished-execution_end,
+ 122         'totalElapsedNs': finished-started,
+ 123         'deadlineMs': deadline_ms, 'outputLimit': cap, 'discardedBytes': discarded,
+ 124         'eof': eof, 'errors': errors, 'descendantsReaped': reaped,
+ 125         'retainedBytes': sum(map(len, streams.values()))
+ 126     }, {key: bytes(value) for key, value in streams.items()}
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/run.py ===
+   1 from pathlib import Path
+   2 import argparse
+   3 import sys
+   4 from common import P, authority, digest, env_for, put, snapshot, source_paths
+   5 from launcher import execute
+   6 
+   7 def run(folder, authority_path, expected_sha, snapshot_fault=False, capture_driver=execute):
+   8     folder.mkdir(parents=True, exist_ok=False)
+   9     streams = {'stdout': b'', 'stderr': b''}
+  10     before = None
+  11     after = None
+  12     record = {'schema': 'sandbox-observer-process-v2', 'authoritySHA256': expected_sha,
+  13               'capture': None, 'snapshotErrors': [], 'sourceCount': 0, 'sourcesUnchanged': False}
+  14     try:
+  15         trusted = authority(authority_path, expected_sha)
+  16         before = snapshot(source_paths())
+  17         record['sourceCount'] = len(before)
+  18         for directory in ['home', 'tmp', 'cache', 'config', 'data']:
+  19             (folder / directory).mkdir()
+  20         record['capture'], streams = capture_driver(trusted['argv'], P, env_for(folder))
+  21     except Exception as error:
+  22         record['snapshotErrors'].append({'stage': 'before_or_capture', 'type': type(error).__name__, 'message': str(error)})
+  23     finally:
+  24         # Capture outcome persists even if the post-run source snapshot fails.
+  25         try:
+  26             if snapshot_fault:
+  27                 raise OSError('synthetic_after_snapshot_error')
+  28             after = snapshot(source_paths())
+  29             record['sourcesUnchanged'] = before is not None and before == after
+  30         except Exception as error:
+  31             record['snapshotErrors'].append({'stage': 'after', 'type': type(error).__name__, 'message': str(error)})
+  32         for name, data in streams.items():
+  33             (folder / (name + '.txt')).write_bytes(data)
+  34         put(folder / 'sources-before.json', before)
+  35         put(folder / 'sources-after.json', after)
+  36         put(folder / 'process.json', record)
+  37     capture = record['capture']
+  38     good = (capture is not None and capture['exitCode'] == 0 and capture['joined']
+  39             and capture['remainingProcessGroup'] is False and not capture['errors']
+  40             and not record['snapshotErrors'] and record['sourcesUnchanged'])
+  41     return good, record
+  42 
+  43 if __name__ == '__main__':
+  44     parser = argparse.ArgumentParser()
+  45     parser.add_argument('--run', required=True, type=Path)
+  46     parser.add_argument('--authority', required=True, type=Path)
+  47     parser.add_argument('--authority-sha', required=True)
+  48     args = parser.parse_args()
+  49     good, result = run(args.run.resolve(), args.authority, args.authority_sha)
+  50     print({'measurementProcessValid': good, 'exitCode': result['capture']['exitCode'] if result['capture'] else None,
+  51            'sourceCount': result['sourceCount'], 'record': str(args.run / 'process.json')})
+  52     sys.exit(0 if good else 1)
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/seal.py ===
+   1 """Lead capture receipt. Expected digest must be supplied independently later."""
+   2 from pathlib import Path
+   3 import argparse
+   4 from common import digest, put
+   5 
+   6 FILES = {'process.json', 'sources-before.json', 'sources-after.json', 'stdout.txt', 'stderr.txt'}
+   7 
+   8 def seal(folder, target):
+   9     if target.exists():
+  10         raise FileExistsError(target)
+  11     value = {'schema': 'sandbox-observer-receipt-v2', 'run': str(folder.resolve()),
+  12              'files': {name: {'sha256': digest(folder / name), 'bytes': (folder / name).stat().st_size} for name in sorted(FILES)}}
+  13     put(target, value)
+  14     return digest(target)
+  15 
+  16 if __name__ == '__main__':
+  17     parser = argparse.ArgumentParser()
+  18     parser.add_argument('--run', required=True, type=Path)
+  19     parser.add_argument('--out', required=True, type=Path)
+  20     args = parser.parse_args()
+  21     print(seal(args.run, args.out))

@@ -1727,7 +1727,9 @@ export function auditProductBoundary(
         const target = path.join(root, file)
         pinState.set(
           file,
-          fs.existsSync(target)
+          fs.existsSync(target) &&
+            fs.lstatSync(target).isFile() &&
+            fs.realpathSync(target) === target
             ? createHash('sha256').update(fs.readFileSync(target)).digest('hex')
             : null
         )
@@ -1872,15 +1874,332 @@ export function auditProductBoundary(
 // an acceptance of HISO-005.
 const capabilityExceptions = [
   {
-    id: 'pdsh-neutral-canonical-compiled-reflection',
+    id: 'pare100-attested-parser-identity',
     reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
     justification:
-      'Compiled mirror of the reviewed neutral canonical serializer, emitted by the shared preparation build. Source and compiled bytes are independently pinned together; reflection only checks ordinary/null prototypes.',
+      'SPEC0214 reviewed private provenance check reads only own safeParse data descriptors and compares function identity against captured validators; does not invoke getters/evaluate strings/import modules. Exact source plus mirror/composition pins; arbitrary host JS remains trusted.',
+    pins: {
+      'packages/platform/src/plugin-execution-core.ts':
+        'a8ba50db2512c1a7f48f485143318c61a2583c9d956cfa529fce35e1a3caca03',
+      'packages/platform/dist/plugin-execution-core.js':
+        'b224ddd5033dd084cf9360e476a3fe7098faa10f7e19b53a615ab11304b7886d',
+      'packages/platform/src/controlled-plugins.ts':
+        '88689ff935108d6a0ba253dc35093f544bfb58768c3d60637eec1172ead70879',
+      'packages/platform/src/plugin-gateway.ts':
+        '8e764f8fb7bc4ff341896df1088ed795021ad10b675af1e87a459b395acc9280',
+      'packages/platform/src/tool-invocation-boundary.ts':
+        'c2c683ce2b3083afc6443c38b35aff131de6ee59e76a34f81ad2bdd04ab6992e',
+      'packages/platform/src/controlled-kernel-adapters.ts':
+        'd532a2d68a1b1001b0fed86837cac6f47382a3d8b732e7e7e79ca19c6ce75845',
+      'packages/platform/src/controlled-kernel-execution.ts':
+        'e42590c241e4da6d85b07fe353da153b4ac2e17d462219cbd6095a5b9448153b',
+      'packages/platform/src/index.ts':
+        '1268e8167372327a9b1bb856ec7b853e58d418cb5ce990eb38fed9be2d254029'
+    },
+    sites: {
+      'packages/platform/src/plugin-execution-core.ts': {
+        "Object.getOwnPropertyDescriptor(a.input, 'safeParse')?.value ===": {
+          f0cac39d5544623a: 1
+        },
+        "Object.getOwnPropertyDescriptor(a.output, 'safeParse')?.value ===": {
+          '33f70806644ca7b2': 1
+        }
+      },
+      'packages/platform/dist/plugin-execution-core.js': {
+        "Object.getOwnPropertyDescriptor(a.input, 'safeParse')?.value ===": {
+          f0cac39d5544623a: 1
+        },
+        "Object.getOwnPropertyDescriptor(a.output, 'safeParse')?.value ===": {
+          '33f70806644ca7b2': 1
+        }
+      }
+    }
+  },
+  {
+    id: 'pare100-sandbox-probe-compiled',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'Exact compiled mirror of existing pinned PDSH-011 probe. Fixed bwrap argv, no shell; exception attests only reviewed probe, not arbitrary guest/platform capability.',
+    pins: {
+      'packages/sandbox/src/capabilities.ts':
+        '6d65214b7c2c641603aec5aa336b3a050efd5c2ba9917d142407f3c019c3d6f5',
+      'packages/sandbox/dist/capabilities.js':
+        '5b5b62f5630c1f35fecca17ff01aac386806d17aac27d94525a39221544dd32c'
+    },
+    sites: {
+      'packages/sandbox/dist/capabilities.js': {
+        "execFileSync('bwrap', ['--ro-bind', '/', '/', '--unshare-net', '/bin/true'], { stdio: 'ignore', timeout: 5000 });":
+          {
+            '0d29dd41e010b63d': 1
+          }
+      }
+    }
+  },
+  {
+    id: 'pare100-contained-runner-compiled',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'Exact compiled mirror of existing pinned PDSH-011 contained runner. spawn argv, child stream/exit/timeout/stdin lifecycle under existing grants; bwrapPath is trusted host composition. No assertion of universal OS containment or authorization for real effects.',
+    pins: {
+      'packages/sandbox/src/run.ts':
+        'a5fa08026af97e2c809445f5949799f3e70b1f833da542142cb28d14f078e933',
+      'packages/sandbox/dist/run.js':
+        'df6716b96dbeef7ae3a75d2def34e389cf8c3ba127a098ed2dffb96fd35070a9'
+    },
+    sites: {
+      'packages/sandbox/dist/run.js': {
+        "const child = spawn(request.bwrapPath ?? 'bwrap', bwrapArgs, {": {
+          fdc5cd232a6b322b: 1
+        },
+        "child.kill('SIGKILL');": {
+          '5c689333c261579d': 1
+        },
+        "child.stdout.on('data', (chunk) => drain('stdout', chunk));": {
+          '2d81e05f58c53e18': 1
+        },
+        "child.stderr.on('data', (chunk) => drain('stderr', chunk));": {
+          '6d6d1e16402de7ff': 1
+        },
+        "child.on('error', () => {": {
+          '89ea22717a6b2867': 1
+        },
+        "child.on('close', (code) => {": {
+          d59b602a312f5180: 1
+        },
+        'child.stdin.end(request.stdin);': {
+          e1751db744e7920e: 1
+        },
+        'child.stdin.end();': {
+          dc7602b66365a6bb: 1
+        }
+      }
+    }
+  },
+  {
+    id: 'pare100-sdk-owned-test-child',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'SPEC0215 explicit user-reviewed fixed synthetic SDK child ownership/lifecycle; trusted Node/tsx/local dependencies, enumerated environment/private HOME; exact complete expressions, occurrence limits and whole composition pins. No arbitrary-program containment claim.',
+    pins: {
+      'packages/sdk/src/__tests__/stdio.test.ts':
+        '8d4ca5a2de91368ed8ea727a471c40250561d56254fea675f1bf506a9da10c2b',
+      'examples/consumers/sdk-stdio/index.mts':
+        '4c7e638a01409b2ae3a597b0ae2c890049877dbb40aa206fd1f7059e820f3bef',
+      'examples/consumers/sdk-stdio/child.mts':
+        '5f0754505c3499e52c367b1c773b0402f2accdf3fa958caf3d8dc91ef405512e',
+      'packages/sdk/src/stdio.ts':
+        '51ce4cbdb864ebe8004324bb7df75beab64d3b5a67920c2d2d4bac96e317a741',
+      'packages/sdk/src/validators.ts':
+        'd038763873888ffbc3119b0cb7b9d3260b0c4674419b58c94beec6c6a7e48391',
+      'packages/sdk/src/client.ts':
+        'f3009b670111a072415c1fe744da298ef89dd061c79070ceadde2c5f5473e7fe',
+      'packages/sdk/src/server.ts':
+        'a660bf8e2cb0141925cdca1b2f478b04b0b6743f9646b963fbb76efb442d7f9d',
+      'packages/sdk/src/index.ts':
+        '608a9e5fd1b64c35b89be6b7059d302cf6f8b28c07cfc30b8d67d641762121f2',
+      'packages/sdk/src/protocol.ts':
+        '5a485a669fa917a6514d00fa2fa62a8f86f1b70a7d7a0a9ab025a5ae594595dd',
+      'packages/sdk/src/composition.ts':
+        '0e4b26d3739ff4eb3c8f26def437795fda0ea5249d7068c52a47603cebffd94a',
+      'packages/harness/src/session/events.ts':
+        '771fa0692d9712ca0f168f71e15d43b8ba351b0aea003a98014159b3c1710bd2',
+      'packages/harness/src/session/memory.ts':
+        'cc98336ffc0b8131ccc5e33a36c8861b102e226acea45d29033001339e3647c7',
+      'packages/harness/src/session/index.ts':
+        'd9544a05b32b5dcb9d1e79a5eda73e50695095a269658fa6bfafb651187d746e',
+      'packages/harness/src/index.ts':
+        'fff371d91afe0ac7b86b19f82a6deeda9dc07ebbc12eabb0744e460255bb208f'
+    },
+    sites: {
+      'packages/sdk/src/__tests__/stdio.test.ts': {
+        'const child = spawn(': {
+          '42dbd0dd57d39c28': 1
+        },
+        'for (const s of [child.stdin, child.stdout, child.stderr])': {
+          '0bbca7c676d37570': 1,
+          '420dff553f97e6ee': 1,
+          '43db0b7bb09f8093': 1
+        },
+        "child.on('error', () => {})": {
+          c1b0eb4f5632c391: 1
+        },
+        'resources.push(() => shutdownSdkChild(child))': {
+          ddc9e669194254ce: 1
+        },
+        "child.stderr.off('data', ready)": {
+          e065d31a1edd8fd0: 1
+        },
+        "child.off('error', failed)": {
+          2116742447296456: 1
+        },
+        "child.off('close', closed)": {
+          '28b860ab50761659': 1
+        },
+        "child.stderr.once('data', ready)": {
+          d40763bde174f1e8: 1
+        },
+        "child.once('error', failed)": {
+          a9a522cc682b5d75: 1
+        },
+        "child.once('close', closed)": {
+          '2045ddd34528e3ca': 1
+        },
+        "const kill = vi.spyOn(child, 'kill')": {
+          ddc9e669194254ce: 1
+        },
+        'await shutdownSdkChild(child)': {
+          ddc9e669194254ce: 1
+        },
+        "expect(child.signalCode).toBe('SIGKILL')": {
+          '4bff52bde459ec30': 1
+        },
+        'child.stdin.closed,': {
+          e2aac9736fa1b739: 1
+        },
+        'child.stdout.closed,': {
+          '318fc17f11ad7419': 1
+        },
+        'child.stderr.closed': {
+          d41b6dfdd11deebb: 1
+        },
+        "expect(child.listenerCount('close')).toBe(0)": {
+          '9eda5f6c4655ab9b': 1
+        }
+      }
+    }
+  },
+  {
+    id: 'pare100-sdk-owned-example-child',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'SPEC0215 explicit user-reviewed fixed synthetic SDK child ownership/lifecycle; trusted Node/tsx/local dependencies, enumerated environment/private HOME; exact complete expressions, occurrence limits and whole composition pins. No arbitrary-program containment claim.',
+    pins: {
+      'packages/sdk/src/__tests__/stdio.test.ts':
+        '8d4ca5a2de91368ed8ea727a471c40250561d56254fea675f1bf506a9da10c2b',
+      'examples/consumers/sdk-stdio/index.mts':
+        '4c7e638a01409b2ae3a597b0ae2c890049877dbb40aa206fd1f7059e820f3bef',
+      'examples/consumers/sdk-stdio/child.mts':
+        '5f0754505c3499e52c367b1c773b0402f2accdf3fa958caf3d8dc91ef405512e',
+      'packages/sdk/src/stdio.ts':
+        '51ce4cbdb864ebe8004324bb7df75beab64d3b5a67920c2d2d4bac96e317a741',
+      'packages/sdk/src/validators.ts':
+        'd038763873888ffbc3119b0cb7b9d3260b0c4674419b58c94beec6c6a7e48391',
+      'packages/sdk/src/client.ts':
+        'f3009b670111a072415c1fe744da298ef89dd061c79070ceadde2c5f5473e7fe',
+      'packages/sdk/src/server.ts':
+        'a660bf8e2cb0141925cdca1b2f478b04b0b6743f9646b963fbb76efb442d7f9d',
+      'packages/sdk/src/index.ts':
+        '608a9e5fd1b64c35b89be6b7059d302cf6f8b28c07cfc30b8d67d641762121f2',
+      'packages/sdk/src/protocol.ts':
+        '5a485a669fa917a6514d00fa2fa62a8f86f1b70a7d7a0a9ab025a5ae594595dd',
+      'packages/sdk/src/composition.ts':
+        '0e4b26d3739ff4eb3c8f26def437795fda0ea5249d7068c52a47603cebffd94a',
+      'packages/harness/src/session/events.ts':
+        '771fa0692d9712ca0f168f71e15d43b8ba351b0aea003a98014159b3c1710bd2',
+      'packages/harness/src/session/memory.ts':
+        'cc98336ffc0b8131ccc5e33a36c8861b102e226acea45d29033001339e3647c7',
+      'packages/harness/src/session/index.ts':
+        'd9544a05b32b5dcb9d1e79a5eda73e50695095a269658fa6bfafb651187d746e',
+      'packages/harness/src/index.ts':
+        'fff371d91afe0ac7b86b19f82a6deeda9dc07ebbc12eabb0744e460255bb208f'
+    },
+    sites: {
+      'examples/consumers/sdk-stdio/index.mts': {
+        'child = spawn(': {
+          ddc9e669194254ce: 1,
+          e6b8e4633d721034: 1
+        },
+        "child.on('error', () => {})": {
+          c1b0eb4f5632c391: 1
+        },
+        'for (const stream of [child.stdin, child.stdout, child.stderr])': {
+          '0bbca7c676d37570': 1,
+          '420dff553f97e6ee': 1,
+          '43db0b7bb09f8093': 1
+        },
+        "child.stderr.on('data', (chunk: Buffer) => {": {
+          '10a6f27b760ebc96': 1
+        },
+        'input: child.stdout,': {
+          '420dff553f97e6ee': 1
+        },
+        'output: child.stdin,': {
+          '0bbca7c676d37570': 1
+        },
+        'if (child) await shutdownSdkChild(child)': {
+          ddc9e669194254ce: 2
+        },
+        'if (!child || child.exitCode !== null || child.signalCode !== null)': {
+          ddc9e669194254ce: 1,
+          f33249cbc3b0f0ac: 1,
+          '4bff52bde459ec30': 1
+        }
+      }
+    }
+  },
+  {
+    id: 'pare100-session-json-compiled-reflection',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'SPEC0215 explicit user-reviewed session JSON reflection mirror; only descriptor/prototype validation, exact source/compiled closure pins.',
     pins: {
       'packages/contracts/src/canonical-json.ts':
         '133301a83cbf3996122cec66dc02b88642f851c89c88419a9a197acd11853b77',
       'packages/contracts/dist/canonical-json.js':
-        '899483f6572feefe1953fd7cfdc20ba80845d0748dd78998a2fdbebdf25b297e'
+        'e9c2a06def1b72a9b4eb9fb98a03eaf8cf93d742ba68dea6a9c54b5ee26bcc79',
+      'packages/harness/src/session/events.ts':
+        '771fa0692d9712ca0f168f71e15d43b8ba351b0aea003a98014159b3c1710bd2',
+      'packages/harness/dist/session/events.js':
+        '2960f0fb9dd3d1cbe989c612b4ccefad886e849c5e75180f0122a26ea6ec8efa'
+    },
+    sites: {
+      'packages/harness/dist/session/events.js': {
+        'const descriptors = Object.getOwnPropertyDescriptors(v);': {
+          '511cf3cd840c8327': 1
+        },
+        "if (Object.keys(descriptors).some((key) => key !== 'length' && !/^(0|[1-9]\\d*)$/.test(key)))":
+          {
+            '12b2fdc0a0ffd6ce': 1
+          },
+        'const descriptor = descriptors[String(i)];': {
+          '12b2fdc0a0ffd6ce': 1
+        },
+        "if (!descriptor || !('value' in descriptor) || !descriptor.enumerable)":
+          {
+            '194b520dc30384b3': 2,
+            '7e8c064eaa08ddfa': 1
+          },
+        'visit(descriptor.value, depth + 1);': {
+          '7d29e4d19453aa96': 1
+        },
+        'if (Object.getPrototypeOf(v) !== Object.prototype &&': {
+          '99cac9d0d093a87e': 1
+        },
+        'Object.getPrototypeOf(v) !== null)': {
+          '99cac9d0d093a87e': 1
+        },
+        'for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(v))) {':
+          {
+            '511cf3cd840c8327': 1
+          }
+      }
+    }
+  },
+
+  {
+    id: 'pdsh-neutral-canonical-compiled-reflection',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    justification:
+      'SPEC0215 explicit user-reviewed compiled mirror; exact source and compiled byte pins, same three reflection occurrences.',
+    pins: {
+      'packages/contracts/src/canonical-json.ts':
+        '133301a83cbf3996122cec66dc02b88642f851c89c88419a9a197acd11853b77',
+      'packages/contracts/dist/canonical-json.js':
+        'e9c2a06def1b72a9b4eb9fb98a03eaf8cf93d742ba68dea6a9c54b5ee26bcc79',
+      'packages/harness/src/session/events.ts':
+        '771fa0692d9712ca0f168f71e15d43b8ba351b0aea003a98014159b3c1710bd2',
+      'packages/harness/dist/session/events.js':
+        '2960f0fb9dd3d1cbe989c612b4ccefad886e849c5e75180f0122a26ea6ec8efa'
     },
     sites: {
       'packages/contracts/dist/canonical-json.js': {
@@ -2540,8 +2859,10 @@ const exceptableReasons = new Set([
 const normalizeLine = (text) => text.trim().replace(/\s+/g, ' ')
 const expressionDigest = (text) =>
   createHash('sha256').update(normalizeLine(text)).digest('hex').slice(0, 16)
+// SPEC0215: one literal example site; no examples directory/glob exemption.
+const sdkExampleSite = 'examples/consumers/sdk-stdio/index.mts'
 const firstPartyFile = (file) =>
-  /^(?:packages|apps|legacy)\//.test(file) &&
+  (/^(?:packages|apps|legacy)\//.test(file) || file === sdkExampleSite) &&
   !file
     .split('/')
     .some((part) => ['node_modules', '..', '.', ''].includes(part))
@@ -2549,6 +2870,7 @@ const firstPartyFile = (file) =>
 // predicates separate prevents an expanded exemption surface for runtime code.
 const pinnableFirstPartyFile = (file) =>
   firstPartyFile(file) ||
+  file === 'examples/consumers/sdk-stdio/child.mts' ||
   (/^scripts\//.test(file) &&
     !file
       .split('/')

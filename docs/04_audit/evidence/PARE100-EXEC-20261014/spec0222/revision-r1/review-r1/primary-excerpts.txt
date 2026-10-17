@@ -1,0 +1,2809 @@
+
+=== spec.md:30-40 ===
+   30 ## 3. Ownership, confiança e proteção dos controles
+   31 
+   32 Um `ManagedHarnessOwner` pertence a um tenant e um profileId fornecidos por código confiável do host. Control ports, actor de gerenciamento, catálogo de artefatos revisados, stores e factories de orquestrador são capturados uma vez. O payload não fornece funções, imports, permissões, policy, actor ou referência de owner. Não exportar uma ferramenta do modelo, rota HTTP/stdio ou capacidade de instalação por esta SPEC.
+   33 
+   34 O catálogo confiável liga `(pluginId, version)` a digest dos artefatos locais revisados, validadores de configuração e função de ativação. Manifest/plan são dados estritos e detached; config não pode escolher um módulo fora desse catálogo. Digest de descriptor/config sozinho não atesta código: registrar separadamente artifactDigest, configDigest e compositionFingerprint. Não usar `Function.toString`, `getLatest`, hash de closure ou nome de pacote como prova de revisão.
+   35 
+   36 O conjunto protegido é `CONTROL_SERVICES` mais `OPTIONAL_SERVICES` de segurança, incluindo `sandbox`. Opcional significa que pode estar ausente e falhar fechado, não que uma capability possa fornecê-lo. O BUILD corrigirá explicitamente a classificação de proteção de sandbox no host, sem incluí-lo em REQUIRED_SERVICES nem mudar grants. Capability só pode prover slots declarados de LOOP_CAPABILITIES e hooks permitidos; não registra guardas, não recebe mutador do owner e não reordena os controles.
+   37 
+   38 Cada geração usa os mesmos control ports de identidade capturada e wrappers de registro sem ownership desses recursos compartilhados. Descartar seus registros não fecha audit/policy/approvals/log/effects/sandbox/stores. Recursos de controle próprios do owner têm disposers separados e só fecham depois de todas as gerações e operações; recursos emprestados nunca são fechados por ele. Referências não se tornam isolamento contra código JavaScript arbitrário do mesmo processo: plugins precisam ser previamente revisados; contenção nativa continua P100-024.
+   39 
+   40 Gerenciamento usa o PolicyEngine existente com actor fixo confiável, tenant/profile, ação proposta `plugin.lifecycle.read` ou `plugin.lifecycle.replace`, recurso do perfil e digest do pedido. São extensões T3 explícitas; o default não concede esses grants. DENY, erro e REQUIRE_APPROVAL bloqueiam o método e retornam handoff de intenção, sem ativar plugin nem conceder approval automaticamente. Reavaliar replace antes da publicação, não reaproveitar a decisão de antes do boot. Uma permissão para gerenciar não concede permissão para executar ferramentas; todo uso continua passando pelos controles atuais.
+
+=== spec.md:44-64 ===
+   44 Export de `@cvg/harness`: `createManagedOperationalHarness(options): ManagedHarnessOwner`. A fábrica valida os dados puros e retorna sincronamente um owner BOOTING, antes de executar qualquer activate; bootstrap é uma tarefa possuída agendada depois desse retorno. Assim, erro ou aquisição tardia nunca perde seu supervisor. A fábrica exige control ports explícitos e um bootstrapPlan válido; não altera o default de `createOperationalHarness` nem seleciona esse modo por payload. Só ready com boot e evidência ACK permite OPEN/pins/turnos; o objeto BOOTING não é um runtime operacional. Fechar durante bootstrap já tem um owner nativo para conservar e juntar seus recursos.
+   45 
+   46 | Método                                                                    | Contrato                                                                                                                                                                                                                                |
+   47 | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   48 | `owner.ready({timeoutMs?, signal?})`                                      | Observa o único bootstrap já agendado: READY, FAILED com cleanup/receipt ou PENDING com receipt. Não reinicia boot nem emite owner novo; falha original de boot e falhas de cleanup permanecem distintas.                               |
+   49 | `owner.pinCurrent({agent, signal?})`                                      | Obtém lease nativo da revisão corrente para o tenant/profile do owner. Captura agent identity/version; não recebe generationId arbitrário nem reidrata um lease de JSON. Owner fechado/fenced recusa antes de efeito.                   |
+   50 | `lease.runTurn(input)`                                                    | Admite um turno no kernel real daquela geração. Tenant/agent/version precisam coincidir; request é capturado antes de await. Retorna `{generationId, revision, result: RuntimeResult}`; não expõe runtime/KernelHost/registry privados. |
+   51 | `lease.release({timeoutMs?, signal?})`                                    | Marca o lease como releasing sincronamente e exatamente uma vez, impedindo novos turnos. Espera os usos já admitidos, ou retorna receipt de espera pendente; uma segunda chamada observa o mesmo join.                                  |
+   52 | `owner.replaceCapabilities({requestId, expectedRevision, plan, signal?})` | Serializa uma troca, valida/pede policy antes de ativação, prepara candidato e publica somente contra expectedRevision. Mesmo requestId/digest observa a operação anterior; digest diferente dá conflito.                               |
+   53 | `owner.inventory()`                                                       | Projeção de dados capturada de um único ponto local, após autorização de leitura: revisão, corrente, gerações, plugins/slots/digests, estado real, contadores e códigos sanitizados. Não é inventário persistente global.               |
+   54 | `owner.close({timeoutMs?, signal?})`                                      | Fecha admissão sincronamente, invalida leases para novos turnos e junta boot/mutações/uso real/cleanup. Timeout do observador retorna PENDING, não CLOSED nem sucesso de descarte.                                                      |
+   55 | `owner.wait(receipt, {timeoutMs?, signal?})`                              | Observa o mesmo trabalho nativo já iniciado. Receipt é autenticado pelo owner, não pelo formato de seus campos. Não repete ativação, chamada, publication ou disposer.                                                                  |
+   56 | `owner.reconcileEvidence(receipt)`                                        | Após policy nova, repete somente a observação auditável da decisão local já fixada, nos casos da seção6; nunca reexecuta activate/tool/model/disposer.                                                                                  |
+   57 
+   58 Owner, lease e receipt são objetos autenticados em WeakMaps privados da fábrica. Clone, Proxy, objeto estrutural, outro owner/tenant e receipt serializado falham antes de IO. IDs públicos são apenas diagnóstico; não são autorização, durable receipt ou capability de retomada. Dados de inventory são imutáveis/detached e nunca carregam funções, recursos, config secreta ou tokens de controle.
+   59 
+   60 `runTurn` não expõe `.run`/`.execute` e não implementa estruturalmente `OperationalHarness`/`HarnessRuntime`. Sua entrada omite e recusa em runtime os campos `resume`, `executionId` e `capabilityFingerprint`, que são de roots de execução. O owner cria IDs locais únicos e injeta o fingerprint capturado no kernel. Não executar checkpoint/job antigo como um turno novo. Continuação durable/resume do worker217 não é uma API desta fundação; ver seção9.
+   61 
+   62 Um lease já retido pode continuar admitindo turnos na geração RETIRING enquanto o owner está OPEN e até release. Replace escolhe o default para pins novos, não declara revogação instantânea de um pin antigo. Unload só está concluído quando seus pins/usos/recursos chegam a zero. Regras de revogação de autoridade continuam nos control ports reavaliados em cada despacho. O owner.close impede também novos turnos dos pins antigos, sinaliza cancelamento cooperativo e não promete desfazer efeito em andamento.
+   63 
+   64 Limites propostos, verificáveis antes de iniciar o respectivo callback:128plugins,64hooks por plugin,32mutations aguardando,1024pins/128turnos ativos/1024operações reais/128aquisições por owner e no máximo8gerações retiradas/candidatas com recursos ainda vivos,256KiB por plan/config agregado,16KiB por string e IDs120chars/versões80chars. Exceder quota recusa antes de invocar o thunk; não decrementar contadores de trabalho já iniciado para abrir vaga artificial. DTO rejeita campos extras, getters, símbolos, protótipos não suportados, ciclos, números não finitos e IDs/versões vazios. Deadlines/limites são finitos positivos, timeout de observação padrão5s. Limites não são SLOs nem prova de performance; saturação recusa trabalho novo com código estável, sem expulsar geração usada.
+
+=== spec.md:68-78 ===
+   68 O plan define lista de plugins/version/config, serviços declarados e hooks. Um helper interno transforma entradas revisadas em KernelPlugins de capability; usa `KernelHost.order/boot` para dependências, duplicatas, ciclos e rollback. Não criar outro resolvedor de dependências que discorde do host. Control plugins vêm exclusivamente do perfil fixo confiável e antes das capabilities; ausência de serviço obrigatório recusa o candidato inteiro.
+   69 
+   70 O módulo interno da fábrica compartilha o mesmo host selado com os entrypoints de single_pass e iterative que consomem essa geração. O wiring interno proposto `createOperationalHarnessFromPreparedKernel` recebe esse host e os mesmos ports resolvidos, sem export público/deep import do handle. O perfil gerenciado usa action de audit própria `harness.managed` com runtimeProfile explícito nos fatos do owner; os labels e a composição das factories legadas continuam inalterados. O registry de perfis é fixo e só oferece single_pass/iterative governados; perfil ausente recusa antes de body. Não fazer um boot de validação e depois um segundo boot escondido com outros plugins/ports. Extrair wiring interno do factory/runtime pode ser necessário, mas não exportar uma porta pública `unsafeHost` para injeção pelo payload. Boot lazy incompatível com publicação: perfis que a geração anuncia precisam estar completamente preparados antes de ACTIVE.
+   71 
+   72 Uma factory de IterativeOrchestrator confiável, fixa no owner, recebe os ports daquela geração e retorna o orquestrador real correspondente. Se HybridOrchestrator captura um ModelGateway, ele recebe exatamente o gateway da geração, não um closure do perfil anterior. Planner, tools e telemetry também vêm dos serviços resolvidos, sem registry paralelo. Steps/session stores, knowledge/context e demais ports fixos do host não mudam implicitamente por reload; ampliar esses slots exige contrato próprio e preserva as tarefas014/015/020/040.
+   73 
+   74 No modo gerenciado, o slot tools só aceita o caminho `provideCapabilities(CapabilityRegistry)` do contexto: exigir effectJournal explícito emprestado do owner, produzir o ToolRegistry pelos adapters atuais da fábrica e fixar o mesmo fingerprint no kernel e na geração. Rejeitar raw ToolRegistry paralelo ou substituição posterior. Há um único provider do slot tools, que pode compor o bundle revisado; cada descriptor/implementation do bundle precisa corresponder ao binding de artefato/provider/version do catálogo. Dois providers do slot, descriptor duplicado ou digest/version divergente falham antes de publicação. Trocar só uma implementação mantendo identidade/digest antigo não é reload válido.
+   75 
+   76 Os fingerprints de tool descriptors continuam sendo calculados pelo mecanismo atual de CapabilityRegistry. Um `generationId` novo não substitui capabilityFingerprint e um digest de ciclo de vida não concede equivalência de capacidades. Hooks/artefatos/config entram em um digest de plano separado; o vínculo com approvals continua usando as regras atuais e os inputs corretos. Mudança do conjunto de capacidades precisa produzir o fingerprint correspondente, sem reusar um approval de composição anterior.
+   77 
+   78 Ativação só registra recursos por contexto limitado: `provide/on/effect` são operações da geração; `acquire(thunk, dispose)` e `track(thunk)` contabilizam trabalho antes de invocar o thunk. O contexto não oferece métodos de gerenciamento, acesso a controle mutável, import arbitrário ou escrita de configuração global. Um recurso emprestado tem ownership explícito e não recebe disposer do plugin.
+
+=== spec.md:82-106 ===
+   82 Uma fila por owner serializa bootstrap/replace/publication/reconciliação de evidência. Pins e turnos usam admissão síncrona separada, sem esperar um plugin arbitrário terminar enquanto um lock lógico de admissão está retido. Chamadas de mutação reentrantes a partir de activate/dispose/audit do próprio owner são recusadas, evitando aguardar a própria fila; inventory é somente leitura. Close não pode fazer self-join: se chamado dentro de callback possuído, fecha a admissão e retorna receipt pendente; wait desse receipt pelo mesmo callback é recusado.
+   83 
+   84 1. Capturar request/plan, validar quota e requestId/digest. Operações duplicadas compartilham o resultado/receipt original; nenhuma reativação. expectedRevision é conferido na admissão e de novo antes da publicação.
+   85 2. Autorizar o actor fixo e validar catálogo/config antes de qualquer activate. Preparar candidato enquanto a geração corrente continua disponível. Falha, cancel ou timeout antes de publicação não altera a corrente; o candidato continua possuído até terminar cleanup, inclusive aquisições que chegam tarde.
+   86 3. Candidato READY tem todos os serviços exigidos, ports e hooks ligados; nenhum disposer/atividade de boot pendente usado como prova falsa de prontidão. Reavaliar policy e registrar `plugin.lifecycle.publish_authorized` com owner/revisões/requestId/digests, sem payload sensível. Falha nessa evidência não publica.
+   87 4. Após o ACK acima, entrar em uma seção síncrona sem await: checar owner OPEN, signal não abortado, expectedRevision e candidato READY; fechar admissão de novos pins/turnos, trocar o ponteiro corrente, incrementar revisão e marcar a anterior RETIRING. Esse é o ponto local de commit; não há rollback automático a partir daqui.
+   88 5. Registrar `plugin.lifecycle.published` e aguardar ACK antes de reabrir admissão. Se append lança/rejeita ou seu resultado é desconhecido, manter owner `EVIDENCE_PENDING` e a admissão fechada. Inventory interno/receipt conserva a decisão local já comprometida; não chamar de aborted ou restaurar a geração antiga. Usos admitidos antes do fence continuam possuídos e controlados.
+   89 6. `reconcileEvidence(receipt)` autentica o registro privado imutável da decisão, reavalia policy e acrescenta uma observação com novo attemptId sobre o mesmo commit. AuditSink não oferece dedup/readback: a primeira escrita pode existir e haverá múltiplas observações legítimas, sem alegar exatamente-uma-vez de audit. Só o ACK da nova observação abre admissão, se o owner ainda estiver OPEN; nunca reativa candidato, muda revisão ou reexecuta efeito. Falha mantém fence. Se close venceu, finalizar evidência não reabre owner.
+   90 7. Retirada da anterior é independente da resposta de publicação. Replace pode retornar `ACTIVATED_RETIREMENT_PENDING` com receipt e contadores; `REPLACED_AND_DISPOSED` só depois do join/cleanup real. Perder o caller ou seu prazo não abandona o recurso.
+   91 
+   92 O cancel pré-commit é eficaz quando observado no passo4. Cancel após commit é too-late para desfazer publicação; o chamador recebe o mesmo receipt/outcome. Não cancelar e repetir um activate ou tool automaticamente. Não prometer commit durável entre audit e ponteiro de memória: esta fronteira é process-local, com os limites de restart da seção9.
+   93 
+   94 ## 7. Quiescência real e descarte
+   95 
+   96 Cada geração mantém separadamente pins, turnos admitidos, operações efetivamente iniciadas, aquisições de recursos e disposers. Quiescência exige todos esses usos efetivos resolvidos e nenhum novo produtor admitido. Liberação do lease ou resolução de `runTurn` não reduz contadores de operações que continuam após race de timeout/cancel.
+   97 
+   98 Instrumentar as bordas reais de ModelGateway.complete, body de ToolDefinition.execute e hooks de capability: incrementar antes da invocação e decrementar no finally da promessa original, não no resultado da corrida com deadline. A promessa original continua observada para evitar unhandled rejection; seu resultado tardio não substitui o resultado já retornado nem dispara outro efeito/publicação. Gate do kernel/policy/approval/journal permanece no caminho único antes do corpo. A instrumentação mede lifetime; não é um executor paralelo nem um bypass de orçamento.
+   99 
+  100 `acquire` incrementa pendingAcquire antes do callback. Quando o recurso chega, seu disposer fica registrado mesmo que close/cancel/retire tenha ocorrido. Se a geração já não pode publicá-lo, entra diretamente no cleanup possuído; não fazer throw e perder a referência. `provide/on` depois de seal é recusado; isso não apaga o dever de devolver um recurso já adquirido. `track` recusa thunks novos depois de fechar sua admissão; callbacks já admitidos e suas aquisições registradas continuam no join. Trabalho arbitrário que um plugin inicia fora desse protocolo viola o contrato do catálogo e não recebe garantia de quiescência.
+  101 
+  102 O host terá uma única primitive interna de cleanup com relatório por disposer, compartilhada pelos caminhos de boot rollback/dispose; a API legada de dispose pode continuar retornando void, mas o owner gerenciado recebe o relatório completo, sem inferi-lo de um retorno void que engoliu erros. Não duplicar registros nem chamar ambas as primitives. Falha de boot mantém o erro primário e anexa o relatório de cleanup, sem trocá-lo pelo último disposer que falhou.
+  103 
+  104 Cleanup de uma geração é single-flight. Só inicia depois de zero pins/turnos/operações/aquisições; unwinds reversos têm estado privado registrado por item, invocação no máximo uma vez, e os outros itens continuam após uma falha já resolvida. Falha de disposer é registrada e retorna CLEANUP_FAILED, não silenciosamente DISPOSED. Disposer pendente/hung conserva CLEANUP_PENDING e sua referência; não executar automaticamente de novo. Não descartar outro recurso que o disposer pendente ainda pode usar: manter ordem reversa sequencial até ele resolver ou até uma política explícita de dependência comprovar independência; esta fundação não introduz esse paralelismo.
+  105 
+  106 Close invalida admissão de novos pins/turnos e mutações imediatamente, incluindo durante BOOTING e EVIDENCE_PENDING (CLOSING domina; completar evidência não reabre), cancela cooperativamente trabalho possuído e junta todos os candidatos, gerações retiradas, original promises e cleanup tardio. Seus waits podem expirar, mas o owner continua CLOSING/CLEANUP_PENDING. Código em processo que ignora signal não pode ser morto com segurança por esta API; não dizer que recursos foram liberados nem iniciar outra geração para escapar do limite. Depois de todas as gerações, fechar somente recursos explicitamente OWNED pelo owner, em ordem reversa; emprestados permanecem do host pai.
+
+=== spec.md:119-135 ===
+  119 ## 9. Compatibilidade, durable bindings e limites de escopo
+  120 
+  121 Não alterar bytes das SPECs217/220/221, migrations históricas ou log v1. Stores compartilhados, effect journal e approval authority não migram para o manager. O worker/API durável217 não recebe o novo owner nem leases desta fundação; eles não são serializáveis, não têm `.run/.execute` de OperationalHarness e rejeitam inputs de resume/fingerprint/executionId. Tests de entrypoint/import e tipos devem mostrar que a composição publicada0217 continua no root imutável atual. Uma integração futura precisa de contrato explícito de retenção de artefatos/fingerprint e pins duráveis entre processos antes de trocar capabilities sob jobs pendentes. Não tratar ticket local como esse contrato.
+  122 
+  123 O lifecycle de writer/conexão em0221 tem outro owner. Recursos de sessão/store são emprestados por esta fundação e não fechados ao retirar geração. Se a composição pai for um owner0221 futuro, o shutdown precisa primeiro fechar admissão de turnos/gerações, juntar seu trabalho e depois fechar o writer; aprovação desta SPEC não aprova0221 nem cria esse adapter.
+  124 
+  125 Restart reconstrói um owner novo exclusivamente do bootstrapPlan/catálogo confiáveis do host. Histórico de audit não é desired config nem protocolo de commit da configuração; receipts locais não podem ser ressuscitados. Não reexecutar automaticamente mutações anteriores. Persistência de desired config, file lock/mixed process, applied/restart-required/override, instalação de bundles/registries/build scripts/version exemptions, inventário cross-host/presets e novas capacidades continuam P100-012/040/052 e exigem SPECs/execução próprias. Seus271requisitos e29UNKNOWN permanecem visíveis; esta fundação não os substitui por12famílias de teste.
+  126 
+  127 OBS-I1-001 (tool result longo truncado em summary300) continua aberto em P100-004/014/020; lifetime correto não restaura conteúdo perdido. SDKsingle_pass, forks/resume/search/backends, topology16vs3, sideEffecting, contenção nativa, interfaces/hosts e gates globais permanecem no objetivo integral. Nenhuma produção, provider real, dado real ou efeito clínico/financeiro/agenda automático é autorizado.
+  128 
+  129 ## 10. Arquivos futuros, rollout e rollback
+  130 
+  131 Somente após aprovação desta SPEC: contrato/owner novos em `packages/harness/src/managed-lifecycle.ts` e export público; helpers internos mínimos em factory/runtime/kernel para receber o MESMO host preparado, sem nova implementação de loop; host/types para sandbox protegido e erro observável de cleanup; wrappers de ownership dos ports de capability. Preferir tipos locais ao pacote harness; só alterar contracts públicos se a revisão concreta mostrar necessidade e registrar a adição. Testes novos em harness/kernel e fixtures públicas, com type/API/architecture checks. Nenhuma mudança no worker/API/platform/persistence/SDK/manifests/lock ou SQL nesta fatia; adapters dessas superfícies são gates posteriores.
+  132 
+  133 Opt-in por chamada explícita da nova fábrica; criarManaged não troca o default de hosts existentes. Antes de integração, produzir nova candidata isolada, inventariar delta exato e reemitir provas/gates afetados. Alterações futuras em pins/input0220 exigem requalificação e decisão sobre o pacote concreto; não editar snapshots antigos para torná-los verdes.
+  134 
+  135 Rollback impede novas composições gerenciadas e deixa terminar/fecha explicitamente os owners já criados; nunca troca controles de um owner vivo nem descarta seus recursos para fingir volta à baseline. Remover o diff apenas de uma candidata descartável/reconstruída, preservando histórico/evidência e sem reset/restore no trabalho compartilhado. Sem schema novo, sem replay de corpos ou registros de approval. Qualquer cleanup incerto continua pendente no operador, não some na reversão do código.
+
+=== spec.md:137-164 ===
+  137 ## 11. Aceitação futura, toda NOT_RUN
+  138 
+  139 | ID   | Prova pelo limite público real                                                             | Controle que precisa falhar                                                           |
+  140 | ---- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+  141 | ML01 | Boot completo single_pass/iterative e troca usam KernelHost/mesmo pipeline/mesmos controls | Segundo boot/profile divergente ou executor do manager que pula kernel                |
+  142 | ML02 | Ordem/dependências/ciclo/duplicata/ausente/erro de apply e rollback dos recursos           | Publicar candidato incompleto ou perder recurso adquirido antes do erro               |
+  143 | ML03 | Capability não fornece/reordena controles nem sandbox opcional, não registra guardas       | Confundir OPTIONAL com não protegido; unload/bypass por plugin/modelo                 |
+  144 | ML04 | IDs/digests/config/catalog/DTO/quotas, sem getters ou import de JSON                       | Trocar código mantendo só descriptorDigest ou aceitar versão latest                   |
+  145 | ML05 | Pin nativo tenant/agent-bound, clone/Proxy/receipt externo recusados antes de IO           | Lease estrutural, pin de outra geração/tenant e uso depois de release                 |
+  146 | ML06 | Turno usa uma geração inteira; novo pin após commit usa a nova, antigo permanece retido    | Metade das ferramentas/modelo/hooks de cada geração                                   |
+  147 | ML07 | Dois replace, staleRevision e requests duplicados/idempotentes com digest conflito         | Duas publicações ou duas ativações para o mesmo request                               |
+  148 | ML08 | Cancel/timeout antes/depois do commit preserva ponto de linearização e cleanup             | Caller abortado recria efeito, rollback falso ou recurso abandonado                   |
+  149 | ML09 | Audit/policy falham antes de publicação; pós-commit incerto mantém fence e receipt         | Admitir novo turno sem evidência, restaurar ponteiro ou reativar na reconciliação     |
+  150 | ML10 | Reconciliação audit/close concorrentes não reabrem owner nem executam capacidade           | Confundir nova observação de commit com repetição do commit                           |
+  151 | ML11 | execute retorna timeout mas promise real de model/tool/hook continua contada               | Dispor recurso em uso só porque a corrida ou lease terminou                           |
+  152 | ML12 | Aquisição chega após cancel/close, disposer é retido e executado uma vez                   | Throw tardio perde handle; close afirma CLOSED antes da aquisição terminar            |
+  153 | ML13 | Disposers reversos/single-flight/falha/hang, recursos OWNED versus BORROWED                | Paralelizar dependentes, repetir disposer incerto ou fechar controle/store emprestado |
+  154 | ML14 | close durante boot/replace/pin/turn e close/release repetidos, waits cancelados            | Late publish/acquisition revive owner ou novo trabalho passa após close               |
+  155 | ML15 | Reentrância de activate/dispose/audit/modelo e self-wait recusados sem deadlock            | Callback bloqueia a fila que espera sua conclusão                                     |
+  156 | ML16 | ModelGateway capturado por Hybrid/planner/toolregistry/hook é o da geração                 | Provider novo com orquestrador antigo ou registry alternativo                         |
+  157 | ML17 | Inventory é snapshot verdadeiro de pending/active/retiring/failed/cleanup                  | Desired plan ou método retornado é rotulado disposed/applied sem join                 |
+  158 | ML18 | Bootstrap/restart explícitos e root217/SDK/owner0221 preservados                           | Injetar lease local em worker durable/resume ou fechar writer emprestado              |
+  159 | ML19 | Policy em read/replace e antes do commit, REQUIRE_APPROVAL gera handoff sem init           | Actor/permissão do payload, bypass de controle ou grant herdado de outra geração      |
+  160 | ML20 | Backpressure de gerações pendentes/pins vazados e recursos ignorando signal                | Quota amplia para esconder leaks; sucesso de stop sem saída real                      |
+  161 
+  162 Fixtures são locais e sintéticas; modelo e recursos externos podem ser portas scripted, mas kernel, dispatcher, policy/approval/journal, lifecycle owner, leases, promises e cleanup precisam ser reais. Sem monkeypatch do motor como baseline. Provar RED/known-bad do harness, GREEN atual, regressão de perfis/controles/217 e fresh critic independente contra candidata congelada.
+  163 
+  164 Node22 typecheck/lint/unit/PG/E2E e gates de core/global/per-file/certificação aplicáveis continuam exigidos na integração de código; NOT_RUN não vira waiver. Matriz semântica precisa ligar cada contrato exigido a procedimento/evidência real, além destas famílias. Esta revisão de desenho não prova runtime, não fecha34cartões e não concede release.
+
+=== cvg/packages/harness/src/kernel/host.ts:71-98 ===
+   71   public static async boot(
+   72     plugins: readonly KernelPlugin[],
+   73     required: readonly ServiceKey[]
+   74   ): Promise<KernelHost> {
+   75     const host = new KernelHost()
+   76     try {
+   77       for (const plugin of KernelHost.order(plugins)) {
+   78         await host.#apply(plugin)
+   79       }
+   80       for (const key of required) {
+   81         if (!host.#services.has(key)) {
+   82           throw new KernelBootError(
+   83             'missing_service',
+   84             `Required service "${key}" is not provided by the profile.`
+   85           )
+   86         }
+   87       }
+   88     } catch (error) {
+   89       await host.dispose()
+   90       if (error instanceof KernelBootError) throw error
+   91       throw new KernelBootError(
+   92         'plugin_apply_failed',
+   93         error instanceof Error ? error.message : 'plugin apply failed'
+   94       )
+   95     }
+   96     host.#sealed = true
+   97     return host
+   98   }
+
+=== cvg/packages/harness/src/kernel/host.ts:115-138 ===
+  115   /** Controls first, then capabilities; registration order inside each. */
+  116   public listeners<P extends HookPoint>(point: P): readonly Listener<P>[] {
+  117     const table = this.#listeners[point] as Listener<P>[]
+  118     return [
+  119       ...table.filter((entry) => entry.kind === 'control'),
+  120       ...table.filter((entry) => entry.kind === 'capability')
+  121     ]
+  122   }
+  123 
+  124   public guards(): readonly ToolGuard[] {
+  125     return this.#guards.map((entry) => entry.fn)
+  126   }
+  127 
+  128   /** Unwinds registrations in reverse order and waits for each to finish. */
+  129   public async dispose(): Promise<void> {
+  130     while (this.#disposers.length > 0) {
+  131       const dispose = this.#disposers.pop()
+  132       try {
+  133         await dispose?.()
+  134       } catch {
+  135         // One failing disposer must not leave the remaining ones running.
+  136       }
+  137     }
+  138   }
+
+=== cvg/packages/harness/src/kernel/host.ts:140-188 ===
+  140   static order(plugins: readonly KernelPlugin[]): KernelPlugin[] {
+  141     const byName = new Map<string, KernelPlugin>()
+  142     const provider = new Map<ServiceKey, string>()
+  143     for (const plugin of plugins) {
+  144       if (byName.has(plugin.name)) {
+  145         throw new KernelBootError(
+  146           'duplicate_plugin',
+  147           `Plugin "${plugin.name}" is declared twice.`
+  148         )
+  149       }
+  150       byName.set(plugin.name, plugin)
+  151       for (const key of plugin.provides ?? []) {
+  152         if (provider.has(key)) {
+  153           throw new KernelBootError(
+  154             'duplicate_service',
+  155             `Service "${key}" is provided by "${provider.get(key)}" and "${plugin.name}".`
+  156           )
+  157         }
+  158         provider.set(key, plugin.name)
+  159       }
+  160     }
+  161     const ordered: KernelPlugin[] = []
+  162     const state = new Map<string, 'visiting' | 'done'>()
+  163     const visit = (plugin: KernelPlugin): void => {
+  164       const current = state.get(plugin.name)
+  165       if (current === 'done') return
+  166       if (current === 'visiting') {
+  167         throw new KernelBootError(
+  168           'dependency_cycle',
+  169           `Plugin "${plugin.name}" is part of a dependency cycle.`
+  170         )
+  171       }
+  172       state.set(plugin.name, 'visiting')
+  173       for (const key of plugin.requires ?? []) {
+  174         const owner = provider.get(key)
+  175         if (!owner) {
+  176           throw new KernelBootError(
+  177             'missing_service',
+  178             `Plugin "${plugin.name}" requires "${key}", which no plugin provides.`
+  179           )
+  180         }
+  181         visit(byName.get(owner) as KernelPlugin)
+  182       }
+  183       state.set(plugin.name, 'done')
+  184       ordered.push(plugin)
+  185     }
+  186     plugins.forEach(visit)
+  187     return ordered
+  188   }
+
+=== cvg/packages/harness/src/kernel/host.ts:190-253 ===
+  190   async #apply(plugin: KernelPlugin): Promise<void> {
+  191     const declared = new Set(plugin.provides ?? [])
+  192     const context: KernelContext = {
+  193       provide: (key, service) => {
+  194         this.#assertOpen()
+  195         if (!declared.has(key)) {
+  196           throw new KernelBootError(
+  197             'undeclared_service',
+  198             `Plugin "${plugin.name}" provides "${key}" without declaring it.`
+  199           )
+  200         }
+  201         if (plugin.kind === 'capability' && isControlService(key)) {
+  202           throw new KernelBootError(
+  203             'control_service_from_capability',
+  204             `Capability "${plugin.name}" cannot provide control service "${key}".`
+  205           )
+  206         }
+  207         this.#services.set(key, { owner: plugin.name, value: service })
+  208         const dispose: Disposer = async () => {
+  209           this.#services.delete(key)
+  210         }
+  211         this.#disposers.push(dispose)
+  212         return dispose
+  213       },
+  214       get: (key) => this.get(key),
+  215       on: (point, listener) => {
+  216         this.#assertOpen()
+  217         const table = this.#listeners[point] as Listener<typeof point>[]
+  218         const entry: Listener<typeof point> = {
+  219           kind: plugin.kind,
+  220           plugin: plugin.name,
+  221           fn: listener
+  222         }
+  223         table.push(entry)
+  224         const dispose: Disposer = async () => {
+  225           const index = table.indexOf(entry)
+  226           if (index >= 0) table.splice(index, 1)
+  227         }
+  228         this.#disposers.push(dispose)
+  229         return dispose
+  230       },
+  231       guard: (guard) => {
+  232         this.#assertOpen()
+  233         if (plugin.kind !== 'control') {
+  234           throw new KernelBootError(
+  235             'guard_from_capability',
+  236             `Capability "${plugin.name}" cannot register a guard.`
+  237           )
+  238         }
+  239         const entry = { plugin: plugin.name, fn: guard }
+  240         this.#guards.push(entry)
+  241         const dispose: Disposer = async () => {
+  242           const index = this.#guards.indexOf(entry)
+  243           if (index >= 0) this.#guards.splice(index, 1)
+  244         }
+  245         this.#disposers.push(dispose)
+  246         return dispose
+  247       },
+  248       effect: (dispose) => {
+  249         this.#assertOpen()
+  250         this.#disposers.push(dispose)
+  251       }
+  252     }
+  253     await plugin.apply(context)
+
+=== cvg/packages/harness/src/kernel/types.ts:168-198 ===
+  168 export type Next<T> = () => Promise<T>
+  169 
+  170 export interface HookMap {
+  171   /** waterfall — accept or stop the step; `pause` stops here. */
+  172   'turn/before-step': (
+  173     turn: TurnState,
+  174     next: Next<KernelGate>
+  175   ) => Promise<KernelGate>
+  176   /** waterfall — budget and request checks before the model is called. */
+  177   'model/before-call': (
+  178     call: ModelCallState,
+  179     next: Next<KernelGate>
+  180   ) => Promise<KernelGate>
+  181   /** waterfall — policy and approval decide before dispatch. */
+  182   'tool/pre-execute': (
+  183     call: ToolCallState,
+  184     next: Next<KernelGate>
+  185   ) => Promise<KernelGate>
+  186   /** waterfall around the tool body — timeout, retry, metrics. */
+  187   'tool/execute': (
+  188     call: ToolCallState,
+  189     next: Next<ToolOutcome>
+  190   ) => Promise<ToolOutcome>
+  191   /** serial — settle reservations, inspect or replace the outcome. */
+  192   'tool/post-execute': (
+  193     call: ToolCallState,
+  194     outcome: ToolOutcome
+  195   ) => Promise<ToolOutcome>
+  196   /** serial — finalize the turn result (audit, telemetry). */
+  197   'turn/end': (turn: TurnState, result: RuntimeResult) => Promise<RuntimeResult>
+  198 }
+
+=== cvg/packages/harness/src/kernel/types.ts:286-348 ===
+  286 export interface Services {
+  287   planner: Orchestrator
+  288   model: ModelGateway
+  289   tools: ToolRegistry
+  290   policy: PolicyEngine
+  291   approvals: ApprovalEngine
+  292   audit: AuditSink
+  293   telemetry: TelemetrySink
+  294   budget: BudgetService
+  295   pause: PauseSwitch
+  296   log: KernelLog
+  297   effects: EffectLedger
+  298   /** Optional containment gate; absent means fail-closed for contained tools. */
+  299   sandbox?: SandboxGate
+  300 }
+  301 
+  302 export type ServiceKey = keyof Services
+  303 
+  304 /** Services only control plugins may provide (SPEC 0181 I1/I2). */
+  305 export const CONTROL_SERVICES = [
+  306   'policy',
+  307   'approvals',
+  308   'effects',
+  309   'audit',
+  310   'budget',
+  311   'pause',
+  312   'log'
+  313 ] as const satisfies readonly ServiceKey[]
+  314 
+  315 /**
+  316  * Containment is optional (SPEC 0195): the pipeline resolves it via
+  317  * `host.get('sandbox')` and fails closed when it is absent, so it must never
+  318  * join REQUIRED_SERVICES.
+  319  */
+  320 export const OPTIONAL_SERVICES = [
+  321   'sandbox'
+  322 ] as const satisfies readonly ServiceKey[]
+  323 
+  324 /** Capabilities the single-turn loop needs to run. */
+  325 export const LOOP_CAPABILITIES = [
+  326   'planner',
+  327   'model',
+  328   'tools',
+  329   'telemetry'
+  330 ] as const satisfies readonly ServiceKey[]
+  331 
+  332 export interface KernelContext {
+  333   provide<K extends ServiceKey>(key: K, service: Services[K]): Disposer
+  334   get<K extends ServiceKey>(key: K): Services[K]
+  335   on<P extends HookPoint>(point: P, listener: HookMap[P]): Disposer
+  336   /** Control plugins only. */
+  337   guard(guard: ToolGuard): Disposer
+  338   /** Register teardown work for resources the plugin owns. */
+  339   effect(dispose: Disposer): void
+  340 }
+  341 
+  342 export interface KernelPlugin {
+  343   readonly name: string
+  344   readonly kind: PluginKind
+  345   readonly provides?: readonly ServiceKey[]
+  346   readonly requires?: readonly ServiceKey[]
+  347   apply(ctx: KernelContext): void | Promise<void>
+  348 }
+
+=== cvg/packages/harness/src/kernel/profile.ts:57-88 ===
+   57 export function standardKernelPlugins(
+   58   options: StandardKernelOptions
+   59 ): KernelPlugin[] {
+   60   const eventName = options.eventName ?? 'harness.kernel'
+   61   return [
+   62     budgetControl(),
+   63     pauseControl(options.pause),
+   64     logControl(options.log),
+   65     effectsControl(options.effects),
+   66     policyControl(options.policy),
+   67     approvalsControl(
+   68       options.approvals,
+   69       options.capabilityFingerprint
+   70         ? { capabilityFingerprint: options.capabilityFingerprint }
+   71         : {}
+   72     ),
+   73     auditControl(options.audit, { action: eventName }),
+   74     ...(options.sandbox ? [sandboxControl(options.sandbox)] : []),
+   75     plannerCapability(options.orchestrator),
+   76     modelCapability(options.modelGateway),
+   77     toolsCapability(options.tools),
+   78     telemetryCapability(options.telemetry, { name: eventName }),
+   79     ...(options.plugins ?? [])
+   80   ]
+   81 }
+   82 
+   83 /** Kernel runtime with the standard profile, booted on first use. */
+   84 export function createKernelRuntime(
+   85   options: StandardKernelOptions
+   86 ): KernelRuntime {
+   87   return KernelRuntime.lazy(standardKernelPlugins(options))
+   88 }
+
+=== cvg/packages/harness/src/createOperationalHarness.ts:73-137 ===
+   73 export function createOperationalHarness(
+   74   options: OperationalHarnessOptions
+   75 ): OperationalHarness {
+   76   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
+   77   if (options.capabilities && !options.effectJournal) {
+   78     throw new Error(
+   79       'Capability composition requires an explicit effect journal'
+   80     )
+   81   }
+   82   const tools = resolveTools(options, capabilityFingerprint)
+   83   const singlePass = new SinglePassGovernedRuntime({
+   84     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+   85     modelGateway: options.modelGateway,
+   86     policy: options.policy,
+   87     approvals: options.approvals,
+   88     tools,
+   89     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+   90     audit: options.audit,
+   91     telemetry: options.telemetry,
+   92     ...(options.pause ? { pause: options.pause } : {}),
+   93     ...(options.effects ? { effects: options.effects } : {}),
+   94     ...(options.log ? { log: options.log } : {}),
+   95     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+   96   })
+   97 
+   98   const iterative =
+   99     options.iterativeOrchestrator && options.stepStore
+  100       ? new IterativeGovernedRuntime({
+  101           orchestrator: options.iterativeOrchestrator,
+  102           modelGateway: options.modelGateway,
+  103           policy: options.policy,
+  104           approvals: options.approvals,
+  105           tools,
+  106           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+  107           audit: options.audit,
+  108           telemetry: options.telemetry,
+  109           ...(options.pause ? { pause: options.pause } : {}),
+  110           ...(options.effects ? { effects: options.effects } : {}),
+  111           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+  112           ...(options.log ? { log: options.log } : {}),
+  113           stepStore: options.stepStore,
+  114           ...(options.contextEngine
+  115             ? { contextEngine: options.contextEngine }
+  116             : {}),
+  117           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+  118           ...(options.sufficiencyEvaluator
+  119             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+  120             : {}),
+  121           ...(options.completionEvaluator
+  122             ? { completionEvaluator: options.completionEvaluator }
+  123             : {}),
+  124           ...(options.claimExtractor
+  125             ? { claimExtractor: options.claimExtractor }
+  126             : {}),
+  127           ...(options.clock ? { clock: options.clock } : {})
+  128         })
+  129       : undefined
+  130 
+  131   const resolveProfile = (input: RuntimeInput): RuntimeProfile =>
+  132     input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+  133 
+  134   const execute = async (input: RuntimeInput): Promise<RuntimeResult> => {
+  135     const governedInput = capabilityFingerprint
+  136       ? { ...input, capabilityFingerprint }
+  137       : input
+
+=== cvg/packages/harness/src/createOperationalHarness.ts:194-227 ===
+  194   return {
+  195     run: (input) => execute(input),
+  196     execute,
+  197     resolveProfile,
+  198     ...(options.capabilities
+  199       ? { capabilityFingerprint: options.capabilities.compositionFingerprint() }
+  200       : {})
+  201   }
+  202 }
+  203 
+  204 function resolveTools(
+  205   options: OperationalHarnessOptions,
+  206   capabilityFingerprint: string | undefined
+  207 ): ToolRegistry {
+  208   if (options.capabilities && options.tools) {
+  209     throw new Error(
+  210       'Operational harness composition accepts capabilities or tools, not both'
+  211     )
+  212   }
+  213   const registry = options.capabilities
+  214     ? createCapabilityToolRegistry(options.capabilities)
+  215     : options.tools
+  216   if (!registry) {
+  217     throw new Error(
+  218       'Operational harness composition requires an explicit capability or tool registry'
+  219     )
+  220   }
+  221   if (!options.effectJournal) return registry
+  222   return createJournaledToolRegistry(registry, options.effectJournal, {
+  223     ...options.effectJournalOptions,
+  224     ...(capabilityFingerprint
+  225       ? { compositionFingerprint: capabilityFingerprint }
+  226       : {})
+  227   })
+
+=== cvg/packages/harness/src/kernel/kernel-runtime.ts:188-209 ===
+  188   public async dispose(): Promise<void> {
+  189     if (!this.#host) return
+  190     const host = await this.#host.catch(() => undefined)
+  191     await host?.dispose()
+  192   }
+  193 
+  194   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
+  195     let host: KernelHost
+  196     try {
+  197       this.#host ??= KernelHost.boot(this.plugins, REQUIRED_SERVICES)
+  198       host = await this.#host
+  199     } catch (error) {
+  200       return result({
+  201         response:
+  202           this.options.bootFailureResponse ??
+  203           `Kernel could not start: ${errorMessage(error)}.`,
+  204         stopReason: 'INTERNAL_FAILURE',
+  205         modelCalls: 0,
+  206         toolCalls: 0
+  207       })
+  208     }
+  209     return new Turn(host, input).run()
+
+=== cvg/packages/harness/src/kernel/kernel-runtime.ts:281-297 ===
+  281       const decision = await race(this.#state, () =>
+  282         this.#host.get('planner').decideNextStep({
+  283           runtime: input,
+  284           availableTools: this.#availableTools(),
+  285           step: 1
+  286         })
+  287       )
+  288       if (decision === CANCELLED) {
+  289         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+  290       }
+  291       if (decision === DEADLINE) {
+  292         return this.#finish(
+  293           fromStop(
+  294             stop('MAX_DURATION', 'Duration budget exhausted while planning.')
+  295           )
+  296         )
+  297       }
+
+=== cvg/packages/harness/src/kernel/kernel-runtime.ts:626-671 ===
+  626   #availableTools(): readonly ToolDescriptor[] {
+  627     const allowed = this.#state.input.agent.tools
+  628     return this.#host
+  629       .get('tools')
+  630       .list()
+  631       .filter((tool) => exposes(allowed, tool.id))
+  632       .map(describe)
+  633   }
+  634 
+  635   async #finish(initial: RuntimeResult): Promise<RuntimeResult> {
+  636     let current = initial
+  637     for (const entry of this.#host.listeners('turn/end')) {
+  638       try {
+  639         current = await entry.fn(this.#state, current)
+  640       } catch (error) {
+  641         if (entry.kind === 'control') {
+  642           current = {
+  643             ...current,
+  644             response: `Execution could not be completed because ${entry.plugin} failed: ${errorMessage(error)}.`,
+  645             stopReason: 'INSUFFICIENT_EVIDENCE'
+  646           }
+  647         }
+  648       }
+  649     }
+  650     const unrecorded = await appendLog(this.#host, {
+  651       type: 'turn/end',
+  652       correlationId: this.#state.input.correlationId,
+  653       stopReason: current.stopReason
+  654     })
+  655     if (unrecorded) {
+  656       // F04: a turn whose closing record failed is never reported as done.
+  657       // A turn that had already stopped keeps why it stopped (AUD-0600 F01).
+  658       return {
+  659         ...current,
+  660         response:
+  661           current.stopReason === 'COMPLETED'
+  662             ? unrecorded.response
+  663             : current.response.startsWith(unrecorded.response)
+  664               ? current.response
+  665               : `${unrecorded.response} The turn had already stopped (${current.stopReason}): ${current.response}`,
+  666         stopReason: 'INSUFFICIENT_EVIDENCE'
+  667       }
+  668     }
+  669     return current
+  670   }
+  671 }
+
+=== cvg/packages/harness/src/kernel/pipeline.ts:78-104 ===
+   78 /** Waterfall over a gate point; a throwing listener becomes a stop (I7). */
+   79 export function runGate<S>(
+   80   host: KernelHost,
+   81   point: GatePoint,
+   82   state: S
+   83 ): Promise<KernelGate> {
+   84   const listeners = host.listeners(point) as unknown as readonly {
+   85     readonly plugin: string
+   86     readonly fn: (
+   87       state: S,
+   88       next: () => Promise<KernelGate>
+   89     ) => Promise<KernelGate>
+   90   }[]
+   91   const run = (index: number): Promise<KernelGate> => {
+   92     const entry = listeners[index]
+   93     if (!entry) return Promise.resolve(PROCEED)
+   94     return entry
+   95       .fn(state, () => run(index + 1))
+   96       .catch((error: unknown) =>
+   97         stop(
+   98           'INSUFFICIENT_EVIDENCE',
+   99           `${entry.plugin} failed at ${point}: ${errorMessage(error)}.`
+  100         )
+  101       )
+  102   }
+  103   return run(0)
+  104 }
+
+=== cvg/packages/harness/src/kernel/pipeline.ts:138-185 ===
+  138 /** Races an operation against the turn budget and the cancel signal (I8). */
+  139 export async function race<T>(
+  140   turn: TurnState,
+  141   operation: () => Promise<T>
+  142 ): Promise<T | typeof DEADLINE | typeof CANCELLED> {
+  143   const signal = turn.signal
+  144   if (signal.aborted) return CANCELLED
+  145   let onAbort!: () => void
+  146   const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+  147     onAbort = () => resolve(CANCELLED)
+  148     signal.addEventListener('abort', onAbort, { once: true })
+  149   })
+  150   try {
+  151     return await Promise.race([turn.budget.withDeadline(operation), cancelled])
+  152   } finally {
+  153     signal.removeEventListener('abort', onAbort)
+  154   }
+  155 }
+  156 
+  157 /**
+  158  * Like `race`, but always starts the operation first: used once the kernel has
+  159  * committed to dispatch, so the cancel signal is passed to the body instead of
+  160  * skipping it.
+  161  */
+  162 async function raceInvoked<T>(
+  163   turn: TurnState,
+  164   operation: () => Promise<T>
+  165 ): Promise<T | typeof DEADLINE | typeof CANCELLED> {
+  166   const running = operation()
+  167   // The operation may start and then find an exhausted deadline at race time;
+  168   // its later rejection must never surface as an unhandled rejection.
+  169   void running.catch(() => undefined)
+  170   const signal = turn.signal
+  171   let onAbort!: () => void
+  172   const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+  173     if (signal.aborted) resolve(CANCELLED)
+  174     onAbort = () => resolve(CANCELLED)
+  175     signal.addEventListener('abort', onAbort, { once: true })
+  176   })
+  177   try {
+  178     return await Promise.race([
+  179       turn.budget.withDeadline(() => running),
+  180       cancelled
+  181     ])
+  182   } finally {
+  183     signal.removeEventListener('abort', onAbort)
+  184   }
+  185 }
+
+=== cvg/packages/harness/src/kernel/pipeline.ts:299-328 ===
+  299   const gate = await runGate(host, 'tool/pre-execute', call)
+  300   if (gate.kind === 'stop') return closeNotStarted(gate)
+  301 
+  302   const denial = await revalidate(host, call)
+  303   if (denial) return closeNotStarted(denial)
+  304 
+  305   const sandbox = await enforceSandbox(host, call)
+  306   if (sandbox) return closeNotStarted(sandbox)
+  307 
+  308   let hooked: KernelStop | undefined
+  309   try {
+  310     hooked = await hooks.beforeDispatch?.(call)
+  311   } catch (error) {
+  312     // The loop's own checkpoint failed: the logged call is still closed once
+  313     // and the original failure reaches the loop unchanged (AUD-0598 R03).
+  314     await appendLog(host, {
+  315       type: 'tool/result',
+  316       correlationId,
+  317       toolId: tool.id,
+  318       outcome: 'not_started'
+  319     })
+  320     throw error
+  321   }
+  322   if (hooked) return closeNotStarted(hooked)
+  323 
+  324   // The hook may have taken time (checkpoint): re-check before reserving.
+  325   const late = await revalidate(host, call)
+  326   if (late) return closeNotStarted(late)
+  327 
+  328   const settled = await postExecute(host, call, await dispatch(host, call))
+
+=== cvg/packages/harness/src/kernel/pipeline.ts:473-514 ===
+  473   const terminal = async (): Promise<ToolOutcome> => {
+  474     if (turn.budget.remainingMs() <= 0) {
+  475       return {
+  476         kind: 'not_started',
+  477         gate: stop(
+  478           'MAX_DURATION',
+  479           'Duration budget exhausted before tool execution.'
+  480         )
+  481       }
+  482     }
+  483     // Last decision point: after every wrapper (the approval reservation),
+  484     // a pause or a cancellation still prevents the effect (F01/F02).
+  485     const blocked = await revalidate(host, call)
+  486     if (blocked) return { kind: 'not_started', gate: blocked }
+  487     try {
+  488       await host.get('effects').started(ref)
+  489     } catch (error) {
+  490       return {
+  491         kind: 'not_started',
+  492         gate: stop(
+  493           'INSUFFICIENT_EVIDENCE',
+  494           `Effect ledger could not record the start: ${errorMessage(error)}.`
+  495         )
+  496       }
+  497     }
+  498     started = true
+  499     const startedAt = Date.now()
+  500     const toolController = new AbortController()
+  501     try {
+  502       // Past the decision point the body is always invoked, so a recorded
+  503       // start never pairs with a body that did not run.
+  504       const value = await raceInvoked(turn, () =>
+  505         call.tool.execute(call.invocation.input, {
+  506           tenantId: turn.input.tenantId,
+  507           agentId: turn.input.agent.id,
+  508           correlationId: turn.input.correlationId,
+  509           traceId: turn.input.traceId,
+  510           operationKey: call.invocation.operationKey,
+  511           ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
+  512           signal: AbortSignal.any([toolController.signal, turn.signal])
+  513         })
+  514       )
+
+=== cvg/packages/harness/src/kernel/pipeline.ts:534-571 ===
+  534   const listeners = host.listeners('tool/execute')
+  535   const run = (index: number): Promise<ToolOutcome> => {
+  536     const entry = listeners[index]
+  537     if (!entry) return terminal()
+  538     return entry
+  539       .fn(call, () => run(index + 1))
+  540       .catch(
+  541         (error: unknown): ToolOutcome =>
+  542           started
+  543             ? {
+  544                 kind: 'threw',
+  545                 error: `${entry.plugin} failed: ${errorMessage(error)}`,
+  546                 durationMs: 0
+  547               }
+  548             : {
+  549                 kind: 'not_started',
+  550                 gate: stop(
+  551                   'INSUFFICIENT_EVIDENCE',
+  552                   `${entry.plugin} failed before dispatch: ${errorMessage(error)}.`
+  553                 )
+  554               }
+  555       )
+  556   }
+  557   const outcome = await run(0)
+  558   if (started) {
+  559     try {
+  560       await host.get('effects').finished(ref, outcome.kind)
+  561     } catch {
+  562       // The body already ran. A missing settlement is uncertain, never a
+  563       // successful effect or permission to retry the body/ledger.
+  564       return {
+  565         kind: 'threw',
+  566         error: 'unknown_effect: effect_settlement_failed',
+  567         durationMs: 'durationMs' in outcome ? outcome.durationMs : 0
+  568       }
+  569     }
+  570   }
+  571   return outcome
+
+=== cvg/packages/harness/src/kernel/pipeline.ts:574-595 ===
+  574 async function postExecute(
+  575   host: KernelHost,
+  576   call: ToolCallState,
+  577   outcome: ToolOutcome
+  578 ): Promise<ToolOutcome> {
+  579   let current = outcome
+  580   for (const entry of host.listeners('tool/post-execute')) {
+  581     try {
+  582       current = await entry.fn(call, current)
+  583     } catch (error) {
+  584       // I7: a failing settlement after an effect never reads as success.
+  585       if (current.kind === 'succeeded') {
+  586         current = {
+  587           kind: 'confirm_failed',
+  588           result: current.result,
+  589           error: `${entry.plugin} failed: ${errorMessage(error)}`,
+  590           durationMs: current.durationMs
+  591         }
+  592       }
+  593     }
+  594   }
+  595   return current
+
+=== cvg/packages/harness/src/kernel/pipeline.ts:625-644 ===
+  625   const preGate = turn.budget.beginModelRequest()
+  626   if (preGate) return { kind: 'stopped', gate: preGate }
+  627   const gate = await runGate(host, 'model/before-call', { turn, request: full })
+  628   if (gate.kind === 'stop') return { kind: 'stopped', gate }
+  629   if (turn.signal.aborted) return { kind: 'cancelled' }
+  630   // I6: log the request as it will be sent, after every control adjusted it.
+  631   const { signal: _signal, ...effective } = full
+  632   void _signal
+  633   const logged = await appendLog(host, {
+  634     type: 'model/request',
+  635     correlationId: turn.input.correlationId,
+  636     request: snapshot(effective)
+  637   })
+  638   if (logged) return { kind: 'stopped', gate: logged }
+  639   try {
+  640     const outcome = await race(turn, () => host.get('model').complete(full))
+  641     if (outcome === DEADLINE || outcome === CANCELLED) {
+  642       controller.abort()
+  643       return { kind: outcome === DEADLINE ? 'deadline' : 'cancelled' }
+  644     }
+
+=== cvg/packages/harness/src/kernel/controls.ts:690-734 ===
+  690 export function auditControl(
+  691   audit: AuditSink,
+  692   options: AuditControlOptions = {}
+  693 ): KernelPlugin {
+  694   const action = options.action ?? 'harness.kernel'
+  695   return {
+  696     name: 'control.audit',
+  697     kind: 'control',
+  698     provides: ['audit'],
+  699     requires: ['budget'],
+  700     apply(ctx) {
+  701       ctx.provide('audit', audit)
+  702       ctx.on('turn/end', async (turn, result) => {
+  703         try {
+  704           const window = Math.max(turn.budget.remainingMs(), AUDIT_GRACE_MS)
+  705           const recorded = await turn.budget.withDeadline(
+  706             () =>
+  707               audit.append({
+  708                 actor: turn.input.agent.id,
+  709                 agent: turn.input.agent.id,
+  710                 tenant: turn.input.tenantId,
+  711                 action,
+  712                 policy: turn.metadata.policy,
+  713                 approval: turn.metadata.approval,
+  714                 tool: turn.metadata.tool,
+  715                 result: result.stopReason,
+  716                 timestamp: new Date().toISOString(),
+  717                 traceId: turn.input.traceId,
+  718                 correlationId: turn.input.correlationId
+  719               }),
+  720             window
+  721           )
+  722           if (recorded === DEADLINE) throw new Error('audit deadline exceeded')
+  723           return result
+  724         } catch {
+  725           return {
+  726             ...result,
+  727             response:
+  728               'Execution could not be completed because audit recording failed.',
+  729             stopReason: 'INSUFFICIENT_EVIDENCE'
+  730           }
+  731         }
+  732       })
+  733     }
+  734   }
+
+=== cvg/packages/harness/src/kernel/controls.ts:739-805 ===
+  739 export function plannerCapability(planner: Orchestrator): KernelPlugin {
+  740   return {
+  741     name: 'capability.planner',
+  742     kind: 'capability',
+  743     provides: ['planner'],
+  744     apply: (ctx) => void ctx.provide('planner', planner)
+  745   }
+  746 }
+  747 
+  748 export function modelCapability(model: ModelGateway): KernelPlugin {
+  749   return {
+  750     name: 'capability.model',
+  751     kind: 'capability',
+  752     provides: ['model'],
+  753     apply: (ctx) => void ctx.provide('model', model)
+  754   }
+  755 }
+  756 
+  757 export function toolsCapability(tools: ToolRegistry): KernelPlugin {
+  758   return {
+  759     name: 'capability.tools',
+  760     kind: 'capability',
+  761     provides: ['tools'],
+  762     apply: (ctx) => void ctx.provide('tools', tools)
+  763   }
+  764 }
+  765 
+  766 export interface TelemetryCapabilityOptions {
+  767   readonly name?: string
+  768 }
+  769 
+  770 /** Observability never turns a governed result into an error. */
+  771 export function telemetryCapability(
+  772   telemetry: TelemetrySink,
+  773   options: TelemetryCapabilityOptions = {}
+  774 ): KernelPlugin {
+  775   const name = options.name ?? 'harness.kernel'
+  776   return {
+  777     name: 'capability.telemetry',
+  778     kind: 'capability',
+  779     provides: ['telemetry'],
+  780     apply(ctx) {
+  781       ctx.provide('telemetry', telemetry)
+  782       ctx.on('turn/end', async (turn, result) => {
+  783         const event: TelemetryEvent = {
+  784           name,
+  785           latencyMs: Date.now() - turn.startedAt,
+  786           errors: result.stopReason === 'COMPLETED' ? 0 : 1,
+  787           costUsd: result.usage.costUsd,
+  788           inputTokens: result.usage.inputTokens,
+  789           outputTokens: result.usage.outputTokens,
+  790           provider: turn.metadata.provider,
+  791           toolDurationMs: turn.metadata.toolDurationMs,
+  792           steps: result.steps,
+  793           traceId: turn.input.traceId,
+  794           correlationId: turn.input.correlationId
+  795         }
+  796         try {
+  797           telemetry.record(event)
+  798         } catch {
+  799           // Observability must not turn a governed result into an error.
+  800         }
+  801         return result
+  802       })
+  803     }
+  804   }
+  805 }
+
+=== cvg/packages/harness/src/iterative-runtime.ts:424-450 ===
+  424   /** Boots the kernel profile of the iterative mode once (SPEC 0181). */
+  425   private bootKernel(): Promise<KernelHost> {
+  426     this.#kernel ??= KernelHost.boot(
+  427       [
+  428         budgetControl(),
+  429         pauseControl(this.options.pause),
+  430         logControl(this.options.log),
+  431         effectsControl(this.options.effects),
+  432         ...(this.options.sandbox ? [sandboxControl(this.options.sandbox)] : []),
+  433         policyControl(this.options.policy),
+  434         approvalsControl(
+  435           this.options.approvals,
+  436           this.options.capabilityFingerprint
+  437             ? { capabilityFingerprint: this.options.capabilityFingerprint }
+  438             : {}
+  439         ),
+  440         auditControl(this.options.audit, { action: 'harness.iterative' }),
+  441         modelCapability(this.options.modelGateway),
+  442         toolsCapability(this.options.tools),
+  443         telemetryCapability(this.options.telemetry, {
+  444           name: 'harness.iterative'
+  445         })
+  446       ],
+  447       ITERATIVE_REQUIRED_SERVICES
+  448     )
+  449     return this.#kernel
+  450   }
+
+=== cvg/packages/harness/src/iterative-runtime.ts:571-605 ===
+  571     let host: KernelHost
+  572     try {
+  573       host = await this.bootKernel()
+  574     } catch (error) {
+  575       /* v8 ignore start -- defensive: the fixed plugin list always satisfies the boot contract */
+  576       return this.earlyFinish(
+  577         input,
+  578         `Kernel could not start: ${errorMessage(error)}.`,
+  579         'INTERNAL_FAILURE',
+  580         startedAtMs
+  581       )
+  582       /* v8 ignore stop */
+  583     }
+  584 
+  585     let checkpoint: ExecutionCheckpoint | null = null
+  586     try {
+  587       checkpoint = await this.options.stepStore.loadCheckpoint(
+  588         input.tenantId,
+  589         executionId
+  590       )
+  591     } catch (error) {
+  592       return this.earlyFinish(
+  593         input,
+  594         `Execution checkpoint could not be trusted: ${errorMessage(error)}.`,
+  595         'STATE_CONFLICT',
+  596         startedAtMs
+  597       )
+  598     }
+  599 
+  600     if (checkpoint) {
+  601       const rejection = this.rejectCheckpoint(checkpoint, input)
+  602       if (rejection) {
+  603         return this.earlyFinish(input, rejection, 'STATE_CONFLICT', startedAtMs)
+  604       }
+  605     }
+
+=== cvg/packages/harness/src/iterative-runtime.ts:790-804 ===
+  790       const beforeStep = await runGate(
+  791         this.kernelFor(run),
+  792         'turn/before-step',
+  793         this.turnFor(run)
+  794       )
+  795       if (beforeStep.kind === 'stop') {
+  796         // An operator pause is not terminal: the durable checkpoint, with any
+  797         // pending approval or question, stays resumable (AUD-0597 F03).
+  798         return {
+  799           ...this.stop(beforeStep.stopReason, beforeStep.response),
+  800           /* v8 ignore next -- the pause control is the only before-step control */
+  801           ...(beforeStep.cause === 'operator_paused'
+  802             ? { preserveCheckpoint: true }
+  803             : {})
+  804         }
+
+=== cvg/packages/harness/src/iterative-runtime.ts:991-1015 ===
+  991     const decisionAbortController = new AbortController()
+  992     const decisionOrDeadline = await this.withDeadline(
+  993       this.options.orchestrator.decide({
+  994         context,
+  995         signal: decisionAbortController.signal
+  996       }),
+  997       remaining
+  998     )
+  999     if (decisionOrDeadline === DEADLINE_EXCEEDED) {
+ 1000       decisionAbortController.abort()
+ 1001       return {
+ 1002         outcome: this.stop(
+ 1003           'MAX_DURATION',
+ 1004           'Duration budget exhausted while deciding the next step.'
+ 1005         )
+ 1006       }
+ 1007     }
+ 1008     const turn = decisionOrDeadline
+ 1009     const usage = turn.usage ?? EMPTY_MODEL_USAGE
+ 1010     this.accountUsage(run, usage)
+ 1011     const usageStop = this.checkAfterUsage(run)
+ 1012     if (usageStop) {
+ 1013       return { outcome: this.stop(usageStop.reason, usageStop.response) }
+ 1014     }
+ 1015     return { decision: turn.decision }
+
+=== cvg/packages/harness/src/iterative-runtime.ts:1569-1687 ===
+ 1569   private async finalize(
+ 1570     run: LoopRun,
+ 1571     outcome: Extract<DispatchOutcome, { kind: 'stop' }>,
+ 1572     startedAtMs: number
+ 1573   ): Promise<RuntimeResult> {
+ 1574     let stopReason: StopReason = outcome.stopReason
+ 1575     run.usage.activeDurationMs += Date.now() - startedAtMs
+ 1576     if (!outcome.preserveCheckpoint && TERMINAL_STOPS.has(stopReason)) {
+ 1577       try {
+ 1578         await this.closePendingStep(run, stopReason)
+ 1579       } catch {
+ 1580         // The open step could not be closed: the terminal checkpoint must not
+ 1581         // claim a clean stop while the step store disagrees.
+ 1582         stopReason = 'INSUFFICIENT_EVIDENCE'
+ 1583       }
+ 1584     }
+ 1585     run.state = { ...run.state, stopReason }
+ 1586     let checkpointProven = true
+ 1587     if (outcome.preserveCheckpoint) {
+ 1588       // Intentional no-write: the durable pause must stay resumable after a
+ 1589       // rejected resume binding.
+ 1590     } else {
+ 1591       try {
+ 1592         await this.persistCheckpoint(run)
+ 1593       } catch {
+ 1594         checkpointProven = false
+ 1595       }
+ 1596     }
+ 1597     const claimedReason: StopReason = checkpointProven
+ 1598       ? stopReason
+ 1599       : 'INSUFFICIENT_EVIDENCE'
+ 1600     if (!checkpointProven) {
+ 1601       run.state = { ...run.state, stopReason: claimedReason }
+ 1602     }
+ 1603     const result: RuntimeResult = {
+ 1604       response: outcome.response,
+ 1605       stopReason: claimedReason,
+ 1606       ...(outcome.kind === 'stop' && outcome.approvalId
+ 1607         ? { approvalId: outcome.approvalId }
+ 1608         : {}),
+ 1609       steps: run.usage.steps,
+ 1610       modelCalls: run.usage.modelCalls,
+ 1611       toolCalls: run.usage.toolCalls,
+ 1612       usage: {
+ 1613         inputTokens: run.usage.inputTokens,
+ 1614         outputTokens: run.usage.outputTokens,
+ 1615         costUsd: run.usage.costUsd
+ 1616       },
+ 1617       ...(run.lastToolObservation
+ 1618         ? {
+ 1619             toolResult: {
+ 1620               /* v8 ignore next -- only a successful tool observation is stored */
+ 1621               status:
+ 1622                 (run.lastToolObservation.payload as { status?: string } | null)
+ 1623                   ?.status === 'SUCCEEDED'
+ 1624                   ? ('SUCCEEDED' as const)
+ 1625                   : ('REJECTED' as const),
+ 1626               output: (
+ 1627                 run.lastToolObservation.payload as {
+ 1628                   output?: unknown
+ 1629                 } | null
+ 1630               )?.output
+ 1631             }
+ 1632           }
+ 1633         : {})
+ 1634     }
+ 1635     const finalResult = await this.recordAuditOutcome(
+ 1636       run,
+ 1637       result,
+ 1638       claimedReason
+ 1639     )
+ 1640     this.recordTelemetry(run, finalResult, startedAtMs)
+ 1641     return finalResult
+ 1642   }
+ 1643 
+ 1644   private async recordAuditOutcome(
+ 1645     run: LoopRun,
+ 1646     result: RuntimeResult,
+ 1647     stopReason: StopReason
+ 1648   ): Promise<RuntimeResult> {
+ 1649     const action =
+ 1650       stopReason === 'COMPLETED'
+ 1651         ? 'runtime.completed'
+ 1652         : stopReason === 'NEEDS_USER_INPUT' ||
+ 1653             stopReason === 'APPROVAL_REQUIRED'
+ 1654           ? 'runtime.paused'
+ 1655           : 'runtime.stopped'
+ 1656     // Audit always gets at least a bounded grace window, so a budget stop
+ 1657     // (possibly after an effect) is still recorded. If even that fails, the
+ 1658     // result is degraded like any other unaudited outcome (ENG-008).
+ 1659     try {
+ 1660       const deadlineMs = Math.max(this.remainingDuration(run), AUDIT_GRACE_MS)
+ 1661       const auditOrDeadline = await this.withDeadline(
+ 1662         this.options.audit.append({
+ 1663           actor: run.input.agent.id,
+ 1664           agent: run.input.agent.id,
+ 1665           tenant: run.input.tenantId,
+ 1666           action,
+ 1667           policy: null,
+ 1668           approval: (result.approvalId as ApprovalId | undefined) ?? null,
+ 1669           tool: run.lastToolObservation?.provenance.sourceId ?? null,
+ 1670           result: stopReason,
+ 1671           timestamp: this.clock().toISOString(),
+ 1672           traceId: run.input.traceId,
+ 1673           correlationId: run.input.correlationId
+ 1674         }),
+ 1675         deadlineMs
+ 1676       )
+ 1677       if (auditOrDeadline === DEADLINE_EXCEEDED) {
+ 1678         throw new Error('audit deadline exceeded')
+ 1679       }
+ 1680       return result
+ 1681     } catch {
+ 1682       return {
+ 1683         ...result,
+ 1684         response:
+ 1685           'Execution could not be completed because audit recording failed.',
+ 1686         stopReason: 'INSUFFICIENT_EVIDENCE'
+ 1687       }
+
+=== cvg/packages/harness/src/iterative-runtime.ts:1691-1722 ===
+ 1691   private recordTelemetry(
+ 1692     run: LoopRun,
+ 1693     result: RuntimeResult,
+ 1694     startedAtMs: number
+ 1695   ): void {
+ 1696     const telemetry: TelemetryEvent = {
+ 1697       name: 'harness.iterative',
+ 1698       latencyMs: Date.now() - startedAtMs,
+ 1699       errors: result.stopReason === 'COMPLETED' ? 0 : 1,
+ 1700       costUsd: result.usage.costUsd,
+ 1701       inputTokens: result.usage.inputTokens,
+ 1702       outputTokens: result.usage.outputTokens,
+ 1703       provider: null,
+ 1704       toolDurationMs: 0,
+ 1705       steps: result.steps,
+ 1706       traceId: run.input.traceId,
+ 1707       correlationId: run.input.correlationId,
+ 1708       attributes: {
+ 1709         outcome: result.stopReason,
+ 1710         model_calls: result.modelCalls,
+ 1711         tool_calls: result.toolCalls,
+ 1712         knowledge_calls: run.usage.knowledgeCalls,
+ 1713         replans: run.usage.replans,
+ 1714         verification_calls: run.usage.verificationCalls
+ 1715       }
+ 1716     }
+ 1717     try {
+ 1718       this.options.telemetry.record(telemetry)
+ 1719     } catch {
+ 1720       // telemetry is best effort
+ 1721     }
+ 1722   }
+
+=== cvg/packages/harness/src/iterative-runtime.ts:1764-1789 ===
+ 1764   private async withDeadline<T>(
+ 1765     operation: Promise<T>,
+ 1766     remainingMs: number
+ 1767   ): Promise<T | typeof DEADLINE_EXCEEDED> {
+ 1768     if (remainingMs <= 0) return DEADLINE_EXCEEDED
+ 1769     let timer!: ReturnType<typeof setTimeout>
+ 1770     const deadline = new Promise<typeof DEADLINE_EXCEEDED>((resolve) => {
+ 1771       timer = setTimeout(() => resolve(DEADLINE_EXCEEDED), remainingMs)
+ 1772     })
+ 1773     try {
+ 1774       return await Promise.race([operation, deadline])
+ 1775     } finally {
+ 1776       clearTimeout(timer)
+ 1777     }
+ 1778   }
+ 1779 }
+ 1780 
+ 1781 export function stringifySummary(value: unknown, fallback: string): string {
+ 1782   if (value === undefined || value === null) return fallback
+ 1783   if (typeof value === 'string') return value.slice(0, 300)
+ 1784   try {
+ 1785     return (JSON.stringify(value) ?? fallback).slice(0, 300)
+ 1786   } catch {
+ 1787     return fallback
+ 1788   }
+ 1789 }
+
+=== cvg/packages/harness/src/capability-boundary.ts:70-145 ===
+   70 export class CapabilityRegistry implements CapabilityRegistryPort {
+   71   public constructor(registrations: readonly CapabilityRegistration[] = []) {
+   72     const stored: StoredRegistration[] = []
+   73     for (const registration of registrations) {
+   74       const normalized = normalizeRegistration(registration)
+   75       if (
+   76         stored.some(
+   77           (candidate) =>
+   78             candidate.descriptor.id === normalized.descriptor.id &&
+   79             candidate.descriptor.version === normalized.descriptor.version
+   80         )
+   81       ) {
+   82         throw new CapabilityRegistryError(
+   83           'duplicate_capability',
+   84           `Capability already registered: ${normalized.descriptor.id}@${normalized.descriptor.version}`
+   85         )
+   86       }
+   87       stored.push(normalized)
+   88     }
+   89     registrationsByRegistry.set(this, Object.freeze(stored))
+   90   }
+   91 
+   92   public register(registration: CapabilityRegistration): CapabilityRegistry {
+   93     const normalized = normalizeRegistration(registration)
+   94     if (
+   95       getRegistrations(this).some(
+   96         (candidate) =>
+   97           candidate.descriptor.id === normalized.descriptor.id &&
+   98           candidate.descriptor.version === normalized.descriptor.version
+   99       )
+  100     ) {
+  101       throw new CapabilityRegistryError(
+  102         'duplicate_capability',
+  103         `Capability already registered: ${normalized.descriptor.id}@${normalized.descriptor.version}`
+  104       )
+  105     }
+  106 
+  107     return CapabilityRegistry.fromStored([
+  108       ...getRegistrations(this),
+  109       normalized
+  110     ])
+  111   }
+  112 
+  113   public listDescriptors(): readonly CapabilityDescriptor[] {
+  114     return sorted(getRegistrations(this)).map(({ descriptor }) =>
+  115       cloneDescriptor(descriptor)
+  116     )
+  117   }
+  118 
+  119   public resolveDescriptor(
+  120     capabilityId: string,
+  121     version: string
+  122   ): CapabilityDescriptor | undefined {
+  123     if (!isBoundedIdentifier(capabilityId, MAX_ID_LENGTH)) return undefined
+  124     if (!isBoundedVersion(version)) return undefined
+  125     const registration = getRegistrations(this).find(
+  126       (candidate) =>
+  127         candidate.descriptor.id === capabilityId &&
+  128         candidate.descriptor.version === version
+  129     )
+  130     return registration ? cloneDescriptor(registration.descriptor) : undefined
+  131   }
+  132 
+  133   public compositionFingerprint(): string {
+  134     const descriptors = sorted(getRegistrations(this)).map(
+  135       ({ descriptor }) => descriptor
+  136     )
+  137     return createHash('sha256')
+  138       .update(
+  139         stableSerialize({
+  140           schemaVersion: 'capability-composition-v1',
+  141           descriptors
+  142         })
+  143       )
+  144       .digest('hex')
+  145   }
+
+=== cvg/packages/harness/src/capability-boundary.ts:184-205 ===
+  184 export function createCapabilityToolRegistry(
+  185   registry: CapabilityRegistryPort
+  186 ): ToolRegistry {
+  187   const snapshot = sorted(getRegistrations(registry))
+  188   return {
+  189     list: () => snapshot.map((registration) => toTool(registration)),
+  190     resolve: (capabilityId, version) => {
+  191       if (
+  192         !isBoundedIdentifier(capabilityId, MAX_ID_LENGTH) ||
+  193         !isBoundedVersion(version)
+  194       ) {
+  195         return undefined
+  196       }
+  197       const registration = snapshot.find(
+  198         (candidate) =>
+  199           candidate.descriptor.id === capabilityId &&
+  200           candidate.descriptor.version === version
+  201       )
+  202       return registration ? toTool(registration) : undefined
+  203     }
+  204   }
+  205 }
+
+=== cvg/packages/harness/src/capability-boundary.ts:300-403 ===
+  300 function normalizeImplementation(value: unknown): CapabilityImplementation {
+  301   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  302     throw new CapabilityRegistryError(
+  303       'invalid_implementation',
+  304       'Capability implementation requires input validation, execution, and output validation'
+  305     )
+  306   }
+  307 
+  308   let validateInput: CapabilityImplementation['validateInput']
+  309   let execute: CapabilityImplementation['execute']
+  310   let validateOutput: CapabilityImplementation['validateOutput']
+  311   try {
+  312     const implementation = value as Record<string, unknown>
+  313     if (
+  314       typeof implementation.validateInput !== 'function' ||
+  315       typeof implementation.execute !== 'function' ||
+  316       typeof implementation.validateOutput !== 'function'
+  317     ) {
+  318       throw new Error('missing implementation method')
+  319     }
+  320     validateInput = (
+  321       implementation.validateInput as CapabilityImplementation['validateInput']
+  322     ).bind(value)
+  323     execute = (
+  324       implementation.execute as CapabilityImplementation['execute']
+  325     ).bind(value)
+  326     validateOutput = (
+  327       implementation.validateOutput as CapabilityImplementation['validateOutput']
+  328     ).bind(value)
+  329   } catch {
+  330     throw new CapabilityRegistryError(
+  331       'invalid_implementation',
+  332       'Capability implementation requires input validation, execution, and output validation'
+  333     )
+  334   }
+  335   return Object.freeze({
+  336     validateInput,
+  337     execute,
+  338     validateOutput
+  339   }) as CapabilityImplementation
+  340 }
+  341 
+  342 function toTool(registration: StoredRegistration): ToolDefinition {
+  343   const descriptor = cloneDescriptor(registration.descriptor)
+  344   return {
+  345     ...descriptor,
+  346     execute: (input: unknown, context: ToolExecutionContext) =>
+  347       executeBound(registration.implementation, input, context)
+  348   }
+  349 }
+  350 
+  351 async function executeBound(
+  352   implementation: CapabilityImplementation,
+  353   input: unknown,
+  354   context: ToolExecutionContext
+  355 ): Promise<ToolResult> {
+  356   let safeInput: unknown
+  357   try {
+  358     safeInput = cloneJsonValue(input)
+  359     if (!inputMatchesExecutionContext(safeInput, context)) {
+  360       return { status: 'REJECTED', error: 'capability_input_invalid' }
+  361     }
+  362     if (implementation.validateInput(safeInput) !== true) {
+  363       return { status: 'REJECTED', error: 'capability_input_invalid' }
+  364     }
+  365   } catch {
+  366     return { status: 'REJECTED', error: 'capability_input_invalid' }
+  367   }
+  368 
+  369   let result: ToolResult
+  370   try {
+  371     const safeContext = Object.freeze({ ...context }) as ToolExecutionContext
+  372     const rawResult = await implementation.execute(safeInput, safeContext)
+  373     const normalizedResult = normalizeToolResult(rawResult)
+  374     if (!normalizedResult) {
+  375       return { status: 'REJECTED', error: 'capability_result_invalid' }
+  376     }
+  377     result = normalizedResult
+  378   } catch {
+  379     return { status: 'FAILED', error: 'capability_execution_failed' }
+  380   }
+  381 
+  382   if (result.status === 'SUCCEEDED') {
+  383     try {
+  384       if (implementation.validateOutput(result.output) !== true) {
+  385         return { status: 'REJECTED', error: 'capability_output_invalid' }
+  386       }
+  387     } catch {
+  388       return { status: 'REJECTED', error: 'capability_output_invalid' }
+  389     }
+  390   }
+  391 
+  392   try {
+  393     return {
+  394       status: result.status,
+  395       ...(result.output !== undefined
+  396         ? { output: cloneJsonValue(result.output) }
+  397         : {}),
+  398       ...(result.error !== undefined ? { error: result.error } : {})
+  399     }
+  400   } catch {
+  401     return { status: 'REJECTED', error: 'capability_result_invalid' }
+  402   }
+  403 }
+
+=== cvg/packages/harness/src/effect-journal.ts:251-279 ===
+  251 function proposalHash(
+  252   tool: ToolDefinition,
+  253   input: unknown,
+  254   compositionFingerprint: string | undefined
+  255 ): string {
+  256   return createHash('sha256')
+  257     .update(
+  258       JSON.stringify({
+  259         schemaVersion: 'effect-proposal-v2',
+  260         compositionFingerprint: compositionFingerprint ?? null,
+  261         tool: {
+  262           id: tool.id,
+  263           version: tool.version,
+  264           sideEffect: tool.sideEffect,
+  265           idempotent: tool.idempotent,
+  266           providerId:
+  267             'providerId' in tool
+  268               ? (tool as { providerId?: unknown }).providerId
+  269               : undefined,
+  270           providerVersion:
+  271             'providerVersion' in tool
+  272               ? (tool as { providerVersion?: unknown }).providerVersion
+  273               : undefined
+  274         },
+  275         input
+  276       })
+  277     )
+  278     .digest('hex')
+  279 }
+
+=== cvg/packages/harness/src/effect-journal.ts:281-297 ===
+  281 /**
+  282  * Wraps only the executor side of a registry. Descriptors remain unchanged,
+  283  * policy and approval still run in the harness before this wrapper is called.
+  284  */
+  285 export function createJournaledToolRegistry(
+  286   registry: ToolRegistry,
+  287   journal: EffectJournal,
+  288   options: JournaledToolRegistryOptions = {}
+  289 ): ToolRegistry {
+  290   return {
+  291     list: () => registry.list(),
+  292     resolve: (toolId, version) => {
+  293       const tool = registry.resolve(toolId, version)
+  294       if (!tool) return undefined
+  295       return journaledTool(tool, journal, options)
+  296     }
+  297   }
+
+=== cvg/packages/harness/src/effect-journal.ts:310-395 ===
+  310     execute: async (
+  311       input: unknown,
+  312       context: ToolExecutionContext
+  313     ): Promise<ToolResult> => {
+  314       const operationKey = bounded(context.operationKey ?? '', 'operationKey')
+  315       const attemptId = createEffectAttemptId(options.attemptIdFactory)
+  316       const reservation = await journal.reserve({
+  317         tenantId: context.tenantId,
+  318         operationKey,
+  319         proposalHash: proposalHash(tool, input, compositionFingerprint),
+  320         attemptId
+  321       })
+  322       if (reservation.state === 'CONFIRMED') {
+  323         return { status: 'SUCCEEDED', output: reservation.result }
+  324       }
+  325       if (
+  326         reservation.state === 'UNCERTAIN' ||
+  327         reservation.state === 'EFFECT_STARTED'
+  328       ) {
+  329         return {
+  330           status: 'REJECTED',
+  331           error:
+  332             'unknown_effect: explicit reconciliation is required before retry'
+  333         }
+  334       }
+  335       if (reservation.attemptId !== attemptId) {
+  336         return {
+  337           status: 'REJECTED',
+  338           error:
+  339             'unknown_effect: an existing reservation requires reconciliation'
+  340         }
+  341       }
+  342       await journal.markStarted({
+  343         tenantId: context.tenantId,
+  344         operationKey,
+  345         attemptId
+  346       })
+  347       try {
+  348         const result = await tool.execute(input, context)
+  349         if (
+  350           options.crashAfterEffectBeforeConfirm &&
+  351           result.status === 'SUCCEEDED'
+  352         ) {
+  353           await journal.markUncertain({
+  354             tenantId: context.tenantId,
+  355             operationKey,
+  356             attemptId,
+  357             reason: 'synthetic crash after effect before confirmation'
+  358           })
+  359           return {
+  360             status: 'REJECTED',
+  361             error:
+  362               'unknown_effect: synthetic crash after effect before confirmation'
+  363           }
+  364         }
+  365         if (result.status === 'SUCCEEDED') {
+  366           await journal.confirm({
+  367             tenantId: context.tenantId,
+  368             operationKey,
+  369             attemptId,
+  370             result: result.output
+  371           })
+  372         } else {
+  373           await journal.fail({
+  374             tenantId: context.tenantId,
+  375             operationKey,
+  376             attemptId,
+  377             error: result.error ?? 'tool failed'
+  378           })
+  379         }
+  380         return result
+  381       } catch (error) {
+  382         const message =
+  383           error instanceof Error ? error.message : 'tool execution failed'
+  384         await journal.markUncertain({
+  385           tenantId: context.tenantId,
+  386           operationKey,
+  387           attemptId,
+  388           reason: `unknown effect after executor failure: ${message}`
+  389         })
+  390         return {
+  391           status: 'REJECTED',
+  392           error: 'unknown_effect: executor outcome is uncertain'
+  393         }
+  394       }
+  395     }
+
+=== cvg/packages/contracts/src/contracts.ts:177-210 ===
+  177 export interface RuntimeInput {
+  178   readonly agent: AgentProfile
+  179   readonly tenantId: TenantId
+  180   /** Set by the durable worker; never trusted from the public request body. */
+  181   readonly executionId?: string
+  182   /** Immutable capability composition binding supplied by the execution root. */
+  183   readonly capabilityFingerprint?: string
+  184   readonly conversationId: ConversationId
+  185   readonly sessionId: SessionId
+  186   readonly correlationId: CorrelationId
+  187   readonly traceId: TraceId
+  188   readonly userMessage: string
+  189   readonly context: ContextSnapshot
+  190   readonly state: StateSnapshot
+  191   readonly budget: ExecutionBudget
+  192   readonly requestedTool?: ToolInvocation
+  193   /**
+  194    * Explicit runtime selection. The composition root resolves the runtime
+  195    * through its registry; no caller reaches a runtime class directly.
+  196    */
+  197   readonly runtimeProfile?: 'single_pass' | 'iterative'
+  198   /**
+  199    * Durable worker resume binding. The worker derives this from the execution
+  200    * record; the public request body can never set it.
+  201    */
+  202   readonly resume?:
+  203     | { readonly kind: 'approval'; readonly approvalId: string }
+  204     | { readonly kind: 'user_input'; readonly message: string }
+  205   /**
+  206    * Cooperative cancellation from the caller (SPEC 0181 I8). The kernel links
+  207    * it to its own deadline signal; cancellation before dispatch runs no tool.
+  208    */
+  209   readonly signal?: AbortSignal
+  210 }
+
+=== cvg/packages/contracts/src/contracts.ts:290-313 ===
+  290 export interface ModelGateway {
+  291   complete(request: ModelRequest): Promise<ModelResult>
+  292 }
+  293 
+  294 export interface PolicyRequest {
+  295   readonly tenantId: TenantId
+  296   readonly agentId: AgentId
+  297   readonly action: string
+  298   readonly tool: ToolDefinition
+  299   readonly invocation: ToolInvocation
+  300   readonly correlationId: CorrelationId
+  301 }
+  302 
+  303 export type PolicyOutcome = 'ALLOW' | 'DENY' | 'REQUIRE_APPROVAL' | 'HANDOFF'
+  304 
+  305 export interface PolicyDecision {
+  306   readonly outcome: PolicyOutcome
+  307   readonly reason: string
+  308   readonly policyVersion: string
+  309 }
+  310 
+  311 export interface PolicyEngine {
+  312   evaluate(request: PolicyRequest): Promise<PolicyDecision>
+  313 }
+
+=== cvg/packages/contracts/src/contracts.ts:493-531 ===
+  493 export interface AuditEvent {
+  494   readonly actor: string | null
+  495   readonly agent: AgentId
+  496   readonly tenant: TenantId
+  497   readonly action: string
+  498   readonly policy: string | null
+  499   readonly approval: ApprovalId | null
+  500   readonly tool: string | null
+  501   readonly result: string
+  502   readonly timestamp: string
+  503   readonly traceId: TraceId
+  504   readonly correlationId: CorrelationId
+  505 }
+  506 
+  507 export interface AuditSink {
+  508   append(event: AuditEvent): Promise<void>
+  509 }
+  510 
+  511 export interface TelemetryEvent {
+  512   readonly name: string
+  513   readonly latencyMs: number
+  514   readonly errors: number
+  515   readonly costUsd: number
+  516   readonly inputTokens: number
+  517   readonly outputTokens: number
+  518   readonly provider: string | null
+  519   readonly toolDurationMs: number
+  520   readonly steps: number
+  521   readonly traceId: TraceId
+  522   readonly correlationId: CorrelationId
+  523   /**
+  524    * Bounded, non-identifying attributes (fixed labels only; never
+  525    * execution/conversation identifiers).
+  526    */
+  527   readonly attributes?: Readonly<Record<string, string | number>>
+  528 }
+  529 
+  530 export interface TelemetrySink {
+  531   record(event: TelemetryEvent): void
+
+=== cvg/packages/orchestrator/src/hybrid-orchestrator.ts:135-172 ===
+  135 export class HybridOrchestrator implements IterativeOrchestrator {
+  136   public readonly version: string
+  137   private readonly decisionModel: ModelGateway | undefined
+  138   private readonly rules: readonly OrchestrationRule[]
+  139   private readonly maxDecisionRepairs: number
+  140 
+  141   public constructor(options: HybridOrchestratorOptions = {}) {
+  142     this.decisionModel = options.decisionModel
+  143     this.rules = options.rules ?? []
+  144     const requested = options.maxDecisionRepairs ?? 1
+  145     this.maxDecisionRepairs = Number.isFinite(requested)
+  146       ? Math.min(5, Math.max(0, Math.trunc(requested)))
+  147       : 1
+  148     this.version = options.version ?? 'hybrid-1.0.0'
+  149   }
+  150 
+  151   public async decide(
+  152     input: IterativeOrchestratorInput
+  153   ): Promise<IterativeOrchestratorTurn> {
+  154     const context = input.context
+  155     for (const rule of this.rules) {
+  156       const decision = rule(context)
+  157       if (!decision) continue
+  158       const validation = validateLoopDecision(decision)
+  159       if (!validation.valid) {
+  160         throw new OrchestratorDecisionError(
+  161           'decision_invalid',
+  162           `Deterministic rule produced an invalid decision: ${validation.errors.join('; ')}`
+  163         )
+  164       }
+  165       return { decision, usage: EMPTY_MODEL_USAGE }
+  166     }
+  167 
+  168     if (!this.decisionModel) {
+  169       throw new OrchestratorDecisionError(
+  170         'orchestrator_unavailable',
+  171         'No deterministic rule matched and no decision model is configured'
+  172       )
+
+=== cvg/packages/orchestrator/src/hybrid-orchestrator.ts:178-210 ===
+  178     while (true) {
+  179       if (input.signal?.aborted) {
+  180         throw new OrchestratorDecisionError(
+  181           'orchestrator_unavailable',
+  182           'Decision was cancelled by the runtime deadline'
+  183         )
+  184       }
+  185       const prompt = buildDecisionPrompt({
+  186         ...context,
+  187         ...(repairAttempt > 0
+  188           ? {
+  189               decisionRepair: {
+  190                 attempt: repairAttempt,
+  191                 errors: lastErrors
+  192               }
+  193             }
+  194           : {})
+  195       })
+  196       const modelResult = await this.decisionModel.complete({
+  197         messages: [
+  198           { role: 'system', content: prompt },
+  199           { role: 'user', content: context.userMessage }
+  200         ],
+  201         context: {
+  202           values: { goal: context.goal },
+  203           sourceIds: ['hybrid-orchestrator'],
+  204           capturedAt: new Date().toISOString()
+  205         },
+  206         budget: context.budget,
+  207         correlationId: context.correlationId,
+  208         purpose: repairAttempt > 0 ? 'REPAIR' : 'ORCHESTRATION',
+  209         ...(input.signal ? { signal: input.signal } : {})
+  210       })
+
+=== reference/packages/host/plugin-inventory/src/index.ts:78-114 ===
+   78 /** Read current Loader entries and optional preset compositions.
+   79  * @param ctx Context with the Loader service.
+   80  * @returns Current inventory with optional display metadata and no separate runtime cache.
+   81  */
+   82 export async function readPluginInventory(ctx: Context): Promise<PluginInventorySnapshot> {
+   83   const entries: PluginInventoryEntry[] = []
+   84   const packages = ctx.get('pluginPackages')
+   85   for (const entry of ctx.loader.entries()) {
+   86     if (entry.options.group) continue
+   87     const base = entry.parent.tree.ctx.baseUrl
+   88     const meta = base === undefined ? undefined : packages?.metaOf(entry.options.name, base)
+   89     entries.push({
+   90       entryId: pluginEntryId(entry.id),
+   91       moduleName: entry.options.name,
+   92       enabled: !entry.disabled,
+   93       fiberPhase: entry.fiber === undefined ? null : FIBER_PHASE[entry.fiber.state],
+   94       ...meta === undefined ? {} : { meta },
+   95     })
+   96   }
+   97   const presets = ctx.get('agentPresets')
+   98   const management = ctx.get('pluginManager') === undefined ? {} : { managementAvailable: true }
+   99   if (presets === undefined) return { entries, ...management }
+  100   const agentPresets: AgentPresetPluginGroup[] = (await presets.compositionInventory()).map(
+  101     composition => ({
+  102       ...composition,
+  103       rows: composition.rows.map(({ fiberState, ...row }) => {
+  104         const meta = ctx.baseUrl === undefined ? undefined : packages?.metaOf(row.moduleName, ctx.baseUrl)
+  105         return {
+  106           ...row,
+  107           fiberPhase: fiberState === undefined ? null : FIBER_PHASE[fiberState],
+  108           ...meta === undefined ? {} : { meta },
+  109         }
+  110       }),
+  111     }),
+  112   )
+  113   return { entries, agentPresets, ...management }
+  114 }
+
+=== reference/packages/host/plugin-inventory/src/types.ts:7-75 ===
+    7 /** Lifecycle state of an entry's root Fiber, or null when it has no live root Fiber. */
+    8 export type PluginFiberPhase =
+    9   | 'pending'
+   10   | 'loading'
+   11   | 'active'
+   12   | 'failed'
+   13   | 'unloading'
+   14   | null
+   15 
+   16 /** One non-group Loader entry exposed to trusted clients. */
+   17 export interface PluginInventoryEntry {
+   18   readonly entryId: PluginEntryId
+   19   /** Exact module specifier imported by the Loader entry. */
+   20   readonly moduleName: string
+   21   /** Local package display metadata, independent of whether the entry is enabled. */
+   22   readonly meta?: PluginLocalizedMeta
+   23   /** Effective Loader enablement, including disabled ancestor groups. */
+   24   readonly enabled: boolean
+   25   readonly fiberPhase: PluginFiberPhase
+   26 }
+   27 
+   28 /** Effective enablement of one preset composition row. */
+   29 export type PresetPluginEnablement = boolean | 'conditional'
+   30 
+   31 /** One plugin row an agent preset's composition names. */
+   32 export interface AgentPresetPluginRow {
+   33   /** Composition row id, or null when the row declares none. */
+   34   readonly entryId: string | null
+   35   /** Module specifier the row names. */
+   36   readonly moduleName: string
+   37   /** Local package display metadata, independent of whether the preset is mounted. */
+   38   readonly meta?: PluginLocalizedMeta
+   39   /**
+   40    * Effective enablement, including disabled ancestor groups. `'conditional'`
+   41    * marks a `!!js` disabled expression on a composition no session has
+   42    * mounted, which only a Loader context can decide.
+   43    */
+   44   readonly enabled: PresetPluginEnablement
+   45   /** The row's own `!!js` disabled expression, when it carries one. */
+   46   readonly condition?: string
+   47   /** Root-fiber phase when the composition is live; null otherwise. */
+   48   readonly fiberPhase: PluginFiberPhase
+   49 }
+   50 
+   51 /** One agent preset's identity and flattened composition in the inventory. */
+   52 export interface AgentPresetPluginGroup {
+   53   /** Stable preset id. */
+   54   readonly id: string
+   55   /** Display name the preset published; a reader falls back to the id. */
+   56   readonly name?: string
+   57   /** Whether a session naming no preset composes this one. */
+   58   readonly isDefault: boolean
+   59   /** Why this preset's composition cannot be read; absent when rows answer. */
+   60   readonly broken?: string
+   61   /** Plugin rows in composition order; empty when the preset is broken. */
+   62   readonly rows: readonly AgentPresetPluginRow[]
+   63 }
+   64 
+   65 /** Point-in-time inventory returned by the plugin inventory Remote. */
+   66 export interface PluginInventorySnapshot {
+   67   /** Whether this Host exposes persistent current-profile management. */
+   68   readonly managementAvailable?: boolean
+   69   readonly entries: readonly PluginInventoryEntry[]
+   70   /**
+   71    * Per-preset compositions, present only when an agent-preset roster is
+   72    * composed in this deployment.
+   73    */
+   74   readonly agentPresets?: readonly AgentPresetPluginGroup[]
+   75 }
+
+=== reference/packages/boot/plugin-manager/src/types.ts:110-136 ===
+  110 /** Persisted change and independently observed application outcome. */
+  111 export interface ChangeResult {
+  112   changed: boolean
+  113   /** `cancelled` is an installation the caller stopped, its files restored. */
+  114   application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled'
+  115   /** Last attempted step; successful installation can proceed to enablement. */
+  116   stage: 'install' | 'enable' | 'remove'
+  117   target: string
+  118   enabled?: boolean
+  119   error?: ManagementError
+  120   /** Pre-existing inactive entries the operation left as they were. */
+  121   warnings?: string[]
+  122   packageResult?: PackageResult
+  123   /** The bundle an installation added, once pnpm and the bundle check accepted it. */
+  124   bundle?: string
+  125   /** Exact package names awaiting explicit script approval in the profile's pnpm settings, read after a failed run. */
+  126   pendingBuilds?: string[]
+  127   /** Package script permissions saved before this installation attempt. */
+  128   approvedBuilds?: string[]
+  129   /** The registries the installation asked, in order; `packageResult` is the last one's run. */
+  130   registries?: Registry[]
+  131   /**
+  132    * What the last failed run could not reach or get an answer from: the registry it asked, or the host a git or
+  133    * tarball spec is fetched from, which no registry stands in for; absent for a failure neither explains.
+  134    */
+  135   failedAt?: 'registry' | 'spec-host'
+  136 }
+
+=== reference/packages/boot/plugin-manager/src/tools.ts:18-44 ===
+   18 export function apply(ctx: Context): void {
+   19   ctx.tools.register(defineTool({
+   20     name: 'plugin_manager',
+   21     description: 'List plugins or bundles in the current profile, enable or disable them, install a bundle, or remove an installed bundle. Every action requires danger-full-access permission or approval for this call. Approval does not change the session permission mode. Changes affect every session in this profile. List first to obtain exact identifiers. Package installation can execute allowed build scripts. Live profiles apply changes immediately; startup profiles require restart. Incompatible DSH peer dependencies block installation and activation. Version exemptions risk crashes and data loss: warn the user and obtain explicit permission for the exact plugin and runtime versions before granting one.',
+   22     parameters: {
+   23       action: { type: 'string', required: true, enum: ['list_plugins', 'list_bundles', 'set_plugin', 'set_bundle', 'install_bundle', 'remove_bundle', 'list_version_exemptions', 'set_version_exemption'], description: 'Management operation.' },
+   24       target: { type: 'string', description: 'Plugin entry id, bundle package name, or installation spec, according to action.' },
+   25       enabled: { type: 'boolean', description: 'Required for set operations; defaults to true for installation. For set_version_exemption, true grants and false revokes.' },
+   26       runtimeVersion: { type: 'string', description: 'For set_version_exemption: exact DSH version from list_version_exemptions. Target must be the manifest package-name@version, not an alias or version range.' },
+   27       acceptRisk: { type: 'boolean', description: 'For granting an exemption: true only after warning the user about possible crashes and data loss and receiving explicit permission for this exact plugin/runtime pair. General installation permission is not enough.' },
+   28       approvedBuilds: { type: 'array', items: { type: 'string' }, description: 'For install_bundle: pass names from pendingBuilds only after the user explicitly approves running their install scripts in the conversation. This grants persistent permission for this profile.' },
+   29       registry: { type: 'string', description: 'For install_bundle: the npm registry URL asked first, when the user names one; otherwise the configured registry is asked, and its configured fallbacks while a registry is unreachable.' },
+   30       offset: { type: 'number', description: 'Zero-based list offset; defaults to 0.' },
+   31       limit: { type: 'number', description: 'List page size, from 1 to 100; defaults to 25.' },
+   32     },
+   33     output: {
+   34       schema: { type: 'string' },
+   35       render: (_args, value) => [{ type: 'text', text: value }],
+   36     },
+   37     async execute(args, exec) {
+   38       const policy = ctx.sandboxPolicy.resolve(exec.agent === undefined ? {} : { session: exec.agent.session })
+   39       await approveEscalation({
+   40         requestedMode: 'danger-full-access', effectiveMode: policy.mode, subject: 'plugin management operation',
+   41         justification: `plugin_manager ${JSON.stringify(args)}. Profile changes persist across sessions; installed Host code runs outside the workspace sandbox.`,
+   42       }, { approver: ctx.get('approval'), agent: exec.agent, callId: exec.callId,
+   43         toolName: 'plugin_manager', signal: exec.signal })
+   44       exec.signal.throwIfAborted()
+
+=== reference/packages/boot/plugin-manager/src/index.ts:832-866 ===
+  832   private configure<T>(operation: () => Promise<T>): Promise<T> {
+  833     const hmr = this.ownerContext.get('hmr')
+  834     const apply = () => { this.abort.signal.throwIfAborted(); return operation() }
+  835     return hmr === undefined ? apply() : hmr.runExclusive(apply)
+  836   }
+  837 
+  838   private async reload(requiredIds: readonly string[] = []): Promise<string[]> {
+  839     if (this.ownerContext.get('hmr') === undefined) return []
+  840     return reconcileProfilePatches(this.ownerContext.root, readProfilePatches('dsh', this.profile), 'dsh', requiredIds)
+  841   }
+  842 
+  843   private async change(
+  844     operation: (result: ChangeResult) => Promise<ChangeResult['application'] | void>,
+  845     request: Pick<ChangeResult, 'stage' | 'target' | 'enabled'>,
+  846     reason: PluginChange['reason'],
+  847   ): Promise<ChangeResult> {
+  848     return withFileLock(join(this.profile.dir, 'package.json'), async () => {
+  849       this.abort.signal.throwIfAborted()
+  850       const before = this.diskState()
+  851       const result: ChangeResult = { ...request, changed: false,
+  852         application: this.ownerContext.get('hmr') !== undefined ? 'applied' : 'restart-required' }
+  853       try {
+  854         result.application = await operation(result) ?? result.application
+  855       } catch (error) {
+  856         if (error instanceof InstallCancelledError) {
+  857           result.application = 'cancelled'
+  858         } else {
+  859           result.application = 'failed'
+  860           result.error = managementError(error)
+  861         }
+  862       }
+  863       result.changed = before !== this.diskState()
+  864       this.ownerContext.emit('plugin-manager/changed', { reason })
+  865       return result
+  866     }, { waitMs: this.lockWaitMs })
+
+=== reference/packages/boot/hmr/src/index.ts:127-153 ===
+  127   /** Stashed file changes waiting to be processed */
+  128   private stashed = new Set<string>()
+  129   private operations: Promise<unknown> = Promise.resolve()
+  130   private readonly executing = new AsyncLocalStorage<boolean>()
+  131   private applicationReady: Promise<boolean> = Promise.resolve(true)
+  132   private closing = false
+  133   private readonly configPaths = new Set<string>()
+  134 
+  135   /** Serialize a caller-owned mutation with all automatic reload paths.
+  136    * @param operation Work that must not overlap module or configuration replacement.
+  137    * @returns The operation result after its asynchronous work completes.
+  138    */
+  139   runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+  140     if (this.executing.getStore()) return Promise.reject(new Error('HMR transactions cannot be nested'))
+  141     const task = this.operations.then(async () => {
+  142       if (this.closing) throw new Error('HMR is disposed')
+  143       return this.executing.run(true, operation)
+  144     })
+  145     this.operations = task.catch(() => {})
+  146     return task
+  147   }
+  148 
+  149   private runReload(operation: () => Promise<void>): Promise<void> {
+  150     return this.runExclusive(async () => {
+  151       if (await this.applicationReady) await operation()
+  152     })
+  153   }
+
+=== reference/packages/boot/hmr/src/index.ts:198-214 ===
+  198   async* [Service.init](): AsyncGenerator<() => Promise<void>, void, unknown> {
+  199     yield async () => {
+  200       this.closing = true
+  201       await this.watcher?.close()
+  202       // A configuration reload may remove its own HMR entry.
+  203       if (!this.executing.getStore()) await this.operations
+  204     }
+  205 
+  206     const profile = this.ownerContext.get('profileContext')
+  207     if (profile !== undefined) {
+  208       const ready = this.ownerContext.get('appReady')
+  209       if (ready === undefined) throw new Error('Profile HMR requires application readiness')
+  210       const started = Promise.withResolvers<boolean>()
+  211       this.applicationReady = started.promise
+  212       const unsubscribe = ready.onReady(() => { started.resolve(true) })
+  213       yield () => { unsubscribe(); started.resolve(false); return Promise.resolve() }
+  214       const manifestPath = join(profile.dir, 'package.json')
+
+=== reference/packages/boot/hmr/src/index.ts:492-517 ===
+  492     const rollback = () => {
+  493       for (const [filename, job] of esmBackup) {
+  494         Map.prototype.set.call(this.internal.loadCache, filename, job)
+  495       }
+  496       for (const [filepath, module] of cjsBackup) require.cache[filepath] = module
+  497     }
+  498 
+  499     // Attempt to re-import all plugin entry files
+  500     const generations = [...reloads].map(([previous, info]) => ({
+  501       ...info, previous,
+  502       fibers: [...info.runtime?.fibers ?? []].map((fiber) => {
+  503         const entry = fiber.entry?.fiber?.uid === fiber.uid ? fiber.entry : undefined
+  504         const config: unknown = entry === undefined ? fiber._config : entry.options.config
+  505         return { fiber, entry, config }
+  506       }),
+  507     }))
+  508     const attempts: Array<(typeof generations)[number] & { replacement: Plugin }> = []
+  509     try {
+  510       for (const generation of generations) {
+  511         const replacement = this.ctx.loader.unwrapExports(await this.ctx.loader.import(generation.filename, this.getOuterStack)) as Plugin
+  512         attempts.push({ ...generation, replacement })
+  513       }
+  514     } catch (e) {
+  515       handleError(this.ctx, e)
+  516       rollback()
+  517       throw e
+
+=== reference/packages/boot/hmr/src/index.ts:534-578 ===
+  534     const removed = new Set<Plugin>()
+  535     try {
+  536       for (const { previous: plugin, replacement, filename, runtime, fibers } of attempts) {
+  537         if (!runtime) continue
+  538         const path = relative(this.baseDir, fileURLToPath(filename))
+  539 
+  540         removed.add(plugin)
+  541         try {
+  542           this.ctx.registry.delete(plugin)
+  543           await Promise.all(fibers.map(({ fiber }) => fiber.await()))
+  544         } catch (err) {
+  545           this.ctx.logger.warn('failed to dispose plugin at %C', path)
+  546           this.ctx.logger.warn(err)
+  547         }
+  548 
+  549         try {
+  550           await reload(replacement, fibers)
+  551           this.ctx.logger.info('reload plugin at %C', path)
+  552         } catch (err) {
+  553           this.ctx.logger.warn('failed to reload plugin at %C', path)
+  554           this.ctx.logger.warn(err)
+  555           throw err
+  556         }
+  557       }
+  558     } catch (error) {
+  559       // Restore caches and re-register old plugins after a replacement failure.
+  560       rollback()
+  561       for (const { previous: plugin, replacement, fibers } of attempts) {
+  562         if (!removed.has(plugin)) continue
+  563         try {
+  564           const replacementRuntime = this.ctx.registry.get(replacement)
+  565           const replacementFibers = [...replacementRuntime?.fibers ?? []]
+  566           this.ctx.registry.delete(replacement)
+  567           // Failed startup errors remain on fibers after their teardown finishes.
+  568           await Promise.allSettled(replacementFibers.map(fiber => fiber.await()))
+  569           await reload(plugin, fibers)
+  570         } catch (err) {
+  571           this.ctx.logger.warn(err)
+  572         }
+  573       }
+  574       throw error
+  575     }
+  576 
+  577     await this.ctx.loader.await()
+  578     this.ctx.emit('hmr/reload', reloads)
+
+=== reference/packages/preset/agent-preset-registry/src/index.ts:30-48 ===
+   30 interface Generation {
+   31   scope: Scope
+   32   key: ScopeKey
+   33   mount: PresetMount
+   34   users: number
+   35   retired: boolean
+   36 }
+   37 interface Definition {
+   38   config: PresetDefinition
+   39   context: Context
+   40   ready: Promise<void>
+   41   generation?: Generation
+   42   /** Mount failure; unset while a tree is mounted, whose rows {@link AgentPresetRegistry.diagnostic} re-audits on read. */
+   43   broken?: string
+   44 }
+   45 interface Binding {
+   46   parent: ScopeParentBinding
+   47   generation: Generation
+   48 }
+
+=== reference/packages/preset/agent-preset-registry/src/index.ts:80-117 ===
+   80   async register(definition: PresetDefinition): Promise<() => Promise<void>> {
+   81     const context = this.ctx
+   82     if (!definition.id.trim()) throw new Error('Preset id must not be empty')
+   83     if (this.definitions.has(definition.id)) throw new Error(`Duplicate agent preset: ${definition.id}`)
+   84     const record: Definition = { config: definition, context, ready: Promise.resolve() }
+   85     this.definitions.set(definition.id, record)
+   86     let disposed = false
+   87     const unregister = async (): Promise<void> => {
+   88       if (disposed) return
+   89       disposed = true
+   90       this.definitions.delete(definition.id)
+   91       await record.ready
+   92       if (record.generation !== undefined) {
+   93         record.generation.retired = true
+   94         await this.collect(record.generation)
+   95       }
+   96     }
+   97     record.ready = this.activate(record)
+   98     await record.ready
+   99     return unregister
+  100   }
+  101 
+  102   private async activate(record: Definition): Promise<void> {
+  103     const key = {}
+  104     const scope = createScope(this.owner, key)
+  105     try {
+  106       const problem = entryListProblem(record.config.plugins)
+  107       if (problem !== undefined) throw new Error(problem)
+  108       const context = scope.ctx.extend({ baseUrl: record.context.baseUrl })
+  109       const mount = await mountPreset(context, record.config.id, record.config.plugins)
+  110       const generation: Generation = { scope, key, mount, users: 0, retired: false }
+  111       this.generations.set(key, generation)
+  112       record.generation = generation
+  113     } catch (error) {
+  114       record.broken = (error as Error).message
+  115       this.owner.logger.warn(`agent preset ${record.config.id}: ${record.broken}`)
+  116       await scope.dispose()
+  117     }
+
+=== reference/packages/preset/agent-preset-registry/src/index.ts:144-148 ===
+  144   private async collect(generation: Generation): Promise<void> {
+  145     if (!generation.retired || generation.users !== 0) return
+  146     this.generations.delete(generation.key)
+  147     await generation.scope.dispose()
+  148   }
+
+=== reference/packages/preset/agent-preset-registry/src/index.ts:208-249 ===
+  208   private async retain(id?: string): Promise<Generation> {
+  209     const wanted = id ?? this.defaultId
+  210     while (true) {
+  211       const record = this.definitions.get(wanted)
+  212       if (record === undefined) throw new RemoteError('agent-preset/not-found', `Unknown agent preset: ${wanted}`,
+  213         { agentPreset: wanted, available: [...this.definitions.keys()] })
+  214       const broken = await this.diagnostic(record)
+  215       if (this.definitions.get(wanted) !== record) continue
+  216       const generation = record.generation
+  217       if (broken !== undefined || generation === undefined) {
+  218         const reason = broken as string
+  219         throw new RemoteError('agent-preset/invalid', reason, { agentPreset: wanted, reason })
+  220       }
+  221       generation.users++
+  222       return generation
+  223     }
+  224   }
+  225 
+  226   private async bind(ctx: Context, generation: Generation): Promise<void> {
+  227     const key = scopeOf(ctx)
+  228     if (key === undefined) throw new Error('Agent preset binding requires a scoped context')
+  229     const binding = this.bindings.get(key)
+  230     if (binding?.generation === generation) return
+  231     if (binding !== undefined) {
+  232       binding.parent.rebind(generation.key)
+  233       const old = binding.generation
+  234       generation.users++
+  235       binding.generation = generation
+  236       old.users--
+  237       await this.collect(old)
+  238     } else this.join(ctx, key, generation)
+  239   }
+  240 
+  241   private join(ctx: Context, key: ScopeKey, generation: Generation): void {
+  242     const binding = { parent: bindScopeParent(key, generation.key), generation }
+  243     generation.users++
+  244     this.bindings.set(key, binding)
+  245     ctx.effect(() => async () => {
+  246       this.bindings.delete(key)
+  247       binding.generation.users--
+  248       await this.collect(binding.generation)
+  249     }, 'agent-preset.binding')
+
+=== reference/packages/preset/agent-preset-registry/src/mount.ts:40-72 ===
+   40 /**
+   41  * Every preset composition retained by the registry.
+   42  *
+   43  * The record set is module state and therefore spans every Cordis runtime in
+   44  * the process; a reader that serves one runtime passes that runtime's root
+   45  * fiber so another runtime mounting the same preset id (a second embedded
+   46  * app, a test's second harness) never answers for it.
+   47  * @param within - when present, only mounts inside this fiber's subtree.
+   48  * @returns the live mounts.
+   49  */
+   50 export function livePresetMounts(within?: Fiber): PresetMount[] {
+   51   const all = [...mounts]
+   52   return within === undefined ? all : all.filter(mount => withinFiber(mount.fiber, within))
+   53 }
+   54 
+   55 /**
+   56  * Whether `fiber` is `root` itself or is mounted anywhere inside its subtree.
+   57  *
+   58  * Membership is object identity. `uid` looks like a cheaper key but is a
+   59  * per-registry counter, so fibers in two different roots collide on it and a
+   60  * subtree in one runtime would be blamed for a service published in another.
+   61  * @param fiber - the fiber to locate.
+   62  * @param root - the subtree root to test membership against.
+   63  * @returns true when `fiber` belongs to `root`'s subtree.
+   64  */
+   65 function withinFiber(fiber: Fiber, root: Fiber): boolean {
+   66   let current = fiber
+   67   while (true) {
+   68     if (current === root) return true
+   69     const parent = current.parent.fiber
+   70     if (parent === current) return false
+   71     current = parent
+   72   }
+
+=== reference/packages/preset/agent-preset-registry/src/mount.ts:245-272 ===
+  245 /** Load and audit one revision under its registry-owned scope.
+  246  *
+  247  * Failed rows and root-realm service leaks reject the mount. Rows waiting for
+  248  * a Host service stay mounted: they activate by themselves once the provider
+  249  * finishes, and the registry re-audits them after the Host tree settles.
+  250  * Inside a profile, compatibility policy decides admission first: a row whose
+  251  * plugin the profile denies mounts disabled, so the audit reads it as
+  252  * intentionally inactive instead of reporting a failed import.
+  253  * @param ctx Scope context inheriting the declaring Loader's resolution base.
+  254  * @param id Preset identity.
+  255  * @param plugins Declared Cordis entry list.
+  256  * @returns The live tree; scope disposal owns its teardown.
+  257  */
+  258 export async function mountPreset(ctx: Context, id: string, plugins: PresetDefinition['plugins']): Promise<PresetMount> {
+  259   if (scopeOf(ctx) === undefined) throw new Error('agent-preset: mounting requires a scope')
+  260   await ctx.fiber.await()
+  261   const tree = new PresetTree(ctx)
+  262   ctx.effect(() => () =>{  tree.root.stop() }, 'agent-preset.tree')
+  263   await tree.root.update(prepareProfileEntries(ctx, plugins as EntryOptions[], ctx.baseUrl))
+  264   const audit = await auditRows(tree)
+  265   const leaked = leakedServices(ctx, ctx.fiber)
+  266   if (audit.failed.length > 0) throw new Error(audit.failed.join('\n'))
+  267   if (leaked.length > 0) throw new Error(`Preset services require isolate realms: ${leaked.join(', ')}`)
+  268   const mount = { presetId: id, fiber: ctx.fiber, tree, key: scopeOf(ctx) }
+  269   mounts.add(mount)
+  270   ctx.effect(() => () => { mounts.delete(mount) }, 'agent-preset.mount')
+  271   return mount
+  272 }
+
+=== reference/packages/preset/agent-preset-registry/src/invariant.ts:24-59 ===
+   24 /**
+   25  * Assert that no installed preset composition reaches the root service realm,
+   26  * and that a deployment configuring a roster composes every agent from it.
+   27  *
+   28  * `mountPreset` proves the first once, when the subtree settles. A row that
+   29  * publishes later — from a timer, or an asynchronous continuation after its
+   30  * plugin returned — would escape that one-shot audit, so re-check every live
+   31  * mount whenever a service registration changes.
+   32  */
+   33 const install: InvariantInstaller = (ctx, fail) => {
+   34   ctx.on('internal/service', function (this: Context, name) {
+   35     for (const mount of livePresetMounts()) {
+   36       const leaked = leakedServices(ctx, mount.fiber)
+   37       if (leaked.length === 0) continue
+   38       fail(
+   39         `preset "${mount.presetId}" published process-global service(s) [${leaked.join(', ')}] `
+   40         + `after its mount was audited (observed while notifying "${name}") — `
+   41         + 'a preset service must sit behind an `isolate` realm or move to the host composition',
+   42       )
+   43     }
+   44   }, { global: true })
+   45 
+   46   // Bare Agents are valid until model assembly. Cold scoped reads carry no
+   47   // Agent and do not require a session binding.
+   48   ctx.on('system-prompt/assemble', (_assembly, context, next) => {
+   49     const presets = ctx.get('agentPresets')
+   50     const agent = context.agent
+   51     if (presets !== undefined
+   52       && agent !== undefined && presets.composedPreset(agent.ctx) === undefined) {
+   53       fail(
+   54         `agent "${agent.id}" addressed a model without joining any agent preset while a roster is `
+   55         + 'composed; its tools, prompt sections, and skill catalog resolve against the empty global layer',
+   56       )
+   57     }
+   58     return next()
+   59   })
+
+=== cvg/packages/harness/src/kernel/__tests__/host.test.ts:77-108 ===
+   77   it('disposes registrations in reverse order', async () => {
+   78     const events: string[] = []
+   79     const host = await KernelHost.boot(
+   80       [
+   81         provider('log', 'log', events),
+   82         provider('pause', 'pause', events, ['log'])
+   83       ],
+   84       []
+   85     )
+   86     await host.dispose()
+   87     expect(events.filter((event) => event.startsWith('dispose'))).toEqual([
+   88       'dispose:pause',
+   89       'dispose:log'
+   90     ])
+   91     expect(host.has('log')).toBe(false)
+   92   })
+   93 
+   94   it('unwinds what was registered when a later plugin fails to apply', async () => {
+   95     const events: string[] = []
+   96     const failing: KernelPlugin = {
+   97       name: 'failing',
+   98       kind: 'control',
+   99       requires: ['log'],
+  100       apply() {
+  101         throw new Error('apply exploded')
+  102       }
+  103     }
+  104     const boot = KernelHost.boot([provider('log', 'log', events), failing], [])
+  105     await expect(boot).rejects.toBeInstanceOf(KernelBootError)
+  106     await expect(boot).rejects.toMatchObject({ code: 'plugin_apply_failed' })
+  107     expect(events).toEqual(['apply:log', 'dispose:log'])
+  108   })
+
+=== reference/packages/preset/agent-preset-registry/tests/registry.spec.ts:36-66 ===
+   36   it('retains a replaced revision for existing scopes and their children, then releases it', async () => {
+   37     const ctx = await setup()
+   38     const old = await declare(ctx, contribution('standard'))
+   39     const agent = createScope(ctx, {})
+   40     await ctx.agentPresets.mount(agent.ctx)
+   41     const oldKey = await currentKey(ctx)
+   42     await old.dispose()
+   43     await declare(ctx, { ...contribution('replacement'), id: 'standard' })
+   44     expect(await currentKey(ctx)).not.toBe(oldKey)
+   45     expect(livePresetMounts(ctx.fiber)).toHaveLength(2)
+   46     const child = createScope(ctx, {})
+   47     expect(ctx.agentPresets.composeFrom(child.ctx, agent.ctx)).toBe('standard')
+   48     await agent.dispose()
+   49     expect(livePresetMounts(ctx.fiber)).toHaveLength(2)
+   50     await child.dispose()
+   51     expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
+   52     const fresh = await agentOn(ctx, 'fresh')
+   53     expect(ctx.tools.schemas(fresh).map(row => row.name)).toEqual(['replacement'])
+   54   })
+   55 
+   56   it('removes definitions without revoking live bindings', async () => {
+   57     const ctx = await setup()
+   58     const definition = await declare(ctx, contribution('standard'))
+   59     const agent = createScope(ctx, {})
+   60     await ctx.agentPresets.mount(agent.ctx)
+   61     await definition.dispose()
+   62     expect(await ctx.agentPresets.list()).toEqual([])
+   63     await expect(ctx.agentPresets.resolve()).rejects.toThrow('Unknown agent preset')
+   64     expect(ctx.agentPresets.composedPreset(agent.ctx)).toBe('standard')
+   65     await agent.dispose()
+   66     expect(livePresetMounts(ctx.fiber)).toEqual([])
+
+=== reference/packages/preset/agent-preset-registry/tests/registry.spec.ts:147-175 ===
+  147 it('retains a retired revision for an in-flight cold read', async () => {
+  148   const ctx = await setup()
+  149   const definition = await declare(ctx, contribution('standard'))
+  150   const lease = await ctx.agentPresets.acquireScope()
+  151   await definition.dispose()
+  152   expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
+  153   await lease[Symbol.asyncDispose]()
+  154   await lease[Symbol.asyncDispose]()
+  155   expect(livePresetMounts(ctx.fiber)).toEqual([])
+  156 })
+  157 
+  158 it.each([['throws', 'refused'], ['global-service', 'require isolate realms']])('contains a %s plugin activation failure', async (name, reason) => {
+  159   const ctx = await setup()
+  160   const { plugin } = await import('./harness.ts')
+  161   await declare(ctx, { id: 'invalid', plugins: [{ name: plugin(name), config: { message: 'refused', service: 'fixtureService' } }] })
+  162   expect((await ctx.agentPresets.resolve('invalid')).broken).toContain(reason)
+  163   expect(ctx.get('fixtureService')).toBeUndefined()
+  164   expect(livePresetMounts(ctx.fiber)).toEqual([])
+  165 })
+  166 
+  167 it('keeps a row waiting for an absent service mounted, reports it, and refuses bindings', async () => {
+  168   const ctx = await setup()
+  169   const { plugin } = await import('./harness.ts')
+  170   await declare(ctx, { id: 'invalid', plugins: [{ name: plugin('needs-missing') }] })
+  171   expect((await ctx.agentPresets.resolve('invalid')).broken).toContain('waiting for serviceThatDoesNotExist')
+  172   expect(livePresetMounts(ctx.fiber)).toHaveLength(1)
+  173   await expect(ctx.agentPresets.mount(createScope(ctx, {}).ctx, 'invalid')).rejects.toThrow('waiting for serviceThatDoesNotExist')
+  174   expect((await ctx.agentPresets.list())[0]!.broken).toContain('waiting for serviceThatDoesNotExist')
+  175 })
+
+=== reference/packages/boot/plugin-manager/tests/tools.spec.ts:84-97 ===
+   84 it('checks the calling session on each execution, including after permission is revoked', async () => {
+   85   const { ctx, call, manager } = await fixture()
+   86   const id = SessionId('manager-permissions')
+   87   const session = ctx.sessions.create(id, { meta: { createdAt: 0 } })
+   88   const agent = { session } as unknown as Agent
+   89   setSandboxMode(session, 'workspace-write')
+   90   expect((await call({ action: 'list_plugins' }, agent)).isError).toBe(true)
+   91   expect(manager.listPlugins).not.toHaveBeenCalled()
+   92   setSandboxMode(session, 'danger-full-access')
+   93   expect((await call({ action: 'list_plugins' }, agent)).isError).toBe(false)
+   94   setSandboxMode(session, 'read-only')
+   95   expect((await call({ action: 'list_plugins' }, agent)).isError).toBe(true)
+   96   expect(manager.listPlugins).toHaveBeenCalledTimes(1)
+   97 })
+
+=== reference/packages/boot/plugin-manager/tests/tools.spec.ts:131-177 ===
+  131 it.each(['rejected', 'cancelled', 'unavailable'] as const)('does not mutate the profile when approval is %s', async (outcome) => {
+  132   const { ctx, call, manager } = await fixture('workspace-write', 'ask')
+  133   ctx.on('approval/request', async () => outcome)
+  134   const agent = activeAgent(ctx)
+  135   expect((await call({ action: 'install_bundle', target: 'bundle' }, agent)).isError).toBe(true)
+  136   expect(manager.installBundle).not.toHaveBeenCalled()
+  137   expect(agent.session.snapshotEvents().filter(event => event.type === 'approval/decided')
+  138     .map(event => event.data.outcome)).toEqual([outcome])
+  139 })
+  140 
+  141 it('rejects never policy without prompting and keeps full-access calls prompt-free', async () => {
+  142   const { ctx, call, manager } = await fixture('workspace-write', 'never')
+  143   const prompted = vi.fn(async () => 'allowed-once' as const)
+  144   ctx.on('approval/request', prompted, { prepend: true })
+  145   const agent = activeAgent(ctx)
+  146   expect((await call({ action: 'set_plugin', target: 'include:demo', enabled: true }, agent)).isError).toBe(true)
+  147   expect(manager.setPluginEnabled).not.toHaveBeenCalled()
+  148   setSandboxMode(agent.session, 'danger-full-access')
+  149   expect((await call({ action: 'set_plugin', target: 'include:demo', enabled: true }, agent)).isError).toBe(false)
+  150   expect(manager.setPluginEnabled).toHaveBeenCalledTimes(1)
+  151   expect(prompted).not.toHaveBeenCalled()
+  152 })
+  153 
+  154 it('cancels an approval wait before any manager operation', async () => {
+  155   const { ctx, call, manager } = await fixture('workspace-write', 'ask')
+  156   const asked = Promise.withResolvers<undefined>()
+  157   const answer = Promise.withResolvers<ApprovalOutcome>()
+  158   ctx.on('approval/request', () => { asked.resolve(undefined); return answer.promise })
+  159   const controller = new AbortController()
+  160   const result = call({ action: 'install_bundle', target: 'bundle' }, activeAgent(ctx), controller.signal)
+  161   await asked.promise
+  162   expect(manager.installBundle).not.toHaveBeenCalled()
+  163   controller.abort()
+  164   answer.resolve('allowed-once')
+  165   expect((await result).isError).toBe(true)
+  166   expect(manager.installBundle).not.toHaveBeenCalled()
+  167 })
+  168 
+  169 it('does not apply a grant when the call was cancelled before dispatch', async () => {
+  170   const { ctx, call, manager } = await fixture('workspace-write', 'ask')
+  171   const controller = new AbortController()
+  172   vi.spyOn(ctx.approval, 'request').mockImplementation(async () => {
+  173     controller.abort()
+  174     return 'allowed-once'
+  175   })
+  176   expect((await call({ action: 'install_bundle', target: 'bundle' }, activeAgent(ctx), controller.signal)).isError).toBe(true)
+  177   expect(manager.installBundle).not.toHaveBeenCalled()
+
+=== reference/packages/host/plugin-inventory/tests/inventory.spec.ts:152-197 ===
+  152   it('projects current non-group Loader entries without a second cache', async () => {
+  153     const { ctx, inventory } = await harness()
+  154     const activeId = await ctx.loader.create({ name: 'cordis:active' })
+  155     const pendingId = await ctx.loader.create({ name: 'cordis:pending' })
+  156     const disabledId = await ctx.loader.create({
+  157       name: 'cordis:not-installed',
+  158       disabled: true,
+  159     })
+  160     await ctx.loader.create({ name: 'cordis:active', group: true })
+  161 
+  162     const snapshot = await inventory.list()
+  163     // No agent-preset roster is composed, so the snapshot carries no presets.
+  164     expect(snapshot.agentPresets).toBeUndefined()
+  165     expect(snapshot.entries).toHaveLength(3)
+  166     expect(snapshot.entries).toEqual(expect.arrayContaining([
+  167       {
+  168         entryId: activeId,
+  169         moduleName: 'cordis:active',
+  170         enabled: true,
+  171         fiberPhase: 'active',
+  172       },
+  173       {
+  174         entryId: pendingId,
+  175         moduleName: 'cordis:pending',
+  176         enabled: true,
+  177         fiberPhase: 'pending',
+  178       },
+  179       {
+  180         entryId: disabledId,
+  181         moduleName: 'cordis:not-installed',
+  182         enabled: false,
+  183         fiberPhase: null,
+  184       },
+  185     ]))
+  186 
+  187     await ctx.loader.update(activeId, { disabled: true })
+  188     expect((await inventory.list()).entries.find(entry => entry.entryId === activeId)).toEqual({
+  189       entryId: activeId,
+  190       moduleName: 'cordis:active',
+  191       enabled: false,
+  192       fiberPhase: null,
+  193     })
+  194 
+  195     ctx.loader.remove(pendingId)
+  196     expect((await inventory.list()).entries.some(entry => entry.entryId === pendingId)).toBe(false)
+  197   })
+
+=== cvg/packages/shared/src/lifecycle.ts:34-86 ===
+   34 /**
+   35  * Graceful shutdown: stop accepting work (caller closes the server/pool),
+   36  * flush telemetry, then exit. Repeated signals are ignored; a hung close is
+   37  * bounded by a timeout that still exits non-zero.
+   38  */
+   39 export function createShutdownController(
+   40   options: ShutdownControllerOptions
+   41 ): ShutdownController {
+   42   const timeoutMs = options.timeoutMs ?? 15_000
+   43   const signals = options.signals ?? ['SIGTERM', 'SIGINT']
+   44   let shuttingDown = false
+   45 
+   46   const emit = (event: ShutdownEvent): void => {
+   47     options.log?.(event)
+   48   }
+   49 
+   50   const shutdown = async (
+   51     signal: ShutdownSignal = 'SIGTERM',
+   52     code = 0
+   53   ): Promise<void> => {
+   54     if (shuttingDown) {
+   55       emit({ type: 'shutdown.ignored', signal })
+   56       return
+   57     }
+   58     shuttingDown = true
+   59     emit({ type: 'shutdown.started', signal })
+   60     let settled = false
+   61     const timer = setTimeout(() => {
+   62       if (settled) return
+   63       settled = true
+   64       emit({ type: 'shutdown.timeout', signal })
+   65       options.exit(1)
+   66     }, timeoutMs)
+   67     timer.unref?.()
+   68     try {
+   69       await options.close()
+   70       await options.flush?.()
+   71       if (settled) return
+   72       settled = true
+   73       clearTimeout(timer)
+   74       emit({ type: 'shutdown.completed', signal, code })
+   75       options.exit(code)
+   76     } catch (error) {
+   77       if (settled) return
+   78       settled = true
+   79       clearTimeout(timer)
+   80       emit({
+   81         type: 'shutdown.failed',
+   82         signal,
+   83         error: error instanceof Error ? error.message : 'unknown_error'
+   84       })
+   85       options.exit(1)
+   86     }
+
+=== cvg/packages/platform/src/controlled-kernel-execution.ts:129-179 ===
+  129 /** Only internal synthetic tests can supply ports. No HTTP/config option is added. */
+  130 export async function executeControlledKernel(
+  131   prepared: ControlledKernelInput,
+  132   ports: ControlledKernelCompositionPorts = createLocalControlledPorts(),
+  133   host?: ControlledKernelHostContext
+  134 ) {
+  135   const { input, config, version, timing } = prepared
+  136   const durable = host ? new ControlledContinuationRuntime(host) : undefined
+  137   const attempts: ControlledAttempt[] = []
+  138   const evidence = new InvocationEvidenceState(
+  139     attempts,
+  140     ports.pause,
+  141     input.tenantId,
+  142     durable
+  143   )
+  144   const guarded = guardedPorts(ports, evidence, input.onToolAudit)
+  145   const emit: ControlledKernelInput['emit'] = async (name, payload) => {
+  146     if (!durable) return prepared.emit(name, payload)
+  147     // A planner callback remains inside its already ACKed intent; never nest phases.
+  148     if (durable.activePhase && !durable.fault && !durable.closed)
+  149       return prepared.emit(name, payload)
+  150     await evidence.io(
+  151       `callback.platform.${name}`,
+  152       () => prepared.emit(name, payload),
+  153       evidence.closed,
+  154       { name, payload: JSON.parse(JSON.stringify(payload)) }
+  155     )
+  156   }
+  157   const core = gatewayCore(input.capabilityGateway)
+  158   const inventory = controlledInventory(config, input.capabilityGateway)
+  159   let scopeRejected = inventory.length > 128
+  160   const catalog = scopeRejected ? [] : inventory
+  161   let fingerprint = ''
+  162   const composition = composeCapabilities(
+  163     catalog.map(({ descriptor }) =>
+  164       controlledRegistration(
+  165         () =>
+  166           attempts.find((a) => a.command.execution.toolName === descriptor.id),
+  167         descriptor,
+  168         evidence,
+  169         () => fingerprint,
+  170         (operation) => timing.measureAsync('tool', operation)
+  171       )
+  172     )
+  173   )
+  174   fingerprint = composition.fingerprint
+  175   const correlationId = host?.identity.correlationId ?? createCorrelationId()
+  176   const agentVersion = `${version.id}:v${version.version}`
+  177   let output: ReturnType<typeof enforceControlledOutput> | undefined
+  178   let providerInvoked = false
+  179   let names: string[] = []
+
+=== cvg/packages/platform/src/controlled-kernel-continuation.ts:72-127 ===
+   72 export interface ControlledKernelFence {
+   73   tenantId: string
+   74   executionId: string
+   75   workerId: string
+   76   attempt: number
+   77 }
+   78 export interface ControlledKernelIdentity extends ControlledKernelFence {
+   79   correlationId: string
+   80   traceId: string
+   81   inboundMessageId: string
+   82   conversationId: string
+   83   sessionId: string
+   84   agentId: string
+   85   versionId: string
+   86   requestDigest: string
+   87   outboxId: string
+   88   outerAttempt: number
+   89   outerWorkerId: string
+   90   outerAttemptRowId: string
+   91 }
+   92 export interface ControlledPhaseRef {
+   93   phaseId: string
+   94   phaseType: string
+   95   phaseRevision: number
+   96   attempt: number
+   97   inputDigest: string
+   98 }
+   99 export interface ControlledEvidenceAck {
+  100   sequence: number
+  101   hash: string
+  102 }
+  103 export interface ControlledApprovalReceipt extends ControlledEvidenceAck {
+  104   receiptId: string
+  105   approvalId: string
+  106   inputHash: string
+  107   executionRef: string
+  108   consumptionAuditId: string
+  109   phaseId: string
+  110   tenantId: string
+  111   executionId: string
+  112   operationKey: string
+  113   stepId: string
+  114   stepNumber: number
+  115   workerId: string
+  116   attempt: number
+  117   outboxId: string
+  118   outerAttempt: number
+  119   outerWorkerId: string
+  120   outerAttemptRowId: string
+  121   requestDigest: string
+  122   fingerprint: string
+  123   agentId: string
+  124   versionId: string
+  125   actorId: string
+  126   consumedAt: string
+  127 }
+
+=== cvg/packages/platform/src/controlled-kernel-continuation.ts:172-215 ===
+  172 export interface ControlledPublishedSnapshot {
+  173   schema: 'controlled-published-state-v1'
+  174   adapterVersion: typeof CONTROLLED_PUBLISHED_ADAPTER
+  175   requestDigest: string
+  176   fingerprint: string
+  177   executionId: string
+  178   tenantId: string
+  179   traceId: string
+  180   preparedDigest: string
+  181   expiresAt: string
+  182   output: ReturnType<typeof enforceControlledOutput> | null
+  183   outputDigest: string
+  184   providerInvoked: boolean
+  185   outputAllowsTools: boolean
+  186   names: string[]
+  187   planSealed: boolean
+  188   planOutcome: 'ready' | 'suppressed' | 'rejected'
+  189   planDigest: string
+  190   expectedStep: number
+  191   nextPlannerStep: number
+  192   finalIssued: boolean
+  193   scopeRejected: boolean
+  194   attempts: ControlledSerializedAttempt[]
+  195   fault: {
+  196     phase: string
+  197     code: 'evidence_unavailable'
+  198     bodyStarted: boolean
+  199   } | null
+  200   dispatchClosed: boolean
+  201   stop: StopReason | null
+  202   budgetUsage: BudgetUsage
+  203   safePoint: 'S1' | 'S2'
+  204   durationTotals: Partial<Record<TraceSpanName, number>>
+  205 }
+  206 export interface ControlledPublishedState extends ControlledResumeSeal {
+  207   phaseState: 'IDLE_SEALED' | 'OPEN' | 'FAULTED' | 'CLOSED'
+  208   snapshot: ControlledPublishedSnapshot | null
+  209   checkpoint: ExecutionCheckpoint | null
+  210   closedTrace: TestRunTrace | null
+  211   runtimeResult: RuntimeResult | null
+  212   sealCheckpointDigest: string | null
+  213   sealStateDigest: string | null
+  214   sealedThroughSequence: number
+  215   phaseRevision: number
+
+=== cvg/packages/sdk/src/composition.ts:34-76 ===
+   34 /**
+   35  * Full SDK composition: session events enabled. The store defaults to the
+   36  * in-memory fixture; hosts inject a durable store for multi-process use.
+   37  */
+   38 export function createSdk(options: SdkCompositionOptions): SdkFacade {
+   39   const server = createSdkServer({
+   40     ...options,
+   41     sessions: options.sessions ?? new InMemorySessionEventStore()
+   42   })
+   43   const client = createSdkClient(createInProcessTransport(server))
+   44   return {
+   45     server,
+   46     client,
+   47     hello: () => client.hello(),
+   48     openSession: (sessionId) => client.openSession(sessionId),
+   49     sendTurn: (sessionId, userMessage) =>
+   50       client.sendTurn(userMessage, sessionId),
+   51     readEvents: (sessionId, readOptions) =>
+   52       client.readEvents(sessionId, readOptions)
+   53   }
+   54 }
+   55 
+   56 /** Session methods are not part of the minimal composition. */
+   57 export type SdkMinimalOptions = Omit<SdkServerOptions, 'sessions'>
+   58 
+   59 export interface SdkMinimalFacade {
+   60   readonly server: SdkServer
+   61   readonly client: SdkClient
+   62   hello(): Promise<SdkHelloResult>
+   63   sendTurn(userMessage: string): Promise<TurnSendResult>
+   64 }
+   65 
+   66 /** Minimal SDK composition: stateless turns, no session store. */
+   67 export function createSdkMinimal(options: SdkMinimalOptions): SdkMinimalFacade {
+   68   const server = createSdkServer(options)
+   69   const client = createSdkClient(createInProcessTransport(server))
+   70   return {
+   71     server,
+   72     client,
+   73     hello: () => client.hello(),
+   74     sendTurn: (userMessage) => client.sendTurn(userMessage)
+   75   }
+   76 }

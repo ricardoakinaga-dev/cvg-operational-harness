@@ -1,0 +1,13 @@
+"""Bounded text diagnostics only. Does not load or execute project code."""
+import pathlib,json,collections,datetime
+P=pathlib.Path('../review-packet')
+paths=['cvg/packages/harness/src/kernel/kernel-runtime.ts','cvg/packages/harness/src/iterative-runtime.ts','cvg/packages/harness/src/kernel/pipeline.ts']
+r={'timestamp_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'kind':'STATIC_TEXT_ONLY','runtime_proof':False,'signals':[]}
+for name in paths:
+ lines=(P/name).read_text().splitlines()
+ r['signals'].append({'path':name,'abort_adds':[{'line':i+1,'text':s.strip()} for i,s in enumerate(lines) if 'addEventListener' in s], 'abort_removes':[{'line':i+1,'text':s.strip()} for i,s in enumerate(lines) if 'removeEventListener' in s]})
+x=json.loads((P/'original-leaf-bindings.json').read_text())
+r['leaf_inventory']={'count':len(x),'extraction':dict(collections.Counter(e['extraction_status'] for e in x)),'parity':dict(collections.Counter(e['parity_status'] for e in x)), 'semantic_coverage_inferred':False}
+r['diagnostic_limits']='Text matches identify candidate retention seams; no GC, Node runtime, subscription count, native execution or behavioral result was measured.'
+with open('static-diagnostics.json','x') as f:json.dump(r,f,indent=2);f.write('\n')
+print(json.dumps(r,indent=2))

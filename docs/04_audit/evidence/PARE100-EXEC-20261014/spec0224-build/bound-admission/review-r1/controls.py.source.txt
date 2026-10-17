@@ -1,0 +1,16 @@
+import pathlib,json,copy,subprocess,os,hashlib
+import verify
+R=pathlib.Path(__file__).parent;P=R.parent/'review-packet-r1';M=json.loads((P/'manifest.json').read_text());D=R/'controls';D.mkdir(exist_ok=False)
+x=json.loads((R/'runs/r1/BA01/negative-save-controls.json').read_text())['physical'];results=[]
+mutations={'bad-bytecount':lambda z:z['row']['state'].update(decodedBytes=z['row']['state']['decodedBytes']+1),'bad-state-sha':lambda z:z['row']['state'].update(decodedSha256='0'*64),'bad-padding':lambda z:z['row']['state'].update(data=z['row']['state']['data']+'='),'bad-domain-sha':lambda z:z['row'].update(digest='0'*64),'bad-runtime-budget':lambda z:z['authority']['prepared_runtime']['budget'].update(maxModelCalls=2),'bad-parent-normalization':lambda z:z['authority']['request']['runtime'].update(executionId='synthetic_wrong'),'bad-receipt-binding':lambda z:z['checkpoint']['state']['toolResultContext']['decisionAdmissions'][0].update(executionId='synthetic_wrong')}
+for name,mutate in mutations.items():
+ z=copy.deepcopy(x);mutate(z);f=D/(name+'.json');f.write_text(json.dumps(z,indent=2)+'\n');f.chmod(0o600)
+ try:verify.physical(z)
+ except Exception as e:results.append({'name':name,'expectedReject':True,'observedReject':True,'errorType':type(e).__name__,'error':str(e)})
+ else:results.append({'name':name,'expectedReject':True,'observedReject':False})
+env=os.environ.copy();env.update(I1_REVIEW=str(R),I1_READ_LOG=str(R/'reads.jsonl'),I1_SCOPE_PACKAGE=M['allowedScopeMetadata']['path'],I1_PACKET_DEPS=M['allowedDependencyMirror'],NODE_OPTIONS='--require '+str(R/'trace-reads.cjs'),NODE_DISABLE_COMPILE_CACHE='1',TMPDIR=str(R/'tmp'),TMP=str(R/'tmp'),TEMP=str(R/'tmp'));env.pop('SPEC0224_BOUND_CHILD_INPUT',None)
+js="const fs=require('node:fs');fs.readFileSync(process.env.I1_REVIEW+'/vitest.i1.mjs');try{fs.readFileSync('/tmp/cvg-I1-forbidden-control-sentinel')}catch(e){if(e.message==='I1 prohibited read /tmp/cvg-I1-forbidden-control-sentinel'){console.error(e.stack);console.log('EXPECTED_GUARD_REJECTION_BEFORE_READ');process.exit(0)}throw e}process.exit(3)"
+for name,argv in [('09-guard-control',[M['node'],'-e',js]),('10-node-version',[M['node'],'--version'])]:
+ p=subprocess.run(argv,cwd=M['artifactRoot'],env=env,capture_output=True);(R/'commands'/(name+'.stdout')).write_bytes(p.stdout);(R/'commands'/(name+'.stderr')).write_bytes(p.stderr);(R/'commands'/(name+'.json')).write_text(json.dumps({'argv':argv,'cwd':M['artifactRoot'],'envnames':sorted(env),'exit':p.returncode},indent=2)+'\n');assert p.returncode==0
+results.append({'name':'read-guard-denial','observedReject':True,'scope':'user-space interception before native read only; nonexistent synthetic forbidden sentinel; no ancestor read'})
+(R/'controls-result.json').write_text(json.dumps({'pass':all(x['observedReject'] for x in results),'controls':results},indent=2)+'\n');print(json.dumps({'controls':len(results),'allExpectedRejected':all(x['observedReject'] for x in results)}))

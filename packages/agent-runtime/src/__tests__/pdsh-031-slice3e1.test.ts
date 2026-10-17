@@ -23,9 +23,6 @@ const CORRELATION = 'corr_00000000-0000-4000-8000-000000000001'
 const NOW = new Date('2026-10-12T12:00:00.000Z')
 const PAYLOAD_SCHEMA = z.object({ text: z.string() })
 
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms))
-
 interface HarnessOptions {
   readonly clock?: () => Date
   readonly limits?: Record<string, unknown>

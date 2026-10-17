@@ -1,0 +1,175 @@
+  private evaluatorFor(run: LoopRun): CompletionEvaluator {
+    if (this.completionEvaluatorOverride) {
+      return this.completionEvaluatorOverride
+    }
+    const strategy = run.input.agent.completionStrategy ?? 'DETERMINISTIC'
+    const cached = this.completionEvaluators.get(strategy)
+    if (cached) return cached
+    const evaluator = new DeterministicCompletionEvaluator({ strategy })
+    this.completionEvaluators.set(strategy, evaluator)
+    return evaluator
+  }
+
+  private async evaluate(
+    run: LoopRun,
+    decision: LoopDecision
+  ): Promise<Extract<DispatchOutcome, { kind: 'stop' }> | null> {
+    return evaluate(this.dispatchContext, run, decision)
+  }
+
+  private async pause(
+    run: LoopRun,
+    stepNumber: number,
+    outcome: Extract<DispatchOutcome, { kind: 'pause' }>
+  ): Promise<Extract<DispatchOutcome, { kind: 'stop' }>> {
+    return pause(this.dispatchContext, run, stepNumber, outcome)
+  }
+
+  /**
+   * Post-usage gate for orchestrator-reported usage (PDSH-004). The
+   * beginModelRequest pre-model slot already gates the kernel's model call;
+   * this catches reported overages so the loop still stops honestly.
+   */
+  private checkAfterUsage(
+    run: LoopRun
+  ): { reason: StopReason; response: string } | null {
+    if (run.usage.modelCalls > run.input.budget.maxModelCalls) {
+      return {
+        reason: 'MAX_MODEL_CALLS',
+        response: 'Model-call budget exhausted.'
+      }
+    }
+    if (
+      run.usage.inputTokens + run.usage.outputTokens >
+      run.input.budget.maxTokens
+    ) {
+      return { reason: 'MAX_TOKENS', response: 'Token budget exhausted.' }
+    }
+    if (run.usage.costUsd > run.input.budget.maxCostUsd) {
+      return { reason: 'MAX_COST', response: 'Cost budget exhausted.' }
+    }
+    return null
+  }
+
+  private accountUsage(run: LoopRun, usage: ModelUsage): void {
+    run.usage.modelCalls += usage.modelCalls
+    run.usage.inputTokens += usage.inputTokens
+    run.usage.outputTokens += usage.outputTokens
+    run.usage.costUsd += usage.costUsd
+  }
+
+  private effectiveDuration(run: LoopRun): number {
+    return run.usage.activeDurationMs + (Date.now() - run.startedAtMs)
+  }
+
+  private remainingDuration(run: LoopRun): number {
+    return run.input.budget.maxDurationMs - this.effectiveDuration(run)
+  }
+
+  private makeObservation(
+    run: LoopRun,
+    input: {
+      stepId: string
+      stepNumber: number
+      type: Observation['type']
+      source: Observation['source']
+      trust: Observation['trust']
+      payload: unknown
+      summary: string
+      provenance: Observation['provenance']
+    }
+  ): Observation {
+    return {
+      observationId: `obs_${randomUUID()}`,
+      executionId: run.executionId,
+      stepId: input.stepId,
+      stepNumber: input.stepNumber,
+      type: input.type,
+      source: input.source,
+      trust: input.trust,
+      payload: boundedPayload(input.payload, this.maxObservationPayloadChars),
+      summary: input.summary.slice(0, 500),
+      provenance: input.provenance,
+      timestamp: this.clock().toISOString()
+    }
+  }
+
+  private async recordObservation(
+    run: LoopRun,
+    observation: Observation
+  ): Promise<void> {
+    run.observations = [...run.observations, observation].slice(
+      -MAX_CHECKPOINT_OBSERVATIONS
+    )
+    run.state = { ...run.state, observations: run.observations }
+    await this.safeAudit(run, 'observation.recorded', {
+      result: `${observation.source}:${observation.type}`
+    })
+  }
+
+  private async recordStep(
+    run: LoopRun,
+    input: {
+      stepNumber: number
+      stepType: ExecutionStep['stepType']
+      status: ExecutionStep['status']
+      sideEffecting: boolean
+      decisionType?: ExecutionStep['decisionType']
+      reasonCode?: ExecutionStep['reasonCode']
+      errorCode?: string
+      observationRefs?: readonly string[]
+    }
+  ): Promise<void> {
+    const stepId = `step_${run.executionId}_${input.stepNumber}_${input.stepType.toLowerCase()}`
+    const terminal = input.status === 'SUCCEEDED' || input.status === 'FAILED'
+    const decisionType =
+      input.decisionType ?? run.lastDecision?.decisionType ?? undefined
+    await this.options.stepStore.recordStep({
+      stepId,
+      executionId: run.executionId,
+      tenantId: run.input.tenantId,
+      stepNumber: input.stepNumber,
+      stepType: input.stepType,
+      status: input.status,
+      attempt: 1,
+      sideEffecting: input.sideEffecting,
+      startedAt: this.clock().toISOString(),
+      ...(terminal ? { completedAt: this.clock().toISOString() } : {}),
+      ...(decisionType ? { decisionType } : {}),
+      ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+      observationRefs: input.observationRefs ?? [],
+      ...(input.errorCode ? { errorCode: input.errorCode } : {})
+    })
+    if (
+      (terminal || input.status === 'WAITING') &&
+      !run.countedSteps.has(input.stepNumber)
+    ) {
+      run.countedSteps.add(input.stepNumber)
+      run.usage.steps += 1
+    }
+    await this.safeAudit(
+      run,
+      input.status === 'RUNNING' ? 'step.started' : 'step.completed',
+      { result: `${input.stepType}:${input.status}`, tool: null }
+    )
+  }
+
+  private async persistCheckpoint(run: LoopRun): Promise<void> {
+    const checkpoint = sealCheckpoint({
+      executionId: run.executionId,
+      tenantId: run.input.tenantId,
+      checkpointVersion: 1,
+      runtimeProfile: 'iterative',
+      runtimeVersion: RUNTIME_V2_VERSION,
+      orchestratorVersion: this.orchestratorVersion,
+      stepNumber: run.state.stepNumber,
+      state: {
+        ...run.state,
+        observations: run.observations.slice(-MAX_CHECKPOINT_OBSERVATIONS)
+      },
+      budgetUsage: { ...run.usage }
+    })
+    await this.options.stepStore.saveCheckpoint(checkpoint)
+  }
+
+  private operationKey(

@@ -1,5 +1,9 @@
 import { writeFileSync } from 'node:fs'
 import type { TenantId } from '@cvg/platform'
+import type {
+  ClaimExecutionRegistry,
+  ClaimExecutionSlot
+} from './claimed-execution-lifecycle.ts'
 import {
   DEFAULT_OUTBOX_LEASE_MS,
   type DurableOutboxAdapter,
@@ -12,6 +16,7 @@ import {
 } from './controlled-worker.ts'
 import {
   completeClaimedOutboxEvent,
+  claimNextForExecution,
   type ClaimedOutboxEventResult,
   type OutboxHandoffResult
 } from './jobs/process-outbox-event.ts'
@@ -55,6 +60,7 @@ export interface ContinuousWorkerOptions extends Partial<ContinuousWorkerTuning>
   tenantId: TenantId
   workerId: string
   adapter: DurableOutboxAdapter
+  claimExecutions?: ClaimExecutionRegistry
   handlers: ControlledWorkerHandlers
   /** Lease renewal/ownership-check cadence; defaults to leaseMs / 3. */
   heartbeatIntervalMs?: number
@@ -427,21 +433,30 @@ export function createContinuousWorker(
     })
   }
 
-  function dispatchClaimed(event: OutboxEventRecord): void {
-    const heartbeat = startHeartbeat(event)
+  function dispatchClaimed(
+    event: OutboxEventRecord,
+    slot?: ClaimExecutionSlot
+  ): void {
+    const heartbeat = options.claimExecutions
+      ? undefined
+      : startHeartbeat(event)
     const task = (async () => {
       try {
         const result = await completeClaimedOutboxEvent({
           tenantId: options.tenantId,
           workerId,
           adapter: options.adapter,
+          ...(options.claimExecutions
+            ? { claimExecutions: options.claimExecutions }
+            : {}),
+          ...(slot ? { slot } : {}),
           event,
           effect: dispatch,
           ...(options.takeoverActive !== undefined
             ? { takeoverActive: options.takeoverActive }
             : {})
         })
-        recordResult(event, result, heartbeat.lost())
+        recordResult(event, result, heartbeat?.lost() ?? false)
       } catch (error) {
         counters.errors += 1
         telemetry.log(
@@ -457,7 +472,7 @@ export function createContinuousWorker(
         )
         telemetry.metric('worker_outbox_errors_total', 1, { outcome: 'error' })
       } finally {
-        heartbeat.stop()
+        heartbeat?.stop()
       }
     })()
     inFlight.set(task, event)
@@ -553,6 +568,8 @@ export function createContinuousWorker(
     let idleBackoff = 0
     let errorBackoff = 0
     while (running) {
+      if (options.claimExecutions && !options.claimExecutions.acceptingClaims)
+        break
       if (inFlight.size >= tuning.concurrency) {
         await sampleLag()
         await abortableDelay(tuning.pollIntervalMs)
@@ -567,12 +584,21 @@ export function createContinuousWorker(
         continue
       }
       let event: OutboxEventRecord | null
+      let slot: ClaimExecutionSlot | undefined
       try {
-        event = await options.adapter.claimNext({
+        // Recheck after the asynchronous pause probe before reserving a slot.
+        if (options.claimExecutions && !running) break
+        const claimed = await claimNextForExecution({
           tenantId: options.tenantId,
           workerId,
+          adapter: options.adapter,
+          ...(options.claimExecutions
+            ? { claimExecutions: options.claimExecutions }
+            : {}),
           leaseMs: tuning.leaseMs
         })
+        event = claimed?.event ?? null
+        slot = claimed?.slot
       } catch (error) {
         counters.claimFailures += 1
         errorBackoff =
@@ -610,7 +636,7 @@ export function createContinuousWorker(
         await abortableDelay(idleBackoff)
         continue
       }
-      if (!running) {
+      if (!running && !options.claimExecutions) {
         try {
           await options.adapter.fail({
             tenantId: options.tenantId,
@@ -644,7 +670,7 @@ export function createContinuousWorker(
       idleBackoff = 0
       errorBackoff = 0
       counters.claimed += 1
-      dispatchClaimed(event)
+      dispatchClaimed(event, slot)
     }
   }
 
@@ -698,8 +724,18 @@ export function createContinuousWorker(
   }): Promise<ContinuousWorkerStopResult> {
     if (stopPromise) return stopPromise
     const drainMs = Math.max(0, stopOptions?.drainMs ?? tuning.drainMs)
-    stopPromise = (async (): Promise<ContinuousWorkerStopResult> => {
+    let resolveStop!: (value: ContinuousWorkerStopResult) => void
+    let rejectStop!: (error: unknown) => void
+    stopPromise = new Promise((resolve, reject) => {
+      resolveStop = resolve
+      rejectStop = reject
+    })
+    const stopping = (async (): Promise<ContinuousWorkerStopResult> => {
       running = false
+      // Synchronous closure/abort precedes any asynchronous shutdown callback.
+      const claimedDrain = options.claimExecutions?.stopAndDrain()
+      // Observe immediately while sweeps/pump finish; await the same real promise below.
+      if (claimedDrain) void claimedDrain.catch(() => {})
       wakeSleepers()
       if (summaryTimer) {
         clearInterval(summaryTimer)
@@ -716,6 +752,18 @@ export function createContinuousWorker(
           'error'
         )
       })
+      if (claimedDrain) {
+        if (pumpPromise) await pumpPromise
+        await claimedDrain
+        await Promise.all([...inFlight.keys()])
+        logSummary('stop')
+        return {
+          drained: true,
+          released: 0,
+          releaseFailed: 0,
+          metrics: { ...counters }
+        }
+      }
       if (pumpPromise) {
         await Promise.race([
           pumpPromise,
@@ -783,6 +831,7 @@ export function createContinuousWorker(
       })
       return result
     })()
+    void stopping.then(resolveStop, rejectStop)
     return stopPromise
   }
 

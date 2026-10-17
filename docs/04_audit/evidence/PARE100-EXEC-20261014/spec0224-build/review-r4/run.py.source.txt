@@ -1,0 +1,12 @@
+import subprocess,os,json,pathlib,datetime,sys
+R=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4');W='/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree'
+env=os.environ.copy()
+for key,sub in [('TMPDIR','tmp'),('XDG_CACHE_HOME','cache/xdg'),('NODE_COMPILE_CACHE','cache/node')]:
+ p=R/sub;p.mkdir(parents=True,exist_ok=True);env[key]=str(p)
+env['PATH']='/home/ricardo/.nvm/versions/node/v22.23.2/bin:'+env['PATH']
+name=sys.argv[1];args=sys.argv[2:];start=datetime.datetime.now(datetime.timezone.utc).isoformat()
+p=subprocess.run(args,cwd=W,env=env,capture_output=True)
+(R/(name+'.stdout.log')).write_bytes(p.stdout);(R/(name+'.stderr.log')).write_bytes(p.stderr)
+record={'argv':args,'cwd':W,'env':{key:env[key] for key in ['PATH','TMPDIR','XDG_CACHE_HOME','NODE_COMPILE_CACHE']},'startUtc':start,'exitCode':p.returncode,'stdout':name+'.stdout.log','stderr':name+'.stderr.log'}
+(R/(name+'.command.json')).write_text(json.dumps(record,indent=2)+'\n')
+sys.stdout.buffer.write(p.stdout);sys.stderr.buffer.write(p.stderr);print('EXIT',p.returncode);sys.exit(p.returncode)

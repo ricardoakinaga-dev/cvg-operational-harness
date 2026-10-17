@@ -1,0 +1,392 @@
+packages/harness/src/kernel/controls.ts-215-  public isPaused(tenantId: string): boolean {
+packages/harness/src/kernel/controls.ts-216-    return this.#paused.has(tenantId)
+packages/harness/src/kernel/controls.ts-217-  }
+packages/harness/src/kernel/controls.ts-218-}
+packages/harness/src/kernel/controls.ts-219-
+packages/harness/src/kernel/controls.ts-220-export const PAUSED_RESPONSE = 'The agent is paused by an operator.'
+packages/harness/src/kernel/controls.ts-221-
+packages/harness/src/kernel/controls.ts-222-/** Pause stops new steps and is re-checked before every effect (I12). */
+packages/harness/src/kernel/controls.ts:223:export function pauseControl(
+packages/harness/src/kernel/controls.ts-224-  pause: PauseSwitch = new InMemoryPauseSwitch()
+packages/harness/src/kernel/controls.ts-225-): KernelPlugin {
+packages/harness/src/kernel/controls.ts-226-  return {
+packages/harness/src/kernel/controls.ts-227-    name: 'control.pause',
+packages/harness/src/kernel/controls.ts-228-    kind: 'control',
+packages/harness/src/kernel/controls.ts-229-    provides: ['pause'],
+packages/harness/src/kernel/controls.ts-230-    apply(ctx) {
+packages/harness/src/kernel/controls.ts-231-      ctx.provide('pause', pause)
+packages/harness/src/kernel/controls.ts-232-      ctx.on('turn/before-step', async (turn, next) =>
+packages/harness/src/kernel/controls.ts-233-        (await pause.isPaused(turn.input.tenantId))
+packages/harness/src/kernel/controls.ts-234-          ? stop('HUMAN_TAKEOVER', PAUSED_RESPONSE, {
+packages/harness/src/kernel/controls.ts-235-              cause: 'operator_paused'
+packages/harness/src/kernel/controls.ts-236-            })
+packages/harness/src/kernel/controls.ts-237-          : next()
+packages/harness/src/kernel/controls.ts-238-      )
+packages/harness/src/kernel/controls.ts-239-      // Guards run again after the loop's checkpoint and after the approval
+packages/harness/src/kernel/controls.ts-240-      // reservation, so a pause acknowledged in those windows still blocks the
+packages/harness/src/kernel/controls.ts-241-      // body (AUD-0597 F01).
+packages/harness/src/kernel/controls.ts-242-      ctx.guard(async (call) =>
+packages/harness/src/kernel/controls.ts-243-        (await pause.isPaused(call.turn.input.tenantId))
+packages/harness/src/kernel/controls.ts-244-          ? {
+packages/harness/src/kernel/controls.ts-245-              reason: PAUSED_RESPONSE,
+packages/harness/src/kernel/controls.ts-246-              stopReason: 'HUMAN_TAKEOVER',
+packages/harness/src/kernel/controls.ts-247-              cause: 'operator_paused'
+packages/harness/src/kernel/controls.ts-248-            }
+packages/harness/src/kernel/controls.ts-249-          : undefined
+packages/harness/src/kernel/controls.ts-250-      )
+packages/harness/src/kernel/controls.ts-251-    }
+packages/harness/src/kernel/controls.ts-252-  }
+packages/harness/src/kernel/controls.ts-253-}
+packages/harness/src/kernel/controls.ts-254-
+packages/harness/src/kernel/controls.ts-255-// ------------------------------------------------------------------- log
+packages/harness/src/kernel/controls.ts-256-
+packages/harness/src/kernel/controls.ts-257-export class InMemoryKernelLog implements KernelLog {
+packages/harness/src/kernel/controls.ts-258-  public readonly events: KernelLogEvent[] = []
+packages/harness/src/kernel/controls.ts-259-  readonly #limit: number
+packages/harness/src/kernel/controls.ts-260-
+packages/harness/src/kernel/controls.ts-261-  public constructor(limit = 10_000) {
+packages/harness/src/kernel/controls.ts-262-    this.#limit = limit
+packages/harness/src/kernel/controls.ts-263-  }
+--
+packages/harness/src/kernel/controls.ts-308-    if (this.entries.length > this.#limit) this.entries.shift()
+packages/harness/src/kernel/controls.ts-309-  }
+packages/harness/src/kernel/controls.ts-310-}
+packages/harness/src/kernel/controls.ts-311-
+packages/harness/src/kernel/controls.ts-312-/**
+packages/harness/src/kernel/controls.ts-313- * Records the lifecycle of each dispatched effect. The durable journal of the
+packages/harness/src/kernel/controls.ts-314- * worker replaces this in-memory ledger when the stacks are unified (KPLG-004).
+packages/harness/src/kernel/controls.ts-315- */
+packages/harness/src/kernel/controls.ts:316:export function effectsControl(
+packages/harness/src/kernel/controls.ts-317-  ledger: EffectLedger = new InMemoryEffectLedger()
+packages/harness/src/kernel/controls.ts-318-): KernelPlugin {
+packages/harness/src/kernel/controls.ts-319-  return {
+packages/harness/src/kernel/controls.ts-320-    name: 'control.effects',
+packages/harness/src/kernel/controls.ts-321-    kind: 'control',
+packages/harness/src/kernel/controls.ts-322-    provides: ['effects'],
+packages/harness/src/kernel/controls.ts-323-    apply(ctx) {
+packages/harness/src/kernel/controls.ts-324-      ctx.provide('effects', ledger)
+packages/harness/src/kernel/controls.ts-325-    }
+packages/harness/src/kernel/controls.ts-326-  }
+packages/harness/src/kernel/controls.ts-327-}
+packages/harness/src/kernel/controls.ts-328-
+packages/harness/src/kernel/controls.ts-329-// ---------------------------------------------------------------- policy
+packages/harness/src/kernel/controls.ts-330-
+packages/harness/src/kernel/controls.ts-331-/**
+packages/harness/src/kernel/controls.ts-332- * Containment port (SPEC 0195). The pipeline resolves this and enforces it
+packages/harness/src/kernel/controls.ts-333- * between every control and the capability body; a missing gate on the host
+packages/harness/src/kernel/controls.ts-334- * is handled in `enforceSandbox` as fail-closed.
+packages/harness/src/kernel/controls.ts-335- */
+packages/harness/src/kernel/controls.ts:336:export function sandboxControl(sandbox: SandboxGate): KernelPlugin {
+packages/harness/src/kernel/controls.ts-337-  return {
+packages/harness/src/kernel/controls.ts-338-    name: 'control.sandbox',
+packages/harness/src/kernel/controls.ts-339-    kind: 'control',
+packages/harness/src/kernel/controls.ts-340-    provides: ['sandbox'],
+packages/harness/src/kernel/controls.ts-341-    apply(ctx) {
+packages/harness/src/kernel/controls.ts-342-      ctx.provide('sandbox', sandbox)
+packages/harness/src/kernel/controls.ts-343-    }
+packages/harness/src/kernel/controls.ts-344-  }
+packages/harness/src/kernel/controls.ts-345-}
+packages/harness/src/kernel/controls.ts-346-
+packages/harness/src/kernel/controls.ts-347-export function policyControl(policy: PolicyEngine): KernelPlugin {
+packages/harness/src/kernel/controls.ts-348-  return {
+packages/harness/src/kernel/controls.ts-349-    name: 'control.policy',
+packages/harness/src/kernel/controls.ts-350-    kind: 'control',
+packages/harness/src/kernel/controls.ts-351-    provides: ['policy'],
+packages/harness/src/kernel/controls.ts-352-    requires: ['budget'],
+packages/harness/src/kernel/controls.ts-353-    apply(ctx) {
+packages/harness/src/kernel/controls.ts-354-      ctx.provide('policy', policy)
+packages/harness/src/kernel/controls.ts-355-      ctx.on('tool/pre-execute', async (call, next) => {
+packages/harness/src/kernel/controls.ts-356-        const { turn, tool, invocation } = call
+packages/harness/src/kernel/controls.ts-357-        let decision
+packages/harness/src/kernel/controls.ts-358-        try {
+packages/harness/src/kernel/controls.ts-359-          const decisionOrDeadline = await turn.budget.withDeadline(() =>
+packages/harness/src/kernel/controls.ts-360-            policy.evaluate({
+packages/harness/src/kernel/controls.ts-361-              tenantId: turn.input.tenantId,
+packages/harness/src/kernel/controls.ts-362-              agentId: turn.input.agent.id,
+packages/harness/src/kernel/controls.ts-363-              action: 'tool.execute',
+packages/harness/src/kernel/controls.ts-364-              tool,
+packages/harness/src/kernel/controls.ts-365-              invocation,
+packages/harness/src/kernel/controls.ts-366-              correlationId: turn.input.correlationId
+packages/harness/src/kernel/controls.ts-367-            })
+packages/harness/src/kernel/controls.ts-368-          )
+packages/harness/src/kernel/controls.ts-369-          if (decisionOrDeadline === DEADLINE) {
+packages/harness/src/kernel/controls.ts-370-            return stop(
+packages/harness/src/kernel/controls.ts-371-              'MAX_DURATION',
+packages/harness/src/kernel/controls.ts-372-              'Duration budget exhausted during policy evaluation.'
+packages/harness/src/kernel/controls.ts-373-            )
+packages/harness/src/kernel/controls.ts-374-          }
+packages/harness/src/kernel/controls.ts-375-          decision = decisionOrDeadline
+packages/harness/src/kernel/controls.ts-376-          turn.metadata.policy = decision.outcome
+--
+packages/harness/src/kernel/controls.ts-638-          .uncertain({
+packages/harness/src/kernel/controls.ts-639-            ...base,
+packages/harness/src/kernel/controls.ts-640-            reason:
+packages/harness/src/kernel/controls.ts-641-              'Tool execution was cancelled after approval execution started.',
+packages/harness/src/kernel/controls.ts-642-            evidenceRef: ref('tool_cancelled')
+packages/harness/src/kernel/controls.ts-643-          })
+packages/harness/src/kernel/controls.ts-644-          .catch(() => undefined)
+packages/harness/src/kernel/controls.ts-645-        return outcome
+packages/harness/src/kernel/controls.ts:646:      case 'threw':
+packages/harness/src/kernel/controls.ts-647-        await port
+packages/harness/src/kernel/controls.ts-648-          .uncertain({
+packages/harness/src/kernel/controls.ts-649-            ...base,
+packages/harness/src/kernel/controls.ts-650-            reason: `Tool executor threw after approval execution started: ${outcome.error}`,
+packages/harness/src/kernel/controls.ts-651-            evidenceRef: ref('tool_uncertain')
+packages/harness/src/kernel/controls.ts-652-          })
+packages/harness/src/kernel/controls.ts-653-          .catch(() => undefined)
+packages/harness/src/kernel/controls.ts-654-        return outcome
+packages/harness/src/kernel/controls.ts-655-      case 'failed':
+packages/harness/src/kernel/controls.ts-656-        await port
+packages/harness/src/kernel/controls.ts-657-          .fail({ ...base, evidenceRef: ref('tool_failed') })
+packages/harness/src/kernel/controls.ts-658-          .catch(() => undefined)
+packages/harness/src/kernel/controls.ts-659-        return outcome
+packages/harness/src/kernel/controls.ts-660-      case 'succeeded':
+packages/harness/src/kernel/controls.ts-661-        try {
+packages/harness/src/kernel/controls.ts-662-          await port.complete({ ...base, evidenceRef: ref('tool_confirmed') })
+packages/harness/src/kernel/controls.ts-663-          return outcome
+packages/harness/src/kernel/controls.ts-664-        } catch (error) {
+packages/harness/src/kernel/controls.ts-665-          return {
+packages/harness/src/kernel/controls.ts-666-            kind: 'confirm_failed',
+packages/harness/src/kernel/controls.ts-667-            result: outcome.result,
+packages/harness/src/kernel/controls.ts-668-            error: errorMessage(error),
+packages/harness/src/kernel/controls.ts-669-            durationMs: outcome.durationMs
+packages/harness/src/kernel/controls.ts-670-          }
+packages/harness/src/kernel/controls.ts-671-        }
+packages/harness/src/kernel/controls.ts-672-      case 'confirm_failed':
+packages/harness/src/kernel/controls.ts-673-        return outcome
+packages/harness/src/kernel/controls.ts-674-    }
+packages/harness/src/kernel/controls.ts-675-  }
+packages/harness/src/kernel/controls.ts-676-}
+packages/harness/src/kernel/controls.ts-677-
+packages/harness/src/kernel/controls.ts-678-// ----------------------------------------------------------------- audit
+packages/harness/src/kernel/controls.ts-679-
+packages/harness/src/kernel/controls.ts-680-export interface AuditControlOptions {
+packages/harness/src/kernel/controls.ts-681-  /** Audit action name; the single-pass facade keeps `harness.single_pass`. */
+packages/harness/src/kernel/controls.ts-682-  readonly action?: string
+packages/harness/src/kernel/controls.ts-683-}
+packages/harness/src/kernel/controls.ts-684-
+packages/harness/src/kernel/controls.ts-685-/**
+packages/harness/src/kernel/controls.ts-686- * Audit is fail-closed (I10): a failed or late record turns the result into
+--
+packages/harness/src/kernel/kernel-runtime.ts-539-    const approvalId = call.grant?.approvalId
+packages/harness/src/kernel/kernel-runtime.ts-540-    const withApproval = approvalId !== undefined ? { approvalId } : {}
+packages/harness/src/kernel/kernel-runtime.ts-541-    switch (outcome.kind) {
+packages/harness/src/kernel/kernel-runtime.ts-542-      case 'not_started':
+packages/harness/src/kernel/kernel-runtime.ts-543-        return fromStop({ ...outcome.gate, ...withApproval })
+packages/harness/src/kernel/kernel-runtime.ts-544-      case 'deadline':
+packages/harness/src/kernel/kernel-runtime.ts-545-        return result({
+packages/harness/src/kernel/kernel-runtime.ts-546-          response: call.approval
+packages/harness/src/kernel/kernel-runtime.ts:547:            ? 'unknown_effect: duration budget exhausted during tool execution.'
+packages/harness/src/kernel/kernel-runtime.ts-548-            : 'Duration budget exhausted during tool execution.',
+packages/harness/src/kernel/kernel-runtime.ts-549-          stopReason: call.approval ? 'TOOL_FAILURE' : 'MAX_DURATION',
+packages/harness/src/kernel/kernel-runtime.ts-550-          ...withApproval,
+packages/harness/src/kernel/kernel-runtime.ts-551-          modelCalls: 0,
+packages/harness/src/kernel/kernel-runtime.ts-552-          toolCalls: 1
+packages/harness/src/kernel/kernel-runtime.ts-553-        })
+packages/harness/src/kernel/kernel-runtime.ts-554-      case 'cancelled':
+packages/harness/src/kernel/kernel-runtime.ts-555-        return result({
+packages/harness/src/kernel/kernel-runtime.ts-556-          response: call.approval
+packages/harness/src/kernel/kernel-runtime.ts:557:            ? `unknown_effect: ${CANCELLED_RESPONSE}`
+packages/harness/src/kernel/kernel-runtime.ts-558-            : CANCELLED_RESPONSE,
+packages/harness/src/kernel/kernel-runtime.ts-559-          stopReason: call.approval ? 'TOOL_FAILURE' : 'CANCELLED',
+packages/harness/src/kernel/kernel-runtime.ts-560-          ...withApproval,
+packages/harness/src/kernel/kernel-runtime.ts-561-          modelCalls: 0,
+packages/harness/src/kernel/kernel-runtime.ts-562-          toolCalls: 1
+packages/harness/src/kernel/kernel-runtime.ts-563-        })
+packages/harness/src/kernel/kernel-runtime.ts:564:      case 'threw': {
+packages/harness/src/kernel/kernel-runtime.ts-565-        const toolResult: ToolResult = {
+packages/harness/src/kernel/kernel-runtime.ts-566-          status: 'FAILED',
+packages/harness/src/kernel/kernel-runtime.ts-567-          error: outcome.error
+packages/harness/src/kernel/kernel-runtime.ts-568-        }
+packages/harness/src/kernel/kernel-runtime.ts-569-        return result({
+packages/harness/src/kernel/kernel-runtime.ts-570-          response: call.approval
+packages/harness/src/kernel/kernel-runtime.ts:571:            ? `unknown_effect: ${outcome.error}`
+packages/harness/src/kernel/kernel-runtime.ts-572-            : outcome.error,
+packages/harness/src/kernel/kernel-runtime.ts-573-          stopReason: 'TOOL_FAILURE',
+packages/harness/src/kernel/kernel-runtime.ts-574-          ...withApproval,
+packages/harness/src/kernel/kernel-runtime.ts-575-          modelCalls: 0,
+packages/harness/src/kernel/kernel-runtime.ts-576-          toolCalls: 1,
+packages/harness/src/kernel/kernel-runtime.ts-577-          toolResult
+packages/harness/src/kernel/kernel-runtime.ts-578-        })
+packages/harness/src/kernel/kernel-runtime.ts-579-      }
+packages/harness/src/kernel/kernel-runtime.ts-580-      case 'failed':
+packages/harness/src/kernel/kernel-runtime.ts-581-        return result({
+packages/harness/src/kernel/kernel-runtime.ts-582-          response: outcome.result.error ?? 'Tool execution failed.',
+packages/harness/src/kernel/kernel-runtime.ts-583-          stopReason: 'TOOL_FAILURE',
+packages/harness/src/kernel/kernel-runtime.ts-584-          ...withApproval,
+packages/harness/src/kernel/kernel-runtime.ts-585-          modelCalls: 0,
+packages/harness/src/kernel/kernel-runtime.ts-586-          toolCalls: 1,
+packages/harness/src/kernel/kernel-runtime.ts-587-          toolResult: outcome.result
+packages/harness/src/kernel/kernel-runtime.ts-588-        })
+packages/harness/src/kernel/kernel-runtime.ts-589-      case 'confirm_failed':
+packages/harness/src/kernel/kernel-runtime.ts-590-        return result({
+packages/harness/src/kernel/kernel-runtime.ts:591:          response: `unknown_effect: approval confirmation failed: ${outcome.error}.`,
+packages/harness/src/kernel/kernel-runtime.ts-592-          stopReason: 'TOOL_FAILURE',
+packages/harness/src/kernel/kernel-runtime.ts-593-          ...withApproval,
+packages/harness/src/kernel/kernel-runtime.ts-594-          modelCalls: 0,
+packages/harness/src/kernel/kernel-runtime.ts-595-          toolCalls: 1,
+packages/harness/src/kernel/kernel-runtime.ts-596-          toolResult: outcome.result
+packages/harness/src/kernel/kernel-runtime.ts-597-        })
+packages/harness/src/kernel/kernel-runtime.ts-598-      case 'succeeded':
+packages/harness/src/kernel/kernel-runtime.ts-599-        if (
+packages/harness/src/kernel/kernel-runtime.ts-600-          Date.now() - this.#state.startedAt >
+packages/harness/src/kernel/kernel-runtime.ts-601-          this.#state.input.budget.maxDurationMs
+packages/harness/src/kernel/kernel-runtime.ts-602-        ) {
+packages/harness/src/kernel/kernel-runtime.ts-603-          return result({
+packages/harness/src/kernel/kernel-runtime.ts-604-            response: 'Duration budget exhausted after tool execution.',
+packages/harness/src/kernel/kernel-runtime.ts-605-            stopReason: 'MAX_DURATION',
+packages/harness/src/kernel/kernel-runtime.ts-606-            modelCalls: 0,
+packages/harness/src/kernel/kernel-runtime.ts-607-            toolCalls: 1,
+packages/harness/src/kernel/kernel-runtime.ts-608-            toolResult: outcome.result
+packages/harness/src/kernel/kernel-runtime.ts-609-          })
+packages/harness/src/kernel/kernel-runtime.ts-610-        }
+packages/harness/src/kernel/kernel-runtime.ts-611-        return result({
+packages/harness/src/kernel/kernel-runtime.ts-612-          response: stringifyOutput(
+packages/harness/src/kernel/kernel-runtime.ts-613-            outcome.result.output ?? 'Tool completed successfully.'
+packages/harness/src/kernel/kernel-runtime.ts-614-          ),
+packages/harness/src/kernel/kernel-runtime.ts-615-          stopReason: 'COMPLETED',
+packages/harness/src/kernel/kernel-runtime.ts-616-          ...(this.#state.metadata.approval
+packages/harness/src/kernel/kernel-runtime.ts-617-            ? { approvalId: this.#state.metadata.approval }
+packages/harness/src/kernel/kernel-runtime.ts-618-            : {}),
+packages/harness/src/kernel/kernel-runtime.ts-619-          modelCalls: 0,
+packages/harness/src/kernel/kernel-runtime.ts-620-          toolCalls: 1,
+packages/harness/src/kernel/kernel-runtime.ts-621-          toolResult: outcome.result
+packages/harness/src/kernel/kernel-runtime.ts-622-        })
+packages/harness/src/kernel/kernel-runtime.ts-623-    }
+packages/harness/src/kernel/kernel-runtime.ts-624-  }
+packages/harness/src/kernel/kernel-runtime.ts-625-
+packages/harness/src/kernel/kernel-runtime.ts-626-  #availableTools(): readonly ToolDescriptor[] {
+packages/harness/src/kernel/kernel-runtime.ts-627-    const allowed = this.#state.input.agent.tools
+packages/harness/src/kernel/kernel-runtime.ts-628-    return this.#host
+packages/harness/src/kernel/kernel-runtime.ts-629-      .get('tools')
+packages/harness/src/kernel/kernel-runtime.ts-630-      .list()
+packages/harness/src/kernel/kernel-runtime.ts-631-      .filter((tool) => exposes(allowed, tool.id))
+--
+packages/harness/src/iterative-dispatch.ts-574-          ...ctx.stop(gate.stopReason, gate.response),
+packages/harness/src/iterative-dispatch.ts-575-          preserveCheckpoint: true
+packages/harness/src/iterative-dispatch.ts-576-        }
+packages/harness/src/iterative-dispatch.ts-577-      }
+packages/harness/src/iterative-dispatch.ts-578-      await failStep(blockedErrorCode(gate))
+packages/harness/src/iterative-dispatch.ts-579-      return ctx.stop(gate.stopReason, gate.response)
+packages/harness/src/iterative-dispatch.ts-580-    }
+packages/harness/src/iterative-dispatch.ts-581-    case 'deadline':
+packages/harness/src/iterative-dispatch.ts:582:      await failStep(reserved ? 'unknown_effect' : 'deadline')
+packages/harness/src/iterative-dispatch.ts-583-      return ctx.stop(
+packages/harness/src/iterative-dispatch.ts-584-        reserved ? 'TOOL_FAILURE' : 'MAX_DURATION',
+packages/harness/src/iterative-dispatch.ts-585-        reserved
+packages/harness/src/iterative-dispatch.ts:586:          ? 'unknown_effect: duration budget exhausted during tool execution.'
+packages/harness/src/iterative-dispatch.ts-587-          : 'Duration budget exhausted during tool execution.'
+packages/harness/src/iterative-dispatch.ts-588-      )
+packages/harness/src/iterative-dispatch.ts-589-    case 'cancelled':
+packages/harness/src/iterative-dispatch.ts:590:      await failStep(reserved ? 'unknown_effect' : 'cancelled')
+packages/harness/src/iterative-dispatch.ts-591-      return ctx.stop(
+packages/harness/src/iterative-dispatch.ts-592-        reserved ? 'TOOL_FAILURE' : 'CANCELLED',
+packages/harness/src/iterative-dispatch.ts:593:        reserved ? `unknown_effect: ${CANCELLED_RESPONSE}` : CANCELLED_RESPONSE
+packages/harness/src/iterative-dispatch.ts-594-      )
+packages/harness/src/iterative-dispatch.ts:595:    case 'threw':
+packages/harness/src/iterative-dispatch.ts-596-    case 'failed': {
+packages/harness/src/iterative-dispatch.ts-597-      const toolError =
+packages/harness/src/iterative-dispatch.ts-598-        outcome.kind === 'threw' ? outcome.error : outcome.result.error
+packages/harness/src/iterative-dispatch.ts-599-      const unknownEffect =
+packages/harness/src/iterative-dispatch.ts-600-        outcome.kind === 'threw' ||
+packages/harness/src/iterative-dispatch.ts:601:        toolError?.startsWith('unknown_effect:') === true
+packages/harness/src/iterative-dispatch.ts-602-      // `unknownEffect` is false only for a settled failure, so the fallback
+packages/harness/src/iterative-dispatch.ts-603-      // status is unreachable for a thrown outcome.
+packages/harness/src/iterative-dispatch.ts-604-      const failureStatus =
+packages/harness/src/iterative-dispatch.ts-605-        outcome.kind === 'failed' ? outcome.result.status : undefined
+packages/harness/src/iterative-dispatch.ts-606-      await ctx.recordObservation(
+packages/harness/src/iterative-dispatch.ts-607-        run,
+packages/harness/src/iterative-dispatch.ts-608-        ctx.makeObservation(run, {
+packages/harness/src/iterative-dispatch.ts-609-          stepId,
+packages/harness/src/iterative-dispatch.ts-610-          stepNumber,
+packages/harness/src/iterative-dispatch.ts-611-          type: 'TOOL_RESULT',
+packages/harness/src/iterative-dispatch.ts-612-          source: 'TOOL',
+packages/harness/src/iterative-dispatch.ts-613-          trust: 'UNTRUSTED',
+packages/harness/src/iterative-dispatch.ts-614-          payload: {
+packages/harness/src/iterative-dispatch.ts-615-            status: unknownEffect ? 'REJECTED' : (failureStatus as string),
+packages/harness/src/iterative-dispatch.ts-616-            error: toolError ?? 'tool execution failed'
+packages/harness/src/iterative-dispatch.ts-617-          },
+packages/harness/src/iterative-dispatch.ts-618-          summary: unknownEffect
+packages/harness/src/iterative-dispatch.ts-619-            ? 'Tool outcome is uncertain and requires reconciliation.'
+packages/harness/src/iterative-dispatch.ts-620-            : 'Tool execution failed.',
+packages/harness/src/iterative-dispatch.ts-621-          provenance: {
+packages/harness/src/iterative-dispatch.ts-622-            sourceId: tool.id,
+packages/harness/src/iterative-dispatch.ts-623-            ...(tool.version ? { sourceVersion: tool.version } : {}),
+packages/harness/src/iterative-dispatch.ts-624-            operationKey,
+packages/harness/src/iterative-dispatch.ts-625-            ...(unknownEffect ? { effectRef: operationKey } : {})
+packages/harness/src/iterative-dispatch.ts-626-          }
+packages/harness/src/iterative-dispatch.ts-627-        })
+packages/harness/src/iterative-dispatch.ts-628-      )
+packages/harness/src/iterative-dispatch.ts:629:      await failStep(unknownEffect ? 'unknown_effect' : 'tool_failed')
+packages/harness/src/iterative-dispatch.ts-630-      return ctx.stop(
+packages/harness/src/iterative-dispatch.ts-631-        'TOOL_FAILURE',
+packages/harness/src/iterative-dispatch.ts-632-        unknownEffect
+packages/harness/src/iterative-dispatch.ts:633:          ? `unknown_effect: ${toolError as string}`
+packages/harness/src/iterative-dispatch.ts-634-          : (toolError ?? 'Tool execution failed.')
+packages/harness/src/iterative-dispatch.ts-635-      )
+packages/harness/src/iterative-dispatch.ts-636-    }
+packages/harness/src/iterative-dispatch.ts-637-    case 'confirm_failed':
+packages/harness/src/iterative-dispatch.ts-638-      await ctx.recordObservation(
+packages/harness/src/iterative-dispatch.ts-639-        run,
+packages/harness/src/iterative-dispatch.ts-640-        ctx.makeObservation(run, {
+packages/harness/src/iterative-dispatch.ts-641-          stepId,
+packages/harness/src/iterative-dispatch.ts-642-          stepNumber,
+packages/harness/src/iterative-dispatch.ts-643-          type: 'TOOL_RESULT',
+packages/harness/src/iterative-dispatch.ts-644-          source: 'TOOL',
+packages/harness/src/iterative-dispatch.ts-645-          trust: 'UNTRUSTED',
+packages/harness/src/iterative-dispatch.ts-646-          payload: {
+packages/harness/src/iterative-dispatch.ts-647-            status: 'REJECTED',
+packages/harness/src/iterative-dispatch.ts-648-            error: 'approval_confirmation_failed'
+packages/harness/src/iterative-dispatch.ts-649-          },
+packages/harness/src/iterative-dispatch.ts-650-          summary: 'Approval confirmation failed after the effect.',
+packages/harness/src/iterative-dispatch.ts-651-          provenance: {
+packages/harness/src/iterative-dispatch.ts-652-            sourceId: tool.id,
+packages/harness/src/iterative-dispatch.ts-653-            operationKey,
+packages/harness/src/iterative-dispatch.ts-654-            effectRef: operationKey
+packages/harness/src/iterative-dispatch.ts-655-          }
+packages/harness/src/iterative-dispatch.ts-656-        })
+packages/harness/src/iterative-dispatch.ts-657-      )
+packages/harness/src/iterative-dispatch.ts:658:      await failStep('unknown_effect')
+packages/harness/src/iterative-dispatch.ts-659-      return ctx.stop(
+packages/harness/src/iterative-dispatch.ts-660-        'TOOL_FAILURE',
+packages/harness/src/iterative-dispatch.ts:661:        `unknown_effect: approval confirmation failed: ${outcome.error}.`
+packages/harness/src/iterative-dispatch.ts-662-      )
+packages/harness/src/iterative-dispatch.ts-663-    case 'succeeded': {
+packages/harness/src/iterative-dispatch.ts-664-      const observation = ctx.makeObservation(run, {
+packages/harness/src/iterative-dispatch.ts-665-        stepId,
+packages/harness/src/iterative-dispatch.ts-666-        stepNumber,
+packages/harness/src/iterative-dispatch.ts-667-        type: 'TOOL_RESULT',
+packages/harness/src/iterative-dispatch.ts-668-        source: 'TOOL',
+packages/harness/src/iterative-dispatch.ts-669-        trust: 'UNTRUSTED',
+packages/harness/src/iterative-dispatch.ts-670-        payload: {
+packages/harness/src/iterative-dispatch.ts-671-          status: 'SUCCEEDED',
+packages/harness/src/iterative-dispatch.ts-672-          sideEffect: tool.sideEffect,
+packages/harness/src/iterative-dispatch.ts-673-          output: boundedPayload(
+packages/harness/src/iterative-dispatch.ts-674-            outcome.result.output,
+packages/harness/src/iterative-dispatch.ts-675-            ctx.maxObservationPayloadChars
+packages/harness/src/iterative-dispatch.ts-676-          )
+packages/harness/src/iterative-dispatch.ts-677-        },
+packages/harness/src/iterative-dispatch.ts-678-        summary: stringifySummary(
+packages/harness/src/iterative-dispatch.ts-679-          outcome.result.output,
+packages/harness/src/iterative-dispatch.ts-680-          'Tool completed successfully.'
+packages/harness/src/iterative-dispatch.ts-681-        ),
+packages/harness/src/iterative-dispatch.ts-682-        provenance: {
+packages/harness/src/iterative-dispatch.ts-683-          sourceId: tool.id,
+packages/harness/src/iterative-dispatch.ts-684-          ...(tool.version ? { sourceVersion: tool.version } : {}),
+packages/harness/src/iterative-dispatch.ts-685-          operationKey,
+packages/harness/src/iterative-dispatch.ts-686-          effectRef: operationKey
+packages/harness/src/iterative-dispatch.ts-687-        }
+packages/harness/src/iterative-dispatch.ts-688-      })
+packages/harness/src/iterative-dispatch.ts-689-      await ctx.recordObservation(run, observation)
+packages/harness/src/iterative-dispatch.ts-690-      run.lastToolObservation = observation
+packages/harness/src/iterative-dispatch.ts-691-      run.state = { ...run.state, pendingApprovalId: undefined }
+packages/harness/src/iterative-dispatch.ts-692-      await ctx.recordStep(run, {
+packages/harness/src/iterative-dispatch.ts-693-        stepNumber,
+packages/harness/src/iterative-dispatch.ts-694-        stepType: 'TOOL',
+packages/harness/src/iterative-dispatch.ts-695-        status: 'SUCCEEDED',
+packages/harness/src/iterative-dispatch.ts-696-        sideEffecting: true,
+packages/harness/src/iterative-dispatch.ts-697-        reasonCode: decision.reasonCode,
+packages/harness/src/iterative-dispatch.ts-698-        observationRefs: [observation.observationId]
+packages/harness/src/iterative-dispatch.ts-699-      })
+packages/harness/src/iterative-dispatch.ts-700-      if (pipeline.logFailure) {
+packages/harness/src/iterative-dispatch.ts-701-        // F04: the effect is recorded as done (no replay), but the run stops

@@ -1,0 +1,78 @@
+"""Copied-JSON controls only; never executes a probe or changes candidate sources."""
+import copy
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+
+D = Path(__file__).resolve().parent
+P = D.parent
+spec = importlib.util.spec_from_file_location('candidate_validator', P / 'validate.py')
+validator = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(validator)
+run = P / 'runs/i1-01'
+data, process = validator.check_run(run)
+baseline = validator.evaluate(data)
+results = []
+root = D / 'negative-controls'
+root.mkdir(exist_ok=False)
+
+
+def control(name, mutate_data=None, mutate_meta=None, empty_map=False, stderr=None, raw_edit=None):
+    folder = root / name
+    folder.mkdir()
+    current = copy.deepcopy(data)
+    meta = copy.deepcopy(process)
+    if mutate_data:
+        mutate_data(current)
+    if mutate_meta:
+        mutate_meta(meta)
+    raw = (json.dumps(current, separators=(',', ':')) + '\n').encode()
+    if raw_edit:
+        raw = raw_edit(raw)
+    (folder / 'stdout.txt').write_bytes(raw)
+    meta['streams']['stdout'] = {
+        'path': str(folder / 'stdout.txt'),
+        'bytes': len(raw),
+        'sha256': hashlib.sha256(raw).hexdigest(),
+    }
+    for name_map in ['sources-before.json', 'sources-after.json']:
+        (folder / name_map).write_bytes(b'{}\n' if empty_map else (run / name_map).read_bytes())
+    if empty_map:
+        meta['sourceFiles'] = 0
+    if stderr is not None:
+        (folder / 'stderr.txt').write_text(stderr)
+    (folder / 'process.json').write_text(json.dumps(meta, indent=2) + '\n')
+    try:
+        candidate, _ = validator.check_run(folder)
+        verdict = validator.evaluate(candidate)
+        outcome = {'result': 'ACCEPTED', 'invariant': verdict['sandboxPreservationInvariant']}
+    except Exception as error:
+        outcome = {'result': 'REJECTED', 'exception': type(error).__name__, 'reason': str(error)}
+    results.append({'name': name, 'folder': str(folder), **outcome})
+
+
+control('empty-source-authority', empty_map=True)
+control('duration-over-5s', mutate_meta=lambda m: m.update(durationMs=6001))
+control('unknown-duration', mutate_meta=lambda m: m.pop('durationMs'))
+control('forged-limit-policy', mutate_meta=lambda m: m.update(limits={'deadlineMs': 999999, 'combinedOutputBytes': 99999999}))
+control('forged-launch-identity', mutate_meta=lambda m: m.update(argv=['FORGED'], cwd='/FORGED', env={'NODE_OPTIONS': 'FORGED'}, pid=-1, dedicatedProcessGroup=-2, observationOnly=False))
+control('uncaptured-stderr-file', stderr='This nonempty stderr is concealed by an expected_empty record.\n')
+control('missing-telemetry', mutate_data=lambda d: d['cases'][1].update(telemetryEvents=[]))
+control('forged-telemetry', mutate_data=lambda d: d['cases'][1].update(telemetryEvents=[{'forged': True, 'errors': 999}]))
+control('forged-log-payload', mutate_data=lambda d: d['cases'][1]['kernelLogEvents'][1].update(toolId='forged.tool', operationKey='forged-key', input={'text': 'forged'}, correlationId='forged-correlation'))
+control('forged-body-authority', mutate_data=lambda d: d['cases'][1]['bodyCalls'][0]['context'].update(tenantId='forged-tenant', agentId='forged-agent', signal={'forged': True}))
+control('forged-gate-policy', mutate_data=lambda d: d['cases'][0]['gateCalls'][0]['policy'].update(workspaceScoped=False, networkAllowed=True, subprocessAllowed=True))
+control('forged-fingerprint', mutate_data=lambda d: d['cases'][1].update(capabilityFingerprint='0' * 64))
+control('forged-decision-input', mutate_data=lambda d: d['cases'][1]['decisions'][0].update(input={'forged': True}))
+control('extra-result-field', mutate_data=lambda d: d['cases'][1]['nativeResult'].update(forged=True))
+control('wrong-tool-counter', mutate_data=lambda d: d['cases'][1]['nativeResult'].update(toolCalls=2))
+control('duplicate-json-key', raw_edit=lambda b: b.replace(b'"schema":', b'"schema":"forged-before-duplicate","schema":', 1))
+control('boolean-counter', mutate_data=lambda d: d['cases'][1]['nativeResult'].update(toolCalls=True, steps=True, modelCalls=False))
+control('known-nonzero-exit', mutate_meta=lambda m: m.update(exitCode=23))
+control('known-unjoined', mutate_meta=lambda m: m.update(joined=False))
+control('known-source-drift', mutate_meta=lambda m: m.update(sourcesUnchanged=False))
+control('known-output-violation', mutate_meta=lambda m: m.update(violation='output_cap_1MiB'))
+record = {'scope': 'static/copied JSON only, no OS exercises, no source mutants', 'baseline': baseline, 'controls': results}
+(D / 'negative-controls.json').write_text(json.dumps(record, indent=2) + '\n')
+print(json.dumps(record, indent=2))

@@ -1,0 +1,1101 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/__tests__/fixtures/phase3-fixtures.ts SHA256 7455a3a9762c24b7d11c6c1f880e8c4f3824b2ad672714c16be0237453c8fd16
+     1 import type {
+     2   AgenticKnowledgeProvider,
+     3   AgentProfile,
+     4   ApprovalDecision,
+     5   ApprovalEngine,
+     6   ApprovalExecutionPort,
+     7   ApprovalRequest,
+     8   AuditEvent,
+     9   AuditSink,
+    10   KnowledgeSearchRequest,
+    11   KnowledgeSearchResult,
+    12   LoopDecision,
+    13   ModelGateway,
+    14   ModelResult,
+    15   PolicyDecision,
+    16   PolicyEngine,
+    17   PolicyRequest,
+    18   RuntimeInput,
+    19   SufficiencyEvaluation,
+    20   SufficiencyEvaluator,
+    21   TelemetryEvent,
+    22   TelemetrySink,
+    23   ToolDefinition,
+    24   ToolRegistry,
+    25   ToolResult
+    26 } from '@cvg/harness-contracts'
+    27 import { EMPTY_MODEL_USAGE } from '@cvg/harness-contracts'
+    28 
+    29 export const PHASE3_TENANT =
+    30   'tenant_00000000-0000-4000-8000-000000000003' as RuntimeInput['tenantId']
+    31 
+    32 export const PHASE3_TOOL_AVAILABILITY = 'synthetic.phase3.availability'
+    33 export const PHASE3_TOOL_RESERVE = 'synthetic.phase3.reserve'
+    34 
+    35 export function phase3RuntimeInput(
+    36   overrides: Partial<RuntimeInput> = {}
+    37 ): RuntimeInput {
+    38   return {
+    39     agent: phase3AgentProfile(),
+    40     tenantId: PHASE3_TENANT,
+    41     executionId: 'exec_phase3_fixture',
+    42     conversationId:
+    43       'conversation_phase3_fixture' as RuntimeInput['conversationId'],
+    44     sessionId: 'session_phase3_fixture' as RuntimeInput['sessionId'],
+    45     correlationId:
+    46       'correlation_phase3_fixture' as RuntimeInput['correlationId'],
+    47     traceId: 'trace_phase3_fixture' as RuntimeInput['traceId'],
+    48     userMessage: 'phase 3 controlled fixture',
+    49     context: {
+    50       values: { fixture: 'phase3' },
+    51       sourceIds: ['phase3-fixture'],
+    52       capturedAt: '2026-09-15T00:00:00.000Z'
+    53     },
+    54     state: { version: 1, values: {}, updatedAt: '2026-09-15T00:00:00.000Z' },
+    55     budget: {
+    56       maxSteps: 8,
+    57       maxModelCalls: 4,
+    58       maxToolCalls: 4,
+    59       maxDurationMs: 30_000,
+    60       maxCostUsd: 1,
+    61       maxTokens: 4_000,
+    62       maxKnowledgeCalls: 3,
+    63       maxReplans: 2,
+    64       maxVerificationCalls: 3,
+    65       maxDecisionRepairs: 1
+    66     },
+    67     runtimeProfile: 'iterative',
+    68     ...overrides
+    69   }
+    70 }
+    71 
+    72 export function phase3AgentProfile(
+    73   overrides: Partial<AgentProfile> = {}
+    74 ): AgentProfile {
+    75   return {
+    76     id: 'agent.phase3.synthetic' as AgentProfile['id'],
+    77     version: 'v1' as AgentProfile['version'],
+    78     objective: 'Complete the synthetic operational goal.',
+    79     instructions: ['synthetic only', 'never act without authorization'],
+    80     skills: [],
+    81     tools: [PHASE3_TOOL_AVAILABILITY, PHASE3_TOOL_RESERVE],
+    82     policies: ['synthetic-only'],
+    83     ...overrides
+    84   }
+    85 }
+    86 
+    87 export interface Phase3ToolObserver {
+    88   (event: { toolId: string; operationKey: string; input: unknown }): void
+    89 }
+    90 
+    91 export function createPhase3ToolRegistry(options: {
+    92   readonly availability: 'AVAILABLE' | 'UNAVAILABLE'
+    93   readonly reserveFails?: boolean
+    94   readonly observe?: Phase3ToolObserver
+    95 }): ToolRegistry {
+    96   const availabilityTool: ToolDefinition = {
+    97     id: PHASE3_TOOL_AVAILABILITY,
+    98     version: 'v1',
+    99     description: 'Checks the synthetic resource availability.',
+   100     inputSchema: { type: 'object' },
+   101     outputSchema: { type: 'object' },
+   102     risk: 'LOW',
+   103     sideEffect: 'READ',
+   104     idempotent: true,
+   105     requiresApproval: false,
+   106     execute: async (input, context): Promise<ToolResult> => {
+   107       options.observe?.({
+   108         toolId: availabilityTool.id,
+   109         operationKey: context.operationKey ?? '',
+   110         input
+   111       })
+   112       return {
+   113         status: 'SUCCEEDED',
+   114         output:
+   115           options.availability === 'AVAILABLE'
+   116             ? { available: true }
+   117             : { available: false, reason: 'occupied' }
+   118       }
+   119     }
+   120   }
+   121   const reserveTool: ToolDefinition = {
+   122     id: PHASE3_TOOL_RESERVE,
+   123     version: 'v1',
+   124     description: 'Creates a synthetic reservation.',
+   125     inputSchema: { type: 'object' },
+   126     outputSchema: { type: 'object' },
+   127     risk: 'MEDIUM',
+   128     sideEffect: 'WRITE',
+   129     idempotent: false,
+   130     requiresApproval: false,
+   131     execute: async (input, context): Promise<ToolResult> => {
+   132       options.observe?.({
+   133         toolId: reserveTool.id,
+   134         operationKey: context.operationKey ?? '',
+   135         input
+   136       })
+   137       if (options.reserveFails) {
+   138         return { status: 'FAILED', error: 'synthetic failure' }
+   139       }
+   140       return {
+   141         status: 'SUCCEEDED',
+   142         output: { reservationRef: 'reservation-0001', applied: true }
+   143       }
+   144     }
+   145   }
+   146   const tools = [availabilityTool, reserveTool]
+   147   return {
+   148     list: () => tools,
+   149     resolve: (toolId, version) =>
+   150       tools.find(
+   151         (tool) =>
+   152           tool.id === toolId &&
+   153           (version === undefined || tool.version === version)
+   154       )
+   155   }
+   156 }
+   157 
+   158 export interface SyntheticKnowledgeItem {
+   159   readonly itemId: string
+   160   readonly text: string
+   161   readonly sourceId: string
+   162   readonly category: string
+   163 }
+   164 
+   165 export class SyntheticKnowledgeProvider implements AgenticKnowledgeProvider {
+   166   public readonly queries: string[] = []
+   167 
+   168   public constructor(
+   169     private readonly catalog: readonly SyntheticKnowledgeItem[]
+   170   ) {}
+   171 
+   172   public async search(
+   173     request: KnowledgeSearchRequest
+   174   ): Promise<KnowledgeSearchResult> {
+   175     this.queries.push(request.query)
+   176     const tokens = request.query.toLowerCase().split(/\s+/)
+   177     const items = this.catalog.filter((item) => {
+   178       const text = `${item.text} ${item.category}`.toLowerCase()
+   179       return tokens.some((token) => token.length > 2 && text.includes(token))
+   180     })
+   181     return {
+   182       query: request.query,
+   183       items: items.map((item) => ({
+   184         itemId: item.itemId,
+   185         text: item.text,
+   186         sourceId: item.sourceId,
+   187         sourceVersion: 'v1',
+   188         category: item.category
+   189       })),
+   190       provenance: items.map((item) => ({
+   191         sourceId: item.sourceId,
+   192         sourceVersion: 'v1',
+   193         category: item.category
+   194       }))
+   195     }
+   196   }
+   197 }
+   198 
+   199 /** Requires all requested categories to be present before SUFFICIENT. */
+   200 export class CategorySufficiencyEvaluator implements SufficiencyEvaluator {
+   201   public async evaluate(input: {
+   202     readonly query: string
+   203     readonly requestedCategories: readonly string[]
+   204     readonly observations: readonly {
+   205       readonly payload: unknown
+   206     }[]
+   207   }): Promise<SufficiencyEvaluation> {
+   208     const found = new Map<string, Set<string>>()
+   209     for (const observation of input.observations) {
+   210       const payload = observation.payload as {
+   211         items?: readonly {
+   212           itemId: string
+   213           category?: string
+   214           sourceId: string
+   215         }[]
+   216       } | null
+   217       for (const item of payload?.items ?? []) {
+   218         const category = item.category ?? 'unknown'
+   219         const sources = found.get(category) ?? new Set<string>()
+   220         sources.add(item.sourceId)
+   221         found.set(category, sources)
+   222       }
+   223     }
+   224     const requested =
+   225       input.requestedCategories.length > 0
+   226         ? input.requestedCategories
+   227         : [...found.keys()]
+   228     const missing = requested.filter((category) => !found.has(category))
+   229     const conflicting = requested.filter(
+   230       (category) => (found.get(category)?.size ?? 0) > 1
+   231     )
+   232     const covered = requested.filter((category) => found.has(category))
+   233     if (missing.length === 0 && conflicting.length === 0) {
+   234       return {
+   235         level: 'SUFFICIENT',
+   236         reasonCode: 'ALL_CATEGORIES_COVERED',
+   237         missingCategories: [],
+   238         conflictingSources: [],
+   239         coveredCategories: covered
+   240       }
+   241     }
+   242     if (missing.length === 0) {
+   243       return {
+   244         level: 'CONFLICTING',
+   245         reasonCode: 'CONFLICTING_SOURCES',
+   246         missingCategories: [],
+   247         conflictingSources: conflicting,
+   248         coveredCategories: covered
+   249       }
+   250     }
+   251     return {
+   252       level: covered.length > 0 ? 'PARTIAL' : 'INSUFFICIENT',
+   253       reasonCode: 'MISSING_CATEGORIES',
+   254       missingCategories: missing,
+   255       conflictingSources: conflicting,
+   256       coveredCategories: covered
+   257     }
+   258   }
+   259 }
+   260 
+   261 export const PHASE3_KNOWLEDGE_ITEMS: readonly SyntheticKnowledgeItem[] = [
+   262   {
+   263     itemId: 'evidence-infectious-1',
+   264     text: 'condition-X infectious causes include pathogen-alpha.',
+   265     sourceId: 'source-infectious',
+   266     category: 'infectious'
+   267   },
+   268   {
+   269     itemId: 'evidence-nutritional-1',
+   270     text: 'condition-X nutritional causes include diet-deficiency-beta.',
+   271     sourceId: 'source-nutritional',
+   272     category: 'nutritional'
+   273   },
+   274   {
+   275     itemId: 'evidence-metabolic-1',
+   276     text: 'condition-X metabolic causes include enzyme-gamma.',
+   277     sourceId: 'source-metabolic',
+   278     category: 'metabolic'
+   279   }
+   280 ]
+   281 
+   282 export class ScriptedPolicyEngine implements PolicyEngine {
+   283   public readonly evaluations: PolicyRequest[] = []
+   284 
+   285   public constructor(
+   286     private readonly deniedTools: readonly string[] = [],
+   287     private readonly handoffTools: readonly string[] = [],
+   288     private readonly approvalTools: readonly string[] = []
+   289   ) {}
+   290 
+   291   public async evaluate(request: PolicyRequest): Promise<PolicyDecision> {
+   292     this.evaluations.push(request)
+   293     if (this.deniedTools.includes(request.tool.id)) {
+   294       return {
+   295         outcome: 'DENY',
+   296         reason: `Policy denies ${request.tool.id}.`,
+   297         policyVersion: 'synthetic-policy-v1'
+   298       }
+   299     }
+   300     if (this.handoffTools.includes(request.tool.id)) {
+   301       return {
+   302         outcome: 'HANDOFF',
+   303         reason: `Policy requires a human for ${request.tool.id}.`,
+   304         policyVersion: 'synthetic-policy-v1'
+   305       }
+   306     }
+   307     if (this.approvalTools.includes(request.tool.id)) {
+   308       return {
+   309         outcome: 'REQUIRE_APPROVAL',
+   310         reason: `Policy requires approval for ${request.tool.id}.`,
+   311         policyVersion: 'synthetic-policy-v1'
+   312       }
+   313     }
+   314     return {
+   315       outcome: 'ALLOW',
+   316       reason: 'Allowed by synthetic policy.',
+   317       policyVersion: 'synthetic-policy-v1'
+   318     }
+   319   }
+   320 }
+   321 
+   322 export class RecordingAuditSink implements AuditSink {
+   323   public readonly events: AuditEvent[] = []
+   324 
+   325   public async append(event: AuditEvent): Promise<void> {
+   326     this.events.push(event)
+   327   }
+   328 }
+   329 
+   330 export class RecordingTelemetrySink implements TelemetrySink {
+   331   public readonly events: TelemetryEvent[] = []
+   332 
+   333   public record(event: TelemetryEvent): void {
+   334     this.events.push(event)
+   335   }
+   336 }
+   337 
+   338 export class InMemoryApprovalEngine implements ApprovalEngine {
+   339   private readonly decisions = new Map<string, ApprovalDecision>()
+   340   private readonly executionStates = new Map<
+   341     string,
+   342     'RESERVED' | 'CONSUMED' | 'UNCERTAIN'
+   343   >()
+   344 
+   345   public readonly requests: ApprovalRequest[] = []
+   346   public approveOnRequest = false
+   347 
+   348   /** Single-use execution lifecycle, mirroring the durable authority. */
+   349   public execution: ApprovalExecutionPort = {
+   350     begin: async (request) => {
+   351       const state = this.executionStates.get(request.approvalId)
+   352       if (state !== undefined) {
+   353         throw new Error(`Approval execution is ${state.toLowerCase()}`)
+   354       }
+   355       this.executionStates.set(request.approvalId, 'RESERVED')
+   356       return {
+   357         approvalId: request.approvalId,
+   358         reservationId: `reservation_${request.approvalId}`
+   359       }
+   360     },
+   361     complete: async ({ request }) => {
+   362       this.executionStates.set(request.approvalId, 'CONSUMED')
+   363     },
+   364     fail: async ({ request }) => {
+   365       this.executionStates.delete(request.approvalId)
+   366     },
+   367     uncertain: async ({ request }) => {
+   368       this.executionStates.set(request.approvalId, 'UNCERTAIN')
+   369     }
+   370   }
+   371 
+   372   public async request(request: ApprovalRequest): Promise<ApprovalDecision> {
+   373     this.requests.push(request)
+   374     const existing = this.decisions.get(request.operationKey)
+   375     if (existing) return existing
+   376     if (this.approveOnRequest) {
+   377       const decision: ApprovalDecision = {
+   378         status: 'APPROVED',
+   379         approvalId: `approval_${request.operationKey}` as never,
+   380         reason: 'approved by fixture'
+   381       }
+   382       this.decisions.set(request.operationKey, decision)
+   383       return decision
+   384     }
+   385     const decision: ApprovalDecision = {
+   386       status: 'PENDING',
+   387       approvalId: `approval_${request.operationKey}` as never,
+   388       reason: 'approval pending'
+   389     }
+   390     this.decisions.set(request.operationKey, decision)
+   391     return decision
+   392   }
+   393 
+   394   public approve(operationKey: string): void {
+   395     this.decisions.set(operationKey, {
+   396       status: 'APPROVED',
+   397       approvalId: `approval_${operationKey}` as never,
+   398       reason: 'approved by operator'
+   399     })
+   400   }
+   401 
+   402   public deny(operationKey: string): void {
+   403     this.decisions.set(operationKey, {
+   404       status: 'DENIED',
+   405       approvalId: `approval_${operationKey}` as never,
+   406       reason: 'denied by operator'
+   407     })
+   408   }
+   409 }
+   410 
+   411 export class ThrowingModelGateway implements ModelGateway {
+   412   public calls = 0
+   413 
+   414   public async complete(): Promise<ModelResult> {
+   415     this.calls += 1
+   416     throw new Error('synthetic model outage')
+   417   }
+   418 }
+   419 
+   420 export function decision(
+   421   value: Omit<LoopDecision, 'reasonCode'> &
+   422     Partial<Pick<LoopDecision, 'reasonCode'>>
+   423 ): LoopDecision {
+   424   return { reasonCode: 'TOOL_REQUIRED', ...value }
+   425 }
+   426 
+   427 export function orchestratorTurn(decisionValue: LoopDecision): {
+   428   decision: LoopDecision
+   429   usage: typeof EMPTY_MODEL_USAGE
+   430 } {
+   431   return { decision: decisionValue, usage: EMPTY_MODEL_USAGE }
+   432 }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/pipeline.ts SHA256 b5c6d187bb0c3ec9cbcd58ceca5480f016b379535e578e6692f3578d22fbc272
+     1 import { isAbsolute } from 'node:path'
+     2 import type {
+     3   ModelRequest,
+     4   ModelResult,
+     5   RuntimeInput,
+     6   SandboxGateOutcome,
+     7   SandboxMode,
+     8   ToolDescriptor
+     9 } from '@cvg/harness-contracts'
+    10 import type { KernelHost } from './host.ts'
+    11 import {
+    12   DEADLINE,
+    13   PROCEED,
+    14   stop,
+    15   type GuardVerdict,
+    16   type KernelGate,
+    17   type KernelLogEvent,
+    18   type KernelStop,
+    19   type ToolCallState,
+    20   type ToolOutcome,
+    21   type TurnBudget,
+    22   type TurnState
+    23 } from './types.ts'
+    24 
+    25 /**
+    26  * The governed pipelines every loop mode runs through (SPEC 0181 §4). The
+    27  * single-turn loop and the iterative loop both call these functions, so policy,
+    28  * approval, guards, pause, cancellation, the log and the effect ledger live in
+    29  * one implementation.
+    30  */
+    31 
+    32 export const CANCELLED = Symbol('kernel-cancelled')
+    33 export const CANCELLED_RESPONSE = 'Execution was cancelled by the caller.'
+    34 
+    35 export type GatePoint =
+    36   | 'turn/before-step'
+    37   | 'model/before-call'
+    38   | 'tool/pre-execute'
+    39 
+    40 /** A fresh turn: identity, budget view and the linked cancel signal. */
+    41 export function createTurnState(
+    42   input: RuntimeInput,
+    43   startedAt: number,
+    44   budget: TurnBudget,
+    45   signal: AbortSignal
+    46 ): TurnState {
+    47   return {
+    48     input,
+    49     startedAt,
+    50     signal,
+    51     budget,
+    52     metadata: {
+    53       policy: null,
+    54       approval: null,
+    55       tool: null,
+    56       provider: null,
+    57       inputTokens: 0,
+    58       outputTokens: 0,
+    59       costUsd: 0,
+    60       toolDurationMs: 0
+    61     }
+    62   }
+    63 }
+    64 
+    65 /** Detached copy for the log, so later mutation cannot rewrite history. */
+    66 function snapshot<T>(value: T): T {
+    67   try {
+    68     return structuredClone(value)
+    69   } catch {
+    70     return value
+    71   }
+    72 }
+    73 
+    74 function errorMessage(error: unknown): string {
+    75   return error instanceof Error ? error.message : 'unknown failure'
+    76 }
+    77 
+    78 /** Waterfall over a gate point; a throwing listener becomes a stop (I7). */
+    79 export function runGate<S>(
+    80   host: KernelHost,
+    81   point: GatePoint,
+    82   state: S
+    83 ): Promise<KernelGate> {
+    84   const listeners = host.listeners(point) as unknown as readonly {
+    85     readonly plugin: string
+    86     readonly fn: (
+    87       state: S,
+    88       next: () => Promise<KernelGate>
+    89     ) => Promise<KernelGate>
+    90   }[]
+    91   const run = (index: number): Promise<KernelGate> => {
+    92     const entry = listeners[index]
+    93     if (!entry) return Promise.resolve(PROCEED)
+    94     return entry
+    95       .fn(state, () => run(index + 1))
+    96       .catch((error: unknown) =>
+    97         stop(
+    98           'INSUFFICIENT_EVIDENCE',
+    99           `${entry.plugin} failed at ${point}: ${errorMessage(error)}.`
+   100         )
+   101       )
+   102   }
+   103   return run(0)
+   104 }
+   105 
+   106 /** Appends to the kernel log; a failing log stops the turn (fail-closed). */
+   107 export async function appendLog(
+   108   host: KernelHost,
+   109   event: KernelLogEvent
+   110 ): Promise<KernelStop | undefined> {
+   111   try {
+   112     await host.get('log').append(event)
+   113     return undefined
+   114   } catch (error) {
+   115     return stop(
+   116       'INSUFFICIENT_EVIDENCE',
+   117       `Kernel log could not record the turn: ${errorMessage(error)}.`
+   118     )
+   119   }
+   120 }
+   121 
+   122 /**
+   123  * A call that was blocked and whose closing record was then lost: the turn
+   124  * reports the missing evidence without hiding why the call was blocked
+   125  * (AUD-0598 R04, AUD-0599 F01).
+   126  */
+   127 export function unrecordedBlock(
+   128   lost: KernelStop,
+   129   blocked: KernelStop
+   130 ): KernelStop {
+   131   return stop(
+   132     'INSUFFICIENT_EVIDENCE',
+   133     `${lost.response} The call was blocked before it started: ${blocked.response}`,
+   134     blocked.approvalId !== undefined ? { approvalId: blocked.approvalId } : {}
+   135   )
+   136 }
+   137 
+   138 /** Races an operation against the turn budget and the cancel signal (I8). */
+   139 export async function race<T>(
+   140   turn: TurnState,
+   141   operation: () => Promise<T>
+   142 ): Promise<T | typeof DEADLINE | typeof CANCELLED> {
+   143   const signal = turn.signal
+   144   if (signal.aborted) return CANCELLED
+   145   let onAbort!: () => void
+   146   const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+   147     onAbort = () => resolve(CANCELLED)
+   148     signal.addEventListener('abort', onAbort, { once: true })
+   149   })
+   150   try {
+   151     return await Promise.race([turn.budget.withDeadline(operation), cancelled])
+   152   } finally {
+   153     signal.removeEventListener('abort', onAbort)
+   154   }
+   155 }
+   156 
+   157 /**
+   158  * Like `race`, but always starts the operation first: used once the kernel has
+   159  * committed to dispatch, so the cancel signal is passed to the body instead of
+   160  * skipping it.
+   161  */
+   162 async function raceInvoked<T>(
+   163   turn: TurnState,
+   164   operation: () => Promise<T>
+   165 ): Promise<T | typeof DEADLINE | typeof CANCELLED> {
+   166   const running = operation()
+   167   // The operation may start and then find an exhausted deadline at race time;
+   168   // its later rejection must never surface as an unhandled rejection.
+   169   void running.catch(() => undefined)
+   170   const signal = turn.signal
+   171   let onAbort!: () => void
+   172   const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+   173     if (signal.aborted) resolve(CANCELLED)
+   174     onAbort = () => resolve(CANCELLED)
+   175     signal.addEventListener('abort', onAbort, { once: true })
+   176   })
+   177   try {
+   178     return await Promise.race([
+   179       turn.budget.withDeadline(() => running),
+   180       cancelled
+   181     ])
+   182   } finally {
+   183     signal.removeEventListener('abort', onAbort)
+   184   }
+   185 }
+   186 
+   187 /** Monotonic guards: the first denial wins; a throwing guard denies. */
+   188 export async function runGuards(
+   189   host: KernelHost,
+   190   call: ToolCallState
+   191 ): Promise<KernelStop | undefined> {
+   192   for (const guard of host.guards()) {
+   193     let verdict: GuardVerdict
+   194     try {
+   195       verdict = await guard(call)
+   196     } catch (error) {
+   197       verdict = `A guard failed: ${errorMessage(error)}.`
+   198     }
+   199     if (typeof verdict === 'string') return stop('POLICY_DENIED', verdict)
+   200     if (verdict) {
+   201       return stop(
+   202         verdict.stopReason,
+   203         verdict.reason,
+   204         verdict.cause ? { cause: verdict.cause } : {}
+   205       )
+   206     }
+   207   }
+   208   return undefined
+   209 }
+   210 
+   211 /**
+   212  * Guards and cancellation, re-run at every point where the world may have
+   213  * changed before dispatch: after the loop's checkpoint and after the approval
+   214  * reservation (AUD-0597 F01/F02).
+   215  */
+   216 export async function revalidate(
+   217   host: KernelHost,
+   218   call: ToolCallState
+   219 ): Promise<KernelStop | undefined> {
+   220   return (
+   221     (await runGuards(host, call)) ??
+   222     (call.turn.signal.aborted
+   223       ? stop('CANCELLED', CANCELLED_RESPONSE)
+   224       : undefined)
+   225   )
+   226 }
+   227 
+   228 export type ToolPipelineResult =
+   229   /**
+   230    * Nothing ran and nothing is reserved; the call is closed as not started.
+   231    * `blocked` is set when that closing record was lost: `gate` then reports
+   232    * the missing evidence and `blocked` keeps the control's own decision, so
+   233    * the loop can still close its step for the real reason (AUD-0599 F02).
+   234    */
+   235   | {
+   236       readonly kind: 'stopped'
+   237       readonly gate: KernelStop
+   238       readonly blocked?: KernelStop
+   239     }
+   240   /**
+   241    * Dispatch was attempted; the outcome is already settled. `logFailure` is
+   242    * set when the final record could not be written: the outcome stays the
+   243    * fact of what happened, and the loop must not report success (F04).
+   244    */
+   245   | {
+   246       readonly kind: 'settled'
+   247       readonly outcome: ToolOutcome
+   248       readonly logFailure?: KernelStop
+   249     }
+   250 
+   251 export interface ToolPipelineHooks {
+   252   /**
+   253    * Runs after every control allowed the call and before any reservation or
+   254    * effect; the iterative loop persists its checkpoint here.
+   255    */
+   256   readonly beforeDispatch?: (
+   257     call: ToolCallState
+   258   ) => Promise<KernelStop | undefined>
+   259 }
+   260 
+   261 /**
+   262  * log `tool/call` → `tool/pre-execute` → guards → cancellation → hook →
+   263  * `tool/execute` around the body → `tool/post-execute` → log `tool/result`.
+   264  */
+   265 export async function runToolCall(
+   266   host: KernelHost,
+   267   call: ToolCallState,
+   268   hooks: ToolPipelineHooks = {}
+   269 ): Promise<ToolPipelineResult> {
+   270   const { turn, tool, invocation } = call
+   271   const correlationId = turn.input.correlationId
+   272   // I5: the call is on the log before any policy runs or the body starts.
+   273   const logged = await appendLog(host, {
+   274     type: 'tool/call',
+   275     correlationId,
+   276     toolId: tool.id,
+   277     operationKey: invocation.operationKey,
+   278     input: invocation.input
+   279   })
+   280   if (logged) return { kind: 'stopped', gate: logged }
+   281 
+   282   // Every call that was logged is closed exactly once (I5, AUD-0597 F06).
+   283   const closeNotStarted = async (
+   284     blocked: KernelStop
+   285   ): Promise<ToolPipelineResult> => {
+   286     const unrecorded = await appendLog(host, {
+   287       type: 'tool/result',
+   288       correlationId,
+   289       toolId: tool.id,
+   290       outcome: 'not_started'
+   291     })
+   292     // A lost closing record is not hidden behind the denial (AUD-0598 R04):
+   293     // the call stays blocked, and the turn reports the missing evidence.
+   294     return unrecorded
+   295       ? { kind: 'stopped', gate: unrecordedBlock(unrecorded, blocked), blocked }
+   296       : { kind: 'stopped', gate: blocked }
+   297   }
+   298 
+   299   const gate = await runGate(host, 'tool/pre-execute', call)
+   300   if (gate.kind === 'stop') return closeNotStarted(gate)
+   301 
+   302   const denial = await revalidate(host, call)
+   303   if (denial) return closeNotStarted(denial)
+   304 
+   305   const sandbox = await enforceSandbox(host, call)
+   306   if (sandbox) return closeNotStarted(sandbox)
+   307 
+   308   let hooked: KernelStop | undefined
+   309   try {
+   310     hooked = await hooks.beforeDispatch?.(call)
+   311   } catch (error) {
+   312     // The loop's own checkpoint failed: the logged call is still closed once
+   313     // and the original failure reaches the loop unchanged (AUD-0598 R03).
+   314     await appendLog(host, {
+   315       type: 'tool/result',
+   316       correlationId,
+   317       toolId: tool.id,
+   318       outcome: 'not_started'
+   319     })
+   320     throw error
+   321   }
+   322   if (hooked) return closeNotStarted(hooked)
+   323 
+   324   // The hook may have taken time (checkpoint): re-check before reserving.
+   325   const late = await revalidate(host, call)
+   326   if (late) return closeNotStarted(late)
+   327 
+   328   const settled = await postExecute(host, call, await dispatch(host, call))
+   329   const logFailure = await appendLog(host, {
+   330     type: 'tool/result',
+   331     correlationId,
+   332     toolId: tool.id,
+   333     outcome: settled.kind
+   334   })
+   335   return logFailure
+   336     ? { kind: 'settled', outcome: settled, logFailure }
+   337     : { kind: 'settled', outcome: settled }
+   338 }
+   339 
+   340 /**
+   341  * Derives the containment a tool needs from its descriptor (SPEC 0195 §2/§5).
+   342  * EXTERNAL effects require an EGRESS gate; WRITE effects require WORKSPACE;
+   343  * READ effects require at least IN_PROCESS. A mode-`NONE` capability is pure
+   344  * in-memory and never reaches the sandbox gate.
+   345  */
+   346 /**
+   347  * The mode is declared on the descriptor (SPEC 0195 §5). Absent or `'NONE'`
+   348  * means no gate; the harness never infers containment from `sideEffect`, so
+   349  * legacy side-effecting tools keep running until they opt in.
+   350  */
+   351 export function requiredSandboxMode(descriptor: ToolDescriptor): SandboxMode {
+   352   return descriptor.sandbox ?? 'NONE'
+   353 }
+   354 
+   355 /**
+   356  * Enforcement point between every control decision and the capability body
+   357  * (SPEC 0195 §3/§4). Fails closed: a missing gate, an `unavailable` outcome
+   358  * or a thrown gate stops the call as `UNSAFE_REQUEST` and never downgrades
+   359  * to in-process execution. Pure (`NONE`) tools skip the gate entirely.
+   360  */
+   361 async function enforceSandbox(
+   362   host: KernelHost,
+   363   call: ToolCallState
+   364 ): Promise<KernelStop | undefined> {
+   365   const requiredMode = requiredSandboxMode(call.tool)
+   366   if (requiredMode === 'NONE') return undefined
+   367   if (!host.has('sandbox')) {
+   368     return stop(
+   369       'UNSAFE_REQUEST',
+   370       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+   371     )
+   372   }
+   373   const gate = host.get('sandbox')
+   374   if (!gate) {
+   375     // host.has was checked; a missing entry here is a host-integrity fault,
+   376     // so fail closed the same way as an unconfigured gate.
+   377     return stop(
+   378       'UNSAFE_REQUEST',
+   379       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+   380     )
+   381   }
+   382   try {
+   383     const outcome: SandboxGateOutcome = await gate.evaluate({
+   384       descriptor: call.tool,
+   385       context: {
+   386         tenantId: call.turn.input.tenantId,
+   387         agentId: call.turn.input.agent.id,
+   388         correlationId: call.turn.input.correlationId,
+   389         traceId: call.turn.input.traceId,
+   390         operationKey: call.invocation.operationKey
+   391       },
+   392       policy: {
+   393         requiredMode,
+   394         workspaceScoped: requiredMode === 'WORKSPACE',
+   395         networkAllowed: requiredMode === 'EGRESS',
+   396         subprocessAllowed: requiredMode === 'PROCESS'
+   397       }
+   398     })
+   399     if (outcome.kind === 'denied') {
+   400       return stop(
+   401         'UNSAFE_REQUEST',
+   402         `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
+   403       )
+   404     }
+   405     if (outcome.kind === 'unavailable') {
+   406       return stop(
+   407         'UNSAFE_REQUEST',
+   408         `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
+   409       )
+   410     }
+   411     const granted = outcome.kind === 'allowed' ? outcome.handle : undefined
+   412     const handle = granted && {
+   413       mode: granted.mode,
+   414       allowNetwork: granted.allowNetwork,
+   415       allowSubprocess: granted.allowSubprocess,
+   416       workspaceRoot: granted.workspaceRoot,
+   417       deadlineMs: granted.deadlineMs
+   418     }
+   419     if (
+   420       outcome.kind !== 'allowed' ||
+   421       outcome.mode !== requiredMode ||
+   422       !handle ||
+   423       handle.mode !== requiredMode ||
+   424       typeof handle.allowNetwork !== 'boolean' ||
+   425       typeof handle.allowSubprocess !== 'boolean' ||
+   426       (handle.deadlineMs !== undefined &&
+   427         (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0)) ||
+   428       (requiredMode === 'WORKSPACE' && handle.workspaceRoot === undefined) ||
+   429       (handle.workspaceRoot !== undefined &&
+   430         (typeof handle.workspaceRoot !== 'string' ||
+   431           !isAbsolute(handle.workspaceRoot) ||
+   432           handle.workspaceRoot.includes('\0')))
+   433     ) {
+   434       return stop(
+   435         'UNSAFE_REQUEST',
+   436         `Sandbox gate returned an invalid handle for tool "${call.tool.id}".`
+   437       )
+   438     }
+   439     // Copy only validated grants. Neither a later gate mutation nor model
+   440     // JSON can rewrite the authority passed to the capability body.
+   441     call.sandboxHandle = Object.freeze({
+   442       mode: handle.mode,
+   443       allowNetwork: handle.allowNetwork,
+   444       allowSubprocess: handle.allowSubprocess,
+   445       ...(handle.workspaceRoot !== undefined
+   446         ? { workspaceRoot: handle.workspaceRoot }
+   447         : {}),
+   448       ...(handle.deadlineMs !== undefined
+   449         ? { deadlineMs: handle.deadlineMs }
+   450         : {})
+   451     })
+   452     return undefined
+   453   } catch (error) {
+   454     return stop(
+   455       'UNSAFE_REQUEST',
+   456       `Sandbox gate failed for tool "${call.tool.id}": ${errorMessage(error)}.`
+   457     )
+   458   }
+   459 }
+   460 
+   461 async function dispatch(
+   462   host: KernelHost,
+   463   call: ToolCallState
+   464 ): Promise<ToolOutcome> {
+   465   const { turn } = call
+   466   const ref = {
+   467     tenantId: turn.input.tenantId,
+   468     correlationId: turn.input.correlationId,
+   469     toolId: call.tool.id,
+   470     operationKey: call.invocation.operationKey
+   471   }
+   472   let started = false
+   473   const terminal = async (): Promise<ToolOutcome> => {
+   474     if (turn.budget.remainingMs() <= 0) {
+   475       return {
+   476         kind: 'not_started',
+   477         gate: stop(
+   478           'MAX_DURATION',
+   479           'Duration budget exhausted before tool execution.'
+   480         )
+   481       }
+   482     }
+   483     // Last decision point: after every wrapper (the approval reservation),
+   484     // a pause or a cancellation still prevents the effect (F01/F02).
+   485     const blocked = await revalidate(host, call)
+   486     if (blocked) return { kind: 'not_started', gate: blocked }
+   487     try {
+   488       await host.get('effects').started(ref)
+   489     } catch (error) {
+   490       return {
+   491         kind: 'not_started',
+   492         gate: stop(
+   493           'INSUFFICIENT_EVIDENCE',
+   494           `Effect ledger could not record the start: ${errorMessage(error)}.`
+   495         )
+   496       }
+   497     }
+   498     started = true
+   499     const startedAt = Date.now()
+   500     const toolController = new AbortController()
+   501     try {
+   502       // Past the decision point the body is always invoked, so a recorded
+   503       // start never pairs with a body that did not run.
+   504       const value = await raceInvoked(turn, () =>
+   505         call.tool.execute(call.invocation.input, {
+   506           tenantId: turn.input.tenantId,
+   507           agentId: turn.input.agent.id,
+   508           correlationId: turn.input.correlationId,
+   509           traceId: turn.input.traceId,
+   510           operationKey: call.invocation.operationKey,
+   511           ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
+   512           signal: AbortSignal.any([toolController.signal, turn.signal])
+   513         })
+   514       )
+   515       const durationMs = Date.now() - startedAt
+   516       if (value === DEADLINE || value === CANCELLED) {
+   517         toolController.abort()
+   518         return {
+   519           kind: value === DEADLINE ? 'deadline' : 'cancelled',
+   520           durationMs
+   521         }
+   522       }
+   523       return value.status === 'SUCCEEDED'
+   524         ? { kind: 'succeeded', result: value, durationMs }
+   525         : { kind: 'failed', result: value, durationMs }
+   526     } catch (error) {
+   527       return {
+   528         kind: 'threw',
+   529         error: errorMessage(error),
+   530         durationMs: Date.now() - startedAt
+   531       }
+   532     }
+   533   }
+   534   const listeners = host.listeners('tool/execute')
+   535   const run = (index: number): Promise<ToolOutcome> => {
+   536     const entry = listeners[index]
+   537     if (!entry) return terminal()
+   538     return entry
+   539       .fn(call, () => run(index + 1))
+   540       .catch(
+   541         (error: unknown): ToolOutcome =>
+   542           started
+   543             ? {
+   544                 kind: 'threw',
+   545                 error: `${entry.plugin} failed: ${errorMessage(error)}`,
+   546                 durationMs: 0
+   547               }
+   548             : {
+   549                 kind: 'not_started',
+   550                 gate: stop(
+   551                   'INSUFFICIENT_EVIDENCE',
+   552                   `${entry.plugin} failed before dispatch: ${errorMessage(error)}.`
+   553                 )
+   554               }
+   555       )
+   556   }
+   557   const outcome = await run(0)
+   558   if (started) {
+   559     try {
+   560       await host.get('effects').finished(ref, outcome.kind)
+   561     } catch {
+   562       // The body already ran. A missing settlement is uncertain, never a
+   563       // successful effect or permission to retry the body/ledger.
+   564       return {
+   565         kind: 'threw',
+   566         error: 'unknown_effect: effect_settlement_failed',
+   567         durationMs: 'durationMs' in outcome ? outcome.durationMs : 0
+   568       }
+   569     }
+   570   }
+   571   return outcome
+   572 }
+   573 
+   574 async function postExecute(
+   575   host: KernelHost,
+   576   call: ToolCallState,
+   577   outcome: ToolOutcome
+   578 ): Promise<ToolOutcome> {
+   579   let current = outcome
+   580   for (const entry of host.listeners('tool/post-execute')) {
+   581     try {
+   582       current = await entry.fn(call, current)
+   583     } catch (error) {
+   584       // I7: a failing settlement after an effect never reads as success.
+   585       if (current.kind === 'succeeded') {
+   586         current = {
+   587           kind: 'confirm_failed',
+   588           result: current.result,
+   589           error: `${entry.plugin} failed: ${errorMessage(error)}`,
+   590           durationMs: current.durationMs
+   591         }
+   592       }
+   593     }
+   594   }
+   595   return current
+   596 }
+   597 
+   598 export type ModelPipelineResult =
+   599   | { readonly kind: 'stopped'; readonly gate: KernelStop }
+   600   | { readonly kind: 'deadline' }
+   601   | { readonly kind: 'cancelled' }
+   602   | { readonly kind: 'failed'; readonly error: string }
+   603   | { readonly kind: 'completed'; readonly result: ModelResult }
+   604   /** The model answered but the result could not be logged (F04). */
+   605   | {
+   606       readonly kind: 'unrecorded'
+   607       readonly result: ModelResult
+   608       readonly gate: KernelStop
+   609     }
+   610 
+   611 /**
+   612  * `model/before-call` → log `model/request` (I6) → call raced against the
+   613  * budget and the cancel signal → log `model/result`.
+   614  */
+   615 export async function runModelCall(
+   616   host: KernelHost,
+   617   turn: TurnState,
+   618   request: Omit<ModelRequest, 'signal'>
+   619 ): Promise<ModelPipelineResult> {
+   620   const controller = new AbortController()
+   621   const full: ModelRequest = {
+   622     ...request,
+   623     signal: AbortSignal.any([controller.signal, turn.signal])
+   624   }
+   625   const preGate = turn.budget.beginModelRequest()
+   626   if (preGate) return { kind: 'stopped', gate: preGate }
+   627   const gate = await runGate(host, 'model/before-call', { turn, request: full })
+   628   if (gate.kind === 'stop') return { kind: 'stopped', gate }
+   629   if (turn.signal.aborted) return { kind: 'cancelled' }
+   630   // I6: log the request as it will be sent, after every control adjusted it.
+   631   const { signal: _signal, ...effective } = full
+   632   void _signal
+   633   const logged = await appendLog(host, {
+   634     type: 'model/request',
+   635     correlationId: turn.input.correlationId,
+   636     request: snapshot(effective)
+   637   })
+   638   if (logged) return { kind: 'stopped', gate: logged }
+   639   try {
+   640     const outcome = await race(turn, () => host.get('model').complete(full))
+   641     if (outcome === DEADLINE || outcome === CANCELLED) {
+   642       controller.abort()
+   643       return { kind: outcome === DEADLINE ? 'deadline' : 'cancelled' }
+   644     }
+   645     const unrecorded = await appendLog(host, {
+   646       type: 'model/result',
+   647       correlationId: turn.input.correlationId,
+   648       provider: outcome.provider,
+   649       inputTokens: outcome.inputTokens,
+   650       outputTokens: outcome.outputTokens
+   651     })
+   652     if (unrecorded) {
+   653       return { kind: 'unrecorded', result: outcome, gate: unrecorded }
+   654     }
+   655     const accounted = turn.budget.recordModelResult({
+   656       inputTokens: outcome.inputTokens,
+   657       outputTokens: outcome.outputTokens,
+   658       costUsd: outcome.costUsd
+   659     })
+   660     if (accounted) return { kind: 'stopped', gate: accounted }
+   661     return { kind: 'completed', result: outcome }
+   662   } catch (error) {
+   663     return { kind: 'failed', error: errorMessage(error) }
+   664   }
+   665 }
+

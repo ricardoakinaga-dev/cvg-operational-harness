@@ -1,0 +1,226 @@
+from pathlib import Path
+from collections import Counter
+import hashlib, json, shutil
+
+P = Path(__file__).parent
+B = P.parent
+OLD = B / 'sandbox-procedures-r1'
+REF = Path('/home/ricardo/deepseek-harness-session-fixes')
+def sha(f): return hashlib.sha256(f.read_bytes()).hexdigest()
+def put(name, value): (P / name).write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n')
+for x in json.loads((OLD / 'source-hashes.json').read_text()):
+    assert sha(Path(x['path'])) == x['sha256']
+assert sha(OLD / 'review-packet/packet-manifest.json') == '6b3179c7aa1e5573bcaa48556ce879d9dae01081673d9343358d2290de7d5e62'
+for name in ['procedures.json', 'semantic-proposals.json', 'original-leaf-bindings.json', 'selected-catalog-contracts.json']:
+    assert sha(OLD / name) == sha(OLD / 'review-packet' / name)
+for name in ['original-leaf-bindings.json', 'selected-catalog-contracts.json', 'source-hashes.json', 'mode-vocabulary-gap.json']:
+    shutil.copy2(OLD / name, P / name)
+old_procedures = json.loads((OLD / 'procedures.json').read_text())
+old_bindings = json.loads((OLD / 'semantic-proposals.json').read_text())
+drafts = json.loads((OLD / 'next-local-draft/procedure-drafts.json').read_text())
+assert len(old_procedures) == 4 and len(old_bindings) == 32 and len(drafts) == 8
+procedures = json.loads(json.dumps(old_procedures))
+for d in drafts:
+    d = json.loads(json.dumps(d))
+    d.update(status='PROPOSED_NOT_RUN', execution='NOT_RUN', semanticAcceptance=False,
+             semanticBindingAssignment='PROPOSED_ASSOCIATIONS_ONLY_NOT_ACCEPTED',
+             referencePublicArtifact='SOURCE_ONLY_PUBLISHED_EXPORT_SOURCE_LIB_ABI_NOT_VERIFIED',
+             cvgPublicBoundary='UNSPECIFIED_REQUIRES_EXPLICIT_T3_CONTRACT_BEFORE_IMPLEMENTATION',
+             ordinaryToolControls='Always required; mode state, source helpers and diagnostic text never grant execution.',
+             fixtureCodec='Missing optional key means undefined; null remains an explicit value where the source type permits it. Native handles and ports are synthetic fixture references, never JSON authority.',
+             evidenceRequirement='Actual approved public/native boundary, no copied implementation; selector/profile/helper observations alone do not qualify a platform or OS containment.')
+    procedures.append(d)
+
+observations = {}
+def obs(key, proc, expectation, vectors, bad, anchors, boundary='SOURCE_CONTRACT_FUTURE_PUBLIC_PATH_UNQUALIFIED'):
+    observations[key] = dict(id=key, procedure=proc, sourceDerivedExpectation=expectation,
+        futureVectors=vectors, knownBadControl=bad,
+        anchors=[dict(source=s, lines=[a,b]) for s,a,b in anchors],
+        referenceBoundary=boundary, status='PROPOSED_NOT_RUN', runtimeEvidence=[])
+CORE='packages/sandbox/sandbox/src/index.ts'
+LOCAL='packages/sandbox/sandbox-local/src/index.ts'
+POLICY='packages/sandbox/sandbox-policy/src/index.ts'
+SESSION='packages/sandbox/sandbox-policy/src/session-mode.ts'
+INV='packages/sandbox/sandbox-policy/src/invariant.ts'
+PROFILES='packages/sandbox/sandbox-local/src/profiles.ts'
+ROOTS='packages/sandbox/sandbox/src/roots.ts'
+DIAG='packages/sandbox/sandbox/src/diagnostics.ts'
+GRANT='packages/sandbox/sandbox-windows-acl/src/grant.ts'
+obs('MODE_DOMAIN','SBX05','Reference SandboxMode is exactly three file-policy values; ConfinedSandboxMode excludes danger-full-access. This is not a CVG mode translation.',
+    ['read-only','workspace-write','danger-full-access','unsupported-mode rejected by actual validated boundary; no inferred local check in typed-only declarations'],
+    'Treat the three reference strings as CVG NONE/WORKSPACE/EGRESS aliases or claim network isolation.',[(CORE,24,86)])
+obs('POLICY_DEFAULT','SBX05','Native plugin configuration supplies read-only default; fallback root is config root or process cwd and must be absolute. A raw constructor bypassing schema defaulting is not the default-config proof.',
+    ['actual plugin schema with omitted mode/root','explicit workspace-write plus absolute root','relative root rejected'],
+    'Resolve configured root relative to caller cwd or silently choose danger-full-access.',[(POLICY,86,109),(POLICY,132,154)])
+obs('POLICY_RESOLVE','SBX05','Approved request.mode outranks session projection then deployment default; immutable session cwd and session identity travel together, agentless uses fallback and omits sessionId.',
+    ['three precedence sources with distinct modes','two sessions with different cwd/ids','no session','session header without cwd falls back as actually specified'],
+    'Reuse another session mode/root or replace an explicit per-call mode with deployment default.',[(POLICY,188,213),(CORE,35,87)])
+obs('POLICY_SERVICE','SBX05','The native policy service registers sandboxPolicy and requires sessionProjections; config and resolution are shared rather than a capability-family private policy.',
+    ['native service registration/configuration fixture','resolve from enforcing consumers after independent session overrides'],
+    'A second per-tool fallback source replaces the shared resolved policy.',[(POLICY,80,83),(POLICY,132,162)])
+obs('MODE_APPEND','SBX06','setSandboxMode appends exactly one sandbox/mode event; helper itself has no approval check. Caller authorization and durable writer settlement are separate unresolved boundaries.',
+    ['one typed mode switch captures one append','two independent sessions','second switch with another mode'],
+    'Write mode out-of-band or treat the event/helper as approval to widen execution.',[(SESSION,24,55)])
+obs('MODE_PROJECTION','SBX06','Projection starts null, folds the last sandbox/mode, ignores other events; overrideOf returns undefined before a logged override without applying deployment default.',
+    ['empty history','mode A then unrelated event then mode B','isolated histories for two sessions','delegation source retained as event data'],
+    'Projection includes deployment fallback as persisted override or mixes session state.',[(POLICY,111,123),(POLICY,156,162),(POLICY,206,213),(SESSION,24,38)])
+obs('MODE_VOCAB','SBX06','SANDBOX_MODES contains exactly read-only, workspace-write and danger-full-access and is re-exported by the policy entry. The invariant uses that vocabulary; setSandboxMode itself is a typed append helper rather than a raw-input mode validator.',
+    ['exact three advertised values','missing/duplicate/extra mode mutations detected','unknown imported mode reaches invariant failure'],
+    'Map CVG labels into the reference list or infer raw string validation from the typed append helper.',[(SESSION,41,55),(POLICY,33,33),(INV,17,20)])
+obs('MODE_INVARIANT','SBX06','Companion name is sandbox-policy-invariant, injection requires invariants, and registration owner is @deepseek-ai/dsh-sandbox-policy. It validates loaded histories and new session/event dispatch for known modes, ignores unrelated event types and preserves registration disposal.',
+    ['invalid historical mode','invalid newly dispatched mode','unrelated type ignored','all three known mode values','native registration disposer'],
+    'Only new events are checked, or malformed imported mode silently becomes a supported wider value.',[(INV,8,43)])
+obs('POLICY_CONTEXT','SBX07','No agent session gives empty context; request-time snapshot describes resolved file policy without claiming mounted tools. Unconfined file policy does not describe a sandbox environment.',
+    ['agentless context','each native reference mode','changing session projection between requests'],
+    'Policy text is treated as capability inventory or an execution grant.',[(POLICY,41,77),(POLICY,164,183)])
+obs('ENV_EVENT','SBX07','A source sandbox/environment event is appended only for changed JSON(mode,environment) per Session object; absent provider facts make no environment assertion. No writer durability is established here.',
+    ['same object/same data twice: one append','changed mode or environment: new append','no describe result: no environment event','distinct Session objects are distinct WeakMap keys'],
+    'Deduplicate solely by textual session id or emit invented facts when describe returns undefined.',[(POLICY,73,77),(POLICY,164,183)])
+obs('CONFIG_VALIDATION','SBX08','Configured runner/signatures are paired; signatures nonblank single-line; timeout finite positive. Use actual schema defaults before normal constructor fixture.',
+    ['empty runner plus signatures rejected','nonempty runner without signatures rejected','whitespace/newline signatures rejected','timeout 0/-1/nonfinite rejected','valid explicit 5000 timeout'],
+    'Zero means unbounded probe or an arbitrary runner override is accepted without failure dialect.',[(LOCAL,57,79),(LOCAL,270,328)])
+obs('EXACT_WRAP','SBX08','confine rejects already-aborted signal first, canonicalizes root, and returns exact user argv elements after the runner separator with chosen enforcement and diagnostics. It does not spawn that user argv.',
+    ['Unicode and shell-sensitive argv elements','already-aborted genuine signal','configured runner branch','native selected runner branch'],
+    'Join argv into a shell string, mutate user arguments, or invoke user command during confine.',[(CORE,105,130),(CORE,190,202),(LOCAL,331,361)])
+obs('SANDBOX_SERVICE','SBX08','Source SandboxProvider registers sandbox; base describe returns undefined, abstract confine is exercised only through a concrete native provider. Types are source declarations, not compiled export proof.',
+    ['native service/context registration using concrete provider','base describe fixture with no claimed environment','subclass/current public provider type conformance after artifact authentication'],
+    'Assume an abstract source declaration or default export is a functioning native sandbox.',[(CORE,139,205)])
+obs('UNAVAILABLE','SBX08','No usable confining runner produces SandboxUnavailableError carrying SANDBOX_UNAVAILABLE; optional detail is diagnostic and is not an automatic instruction to run unconfined.',
+    ['empty platform chain','all multiple candidates unusable','detail absent/present'],
+    'Return original argv and execute unconfined after selection failure.',[(CORE,133,158),(LOCAL,550,568)])
+obs('RUNNER_SELECT','SBX09','Selection is per platform: Linux bwrap then Landlock, Darwin Seatbelt and Windows ACL sole candidates unprobed for arbitration; custom multi chains probe in order once and cache full/partial/unavailable.',
+    ['first Linux rung usable','bwrap unusable then partial Landlock','both unusable','sole candidate probe count zero','second call uses cached verdict'],
+    'Infer actual support from platform/version or mock probes, or upgrade partial to full.',[(LOCAL,169,207),(LOCAL,543,597)])
+obs('ENV_FACTS','SBX09','confine.enforcement and describe.enforcement retain the same cached selected verdict. Configured/unavailable descriptions keep unknown temp/identity; bwrap workspace-write temp depends on root / or /tmp exception; Landlock/Seatbelt host identity/temp; Windows restricted-token with per-session/per-call workspace temp and partial enforcement.',
+    ['bwrap roots /,/tmp,and synthetic non-root path under each confined mode','Windows with/without sessionId','configured/unavailable','Landlock partial versus full'],
+    'Declare every temp host-shared, copy a host identity to Windows, or treat describe full as native containment proof.',[(CORE,55,74),(LOCAL,369,389)])
+obs('CANONICAL_ROOTS','SBX10','canonicalPath uses native realpath component lookup; failure keeps original spelling. writableRoots is canonical deduplicated workspace,/tmp,platform tmpdir only for workspace-write; no fallback is invented.',
+    ['owned symlink plus .. fixture','missing/unreadable root','workspace aliases /tmp and platform tmpdir','read-only and danger-full-access return no writableRoots list'],
+    'Lexically collapse symlink/.. or add an unnamed fallback grant. Empty roots list alone does not qualify an unconfined mode as contained.',[(ROOTS,20,55)])
+obs('PROFILE_ARGS','SBX10','Profiles express runner-specific file policy: bwrap read-only host plus workspace-write tmpfs/workspace bind, Landlock grants via imported launcher helper, Seatbelt escaped canonical paths. Internal profile helpers are observed through real confine unless published subpath is authenticated separately.',
+    ['read-only versus workspace-write','quotes/backslashes/Unicode in owned path','exact separator and unchanged user argv'],
+    'Claim network/process policy or kernel denial solely because argv/profile text matches.',[(PROFILES,11,58),(LOCAL,393,401)])
+obs('DIAG_SIGNATURE','SBX11','matchesSignature requires nonzero/non-null exit and case-insensitive substring. It does not filter an empty signature, which matches even empty stderr on nonzero exit.',
+    ['exit 0 or null: false','nonzero mixed-case signature','nonzero empty stderr plus empty signature: true'],
+    'Silently apply classifyRunnerFailure blank-signature filtering to this different helper.',[(DIAG,89,100)])
+obs('DIAG_CLASSIFIER','SBX11','Classifier requires nonzero/non-null exit, rule-specific allowed codes, nonblank fatal substring per line after case-insensitive exact informational-line exclusion; returns first original matching detail line.',
+    ['exit 0/null result absent','allowed-code mismatch result absent','exact informational line excluded','informational substring in longer line not excluded','blank fatal signature ignored','case-insensitive fatal preserves original detail'],
+    'Exit alone or a cross-backend union proves runner failure; returned detail is normalized or forged. Diagnostic inference is not proof no user code ran.',[(DIAG,49,87),(LOCAL,220,260)])
+obs('DIAG_SPAWN','SBX11','isRunnerSpawnFailure first requires a usable cwd and ENOENT/EACCES; a supplied path must exactly equal runner, and absent path requires exact spawn-runner syscall. Attribution check is not atomic with spawn.',
+    ['unusable cwd: false','runner missing: false','path wrong/empty: false','path exact with spawn or spawn runner: true','path absent with generic spawn: false','path absent with exact spawn runner: true'],
+    'Treat caller cwd failure as missing runner or infer confinement from arbitrary exit/error code.',[(DIAG,5,47)])
+obs('ACL_IDENTITY','SBX12','Native provider reuses one private temp capability per SessionId/workspace pair, standing workspace grant per workspace; agentless/read-only use different argv paths. Private AclTempCapability fields are observed indirectly in owned runner argv/lifecycle, never assumed public exports.',
+    ['same session/workspace reuse','two session ids or two workspaces isolate temp identity','agentless workspace-write has no provider SID flags','read-only path avoids session temp materialization'],
+    'Reuse a random temp path/SID across fresh providers or treat host temp root as private session directory.',[(LOCAL,404,501)])
+obs('ACL_CLEANUP','SBX12','Materialization failure cleans acquired temp resources; provider attempts cleanup of all grants/temp, warns on failures and clears maps. Grant.dispose revokes only revocable paths and frees SIDs; standing workspace ACEs remain. This does not prove cleanup succeeded or provide CVG structured cleanup acceptance.',
+    ['partial temp grant/directory failure','one cleanup failure does not skip later attempts','standing versus revocable paths','fresh provider does not adopt crash residue'],
+    'Interpret warning/void as verified release or revoke standing workspace ACE as temp cleanup. Real ACL/ABI effects require a future gated Windows native fixture.',[(LOCAL,450,541),(GRANT,20,30),(GRANT,95,139)])
+
+assignments = {}
+def bind(source, key, symbols):
+    for symbol in symbols.split('|'):
+        k = (source, symbol)
+        assert k not in assignments, k
+        assignments[k] = key
+bind(CORE,'DIAG_SIGNATURE','matchesSignature')
+bind(CORE,'DIAG_CLASSIFIER','RunnerFailureRule|RunnerFailureRule.allowedExitCodes|RunnerFailureRule.fatalSignatures|RunnerFailureRule.informationalLines|classifyRunnerFailure')
+bind(CORE,'DIAG_SPAWN','isRunnerSpawnFailure')
+bind(CORE,'SANDBOX_SERVICE','@deepseek-ai/cordis.Context|@deepseek-ai/cordis.Context.sandbox|SandboxProvider|SandboxProvider.constructor|SandboxProvider.describe|default')
+bind(CORE,'EXACT_WRAP','SandboxProvider.confine|ConfinedArgv|ConfinedArgv.argv|ConfinedArgv.runnerFailureRules|ConfinedArgv.denialSignatures')
+bind(CORE,'ENV_FACTS','ConfinedArgv.enforcement|SandboxExecutionEnvironment|SandboxExecutionEnvironment.enforcement|SandboxExecutionEnvironment.runner|SandboxExecutionEnvironment.temporaryFiles|SandboxExecutionEnvironment.sharesHostTemporaryFiles|SandboxExecutionEnvironment.identity|SandboxEnforcement')
+bind(CORE,'UNAVAILABLE','SandboxUnavailableError|SandboxUnavailableError.constructor|SANDBOX_UNAVAILABLE')
+bind(CORE,'MODE_DOMAIN','SandboxMode|ConfinedSandboxMode|SandboxPolicy|SandboxPolicy.mode')
+bind(CORE,'POLICY_RESOLVE','SandboxExecutionPolicy|SandboxExecutionPolicy.mode|SandboxExecutionPolicy.workspaceRoot|SandboxExecutionPolicy.sessionId')
+bind(CORE,'CANONICAL_ROOTS','canonicalPath|writableRoots')
+bind(LOCAL,'CONFIG_VALIDATION','Config|Config.runnerCommand|Config.runnerFailureSignatures|Config.probeTimeoutMs|LocalSandboxProvider.Config|LocalSandboxProvider.constructor')
+bind(LOCAL,'EXACT_WRAP','LocalSandboxProvider|LocalSandboxProvider.confine|default')
+bind(LOCAL,'RUNNER_SELECT','SelectedRunner|SandboxInternals|LocalSandboxProvider.internals|SandboxInternals.platform|SandboxInternals.chain|SandboxInternals.probeBwrap|SandboxInternals.probeLandlock|SandboxInternals.probeSeatbelt|SandboxInternals.probeWindowsAcl|SandboxInternals.landlockLauncher|SandboxInternals.seatbeltExec')
+bind(LOCAL,'ENV_FACTS','LocalSandboxProvider.describe')
+bind(LOCAL,'ACL_IDENTITY','AclTempCapability|AclTempCapability.dir|AclTempCapability.writeSid|SandboxInternals.windowsAclRunnerArgs|SandboxInternals.windowsAclRunnerEntry')
+bind(LOCAL,'ACL_CLEANUP','AclTempCapability.grant|SandboxInternals.rmTempDir')
+bind(POLICY,'POLICY_DEFAULT','Config|Config.mode|Config.workspaceRoot|SandboxPolicyService.Config|SandboxPolicyService.defaultMode|SandboxPolicyService.workspaceRoot')
+bind(POLICY,'POLICY_RESOLVE','SandboxPolicyRequest|SandboxPolicyRequest.mode|SandboxPolicyRequest.session|SandboxPolicyService.resolve')
+bind(POLICY,'POLICY_SERVICE','SandboxPolicyService|SandboxPolicyService.constructor|SandboxPolicyService.inject|@deepseek-ai/cordis.Context|@deepseek-ai/cordis.Context.sandboxPolicy|default')
+bind(POLICY,'MODE_PROJECTION','SandboxModeState|SandboxPolicyService.overrideOf|@deepseek-ai/dsh-session-projection/types.SessionProjectionStateMap|@deepseek-ai/dsh-session-projection/types.SessionProjectionStateMap.sandboxMode')
+bind(POLICY,'ENV_EVENT','@deepseek-ai/dsh-session/types.SessionEventMap')
+bind(POLICY,'MODE_APPEND','setSandboxMode')
+bind(POLICY,'MODE_VOCAB','SANDBOX_MODES')
+bind(SESSION,'MODE_APPEND','setSandboxMode|@deepseek-ai/dsh-session/types.SessionEventMap')
+bind(SESSION,'MODE_VOCAB','SANDBOX_MODES')
+bind(INV,'MODE_INVARIANT','inject|name|apply')
+bind(PROFILES,'PROFILE_ARGS','bwrapProfileArgs|landlockProfileArgs|seatbeltProfileArgs')
+bind(ROOTS,'CANONICAL_ROOTS','canonicalPath|writableRoots')
+bind(DIAG,'DIAG_SIGNATURE','matchesSignature')
+bind(DIAG,'DIAG_CLASSIFIER','classifyRunnerFailure|RunnerFailureMatch|RunnerFailureMatch.detail')
+bind(DIAG,'DIAG_SPAWN','isRunnerSpawnFailure')
+
+contracts = json.loads((P / 'selected-catalog-contracts.json').read_text())
+original = {x['id']: x for x in json.loads((P / 'original-leaf-bindings.json').read_text())}
+old_ids = {x['leafId'] for x in old_bindings}
+event_witnesses = {}
+for ident, source, name, line, key in [
+    ('contract:88977b64d4350d145754de94348a0ee3d41502ef829dfd8ac1c32f158907bff2', SESSION, 'sandbox/mode', 33, 'MODE_APPEND'),
+    ('contract:e4e0ca403ca803ffbaa6d7b199121c5f9fb771ca3bbcd4aab2cd82c4df61307b', POLICY, 'sandbox/environment', 76, 'ENV_EVENT')]:
+    c = next(x for x in contracts if x['id'] == ident)
+    declaration = c['shape']['declarations'][0]
+    literal = declaration['declared_name']
+    assert c['source'] == source and c['extraction_status'] == 'UNKNOWN'
+    assert declaration['module_context'] == [{'name': '@deepseek-ai/dsh-session/types'}]
+    assert literal['byte_length'] == len(name.encode()) and literal['value_sha256'] == hashlib.sha256(name.encode()).hexdigest()
+    lines = (REF / source).read_text().splitlines()
+    assert ("'" + name + "':") in lines[line - 1]
+    assert sum(("'" + name + "':") in s for s in lines) == 1
+    event_witnesses[ident] = dict(name=name, utf8Bytes=len(name.encode()), sha256=literal['value_sha256'], module='@deepseek-ai/dsh-session/types', source=source, line=line, originalUNKNOWNRetained=True)
+    assignments[(source,c['symbol'])] = key
+assert len(event_witnesses) == 2
+
+new = []
+for c in contracts:
+    if c['id'] in old_ids or c['kind'] == 'source-surface': continue
+    key = assignments[(c['source'], c['symbol'])]
+    ob = observations[key]
+    primary = ob['procedure']
+    record = dict(leafId=c['id'], originalLeaf=original[c['id']], catalogContract=c,
+        primaryProcedure=primary, relatedProcedures=[], observationClauses=[key],
+        individualFacet=dict(symbol=c['symbol'], kind=c['kind'], shape=c['shape'], requirement='Observe this exact field/type/member through the named source contract; this is a future facet, not an exhaustive executable oracle.'),
+        association='SEMANTIC_PROPOSAL_NOT_ACCEPTED', procedureStatus='PROPOSED_NOT_RUN',
+        sourceAnchor=dict(source=c['source'],range=[1,len((REF/c['source']).read_text().splitlines())],resolution='Exact closed source/symbol/contract selector; file range is not a source-wide coverage claim'),
+        supportingSourceAnchors=ob['anchors'], acceptance='NOT_GRANTED', runtimeEvidence=[],
+        sourceExportAccess='NOT_ASSUMED_PUBLIC; authenticate compiled export or observe indirectly through concrete public provider; never import private source as counterpart implementation.')
+    if c['id'] in event_witnesses: record['closedLiteralWitness'] = event_witnesses[c['id']]
+    if c['symbol'].startswith('SandboxInternals') or c['symbol'] == 'LocalSandboxProvider.internals':
+        record['testHookScope'] = 'Reference trusted fixture/control hook only. No unsafe public CVG hook or model/payload injection is implied; use a separately approved trusted test seam.'
+    new.append(record)
+assert len(new) == 108
+assert set(assignments) == {(c['source'],c['symbol']) for c in contracts if c['id'] not in old_ids and c['kind'] != 'source-surface'}
+bindings = old_bindings + new
+assert len(bindings) == 140 and bindings[:32] == old_bindings
+assert procedures[:4] == old_procedures and len(procedures) == 12
+assigned = {x['leafId'] for x in bindings}
+assert len(assigned) == 140
+pending = [dict(leaf=x, association='NOT_ASSIGNED', reason='Selected source-surface is not a behavioral contract merely by file membership' if x['source'] in json.loads((OLD/'scope.json').read_text())['selectedSources'] else 'Outside selected nine-source slice; native/ABI/platform/build obligation retained') for x in original.values() if x['id'] not in assigned]
+assert len(pending) == 287 and sum(x['leaf']['id'] in {c['id'] for c in contracts} for x in pending) == 9
+assert {x['leaf']['id'] for x in pending if x['leaf']['id'] in {c['id'] for c in contracts}} == {c['id'] for c in contracts if c['kind']=='source-surface'}
+assert all(x['leaf']['scope'] == 'SOURCE' or x['leaf']['source'] not in json.loads((OLD/'scope.json').read_text())['selectedSources'] or next(c for c in contracts if c['id']==x['leaf']['id'])['kind']=='source-surface' for x in pending)
+for p in procedures[4:]:
+    p['observationClauses'] = [x for x in observations.values() if x['procedure']==p['id']]
+put('procedures.json',procedures)
+put('observation-clauses.json',list(observations.values()))
+put('semantic-proposals.json',bindings)
+put('pending-bindings.json',pending)
+put('closed-event-witnesses.json',event_witnesses)
+put('retained-base.json',dict(proceduresSBX01to04Equal=True, first32BindingsEqual=True,
+    basePacketSHA256=sha(OLD/'review-packet/packet-manifest.json'), reviewAcceptanceInherited=False,
+    oldProceduresCanonicalSHA256=hashlib.sha256(json.dumps(old_procedures,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest(),
+    oldBindingsCanonicalSHA256=hashlib.sha256(json.dumps(old_bindings,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()))
+put('scope.json',dict(task='P100-003/P100-024/SANDBOX-PROCEDURES-R2',track='T1_DOCUMENTARY_ONLY',
+    originalBindings=427, originalExtractionCounts=dict(Counter(x['extraction_status'] for x in original.values())),
+    selectedContracts=149, proposedBindings=140,newBindings=108,
+    proposedExtractionCounts=dict(Counter(x['originalLeaf']['extraction_status'] for x in bindings)),
+    pendingOverall=287, pendingSelectedSourceSurfaces=9, pendingOutsideSelected=278,
+    procedures=12, newProcedureFamilies=8, sourceHashProvenanceFiles=53, denominator=44132,
+    semanticCoverage='NOT_ESTABLISHED', acceptance='NOT_GRANTED', runtimeTests=0,
+    sourceLibABIAndNativeProof='NOT_VERIFIED', newPublicContractAuthority=False,
+    spec0220Human='PENDING',spec0221Human='PENDING',spec0222Human='PENDING_ALREADY_PRESENTED_NO_RESEND',buildAllowed=False))
+print(json.dumps(dict(original=427, proposed=140, new=108, pending=287, selectedSurfacesPending=9,
+    proposedExtraction=dict(Counter(x['originalLeaf']['extraction_status'] for x in bindings)),procedures=12,runtimeTests=0)))

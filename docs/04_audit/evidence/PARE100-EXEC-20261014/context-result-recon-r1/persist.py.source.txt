@@ -1,0 +1,89 @@
+"""T1 source inventory and publication only; never import or run application code."""
+from pathlib import Path
+import hashlib
+import json
+import shutil
+
+P = Path(__file__).resolve().parent
+B = P.parent
+W = B / 'worktree'
+R = Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+REL = Path('docs/04_audit/evidence/PARE100-EXEC-20261014/context-result-recon-r1')
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def put(path, value):
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+
+anchors = {
+    'F01': [('packages/harness/src/iterative-runtime.ts', 'function boundedPayload', 14), ('packages/harness/src/iterative-runtime.ts', 'this.maxObservationPayloadChars =', 4)],
+    'F02': [('packages/harness/src/iterative-dispatch.ts', "    case 'succeeded': {", 39), ('packages/harness/src/iterative-runtime.ts', '      payload: boundedPayload(input.payload', 8)],
+    'F03': [('packages/harness/src/iterative-runtime.ts', 'export function stringifySummary', 11)],
+    'F04': [('packages/harness/src/context-engine.ts', 'const MANDATORY_PRIORITIES', 14), ('packages/harness/src/context-engine.ts', '    this.tokenBudget =', 4), ('packages/harness/src/context-engine.ts', '    for (const observation of toolObservations)', 14), ('packages/harness/src/context-engine.ts', '  private trim(', 18)],
+    'F05': [('packages/harness/src/context-engine.ts', '    const recentObservations =', 43), ('packages/orchestrator/src/hybrid-orchestrator.ts', 'function buildDecisionPrompt', 39)],
+    'F06': [('packages/harness/src/iterative-runtime.ts', '    const context = await this.contextEngine.build', 74), ('packages/harness/src/iterative-runtime.ts', '        beginModelRequest: () =>', 46), ('packages/orchestrator/src/hybrid-orchestrator.ts', '      const modelResult = await this.decisionModel.complete', 25)],
+    'F07': [('packages/harness/src/createOperationalHarness.ts', 'export interface OperationalHarnessOptions', 39), ('packages/harness/src/createOperationalHarness.ts', '  const iterative =', 39)],
+    'F08': [('packages/contracts/src/execution-v2.ts', 'export const MAX_CHECKPOINT_OBSERVATIONS', 2), ('packages/harness/src/iterative-runtime.ts', '  private async recordObservation(', 15), ('packages/harness/src/iterative-runtime.ts', '  private async persistCheckpoint(', 30), ('packages/harness/src/step-store.ts', 'export function checkpointDigest', 22), ('packages/harness/src/step-store.ts', 'export function sealCheckpoint', 50)],
+    'F09': [('packages/persistence/src/operational-step-postgres.ts', 'function jsonText(', 15), ('packages/persistence/src/operational-step-postgres.ts', "      jsonText(checkpoint.state, 'checkpoint state')", 6)],
+    'F10': [('packages/harness/src/completion.ts', 'function toolObservationIsEffect', 11)],
+    'F11': [('packages/contracts/src/contracts.ts', 'export interface ModelMessage', 5), ('packages/contracts/src/contracts.ts', 'export interface ModelRequest', 25), ('packages/model-gateway/src/contracts.ts', 'export const ModelMessageSchema', 14), ('packages/model-gateway/src/contracts.ts', 'export const ModelGatewayRequestSchema', 32), ('packages/agent-runtime/src/runtime-kernel-bridge.ts', '          complete: async (request: { signal?', 38)],
+    'F12': [('tests/differential/tool-case.mjs', 'export function validateToolCase', 35), ('tests/differential/cvg-tool.ts', '        const prompt =', 24)],
+}
+facts, sources = [], {}
+for ident, entries in anchors.items():
+    excerpts = []
+    for rel, marker, count in entries:
+        path = W / rel
+        content = path.read_text().splitlines()
+        hits = [i for i, line in enumerate(content) if marker in line]
+        assert len(hits) == 1, (ident, rel, marker, hits)
+        start = hits[0]
+        end = min(start + count, len(content))
+        fingerprint = sha(path)
+        assert sources.setdefault(rel, fingerprint) == fingerprint
+        excerpts.append({'path': rel, 'sha256': fingerprint, 'startLine': start + 1, 'endLine': end, 'marker': marker, 'literal': '\n'.join(content[start:end])})
+    facts.append({'id': ident, 'kind': 'CURRENT_SOURCE_READ_NOT_RUNTIME_PROOF', 'anchors': excerpts})
+manifest_sources = [{'workspace': str(W), 'path': rel, 'sha256': value, 'bytes': (W / rel).stat().st_size} for rel, value in sorted(sources.items())]
+for filename, value in [('source-facts.json', facts), ('source-manifest.json', manifest_sources)]:
+    existing = P / filename
+    if existing.exists():
+        assert json.loads(existing.read_text()) == value, f'Source inventory drift: {filename}; preserve the original and investigate'
+    else:
+        put(existing, value)
+assert all(sha(W / rel) == value for rel, value in sources.items())
+protected = [
+    ('docs/02_spec/0217_pare100_durable_kernel_composition.md', '1e5df50255e1634c06e09b46e2fc40da3a51a6e15be10ae4856e092bf910a905'),
+    ('docs/02_spec/0220_pare100_durable_kernel_boundary_qualification.md', '211d341fed2bb70d07ab525e5e23279803d9fe387295bb14d4669ad22aa4d9a5'),
+    ('docs/02_spec/0221_pare100_durable_session_facade.md', None),
+    ('docs/02_spec/0222_pare100_managed_capability_lifecycle.md', 'bbe359fbd7c52b2e037eb7240c195244f7e6063e4bfa5638e7eedc73d7e82c31'),
+]
+# Resolve 0221 by actual inventory, never infer a missing filename means absent design.
+matches = list((R / 'docs/02_spec').glob('0221_*.md'))
+assert len(matches) == 1
+protected[2] = (str(matches[0].relative_to(R)), '1f9490ccee25f246e57a7c9c096c41c2572818c60e2c7bae5a4d315ad8e170e4')
+for rel, expected in protected:
+    assert sha(R / rel) == sha(W / rel) == expected, rel
+receipts = [
+    ('sandbox-metadata-observation-r4/lead-acceptance.json', '42d53dbeec51ae2bf11a662254ba86291d5f81feacb5cea9c7926d38bd0cf87c'),
+    ('sandbox-procedures-r5/lead-acceptance.json', '03bbeb07f4889df3174d124c7b25ccc58d26c391e01cd0f52c7e017a8c7a83d3'),
+]
+base = Path('docs/04_audit/evidence/PARE100-EXEC-20261014')
+for rel, expected in receipts:
+    assert sha(R / base / rel) == sha(W / base / rel) == expected, rel
+put(P / 'status.json', {'task': 'P100-004/P100-014/P100-020/P100-021/TOOL-RESULT-RECON-001', 'status': 'RECON_COMPLETE_FOR_SPEC_INPUT', 'track': 'T1', 'sourceFiles': len(sources), 'facts': len(facts), 'runtimeExecutions': 0, 'newPublicContracts': 0, 'spec0224Created': False, 'buildAuthorized': False, 'protectedSpecs': [{'path': rel, 'sha256': value} for rel, value in protected], 'acceptedPriorReceipts': [{'path': rel, 'sha256': value} for rel, value in receipts], 'cards': 36, 'doneLocal': 2, 'open': 34, 'fullParity': 'NOT_MEASURED', 'nextAction': 'PARE100-EXEC:DRAFT-TOOL-RESULT-CONTEXT-0224'})
+
+for root in [R, W]:
+    out = root / REL
+    out.mkdir(parents=True, exist_ok=True)
+    for path in sorted(P.rglob('*')):
+        if not path.is_file() or '__pycache__' in path.parts or not path.stat().st_size:
+            continue
+        dest = out / path.relative_to(P)
+        if path.suffix == '.py':
+            dest = dest.with_name(dest.name + '.source.txt')
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, dest)
+    manifest = [{'path': str(path.relative_to(out)), 'sha256': sha(path), 'bytes': path.stat().st_size} for path in sorted(out.rglob('*')) if path.is_file() and path.name != 'evidence-manifest.json']
+    put(out / 'evidence-manifest.json', manifest)
+print(json.dumps({'sources': len(sources), 'facts': len(facts), 'protectedSpecs': len(protected), 'priorAcceptanceReceipts': len(receipts), 'runtimeExecutions': 0, 'status': 'RECON_COMPLETE_FOR_SPEC_INPUT'}))

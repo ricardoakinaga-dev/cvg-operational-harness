@@ -1,0 +1,26 @@
+import { randomUUID } from "node:crypto";
+import { SessionEventError, validateSessionStream } from "./events.ts";
+/** Bind this adapter to a session/turn; callers open the stream explicitly. */
+export function createSessionKernelLog(options) {
+	const stream = validateSessionStream({
+		tenantId: options.tenantId,
+		sessionId: options.sessionId,
+		formatVersion: options.formatVersion
+	});
+	const { store, traceId, correlationId } = options;
+	const id = options.eventId ?? randomUUID;
+	const clock = options.clock ?? (() => new Date());
+	return { append: async (event) => {
+		if (event.correlationId !== correlationId) throw new SessionEventError("invalid_session_event", "Kernel log correlation differs from bound turn");
+		const { type, ...payload } = event;
+		await store.append({
+			...stream,
+			type,
+			payload,
+			eventId: id(),
+			timestamp: clock().toISOString(),
+			correlationId,
+			traceId
+		});
+	} };
+}

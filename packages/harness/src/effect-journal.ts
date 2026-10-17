@@ -248,6 +248,29 @@ export interface JournaledToolRegistryOptions {
   readonly attemptIdFactory?: EffectAttemptIdFactory
 }
 
+// Private executor provenance survives the native descriptor copies used by
+// complete-result preparation. Caller-provided descriptor fields cannot opt in.
+const NATIVE_EFFECT_JOURNAL = Symbol('native-effect-journal')
+
+export async function hasNativeEffectReservation(
+  tool: ToolDefinition | undefined,
+  tenantId: string,
+  operationKey: string
+): Promise<boolean> {
+  const journal = tool
+    ? (Object.getOwnPropertyDescriptor(tool, NATIVE_EFFECT_JOURNAL)?.value as
+        | EffectJournal
+        | undefined)
+    : undefined
+  if (!journal) return false
+  const record = await journal.get(tenantId, operationKey)
+  return (
+    record !== null &&
+    record.tenantId === tenantId &&
+    record.operationKey === operationKey
+  )
+}
+
 function proposalHash(
   tool: ToolDefinition,
   input: unknown,
@@ -305,8 +328,9 @@ function journaledTool(
   const compositionFingerprint = options.compositionFingerprint
     ? bounded(options.compositionFingerprint, 'compositionFingerprint')
     : undefined
-  return {
+  const wrapped = {
     ...tool,
+    [NATIVE_EFFECT_JOURNAL]: journal,
     execute: async (
       input: unknown,
       context: ToolExecutionContext
@@ -394,4 +418,5 @@ function journaledTool(
       }
     }
   }
+  return wrapped
 }

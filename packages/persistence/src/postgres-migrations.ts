@@ -45,7 +45,8 @@ const defaultPostgresMigrations = [
   '0024_approval_decision_causality',
   '0025_webhook_replay_fencing',
   '0026_rate_limit_key_hardening',
-  '0027_worker_operations'
+  '0027_worker_operations',
+  '0029_controlled_published_kernel'
 ]
 
 function assertSafeSchemaName(schemaName: string): void {

@@ -1,0 +1,15 @@
+import pathlib,subprocess,os,json,time,hashlib
+r=pathlib.Path.cwd(); baseline=json.loads((r/'outputs/commands/inventory/metadata.json').read_text())['environment']; summary=[]
+for fault in ['exit','hang']:
+ for explicit in [False,True]:
+  label=f'fault-{fault}-'+('explicit' if explicit else 'default'); d=r/'outputs'/label;d.mkdir(exist_ok=False)
+  env=dict(baseline); env['TMPDIR']=str(d/'tmp');pathlib.Path(env['TMPDIR']).mkdir();env['TMP']=env['TEMP']=env['TMPDIR'];env['CVG_CRITIC_DRIVER']=str(r/'outputs/fault-drivers'/f'{fault}-entry.mjs')
+  if explicit: env['CVG_DIFFERENTIAL_EVIDENCE_DIR']=str(d/'evidence')
+  cmd=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/vitest/vitest.mjs','run','outputs/current-runner-fault.test.ts','--config','outputs/fault-vitest.config.mts','--maxWorkers=1','-t','executes both public engines: tool-ascii']; start=time.time()
+  with (d/'stdout.log').open('wb') as out,(d/'stderr.log').open('wb') as err: proc=subprocess.run(cmd,env=env,cwd=r,stdout=out,stderr=err,timeout=45)
+  records=list(d.rglob('tool-ascii.command.json')); assert len(records)==1
+  record=json.loads(records[0].read_text()); homes=list((d/'tmp').glob('cvg-tool-turn-*')); rawerr=records[0].with_name('tool-ascii.reference.stderr.log').read_text()
+  meta={'argv':cmd,'cwd':str(r),'environment':env,'exit':proc.returncode,'elapsedMs':round((time.time()-start)*1000),'child':record,'evidenceFile':str(records[0]),'ownedHomesRemaining':[str(x) for x in homes],'homeRemoved':not pathlib.Path(record['cwd']).exists(),'rawFaultRetained':('I1_ADAPTER_EXIT_23' if fault=='exit' else 'I1_ADAPTER_HANG') in rawerr}
+  for stream in ['stdout','stderr']: b=(d/(stream+'.log')).read_bytes();meta[stream+'Bytes']=len(b);meta[stream+'Empty']=not b;meta[stream+'SHA256']=hashlib.sha256(b).hexdigest()
+  (d/'metadata.json').write_text(json.dumps(meta,indent=2)+'\n');summary.append(meta);print(json.dumps({'label':label,'exit':proc.returncode,'childExit':record['exit'],'childSignal':record['signal'],'error':record['error'],'homeRemoved':meta['homeRemoved'],'rawFaultRetained':meta['rawFaultRetained']}),flush=True)
+(r/'outputs/fault-summary.json').write_text(json.dumps(summary,indent=2)+'\n')

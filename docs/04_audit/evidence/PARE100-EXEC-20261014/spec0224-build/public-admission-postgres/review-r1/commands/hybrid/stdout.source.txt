@@ -1,0 +1,71 @@
+161:function completeDigest(value: unknown): string {
+190:function completeSystem(
+216:function completeItems(context: StepContext) {
+224:      'Invalid complete context version or required IDs'
+258:        'Selected tool observation is not canonical complete JSON'
+292:      'Required complete tool observation is missing'
+304:/** Race only pure counting / the model; durable reserve and settle stay runtime-owned. */
+356:  measurement: DecisionInputMeasurement,
+363:    typeof receipt.admissionId !== 'string' ||
+364:    !receipt.admissionId ||
+373:    completeDigest(receipt.measurement) !== completeDigest(measurement) ||
+374:    receipt.reserved?.modelCalls !== 1 ||
+375:    receipt.reserved.inputTokens !== measurement.inputUpperBoundTokens ||
+376:    receipt.reserved.outputTokens !== COMPLETE_DECISION_OUTPUT_TOKENS ||
+377:    receipt.reserved.costUsd !== measurement.costUpperBoundUsd ||
+379:      (previous.admissionId !== receipt.admissionId ||
+384:      'Decision admission receipt does not bind the measured request',
+396:  public readonly contextProtocol = 'complete-tool-v1' as const
+436:              ...(context.toolResultContext.settledDecisionAdmissionIds ?? [])
+472:      const modelResult = await this.decisionModel.complete({
+537:        'Complete decisions require a qualified counter, output cap and native admission port'
+559:    let selected = completeItems(context)
+560:    // Native validation may re-enter the same step after a settled turn.
+563:      ...(context.toolResultContext?.settledDecisionAdmissionIds ?? [])
+572:      let measurement: DecisionInputMeasurement
+579:          const system = completeSystem(
+605:          // freeze the exact snapshot shared with counter and native reserve.
+622:                  maxOutputTokens: COMPLETE_DECISION_OUTPUT_TOKENS
+642:          let measured: DecisionInputMeasurement
+644:            measured = await withinDecisionDeadline(
+645:              () => counter.measure(request),
+650:            if (!validMeasurement(measured))
+651:              throw new Error('invalid measurement')
+652:            measurement = freezeComplete(
+654:                canonicalizeCompleteJson(measured, REQUEST_JSON_LIMITS)
+660:              'Decision counter failed or returned an invalid measurement'
+671:            measurement.inputUpperBoundTokens > tokenBudget ||
+672:            measurement.inputUpperBoundTokens +
+674:              measurement.contextWindowTokens
+682:            // reserve remains the final authority, never a local usage sum.
+703:              measurement.inputUpperBoundTokens +
+713:              measurement.costUpperBoundUsd >
+757:      const measured = measurement!
+758:      const requestSha256 = completeDigest(snapshot)
+759:      const reserved = await decisionAdmission.reserve({
+761:        measurement: measured,
+765:        reserved,
+768:        measured,
+772:      if (decisionAdmissionIds.includes(reserved.admissionId)) {
+784:            model.complete(
+797:          result.provider !== measured.provider ||
+798:          result.model !== measured.model ||
+801:          result.inputTokens > measured.inputUpperBoundTokens ||
+806:          result.costUsd > measured.costUpperBoundUsd
+811:            'Native model identity or usage violates qualified measurement'
+830:          await decisionAdmission.settle({
+832:            admissionId: reserved.admissionId,
+838:        await decisionAdmission.settle({
+840:          admissionId: reserved.admissionId,
+858:      const settled = await decisionAdmission.settle({
+860:        admissionId: reserved.admissionId,
+865:        settled,
+868:        measured,
+871:        reserved
+874:        settled.actual?.modelCalls !== 1 ||
+875:        settled.actual.inputTokens !== result.inputTokens ||
+876:        settled.actual.outputTokens !== result.outputTokens ||
+877:        settled.actual.costUsd !== result.costUsd ||
+878:        (settled.resultSha256 !== undefined &&
+879:          settled.resultSha256 !== completeDigest(result))
+887:      decisionAdmissionIds.push(settled.admissionId)

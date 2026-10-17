@@ -1,0 +1,46 @@
+import pathlib,os,stat,hashlib,json,sys,collections
+R=pathlib.Path(__file__).resolve().parents[1]; exclusions={'seal.json','seal.json.sha256'}
+def category(rel):
+ if rel in ['report.md','findings.json','criteria.json']:return 'review-report'
+ if rel=='inventory.json':return 'inventory'
+ if rel.startswith('sentinel-'):return 'immutable-sentinel'
+ if rel=='input-index.json':return 'guard-input-index'
+ if rel.startswith('configs/'):return 'owned-config/template/guard'
+ if rel.startswith('raw/'):return 'raw-command/log/failure/qualification'
+ if rel.startswith('controls/'):return 'owned-good/bad-evidence-control'
+ if rel.startswith('evidence/'):return 'actual/derived-evidence'
+ if rel.startswith('snapshots/'):return 'observed-source/transform/read-bytes'
+ if rel.startswith('nodecache/'):return 'node-compile-cache'
+ if rel.startswith('cache/'):return 'vitest-cache'
+ if rel.startswith('tmp/'):return 'owned-temporary'
+ if rel.startswith('checkers/__pycache__/'):return 'python-bytecode-cache'
+ if rel.startswith('checkers/'):return 'independent-checker/runner/reproduction'
+ return 'other-owned-output'
+def record(p):
+ rel=p.relative_to(R).as_posix();s=p.lstat();kind='symlink'if stat.S_ISLNK(s.st_mode)else 'directory'if stat.S_ISDIR(s.st_mode)else 'file'if stat.S_ISREG(s.st_mode)else 'special';e={'path':rel,'type':kind,'category':category(rel),'bytes':s.st_size,'publication':'PRIVATE_LEAD_CURATES'}
+ if kind=='file':e['sha256']=hashlib.sha256(p.read_bytes()).hexdigest()
+ elif kind=='symlink':e['target']=os.readlink(p);e['sha256']=hashlib.sha256(e['target'].encode()).hexdigest();e['hashMeaning']='link-target-bytes; target not followed'
+ else:e['sha256']=None;e['hashMeaning']='not an ordinary file'
+ return e
+def entries():
+ result=[]
+ for root,dirs,files in os.walk(R,followlinks=False):
+  for name in sorted(dirs+files):
+   p=pathlib.Path(root)/name
+   if p.relative_to(R).as_posix()not in exclusions:result.append(record(p))
+ return sorted(result,key=lambda e:e['path'])
+def dump(p,v):p.write_text(json.dumps(v,indent=2,ensure_ascii=False)+'\n')
+if len(sys.argv)>1 and sys.argv[1]=='verify':
+ seal=json.loads((R/'seal.json').read_bytes());actual=entries();expected=seal['entries'];errors=[]
+ # Directory st_size is descriptive metadata; compare it as captured as well.
+ if expected!=actual:errors.append('owned-entry-list-or-content-changed')
+ h=hashlib.sha256((R/'seal.json').read_bytes()).hexdigest()
+ if (R/'seal.json.sha256').read_text()!=h+'  seal.json\n':errors.append('detached-seal-sha')
+ inv=json.loads((R/'inventory.json').read_bytes())
+ a=[e for e in actual if e['path']!='inventory.json']
+ if inv['entries']!=a:errors.append('inventory-list-or-content')
+ print(json.dumps({'sealClean':not errors,'ordinaryFiles':sum(e['type']=='file'for e in actual),'directories':sum(e['type']=='directory'for e in actual),'symlinks':sum(e['type']=='symlink'for e in actual),'errors':errors,'sealSHA256':h},indent=2));sys.exit(bool(errors))
+allentries=[e for e in entries()if e['path']!='inventory.json']
+dump(R/'inventory.json',{'scope':str(R),'privacy':'PRIVATE_LEAD_CURATES. Source, prompts, raw requests, internal paths, controls and caches are publication-sensitive. Lead curates.','selfReference':'Every other owned output is inventoried here with bytes/hash where applicable. This inventory file is listed and hashed by detached seal.json, avoiding impossible self-hash recursion. seal.json and seal.json.sha256 are detached exceptions only.','entries':allentries})
+dump(R/'seal.json',{'scope':str(R),'algorithm':'SHA-256','exclusions':sorted(exclusions),'coverage':'All ordinary owned files including inventory.json; directories and symlinks distinguished. No symlink traversal.','entries':entries()})
+h=hashlib.sha256((R/'seal.json').read_bytes()).hexdigest();(R/'seal.json.sha256').write_text(h+'  seal.json\n');print('sealed',h)

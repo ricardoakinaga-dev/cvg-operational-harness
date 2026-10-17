@@ -1,0 +1,136 @@
+import json,pathlib,hashlib,re,collections,copy,math
+r=pathlib.Path(__file__).parent;p=r.parent/'review-packet-r6';m=json.loads((p/'manifest.json').read_text());a=pathlib.Path(m['artifactRoot'])
+def sha(b):return hashlib.sha256(b).hexdigest()
+def canon(x):return json.dumps(x,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()
+def units(s):return len(s.encode('utf-16-le'))//2
+checks=[];summaries=[]
+def check(key,ok,ref,detail=None):checks.append(dict(assertion=key,passed=bool(ok),evidence=ref,**({'detail':detail} if detail is not None else {})))
+def find(v):
+ if isinstance(v,dict):
+  if v.get('type')=='TOOL_RESULT' and v.get('payload',{}).get('completion')=='COMPLETE':return v
+  for child in v.values():
+   z=find(child)
+   if z:return z
+ if isinstance(v,list):
+  for child in v:
+   z=find(child)
+   if z:return z
+ return None
+sources=[('proof/raw-cases.json',p/'proof/raw-cases.json',False)]+[(f'raw/{run}-cases.json',r/'raw'/f'{run}-cases.json',run not in ['focused','response']) for run in ['focused','response','adversarial','supplemental','boundary','system-plus-one']]
+for name,file,custom in sources:
+ rows=json.loads(file.read_text())
+ for i,x in enumerate(rows):
+  s=x['scenario'];tag=s.get('label',s.get('id',x.get('case')));ref=f'{name}#/{i}';cp=x['checkpoint'];res=x['result'];requests=x['requests'];results=x['results' if custom else 'modelResults'];native=x['nativeSteps'];legacy=s.get('legacy',False);faults=x.get('faults',[])
+  # The original supplemental pause control had an invalid reasonCode. Preserve it as
+  # a driver error, not evidence for pause recovery or an implementation failure.
+  invalid=name=='raw/supplemental-cases.json' and s.get('progressPause')
+  if invalid:
+   check('driver-error-correctly-classified','reasonCode is not a supported' in res['response'],ref);summaries.append(dict(evidence=ref,case=tag,qualification='invalid probe decision; superseded by corrected boundary pause control'));continue
+  check('public-run-returned',not x.get('harnessThrew'),ref)
+  check('single-native-effect',x['bodies']==1,ref)
+  obs=[v for v in cp['state']['observations'] if v['type']=='TOOL_RESULT']
+  if not legacy:
+   check('CPA-output-preserved',len(obs)==1 and obs[0]['payload'].get('output')==x['output'],ref)
+   if obs:
+    check('CPA-canonical-bytecount',obs[0]['payload'].get('outputBytes')==len(canon(x['output'])),ref)
+    check('CPA-independent-digest',obs[0]['payload'].get('outputSha256')==sha(canon(x['output'])),ref)
+  observed={k:sum(v[k] for v in results) for k in ['inputTokens','outputTokens','costUsd']}
+  check('live-known-usage-once',res['usage']==observed,ref,{'observedReturnUsage':observed,'actualReturnedUsage':res['usage'],'qualification':'No observed result means unknown provider usage, not proof of zero billing.'})
+  for j,q in enumerate(requests):
+   qref=f'{ref}/requests/{j}'
+   if q['purpose']=='RESPONSE' and not legacy:
+    check('bounded-two-role-request',[v['role'] for v in q['messages']]==['system','user'] and units(q['messages'][0]['content'])<=16000 and units(q['messages'][1]['content'])<=32000 and len(canon(q))<=131072,qref)
+    frame=json.loads(q['messages'][1]['content']);tool=find(frame)
+    check('actual-RESPONSE-full-value',tool is not None and tool['payload']['output']==x['output'],qref)
+    check('data-does-not-become-SYSTEM',all(marker not in q['messages'][0]['content'] for marker in ['UNTRUSTED_USER_224','UNTRUSTED_TOOL_224','UNTRUSTED_INTENT_224','UNTRUSTED_USER_I1','UNTRUSTED_TOOL_I1','UNTRUSTED_INTENT_I1','UNTRUSTED_ALIAS_I1']),qref)
+    check('untrusted-tool-frame',tool is not None and tool['trust']=='UNTRUSTED' and any(it.get('priority')=='FRESH_TOOL_RESULTS' and it.get('trust')=='UNTRUSTED' for it in frame['items']),qref)
+   if q['purpose']=='RESPONSE' and legacy:
+    check('legacy-user-wire',q['messages'][1]['content']==x['input']['userMessage'],qref)
+  if not legacy:
+   admissions=cp['state']['toolResultContext']['decisionAdmissions'];orch=sum(q['purpose']=='ORCHESTRATION' for q in requests)
+   check('no-RESPONSE-decision-receipt',len(admissions)==orch and all(v['status']=='SETTLED' for v in admissions),ref)
+   for admission,qj in zip(admissions,[j for j,q in enumerate(requests) if q['purpose']=='ORCHESTRATION']):
+    check('receipt-bound-to-actual-request',admission['purpose']=='ORCHESTRATION' and admission['requestSha256']==sha(canon(requests[qj])),ref)
+    check('receipt-bound-to-observed-result',admission['resultSha256']==sha(canon(results[qj])) and admission['actual']==dict(modelCalls=1,**{k:results[qj][k] for k in ['inputTokens','outputTokens','costUsd']}),ref)
+   check('single-shared-call-count',res['modelCalls']==len(requests) if requests else res['modelCalls'] in [0,1],ref)
+   if custom:
+    for j,entry in enumerate(x['entries']):
+     check('durable-native-intent-before-provider',any(v['stepType']=='RESPOND' and v['status']=='RUNNING' for v in entry['rows']),ref+f'/entries/{j}')
+     check('same-pipeline-held-slot-ACK-before-provider',entry['checkpoint']['budgetUsage']['modelCalls']==j+1,ref+f'/entries/{j}')
+  cpusage={k:cp['budgetUsage'][k] for k in observed}
+  # Known actual usage may be absent from an older durable checkpoint. Check exact
+  # values only when a healthy writer reached the final cursor or an ACKlost save
+  # actually committed; otherwise expose the discrepancy as reconciliation debt.
+  persistent=s.get('cp') in ['post-persistent','pre-persistent'] or s.get('responseCheckpoint')=='after-model'
+  if not persistent:check('healthy-or-committed-usage-once',cpusage==observed,ref)
+  replay=x.get('replay');paused=s.get('progressPause')
+  if replay and not paused:
+   check('recovery-zero-provider-reentry',replay['requests']==requests,ref+'/replay')
+   check('recovery-preserves-checkpoint',replay['checkpoint']==cp,ref+'/replay')
+   check('recovery-preserves-journal',replay.get('journals')==x.get('journals'),ref+'/replay')
+   check('recovery-preserves-native-terminal-facts',replay['nativeSteps']==native,ref+'/replay')
+   check('recovery-no-effect-repeat',replay['bodies']==1,ref+'/replay')
+   check('rejected-recovery-not-billed-retrospectively',replay['result']['stopReason']=='STATE_CONFLICT' and replay['result']['usage']==dict(inputTokens=0,outputTokens=0,costUsd=0) and replay['result']['modelCalls']==0,ref+'/replay')
+   if any(v['stepType']=='RESPOND' and v['stepNumber']>cp['state']['stepNumber'] for v in native):
+    check('older-checkpoint-explicit-uncertainty',bool(re.search(r'uncertain.*reconciliation',replay['result']['response'],re.I)),ref+'/replay')
+  if paused:
+   check('earlier-success-pause-remains-resumable',res['stopReason']=='NEEDS_USER_INPUT' and replay['result']['stopReason']=='NEEDS_USER_INPUT' and x['resumed']['result']['stopReason']=='COMPLETED' and len(x['resumed']['requests'])==2 and x['resumed']['bodies']==1,ref)
+  primary=s.get('responseModelThrows') or s.get('model')=='throw'
+  if primary and requests:
+   marker='I1_PRIMARY_MODEL_THROW' if custom else 'synthetic_native_response_model_failure'
+   check('native-model-first-evidence-survives',marker in res['response'] and res['stopReason'] in ['MODEL_FAILURE','INSUFFICIENT_EVIDENCE'],ref)
+   if s.get('cp')=='post-once' or s.get('responseCheckpoint')=='transient-after-model':
+    check('healthy-later-writer-retains-MODEL_FAILURE',res['stopReason']==('INSUFFICIENT_EVIDENCE' if s.get('audit')=='terminal' or s.get('terminalAlso') else 'MODEL_FAILURE'),ref)
+   if s.get('cp') not in [None,'none'] or s.get('responseCheckpoint'):check('checkpoint-secondary-explicit','CHECKPOINT' in res['response'] or 'checkpoint_unacknowledged' in res['response'],ref)
+  if custom:
+   if s.get('cp','').startswith('pre') or s.get('step','').startswith('start') or s.get('selector') in ['throw','drop','overflow','deadline'] or s.get('audit')=='step-start':check('pre-provider-fault-no-provider-entry',len(requests)==0,ref)
+   if s.get('cp')=='pre-once':check('held-slot-is-not-provider-entry',res['modelCalls']==1 and len(requests)==0 and len(results)==0,ref)
+   if s.get('step')=='finish-ack' and s.get('model')!='throw':check('ACKlost-preserves-actual-SUCCEEDED',any(v['stepType']=='RESPOND' and v['status']=='SUCCEEDED' for v in native),ref)
+   if s.get('step')=='finish-before':check('beforewrite-retains-actual-FAILED',any(v['stepType']=='RESPOND' and v['status']=='FAILED' for v in native),ref)
+   if s.get('model')=='empty':check('empty-never-success',res['stopReason']!='COMPLETED',ref)
+   if s.get('selector')=='alias':check('retained-selector-alias-is-detached',res['response']=='digest:'+sha(canon(x['output'])),ref)
+   if s.get('model')=='deadline':check('missing-model-result-explicit-unknown-observation',len(requests)==1 and len(results)==0 and res['stopReason']=='MAX_DURATION',ref)
+   if s.get('label','').startswith('boundary-'):
+    label=s['label'];target=int(label.rsplit('-',1)[1]);field=label.split('-')[1]
+    if target in [32000,16000,131072]:
+     actual=units(requests[0]['messages'][1 if field=='user' else 0]['content']) if field in ['system','user'] else len(canon(requests[0]))
+     check('exact-limit-reaches-actual-provider',actual==target,ref,{'actual':actual,'limit':target})
+    else:check('over-limit-zero-provider',len(requests)==0 and 'CONTEXT_OVERFLOW' in res['response'],ref)
+  summaries.append(dict(evidence=ref,case=tag,stopReason=res['stopReason'],checkpointStop=cp['state'].get('stopReason'),providerEntries=len(requests),observedResults=len(results),nativeHeldModelSlots=res['modelCalls'],knownReturnedUsage=observed,durableRecordedUsage=cpusage,usageCertainty='observed-result' if len(results)==len(requests) and requests else 'no-observed-result: unknown historical provider usage; zero recorded values do not prove zero billing',recovery=replay['result']['stopReason'] if replay else None,faultKinds=collections.Counter(v['kind'] for v in faults)))
+# Actual execution evidence, distinct from compilation or V8 cache.
+traceAudit={};readPaths={};nativeWanted=['createOperationalHarness.ts','iterative-runtime.ts','iterative-dispatch.ts','kernel/pipeline.ts','step-store.ts','complete-checkpoint.ts','effect-journal.ts']
+allowed={v['copy']:v for v in m['inputs']};deps=str(pathlib.Path(m['allowedDependencyMirror']).resolve())
+for run in ['focused','response','adversarial','supplemental','boundary','system-plus-one']:
+ reads=[json.loads(l) for l in (r/'raw'/f'{run}-reads.jsonl').read_text().splitlines()];events=[json.loads(l) for l in (r/'raw'/f'{run}-execution.jsonl').read_text().splitlines()];active={(v['pid'],v['threadId']) for v in events if v['event']=='guard-active'};executed=[v for v in events if v['event']=='executed']
+ for v in executed:
+  check('each-executing-thread-native-guard-active',(v['pid'],v['threadId']) in active,f'raw/{run}-execution.jsonl')
+  check('executed-transform-hash',sha(pathlib.Path(v['transform']).read_bytes())==v['sha256'],f'raw/{run}-execution.jsonl')
+ for wanted in nativeWanted:check('actual-native-source-executed:'+wanted,any(v['filename'].endswith('/'+wanted) and v['filename'].startswith(str(a)) for v in executed),f'raw/{run}-execution.jsonl')
+ for v in reads:
+  if v.get('denied') or not v.get('sha256'):continue
+  path=v['path'];readPaths[path]=v
+  if path in allowed:check('native-read-matches-frozen-copy',v['sha256']==allowed[path]['sha256'],f'raw/{run}-reads.jsonl',{'path':path})
+ traceAudit[run]=dict(guardActivations=[dict(pid=pid,threadId=tid) for pid,tid in sorted(active)],executedTransforms=len(executed),denied=[v for v in reads if v.get('denied')],acceptedHashedReads=sum(bool(v.get('sha256')) and not v.get('denied') for v in reads),qualification='runInThisContext function invocation boundary records exact wrapped transformed code as invoked. Compilation artifacts and V8 nodecache files are inventory only, not execution evidence.')
+external=[]
+for path,v in readPaths.items():
+ if path.startswith(deps+'/') or path.startswith(m['allowedDependencyMirror']+'/'):
+  b=pathlib.Path(path).read_bytes();check('dependency-read-hash-unchanged',sha(b)==v['sha256'],'trace dependency reads',{'path':path});external.append(dict(path=path,bytes=len(b),sha256=sha(b)))
+# Bind all 81 frozen candidate entries through the enumerated copied inputs.
+candidate=json.loads(pathlib.Path(m['candidateManifestCopy']).read_text());byrel={v['relative']:v for v in m['inputs']};bindings=[]
+for v in candidate['sourceBindings']:
+ bound=byrel.get(v['path']);ok=bool(bound and bound['sha256']==v['sha256'] and bound['bytes']==v['bytes']);check('candidate-binding',ok,'candidate-manifest.json',{'path':v['path']});bindings.append(dict(path=v['path'],matched=ok,sha256=v['sha256']))
+# Qualify controls by discriminating actual negative/positive observations.
+custom={x['scenario']['id']:x for x in json.loads((r/'raw/adversarial-cases.json').read_text())}
+controls=[]
+def control(name,positive,negative,scope):
+ controls.append(dict(control=name,positive=bool(positive),negative=bool(negative),qualified=bool(positive and not negative),scope=scope));check('discriminating-control:'+name,positive and not negative,'controls.json')
+b=custom['matrix-normal-none-4-none'];pre=custom['pre-once-4'];empty=custom['matrix-empty-none-4-none'];throw=custom['matrix-throw-post-once-4-step-terminal'];leg=custom['legacy-control']
+control('full-tool-value-on-actual-request',find(json.loads(b['requests'][0]['messages'][1]['content'])) is not None,find(leg['requests'][0]) is not None,'complete vs absence of opt-in; same synthetic tool')
+control('provider-entry-vs-held-slot',len(b['requests'])==1,len(pre['requests'])==1,'beforecommit fault holds a native slot but zero actual provider entry')
+control('successful-response-vs-empty',b['result']['stopReason']=='COMPLETED',empty['result']['stopReason']=='COMPLETED','native empty output refuses with usage retained')
+control('primary-category-survives-secondary',throw['result']['stopReason']=='MODEL_FAILURE',throw['result']['stopReason']=='INTERNAL_FAILURE','model throw plus transient checkpoint plus failed-step audit')
+control('success-fact-survives-ACK-loss',any(v['status']=='SUCCEEDED' for v in custom['finish-ack-normal']['nativeSteps'] if v['stepType']=='RESPOND'),any(v['status']=='SUCCEEDED' for v in custom['finish-before-normal']['nativeSteps'] if v['stepType']=='RESPOND'),'native terminal row beforecommit vs ACKlost')
+(r/'assertions.json').write_text(json.dumps({'assertions':checks,'passed':sum(v['passed'] for v in checks),'failed':sum(not v['passed'] for v in checks)},indent=2)+'\n');(r/'observations-summary.json').write_text(json.dumps(summaries,indent=2)+'\n');(r/'controls.json').write_text(json.dumps(controls,indent=2)+'\n');(r/'trace-audit.json').write_text(json.dumps(traceAudit,indent=2)+'\n');(r/'dependency-read-posthashes.json').write_text(json.dumps(external,indent=2)+'\n');(r/'candidate-bindings.json').write_text(json.dumps(bindings,indent=2)+'\n')
+print('Assertions',len(checks),'failed',sum(not v['passed'] for v in checks),'candidate bindings',len(bindings),'read dependencies',len(external))
+for v in checks:
+ if not v['passed']:print(json.dumps(v))

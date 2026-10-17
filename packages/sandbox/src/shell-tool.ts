@@ -1,6 +1,10 @@
 import { existsSync, realpathSync, statSync } from 'node:fs'
-import { isAbsolute } from 'node:path'
-import type { ToolDefinition, ToolResult } from '@cvg/harness-contracts'
+import { isAbsolute, sep } from 'node:path'
+import type {
+  SandboxHandle,
+  ToolDefinition,
+  ToolResult
+} from '@cvg/harness-contracts'
 import { confinePath } from './confine.ts'
 import { runContained, type ContainedRunResult } from './run.ts'
 
@@ -9,6 +13,8 @@ export interface ShellRunRequest {
   readonly argv: readonly string[]
   /** Absolute directory, already confined to the workspace root. */
   readonly cwd: string
+  /** Validated grant supplied by the governed execution context. */
+  readonly handle: SandboxHandle
   readonly timeoutMs: number
   readonly maxOutputBytes: number
   readonly stdin?: string
@@ -36,8 +42,8 @@ export interface ShellToolOptions {
   /** Absolute tenant workspace root; cwd is confined to it by realpath. */
   readonly workspaceRoot: string
   /**
-   * Execution backend. Defaults to `runContained` (SPEC 0196 §5) with a
-   * PROCESS handle built from `workspaceRoot`; tests inject a fake.
+   * Execution backend. Defaults to `runContained` (SPEC 0196 §5) with
+   * the granted PROCESS handle; hosts/tests may inject a trusted runner.
    */
   readonly run?: (request: ShellRunRequest) => Promise<ShellRunResult>
   readonly limits?: Partial<ShellLimits>
@@ -155,13 +161,7 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
         timeoutMs: request.timeoutMs,
         maxOutputBytes: request.maxOutputBytes,
         ...(request.stdin !== undefined ? { stdin: request.stdin } : {}),
-        handle: {
-          mode: 'PROCESS',
-          allowNetwork: false,
-          allowSubprocess: true,
-          workspaceRoot: root,
-          deadlineMs: request.timeoutMs
-        }
+        handle: request.handle
       })
       return result
     })
@@ -175,7 +175,37 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
     sideEffect: 'WRITE',
     idempotent: false,
     sandbox: 'PROCESS',
-    execute: async (input) => {
+    execute: async (input, context) => {
+      const handle = context?.sandboxHandle
+      if (
+        !handle ||
+        handle.mode !== 'PROCESS' ||
+        handle.allowSubprocess !== true ||
+        typeof handle.allowNetwork !== 'boolean' ||
+        typeof handle.workspaceRoot !== 'string' ||
+        !isAbsolute(handle.workspaceRoot) ||
+        handle.workspaceRoot.includes('\0') ||
+        (handle.deadlineMs !== undefined &&
+          (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0))
+      )
+        return rejected('a valid governed PROCESS sandbox handle is required')
+      let grantedRoot: string
+      try {
+        grantedRoot = realpathSync(handle.workspaceRoot)
+        if (!statSync(grantedRoot).isDirectory())
+          return rejected('sandbox workspaceRoot must be a directory')
+      } catch {
+        return rejected('sandbox workspaceRoot cannot be resolved')
+      }
+      const withinGrant = (path: string): boolean =>
+        path === grantedRoot ||
+        path.startsWith(
+          grantedRoot.endsWith(sep) ? grantedRoot : grantedRoot + sep
+        )
+      if (!withinGrant(root))
+        return rejected(
+          'configured workspace root is outside the sandbox grant'
+        )
       const record = input as Record<string, unknown> | null
 
       // Any string-command field is refused: interpolation never enters.
@@ -227,6 +257,8 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
         rawCwd === undefined || rawCwd === '' ? '.' : rawCwd
       )
       if (!confined.ok) return rejected(confined.error)
+      if (!withinGrant(confined.abs))
+        return rejected('cwd is outside the sandbox grant')
       let cwdStats: ReturnType<typeof statSync>
       try {
         cwdStats = statSync(confined.abs)
@@ -247,12 +279,16 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
         }
       }
 
-      const timeoutMs = clamp(
-        typeof record?.['timeoutMs'] === 'number'
-          ? record['timeoutMs']
-          : Number.NaN,
-        limits.defaultTimeoutMs,
-        limits.maxTimeoutMs
+      const timeoutMs = Math.min(
+        limits.maxTimeoutMs,
+        handle.deadlineMs ?? Infinity,
+        clamp(
+          typeof record?.['timeoutMs'] === 'number'
+            ? record['timeoutMs']
+            : Number.NaN,
+          limits.defaultTimeoutMs,
+          limits.maxTimeoutMs
+        )
       )
 
       let result: ShellRunResult
@@ -260,6 +296,10 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
         result = await runner({
           argv,
           cwd: confined.abs,
+          // realpath established the granted directory's identity above.
+          // Use that same identity as cwd at the backend boundary, retaining
+          // every other grant and leaving the context handle untouched.
+          handle: Object.freeze({ ...handle, workspaceRoot: grantedRoot }),
           timeoutMs,
           maxOutputBytes: limits.maxOutputBytes,
           ...(stdinRaw !== undefined ? { stdin: stdinRaw } : {})

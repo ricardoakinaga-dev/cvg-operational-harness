@@ -1,0 +1,220 @@
+1: import type {
+2:   AgenticKnowledgeProvider,
+3:   AgentProfile,
+4:   ApprovalDecision,
+5:   ApprovalEngine,
+6:   ApprovalExecutionPort,
+7:   ApprovalRequest,
+8:   AuditEvent,
+9:   AuditSink,
+10:   KnowledgeSearchRequest,
+11:   KnowledgeSearchResult,
+12:   LoopDecision,
+13:   ModelGateway,
+14:   ModelResult,
+15:   PolicyDecision,
+16:   PolicyEngine,
+17:   PolicyRequest,
+18:   RuntimeInput,
+19:   SufficiencyEvaluation,
+20:   SufficiencyEvaluator,
+21:   TelemetryEvent,
+22:   TelemetrySink,
+23:   ToolDefinition,
+24:   ToolRegistry,
+25:   ToolResult
+26: } from '@cvg/harness-contracts'
+27: import { EMPTY_MODEL_USAGE } from '@cvg/harness-contracts'
+28: 
+29: export const PHASE3_TENANT =
+30:   'tenant_00000000-0000-4000-8000-000000000003' as RuntimeInput['tenantId']
+31: 
+32: export const PHASE3_TOOL_AVAILABILITY = 'synthetic.phase3.availability'
+33: export const PHASE3_TOOL_RESERVE = 'synthetic.phase3.reserve'
+34: 
+35: export function phase3RuntimeInput(
+36:   overrides: Partial<RuntimeInput> = {}
+37: ): RuntimeInput {
+38:   return {
+39:     agent: phase3AgentProfile(),
+40:     tenantId: PHASE3_TENANT,
+41:     executionId: 'exec_phase3_fixture',
+42:     conversationId:
+43:       'conversation_phase3_fixture' as RuntimeInput['conversationId'],
+44:     sessionId: 'session_phase3_fixture' as RuntimeInput['sessionId'],
+45:     correlationId:
+46:       'correlation_phase3_fixture' as RuntimeInput['correlationId'],
+47:     traceId: 'trace_phase3_fixture' as RuntimeInput['traceId'],
+48:     userMessage: 'phase 3 controlled fixture',
+49:     context: {
+50:       values: { fixture: 'phase3' },
+51:       sourceIds: ['phase3-fixture'],
+52:       capturedAt: '2026-09-15T00:00:00.000Z'
+53:     },
+54:     state: { version: 1, values: {}, updatedAt: '2026-09-15T00:00:00.000Z' },
+55:     budget: {
+56:       maxSteps: 8,
+57:       maxModelCalls: 4,
+58:       maxToolCalls: 4,
+59:       maxDurationMs: 30_000,
+60:       maxCostUsd: 1,
+61:       maxTokens: 4_000,
+62:       maxKnowledgeCalls: 3,
+63:       maxReplans: 2,
+64:       maxVerificationCalls: 3,
+65:       maxDecisionRepairs: 1
+66:     },
+67:     runtimeProfile: 'iterative',
+68:     ...overrides
+69:   }
+70: }
+71: 
+72: export function phase3AgentProfile(
+73:   overrides: Partial<AgentProfile> = {}
+74: ): AgentProfile {
+75:   return {
+76:     id: 'agent.phase3.synthetic' as AgentProfile['id'],
+77:     version: 'v1' as AgentProfile['version'],
+78:     objective: 'Complete the synthetic operational goal.',
+79:     instructions: ['synthetic only', 'never act without authorization'],
+80:     skills: [],
+81:     tools: [PHASE3_TOOL_AVAILABILITY, PHASE3_TOOL_RESERVE],
+82:     policies: ['synthetic-only'],
+83:     ...overrides
+84:   }
+85: }
+86: 
+87: export interface Phase3ToolObserver {
+88:   (event: { toolId: string; operationKey: string; input: unknown }): void
+89: }
+90: 
+91: export function createPhase3ToolRegistry(options: {
+92:   readonly availability: 'AVAILABLE' | 'UNAVAILABLE'
+93:   readonly reserveFails?: boolean
+94:   readonly observe?: Phase3ToolObserver
+95: }): ToolRegistry {
+96:   const availabilityTool: ToolDefinition = {
+97:     id: PHASE3_TOOL_AVAILABILITY,
+98:     version: 'v1',
+99:     description: 'Checks the synthetic resource availability.',
+100:     inputSchema: { type: 'object' },
+101:     outputSchema: { type: 'object' },
+102:     risk: 'LOW',
+103:     sideEffect: 'READ',
+104:     idempotent: true,
+105:     requiresApproval: false,
+106:     execute: async (input, context): Promise<ToolResult> => {
+107:       options.observe?.({
+108:         toolId: availabilityTool.id,
+109:         operationKey: context.operationKey ?? '',
+110:         input
+111:       })
+112:       return {
+113:         status: 'SUCCEEDED',
+114:         output:
+115:           options.availability === 'AVAILABLE'
+116:             ? { available: true }
+117:             : { available: false, reason: 'occupied' }
+118:       }
+119:     }
+120:   }
+121:   const reserveTool: ToolDefinition = {
+122:     id: PHASE3_TOOL_RESERVE,
+123:     version: 'v1',
+124:     description: 'Creates a synthetic reservation.',
+125:     inputSchema: { type: 'object' },
+126:     outputSchema: { type: 'object' },
+127:     risk: 'MEDIUM',
+128:     sideEffect: 'WRITE',
+129:     idempotent: false,
+130:     requiresApproval: false,
+131:     execute: async (input, context): Promise<ToolResult> => {
+132:       options.observe?.({
+133:         toolId: reserveTool.id,
+134:         operationKey: context.operationKey ?? '',
+135:         input
+136:       })
+137:       if (options.reserveFails) {
+138:         return { status: 'FAILED', error: 'synthetic failure' }
+139:       }
+140:       return {
+141:         status: 'SUCCEEDED',
+142:         output: { reservationRef: 'reservation-0001', applied: true }
+143:       }
+144:     }
+145:   }
+146:   const tools = [availabilityTool, reserveTool]
+147:   return {
+148:     list: () => tools,
+149:     resolve: (toolId, version) =>
+150:       tools.find(
+151:         (tool) =>
+152:           tool.id === toolId &&
+153:           (version === undefined || tool.version === version)
+154:       )
+155:   }
+156: }
+157: 
+158: export interface SyntheticKnowledgeItem {
+159:   readonly itemId: string
+160:   readonly text: string
+161:   readonly sourceId: string
+162:   readonly category: string
+163: }
+164: 
+165: export class SyntheticKnowledgeProvider implements AgenticKnowledgeProvider {
+166:   public readonly queries: string[] = []
+167: 
+168:   public constructor(
+169:     private readonly catalog: readonly SyntheticKnowledgeItem[]
+170:   ) {}
+171: 
+172:   public async search(
+173:     request: KnowledgeSearchRequest
+174:   ): Promise<KnowledgeSearchResult> {
+175:     this.queries.push(request.query)
+176:     const tokens = request.query.toLowerCase().split(/\s+/)
+177:     const items = this.catalog.filter((item) => {
+178:       const text = `${item.text} ${item.category}`.toLowerCase()
+179:       return tokens.some((token) => token.length > 2 && text.includes(token))
+180:     })
+181:     return {
+182:       query: request.query,
+183:       items: items.map((item) => ({
+184:         itemId: item.itemId,
+185:         text: item.text,
+186:         sourceId: item.sourceId,
+187:         sourceVersion: 'v1',
+188:         category: item.category
+189:       })),
+190:       provenance: items.map((item) => ({
+191:         sourceId: item.sourceId,
+192:         sourceVersion: 'v1',
+193:         category: item.category
+194:       }))
+195:     }
+196:   }
+197: }
+198: 
+199: /** Requires all requested categories to be present before SUFFICIENT. */
+200: export class CategorySufficiencyEvaluator implements SufficiencyEvaluator {
+201:   public async evaluate(input: {
+202:     readonly query: string
+203:     readonly requestedCategories: readonly string[]
+204:     readonly observations: readonly {
+205:       readonly payload: unknown
+206:     }[]
+207:   }): Promise<SufficiencyEvaluation> {
+208:     const found = new Map<string, Set<string>>()
+209:     for (const observation of input.observations) {
+210:       const payload = observation.payload as {
+211:         items?: readonly {
+212:           itemId: string
+213:           category?: string
+214:           sourceId: string
+215:         }[]
+216:       } | null
+217:       for (const item of payload?.items ?? []) {
+218:         const category = item.category ?? 'unknown'
+219:         const sources = found.get(category) ?? new Set<string>()
+220:         sources.add(item.sourceId)

@@ -53,12 +53,20 @@ const okRun: ShellRunResult = {
   truncated: false
 }
 
-const context = {
-  tenantId: 'tenant_00000000-0000-4000-8000-000000000001' as never,
-  agentId: 'agent_00000000-0000-4000-8000-000000000001' as never,
-  correlationId: 'corr_1' as never,
-  traceId: 'trace_1' as never,
-  operationKey: 'pdsh-013-shell.run'
+function context(root: string) {
+  return {
+    tenantId: 'tenant_00000000-0000-4000-8000-000000000001' as never,
+    agentId: 'agent_00000000-0000-4000-8000-000000000001' as never,
+    correlationId: 'corr_1' as never,
+    traceId: 'trace_1' as never,
+    operationKey: 'pdsh-013-shell.run',
+    sandboxHandle: Object.freeze({
+      mode: 'PROCESS' as const,
+      workspaceRoot: root,
+      allowNetwork: false,
+      allowSubprocess: true
+    })
+  }
 }
 
 describe('PDSH-013 shell tool boot (SPEC 0198 §1)', () => {
@@ -77,11 +85,12 @@ describe('PDSH-013 shell tool boot (SPEC 0198 §1)', () => {
 
 describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
   it('rejects string-command fields — no interpolation path exists', async () => {
-    const { tool } = probeTool(tempWorkspace(), okRun)
+    const root = tempWorkspace()
+    const { tool } = probeTool(root, okRun)
     for (const key of ['command', 'cmd', 'shell']) {
       const result = await tool.execute(
         { [key]: 'echo pwned', intent: 'x' },
-        context
+        context(root)
       )
       expect(result.status).toBe('REJECTED')
       expect(result.error).toMatch(/string commands/)
@@ -89,7 +98,8 @@ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
   })
 
   it('rejects malformed argv (missing, empty, non-string, empty element, NUL)', async () => {
-    const { tool } = probeTool(tempWorkspace(), okRun)
+    const root = tempWorkspace()
+    const { tool } = probeTool(root, okRun)
     const bad: unknown[] = [
       undefined,
       'echo hi',
@@ -100,7 +110,7 @@ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
       [null]
     ]
     for (const argv of bad) {
-      const result = await tool.execute({ argv, intent: 'x' }, context)
+      const result = await tool.execute({ argv, intent: 'x' }, context(root))
       expect(result.status, JSON.stringify(argv)).toBe('REJECTED')
     }
   })
@@ -113,24 +123,37 @@ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
       maxTotalArgBytes: 7
     })
     expect(
-      (await tool.execute({ argv: ['a', 'b', 'c'], intent: 'x' }, context))
+      (
+        await tool.execute(
+          { argv: ['a', 'b', 'c'], intent: 'x' },
+          context(root)
+        )
+      ).status
+    ).toBe('REJECTED')
+    expect(
+      (await tool.execute({ argv: ['abcde'], intent: 'x' }, context(root)))
         .status
     ).toBe('REJECTED')
     expect(
-      (await tool.execute({ argv: ['abcde'], intent: 'x' }, context)).status
-    ).toBe('REJECTED')
-    expect(
-      (await tool.execute({ argv: ['abcd', 'efgh'], intent: 'x' }, context))
-        .status
+      (
+        await tool.execute(
+          { argv: ['abcd', 'efgh'], intent: 'x' },
+          context(root)
+        )
+      ).status
     ).toBe('REJECTED')
   })
 
   it('rejects a missing or oversized intent before any spawn', async () => {
-    const { tool, calls } = probeTool(tempWorkspace(), okRun, {
+    const root = tempWorkspace()
+    const { tool, calls } = probeTool(root, okRun, {
       maxIntentLength: 5
     })
     for (const intent of [undefined, '   ', 'abcdefg']) {
-      const result = await tool.execute({ argv: ['true'], intent }, context)
+      const result = await tool.execute(
+        { argv: ['true'], intent },
+        context(root)
+      )
       expect(result.status, String(intent)).toBe('REJECTED')
     }
     expect(calls).toHaveLength(0)
@@ -144,7 +167,7 @@ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
     for (const cwd of ['..', '../..', '/etc', 'escape-link']) {
       const result = await tool.execute(
         { argv: ['true'], cwd, intent: 'x' },
-        context
+        context(root)
       )
       expect(result.status, cwd).toBe('REJECTED')
     }
@@ -159,7 +182,7 @@ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
       (
         await tool.execute(
           { argv: ['true'], cwd: 'missing-dir', intent: 'x' },
-          context
+          context(root)
         )
       ).status
     ).toBe('REJECTED')
@@ -170,17 +193,18 @@ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
       (
         await tool.execute(
           { argv: ['true'], cwd: 'arquivo.txt', intent: 'x' },
-          context
+          context(root)
         )
       ).status
     ).toBe('REJECTED')
   })
 
   it('rejects oversized stdin', async () => {
-    const { tool } = probeTool(tempWorkspace(), okRun, { maxStdinBytes: 4 })
+    const root = tempWorkspace()
+    const { tool } = probeTool(root, okRun, { maxStdinBytes: 4 })
     const result = await tool.execute(
       { argv: ['true'], stdin: '12345', intent: 'x' },
-      context
+      context(root)
     )
     expect(result.status).toBe('REJECTED')
   })
@@ -202,7 +226,7 @@ describe('PDSH-013 shell execution mapping (SPEC 0198 §4)', () => {
         stdin: 'dados',
         intent: 'executar comando sintetico'
       },
-      context
+      context(root)
     )
     expect(result.status).toBe('SUCCEEDED')
     expect(calls).toHaveLength(1)
@@ -215,12 +239,16 @@ describe('PDSH-013 shell execution mapping (SPEC 0198 §4)', () => {
   it('clamps an invalid timeout to the default', async () => {
     const root = tempWorkspace()
     const { tool, calls } = probeTool(root, okRun, { defaultTimeoutMs: 500 })
-    await tool.execute({ argv: ['true'], timeoutMs: -5, intent: 'x' }, context)
+    await tool.execute(
+      { argv: ['true'], timeoutMs: -5, intent: 'x' },
+      context(root)
+    )
     expect(calls[0]?.timeoutMs).toBe(500)
   })
 
   it('surfaces a non-zero exit code as SUCCEEDED (consumer interprets)', async () => {
-    const { tool } = probeTool(tempWorkspace(), {
+    const root = tempWorkspace()
+    const { tool } = probeTool(root, {
       exitCode: 1,
       stdout: '',
       stderr: 'no match',
@@ -228,26 +256,31 @@ describe('PDSH-013 shell execution mapping (SPEC 0198 §4)', () => {
     })
     const result = await tool.execute(
       { argv: ['grep', 'x'], intent: 'x' },
-      context
+      context(root)
     )
     expect(result.status).toBe('SUCCEEDED')
     expect(result.output).toMatchObject({ exitCode: 1, stderr: 'no match' })
   })
 
   it('maps spawn_failed to FAILED (containment failure, never an exit code)', async () => {
-    const { tool } = probeTool(tempWorkspace(), {
+    const root = tempWorkspace()
+    const { tool } = probeTool(root, {
       exitCode: 'spawn_failed',
       stdout: '',
       stderr: 'bwrap: exec failed',
       truncated: false
     })
-    const result = await tool.execute({ argv: ['true'], intent: 'x' }, context)
+    const result = await tool.execute(
+      { argv: ['true'], intent: 'x' },
+      context(root)
+    )
     expect(result.status).toBe('FAILED')
     expect(result.error).toMatch(/containment failed/)
   })
 
   it('maps timeout to FAILED with the effective budget', async () => {
-    const { tool } = probeTool(tempWorkspace(), {
+    const root = tempWorkspace()
+    const { tool } = probeTool(root, {
       exitCode: 'timeout',
       stdout: '',
       stderr: '',
@@ -255,20 +288,24 @@ describe('PDSH-013 shell execution mapping (SPEC 0198 §4)', () => {
     })
     const result = await tool.execute(
       { argv: ['sleep', '99'], timeoutMs: 1000, intent: 'x' },
-      context
+      context(root)
     )
     expect(result.status).toBe('FAILED')
     expect(result.error).toMatch(/timed out after 1000ms/)
   })
 
   it('maps a throwing runner to FAILED', async () => {
+    const root = tempWorkspace()
     const tool = createShellTool({
-      workspaceRoot: tempWorkspace(),
+      workspaceRoot: root,
       run: async () => {
         throw new Error('runner exploded')
       }
     })
-    const result = await tool.execute({ argv: ['true'], intent: 'x' }, context)
+    const result = await tool.execute(
+      { argv: ['true'], intent: 'x' },
+      context(root)
+    )
     expect(result.status).toBe('FAILED')
     expect(result.error).toMatch(/runner exploded/)
   })
@@ -296,7 +333,7 @@ describe('PDSH-013 shell default runner (SPEC 0198 §1, host smoke)', () => {
       const tool = createShellTool({ workspaceRoot: root })
       const result = await tool.execute(
         { argv: ['/bin/echo', 'sintetico'], intent: 'fumaça do host' },
-        context
+        context(root)
       )
       expect(result.status).toBe('SUCCEEDED')
       expect(result.output).toMatchObject({
@@ -316,7 +353,7 @@ describe('PDSH-013 shell default runner (SPEC 0198 §1, host smoke)', () => {
           argv: ['/bin/sh', '-c', 'echo sintetico > inside.txt'],
           intent: 'provar bind gravável do workspace'
         },
-        context
+        context(root)
       )
       expect(result.status).toBe('SUCCEEDED')
       const { readFileSync } = await import('node:fs')

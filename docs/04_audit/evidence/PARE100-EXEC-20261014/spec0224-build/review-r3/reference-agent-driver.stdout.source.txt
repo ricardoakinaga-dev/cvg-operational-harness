@@ -1,0 +1,422 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tests/differential/reference-agent-driver.mjs SHA256 062bb63ee4153608e62d0f5625330452955b46e8c0f70522085851bf8b286d0c
+     1 // SPEC0213: drive the installed production loop through its public testkit.
+     2 // This file contains no reference implementation; only a synthetic adapter.
+     3 import fs from 'node:fs'
+     4 import path from 'node:path'
+     5 import crypto from 'node:crypto'
+     6 import { createRequire, syncBuiltinESMExports } from 'node:module'
+     7 import { pathToFileURL } from 'node:url'
+     8 import { execFileSync } from 'node:child_process'
+     9 import net from 'node:net'
+    10 import tls from 'node:tls'
+    11 import http from 'node:http'
+    12 import https from 'node:https'
+    13 import http2 from 'node:http2'
+    14 import dgram from 'node:dgram'
+    15 import {
+    16   validateFailureCase,
+    17   makeFailure,
+    18   snapshotFailure
+    19 } from './failure-case.mjs'
+    20 import { TOOL_NAME, validateToolCase } from './tool-case.mjs'
+    21 import { capturePortRequest } from './capture-port-data.mjs'
+    22 
+    23 const REFERENCE_ROOT = '/home/ricardo/deepseek-harness-session-fixes'
+    24 const REFERENCE_PIN = '768fb1f3d3dcf9a16659ee354e927d05475f22dd'
+    25 const sha = (data) => crypto.createHash('sha256').update(data).digest('hex')
+    26 const fail = (message) => {
+    27   throw new Error(message)
+    28 }
+    29 const json = (value) => JSON.parse(JSON.stringify(value))
+    30 
+    31 export async function runReferenceFixture(mode = 'reply') {
+    32   if (!['reply', 'failure', 'tool'].includes(mode)) fail('invalid driver mode')
+    33   if (process.argv.length !== 3) fail('one fixture path required')
+    34   if (!process.env.HOME) fail('isolated cwd/home required')
+    35   const home = fs.realpathSync(process.env.HOME)
+    36   const cwd = fs.realpathSync(process.cwd())
+    37   if (
+    38     cwd === REFERENCE_ROOT ||
+    39     cwd.startsWith(`${REFERENCE_ROOT}${path.sep}`) ||
+    40     (cwd !== home && !cwd.startsWith(`${home}${path.sep}`))
+    41   )
+    42     fail('isolated cwd/home required')
+    43   const filename = path.resolve(process.argv[2])
+    44   const fixtureStat = fs.lstatSync(filename)
+    45   if (
+    46     !fixtureStat.isFile() ||
+    47     fixtureStat.nlink !== 1 ||
+    48     fixtureStat.size > 65536 ||
+    49     !fs.realpathSync(filename).startsWith(`${home}${path.sep}`)
+    50   )
+    51     fail('unsafe fixture')
+    52   const fixture = JSON.parse(fs.readFileSync(filename, 'utf8'))
+    53   if (mode === 'tool') validateToolCase(fixture)
+    54   else if (mode === 'failure') validateFailureCase(fixture)
+    55   else if (
+    56     !fixture ||
+    57     typeof fixture !== 'object' ||
+    58     Array.isArray(fixture) ||
+    59     Object.keys(fixture).some(
+    60       (k) => !['version', 'id', 'message', 'fragments'].includes(k)
+    61     ) ||
+    62     fixture.version !== 1 ||
+    63     typeof fixture.id !== 'string' ||
+    64     !/^[a-z0-9_-]{1,64}$/.test(fixture.id) ||
+    65     typeof fixture.message !== 'string' ||
+    66     fixture.message.length < 1 ||
+    67     fixture.message.length > 4096 ||
+    68     !Array.isArray(fixture.fragments) ||
+    69     !fixture.fragments.length ||
+    70     fixture.fragments.length > 32 ||
+    71     fixture.fragments.some((x) => typeof x !== 'string' || x.length > 4096) ||
+    72     fixture.fragments.join('').length > 4096
+    73   )
+    74     fail('invalid fixture')
+    75   if (fs.realpathSync(REFERENCE_ROOT) !== REFERENCE_ROOT)
+    76     fail('reference root alias')
+    77   const head = execFileSync(
+    78     'git',
+    79     [
+    80       '--no-replace-objects',
+    81       '-c',
+    82       'core.fsmonitor=false',
+    83       '-c',
+    84       'core.hooksPath=/dev/null',
+    85       '-C',
+    86       REFERENCE_ROOT,
+    87       'rev-parse',
+    88       'HEAD'
+    89     ],
+    90     {
+    91       encoding: 'utf8',
+    92       env: {
+    93         PATH: process.env.PATH,
+    94         GIT_CONFIG_GLOBAL: '/dev/null',
+    95         GIT_CONFIG_NOSYSTEM: '1',
+    96         GIT_NO_REPLACE_OBJECTS: '1',
+    97         GIT_OPTIONAL_LOCKS: '0'
+    98       }
+    99     }
+   100   ).trim()
+   101   if (head !== REFERENCE_PIN) fail('reference pin drift')
+   102   if (
+   103     JSON.parse(fs.readFileSync(path.join(REFERENCE_ROOT, 'package.json')))
+   104       .version !== '0.2.0-rc.1'
+   105   )
+   106     fail('reference version drift')
+   107   // Test observation guards, not a claim of OS isolation of hostile native code.
+   108   const networkAttempts = []
+   109   for (const [label, mod, keys] of [
+   110     ['net', net, ['connect', 'createConnection']],
+   111     ['tls', tls, ['connect']],
+   112     ['http', http, ['request', 'get']],
+   113     ['https', https, ['request', 'get']],
+   114     ['http2', http2, ['connect']],
+   115     ['dgram', dgram, ['createSocket']]
+   116   ])
+   117     for (const key of keys)
+   118       mod[key] = () => {
+   119         networkAttempts.push(`${label}.${key}`)
+   120         fail('unexpected_network')
+   121       }
+   122   globalThis.fetch = async () => {
+   123     networkAttempts.push('fetch')
+   124     fail('unexpected_network')
+   125   }
+   126   net.Server.prototype.listen = function () {
+   127     networkAttempts.push('net.listen')
+   128     fail('unexpected_network')
+   129   }
+   130   syncBuiltinESMExports()
+   131   console.log = (...args) => console.error(...args)
+   132   // pnpm exposes these peers from the public testkit, not the monorepo root.
+   133   const require = createRequire(
+   134     path.join(
+   135       REFERENCE_ROOT,
+   136       'packages/test-support/agent-loop-testkit/package.json'
+   137     )
+   138   )
+   139   const artifacts = []
+   140   const load = async (name) => {
+   141     const file = fs.realpathSync(require.resolve(name))
+   142     if (!file.startsWith(`${REFERENCE_ROOT}${path.sep}`))
+   143       fail('reference export outside frozen root')
+   144     artifacts.push({ package: name, file, sha256: sha(fs.readFileSync(file)) })
+   145     return import(pathToFileURL(file).href)
+   146   }
+   147   const { Context } = await load('@deepseek-ai/cordis')
+   148   const { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } =
+   149     await load('@deepseek-ai/dsh-agent-loop-testkit')
+   150   const { LlmAdapter } = await load('@deepseek-ai/dsh-llm')
+   151   const { SessionId } = await load('@deepseek-ai/dsh-session')
+   152   for (const name of [
+   153     '@deepseek-ai/dsh-agent',
+   154     '@deepseek-ai/dsh-agent-loop',
+   155     '@deepseek-ai/dsh-session-projection',
+   156     '@deepseek-ai/dsh-system-prompt',
+   157     '@deepseek-ai/dsh-tools'
+   158   ]) {
+   159     const file = fs.realpathSync(require.resolve(name))
+   160     if (!file.startsWith(`${REFERENCE_ROOT}${path.sep}`))
+   161       fail('dependency outside frozen reference')
+   162     artifacts.push({ package: name, file, sha256: sha(fs.readFileSync(file)) })
+   163   }
+   164   const ctx = new Context()
+   165   const events = [],
+   166     requests = [],
+   167     chunks = [],
+   168     adapterErrors = [],
+   169     liveErrors = []
+   170   let calls = 0
+   171   const toolBodies = []
+   172   class ScriptedAdapter extends LlmAdapter {
+   173     async *stream(options) {
+   174       if (++calls > (mode === 'tool' ? 2 : 1)) fail('unexpected_model_call')
+   175       if (options.signal?.aborted) fail('cancelled_before_model')
+   176       requests.push(
+   177         mode === 'tool' ? capturePortRequest(options) : json(options.messages)
+   178       )
+   179       if (mode === 'failure') {
+   180         const error = makeFailure(fixture)
+   181         adapterErrors.push(snapshotFailure(error))
+   182         throw error
+   183       }
+   184       if (mode === 'tool') {
+   185         let script
+   186         if (calls === 1) {
+   187           script = [
+   188             { type: 'block-start', index: 0, blockType: 'tool-call' },
+   189             {
+   190               type: 'block-end',
+   191               index: 0,
+   192               block: {
+   193                 type: 'tool-call',
+   194                 id: `call-${fixture.id}`,
+   195                 name: TOOL_NAME,
+   196                 arguments: JSON.stringify({ text: fixture.text })
+   197               }
+   198             },
+   199             { type: 'usage', usage: { inputTokens: 1, outputTokens: 2 } },
+   200             { type: 'finish', reason: { kind: 'tool-calls' } }
+   201           ]
+   202         } else {
+   203           const results = options.messages.filter((m) => m.role === 'tool')
+   204           if (
+   205             results.length !== 1 ||
+   206             results[0].toolCallId !== `call-${fixture.id}` ||
+   207             toolBodies.length !== 1
+   208           )
+   209             fail('missing real tool result')
+   210           const text = results[0].content
+   211             .map((b) =>
+   212               b.type === 'text' ? b.text : fail('unexpected tool content')
+   213             )
+   214             .join('')
+   215           if (text !== toolBodies[0].output)
+   216             fail('tool result differs from body')
+   217           script = [
+   218             { type: 'block-start', index: 0, blockType: 'text' },
+   219             { type: 'text-delta', index: 0, text },
+   220             { type: 'block-end', index: 0, block: { type: 'text', text } },
+   221             { type: 'usage', usage: { inputTokens: 1, outputTokens: 2 } },
+   222             { type: 'finish', reason: { kind: 'stop' } }
+   223           ]
+   224         }
+   225         for (const chunk of script) {
+   226           chunks.push(json(chunk))
+   227           yield chunk
+   228         }
+   229         return
+   230       }
+   231       const script = [
+   232         { type: 'block-start', index: 0, blockType: 'text' },
+   233         ...fixture.fragments.map((text) => ({
+   234           type: 'text-delta',
+   235           index: 0,
+   236           text
+   237         })),
+   238         {
+   239           type: 'block-end',
+   240           index: 0,
+   241           block: { type: 'text', text: fixture.fragments.join('') }
+   242         },
+   243         { type: 'usage', usage: { inputTokens: 1, outputTokens: 2 } },
+   244         { type: 'finish', reason: { kind: 'stop' } }
+   245       ]
+   246       for (const chunk of script) {
+   247         chunks.push(json(chunk))
+   248         yield chunk
+   249       }
+   250     }
+   251   }
+   252   let native
+   253   try {
+   254     await mountAgentLoopTestDependencies(ctx)
+   255     if (mode === 'tool')
+   256       ctx.tools.register({
+   257         name: TOOL_NAME,
+   258         description: 'Pure synthetic echo; no external capabilities',
+   259         parameters: {
+   260           type: 'object',
+   261           properties: { text: { type: 'string' } },
+   262           required: ['text'],
+   263           additionalProperties: false
+   264         },
+   265         output: {
+   266           schema: { type: 'string' },
+   267           render: (_args, value) => [{ type: 'text', text: value }]
+   268         },
+   269         execute: async (args) => {
+   270           if (toolBodies.length || typeof args.text !== 'string')
+   271             fail('unexpected tool body')
+   272           toolBodies.push({
+   273             name: TOOL_NAME,
+   274             input: json(args),
+   275             output: args.text
+   276           })
+   277           return args.text
+   278         }
+   279       })
+   280     ctx.on('session/event', (_session, event) => {
+   281       events.push(json(event))
+   282     })
+   283     if (mode === 'failure')
+   284       ctx.on('agent/error', ({ turn, step, error }) => {
+   285         liveErrors.push({ turn, step, error: snapshotFailure(error) })
+   286       })
+   287     ctx.llm.registerAdapter(['pare100-synthetic'], new ScriptedAdapter())
+   288     const driver = await mountAgentLoopTestHarness(ctx)
+   289     const agent = await driver.create(
+   290       SessionId(`pare100-${fixture.id}`),
+   291       {
+   292         provider: 'pare100-synthetic',
+   293         model: 'keyless-v1',
+   294         maxTokens: 128
+   295       },
+   296       { cwd: process.cwd() }
+   297     )
+   298     agent.followup({
+   299       id: `message-${fixture.id}`,
+   300       role: 'user',
+   301       content: [{ type: 'text', text: fixture.message }],
+   302       source: { kind: 'user' }
+   303     })
+   304     await agent.whenIdle()
+   305     const messages = json(agent.session.deriveMessages())
+   306     const assistant = messages.filter((x) => x.role === 'assistant')
+   307     native = {
+   308       events,
+   309       messages,
+   310       requests,
+   311       chunks,
+   312       modelCalls: calls,
+   313       ...(mode === 'failure' ? { adapterErrors, liveErrors } : {}),
+   314       ...(mode === 'tool' ? { toolBodies } : {})
+   315     }
+   316     if (
+   317       calls !== (mode === 'tool' ? 2 : 1) ||
+   318       (mode === 'reply' && assistant.length !== 1) ||
+   319       networkAttempts.length
+   320     )
+   321       fail('missing_or_extra_execution')
+   322     if (mode === 'reply') {
+   323       native.finalText = assistant[0].content
+   324         .filter((x) => x.type === 'text')
+   325         .map((x) => x.text)
+   326         .join('')
+   327       const completed = events.filter((x) => x.type === 'assistant/message')
+   328       if (
+   329         completed.length !== 1 ||
+   330         !completed[0].data.usage ||
+   331         !Number.isSafeInteger(completed[0].data.usage.inputTokens) ||
+   332         !Number.isSafeInteger(completed[0].data.usage.outputTokens)
+   333       )
+   334         fail('missing_native_usage')
+   335       native.observedUsage = json(completed[0].data.usage)
+   336     }
+   337     native.toolCalls = events.filter((x) => x.type === 'tool/call').length
+   338     if (mode === 'tool') {
+   339       const final = assistant.at(-1)
+   340       if (!final || toolBodies.length !== 1 || native.toolCalls !== 1)
+   341         fail('missing tool turn')
+   342       native.finalText = final.content
+   343         .map((b) =>
+   344           b.type === 'text' ? b.text : fail('unexpected final content')
+   345         )
+   346         .join('')
+   347     }
+   348   } finally {
+   349     await ctx.fiber.dispose()
+   350   }
+   351   if (
+   352     head !==
+   353     execFileSync(
+   354       'git',
+   355       [
+   356         '--no-replace-objects',
+   357         '-c',
+   358         'core.fsmonitor=false',
+   359         '-C',
+   360         REFERENCE_ROOT,
+   361         'rev-parse',
+   362         'HEAD'
+   363       ],
+   364       {
+   365         encoding: 'utf8',
+   366         env: {
+   367           PATH: process.env.PATH,
+   368           GIT_CONFIG_GLOBAL: '/dev/null',
+   369           GIT_CONFIG_NOSYSTEM: '1',
+   370           GIT_NO_REPLACE_OBJECTS: '1'
+   371         }
+   372       }
+   373     ).trim()
+   374   )
+   375     fail('reference changed during execution')
+   376   for (const artifact of artifacts)
+   377     if (sha(fs.readFileSync(artifact.file)) !== artifact.sha256)
+   378       fail('reference artifact changed during execution')
+   379   process.stdout.write(
+   380     JSON.stringify({
+   381       version: 1,
+   382       fixtureId: fixture.id,
+   383       reference: {
+   384         root: REFERENCE_ROOT,
+   385         head,
+   386         artifacts,
+   387         transitiveArtifactClosure: 'NOT_VERIFIED'
+   388       },
+   389       native,
+   390       networkAttempts,
+   391       ...(mode === 'failure' || mode === 'tool'
+   392         ? {
+   393             observationStatus:
+   394               mode === 'tool'
+   395                 ? 'NATIVE_TOOL_TURN_MEASUREMENT_NOT_PARITY'
+   396                 : 'NATIVE_FAILURE_MEASUREMENT_NOT_PARITY'
+   397           }
+   398         : {
+   399             projection: {
+   400               text: native.finalText,
+   401               modelCalls: native.modelCalls,
+   402               toolCalls: native.toolCalls,
+   403               inputTokens: native.observedUsage.inputTokens,
+   404               outputTokens: native.observedUsage.outputTokens,
+   405               effects: []
+   406             },
+   407             projectionStatus: 'BOUNDED_REPLY_ONLY_NOT_FULL_PARITY'
+   408           })
+   409     }) + '\n'
+   410   )
+   411 }
+   412 
+   413 if (
+   414   process.argv[1] &&
+   415   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+   416 )
+   417   runReferenceFixture().catch((error) => {
+   418     process.stderr.write(`${error.message}\n`)
+   419     process.exitCode = 1
+   420   })
+

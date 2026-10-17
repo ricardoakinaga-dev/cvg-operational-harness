@@ -1,0 +1,45 @@
+# SPEC 0207 — Limpeza de emits obsoletos e órfãos
+
+- Task: P100-001, carteira [0378](../03_build/0378_backlog_paridade_integral.md). Pedido do usuário em 14/10/2026 autoriza remover legados/órfãos; governança proporcional D-12, T2.
+- Estado: `BUILD_LOCAL_AUTHORIZED_T2`. Esta SPEC não altera contrato público, segurança, schema, dados ou código TypeScript. A revisão humana específica T3 não se aplica a esta fatia reversível.
+
+## Recon
+
+Foram encontrados 348 arquivos ignorados `.js`, `.js.map`, `.d.ts` e `.d.ts.map`, total de 2.060.261 bytes. 339 correspondem a `.ts` existente; nove são outputs de `packages/platform/src/secretary-preset` e `packages/persistence/src/journeys{,-postgres}`, cujas fontes já foram movidas ao legado. A declaração autoral versionada `apps/web/src/vite-env.d.ts` fica fora da remoção.
+
+Manifests dos pacotes afetados expõem `dist`, enquanto os programas TypeScript e Vitest resolvem fontes `.ts`. Os builders atuais têm `outDir: dist`; os emits ao lado da fonte são resíduos de configuração anterior. Os workspaces cujo entrypoint usa `src/index.ts` não têm candidato nesse entrypoint. A pesquisa de imports/literais e o build/test devem rejeitar a hipótese de haver consumidor exclusivo de um candidato.
+
+As três bibliotecas `legacy/packages/secretary-*` ainda possuem consumidores, exports, testes e configuração de build. Sua remoção exige migrar os consumidores e revisar a alteração de contrato T3. Elas não são órfãs e não entram nesta fatia.
+
+A pesquisa exata de consumidores encontrou quatro paths somente no catálogo de exceções do checker de fronteira: mirrors compilados de `homolog-worker`, `canonical`, `tool-invocation-boundary` e `persistence/index`. São sítios opcionais de classificação de artefatos, não imports de execução. Não houve import `.js` nas fontes TypeScript examinadas. O checker será executado após a remoção; sua implementação não é alterada.
+
+## Regras de execução
+
+1. Inventariar antes de apagar, com path relativo, fonte correspondente ou linhagem de módulo movido, tamanho, classe e SHA-256.
+2. Nenhum candidato pode estar versionado, ter diff de outro agente ou estar fora das extensões e raízes declaradas. Conferir `git check-ignore` individualmente.
+3. Criar backup próprio em `/tmp/cvg-pare100-20261014-*` e conferir cada hash no momento da remoção. Não usar `git clean`, `restore`, `reset`, `stash`, glob destrutivo ou remoção recursiva.
+4. Preservar `.ts`/`.tsx`, declarações autorais, `dist`, dependências instaladas, evidências e docs históricas, certificação, dados e migrations.
+5. Não mudar lockfile, alias, manifest, contratos, runtime ou configuração para fazer a remoção passar.
+6. Gates: Node 22.23.2, `typecheck`, `lint`, `npm test`, `test:postgres` e E2E. PostgreSQL 16 próprio e dados somente sintéticos; E2E em portas próprias, sem reusar servidor do usuário. Logs e artefatos sob diretório próprio.
+
+## Critério de pronto
+
+Todos os paths do manifesto ausentes, nenhuma implementação versionada modificada, declaração autoral preservada, gates T2 verdes e fronteira de produto verde. A ausência de outputs ignorados deve ser reavaliada após testes/build. O cartão não recebe DONE quando falta gate.
+
+## Recuperação
+
+O backup permite restaurar somente os emits removidos, por lista e hash, se uma dependência exclusiva for encontrada. Não restaurar sobre arquivo novo criado por outro agente: conflito interrompe a restauração e é registrado. Se a compilação atual regenerar um output em `src`, registrar o produtor e corrigir em cartão de tooling separado; não esconder a recorrência.
+
+## Resultado
+
+Inventário e backup concluídos; remoção e gates ainda `NOT_RUN` no momento de emissão desta SPEC. A conclusão será acrescentada a este arquivo após execução.
+
+### Execução — 14/10/2026
+
+348 emits removidos e backup persistido na evidência; zero candidato regenerado após testes. 983 arquivos selecionados de implementação/config/testes versionados sem mudança e declaração autoral preservada. Typecheck PASS; unit 381 arquivos/3.249 PASS (23 arquivos/212 skipped sem DB); PostgreSQL 37/302 PASS zero skips; E2E 12/12 PASS; fronteira PASS.
+
+Lint FAIL preexistente: `sleep` não usado em `packages/agent-runtime/src/__tests__/pdsh-031-slice3e1.test.ts:26`, reproduzido na versão de HEAD por stdin sem editar esse arquivo do owner PDSH-031. P100-001 permanece `VERIFY`, não DONE; dívida em P100-002. [Relatório](../04_audit/0612_parity_plan_cleanup_2026-10-14.md) e [evidência](../04_audit/evidence/PARE100-20261014/summary.md). Nenhum código versionado, lockfile ou contrato foi alterado.
+
+## Fechamento local — 15/10/2026
+
+P100-001 e P100-002 encerrados `DONE_LOCAL` após I1 independente ACCEPT_LOCAL, sem alteração dos critérios. Limpeza/backup348 e fonte integrada113 conferidos; gatesR4 e integraçãoRoot aprovados. [Parecer e limites](../04_audit/evidence/PARE100-EXEC-20261014/critic-baseline-closure-r1/review.md.source.txt). F-CLI-001 e imposição per-file no CI padrão permanecem em P100-050; nenhum fechamento PDSH/AUD, paridade integral ou release.

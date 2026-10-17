@@ -88,7 +88,10 @@ function run(entry, { runId, candidateId }) {
     ...process.env,
     CI: process.env.CI ?? 'true',
     CI_RUN_ID: runId,
-    CI_CANDIDATE_ID: candidateId
+    CI_CANDIDATE_ID: candidateId,
+    // Standalone certify must enforce the neutral-core per-file gate too.
+    // coverage:critical retains the independent aggregate check in the chain.
+    ...(entry.id === 'coverage' ? { CVG_COVERAGE_PER_FILE: '1' } : {})
   }
   const result = spawnSync(entry.command, {
     cwd: root,

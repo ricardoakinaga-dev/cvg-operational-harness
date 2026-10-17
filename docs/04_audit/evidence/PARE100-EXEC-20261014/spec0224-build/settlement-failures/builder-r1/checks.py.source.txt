@@ -1,0 +1,12 @@
+import json, subprocess, os, hashlib, datetime
+from pathlib import Path
+b=Path(__file__).parent;w=b.parents[2]/'worktree';node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node';source='packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts'
+env=os.environ.copy();env.update(PATH=str(Path(node).parent)+':'+env.get('PATH',''),TMPDIR=str(b/'tmp'),TMP=str(b/'tmp'),TEMP=str(b/'tmp'),NODE_COMPILE_CACHE=str(b/'nodecache'),SPEC0224_SETTLE_ASSIGNED_ROOT=str(b),SPEC0224_SETTLE_RESOURCE=str(b/'private/resource-private.json'),SPEC0224_SETTLE_SERVICE_RESOURCE=str(b/'private/service-connection-private.json'),SPEC0224_SETTLE_EVIDENCE=str(b/'runs/r1'))
+checks=[('typecheck-final',[node,str(w/'node_modules/typescript/bin/tsc'),'-p','tsconfig.typecheck.json','--noEmit']),('eslint-final',[node,str(w/'node_modules/eslint/bin/eslint.js'),source]),('vitest-collect',[node,str(w/'node_modules/vitest/vitest.mjs'),'list','--config',str(b/'vitest.config.mjs'),'--configLoader','native','--json'])]
+rows=[]
+for name,argv in checks:
+ before=hashlib.sha256((w/source).read_bytes()).hexdigest();started=datetime.datetime.now(datetime.timezone.utc).isoformat()
+ with (b/(name+'.stdout.log')).open('xb') as out,(b/(name+'.stderr.log')).open('xb') as err: p=subprocess.run(argv,cwd=w,env=env,stdout=out,stderr=err)
+ row={'name':name,'argv':argv,'cwd':str(w),'exit':p.returncode,'sourceBeforeSHA256':before,'sourceAfterSHA256':hashlib.sha256((w/source).read_bytes()).hexdigest(),'startedAt':started,'finishedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'stdout':str(b/(name+'.stdout.log')),'stderr':str(b/(name+'.stderr.log'))}
+ (b/(name+'.command.json')).write_text(json.dumps(row,indent=2)+'\n');rows.append(row);print(name,p.returncode)
+(b/'checks-final.json').write_text(json.dumps(rows,indent=2)+'\n')

@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""I1 documentary checker. Reads manifest-enumerated bytes only; no subject execution."""
+from pathlib import Path
+import hashlib,json,re
+P=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/published-contract-review-packet-r1/manifest.json')
+O=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/published-contract-review-r1')
+EXPECTED='fd24b5651f89b8d558187044ebce598b82b39614dabb22aeae06094f6535028b'
+b=P.read_bytes(); assert hashlib.sha256(b).hexdigest()==EXPECTED
+m=json.loads(b); byid={x['id']:x for x in m['inputs']}; assert len(byid)==38
+rows=[]; texts={}
+for x in m['inputs']:
+    data=Path(x['copy']).read_bytes(); h=hashlib.sha256(data).hexdigest()
+    rows.append(dict(id=x['id'],path=x['copy'],bytes=len(data),sha256=h,match=len(data)==x['bytes'] and h==x['sha256']))
+    texts[x['id']]=data.decode('utf-8')
+assert all(x['match'] for x in rows)
+post={'manifest':{'path':str(P),'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()},'inputs':rows}
+pre=json.loads((O/'fingerprint-pre.json').read_text()); assert post==pre
+(O/'fingerprint-post.json').write_text(json.dumps(post,indent=2)+'\n')
+def locations(key,needle):
+    return [{'line':n,'text':l} for n,l in enumerate(texts[key].splitlines(),1) if needle in l]
+settlement=texts['S06'].split('export const CONTROLLED_SETTLEMENT_PHASES = Object.freeze([',1)[1].split('] as const)',1)[0]
+phases=re.findall(r"'([^']+)'",settlement)
+assert 'step.saveCheckpoint' in phases and 'complete.checkpoint' not in phases
+assert 'controlled_settlement_only' in texts['S06']
+assert 'const settlement = TERMINAL_PHASE.test(type)' in texts['S08']
+assert 'run.usage.inputTokens += outcome.result.inputTokens' in texts['S12']
+assert 'run.usage.outputTokens += outcome.result.outputTokens' in texts['S12']
+assert 'run.usage.costUsd += outcome.result.costUsd' in texts['S12']
+assert "purpose !== 'ORCHESTRATION' && purpose !== 'REPAIR'" in texts['S11']
+assert "adapter_version = 'controlled-published-v1'" in texts['S10']
+assert 'bound execution requires controlled fence context' in texts['S10']
+assert "BEFORE INSERT OR UPDATE OR DELETE ON outbox_attempts" not in texts['S10']
+assert "BEFORE UPDATE OR DELETE ON outbox_events" not in texts['S10']
+relpaths={x['relative'] for x in m['inputs']}
+missing=['packages/harness/src/kernel/pipeline.ts','packages/harness/src/kernel/host.ts','packages/harness/src/iterative-runtime.ts','packages/persistence/src/postgres-outbox.ts','apps/worker/src/postgres-controlled.ts','packages/persistence/src/postgres-inbound.ts','packages/persistence/src/operational-execution-postgres.ts']
+assert not any(p in relpaths for p in missing)
+pa=re.findall(r'\| (PA[0-9]{2}) NOT_RUN',texts['ACCEPTANCE-PLAN.md']); assert pa==[f'PA{i:02}' for i in range(1,16)]
+checks={
+ 'kind':'EXECUTED_LOCAL_DOCUMENTARY_CHECK_ONLY','subject_runtime_status':'NOT_RUN',
+ 'manifest_and_all_38_expected_hashes_match':True,'pre_post_fingerprints_equal':True,
+ 'phase_check':{'proposed':'complete.checkpoint','current_settlement_allowlist':phases,'in_allowlist':False,'meaning':'Design must specify a constrained terminal/diagnostic transition; this is not execution of the proposal.'},
+ 'manual_response_unrecorded_debit':{k:locations('S12',k) for k in ['run.usage.inputTokens += outcome.result.inputTokens','run.usage.outputTokens += outcome.result.outputTokens','run.usage.costUsd += outcome.result.costUsd']},
+ 'legacy_sql_marker_preserved_in_source':True,
+ 'missing_causal_sources_not_opened':missing,
+ 'future_acceptance_cases_all_not_run':pa,
+ 'outside_packet_enumerated_authority_paths':[{'id':x['id'],'path':x['copy']} for x in m['inputs'] if not x['copy'].startswith(m['readRoot']+'/')],
+ 'limitations':['No native code imported or executed.','No PG, provider, network, package installs or repo commands.','Assertions describe source facts only; no acceptance case passed.']}
+(O/'static-checks.json').write_text(json.dumps(checks,indent=2,ensure_ascii=False)+'\n')
+print(json.dumps({'documentary_checks':'PASS','input_count':38,'pre_post_equal':True,'runtime_cases':'NOT_RUN'}))

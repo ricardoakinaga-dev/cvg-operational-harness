@@ -1,0 +1,601 @@
+{
+  "protocol_version": 1,
+  "methods": [
+    "sdk.hello",
+    "session.open",
+    "turn.send",
+    "session.events"
+  ],
+  "error_codes": {
+    "parse_error": -32700,
+    "invalid_request": -32600,
+    "method_not_found": -32601,
+    "invalid_params": -32602,
+    "internal_error": -32603,
+    "unsupported_protocol_version": 1001,
+    "session_not_found": 1002,
+    "capability_not_available": 1003
+  },
+  "transport_error_codes": {
+    "frame": -32080,
+    "response_too_large": -32081,
+    "timeout": -32082,
+    "transport": -32083,
+    "limit": -32084,
+    "invalid_response": -32085
+  },
+  "stop_reasons": [
+    "COMPLETED",
+    "NEEDS_USER_INPUT",
+    "APPROVAL_REQUIRED",
+    "HUMAN_TAKEOVER",
+    "POLICY_DENIED",
+    "INSUFFICIENT_EVIDENCE",
+    "MAX_STEPS",
+    "MAX_COST",
+    "MAX_DURATION",
+    "MAX_TOKENS",
+    "MAX_MODEL_CALLS",
+    "MAX_TOOL_CALLS",
+    "MAX_REPLANS",
+    "MAX_KNOWLEDGE_CALLS",
+    "MAX_VERIFICATION_CALLS",
+    "VERIFICATION_FAILED",
+    "LOOP_DETECTED",
+    "TOOL_FAILURE",
+    "MODEL_FAILURE",
+    "INTERNAL_FAILURE",
+    "STATE_CONFLICT",
+    "CANCELLED",
+    "UNSAFE_REQUEST"
+  ],
+  "catalog": {
+    "formatVersion": 1,
+    "definitions": {
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "pattern": "^[^\\u0000]+$"
+      },
+      "text": {
+        "type": "string",
+        "x-maxUtf8Bytes": 65536
+      },
+      "count": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "hash": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "context": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "values",
+          "sourceIds",
+          "capturedAt"
+        ],
+        "properties": {
+          "values": {
+            "type": "object"
+          },
+          "sourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "capturedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "budget": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "maxSteps",
+          "maxModelCalls",
+          "maxToolCalls",
+          "maxDurationMs",
+          "maxCostUsd",
+          "maxTokens"
+        ],
+        "properties": {
+          "maxSteps": {
+            "$ref": "#/definitions/count"
+          },
+          "maxModelCalls": {
+            "$ref": "#/definitions/count"
+          },
+          "maxToolCalls": {
+            "$ref": "#/definitions/count"
+          },
+          "maxDurationMs": {
+            "type": "number",
+            "minimum": 0
+          },
+          "maxCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "maxTokens": {
+            "$ref": "#/definitions/count"
+          },
+          "maxKnowledgeCalls": {
+            "$ref": "#/definitions/count"
+          },
+          "maxReplans": {
+            "$ref": "#/definitions/count"
+          },
+          "maxVerificationCalls": {
+            "$ref": "#/definitions/count"
+          },
+          "maxDecisionRepairs": {
+            "$ref": "#/definitions/count"
+          }
+        }
+      },
+      "request": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "messages",
+          "context",
+          "budget",
+          "correlationId"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "role",
+                "content"
+              ],
+              "properties": {
+                "role": {
+                  "enum": [
+                    "system",
+                    "user",
+                    "assistant",
+                    "tool"
+                  ]
+                },
+                "content": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "context": {
+            "$ref": "#/definitions/context"
+          },
+          "budget": {
+            "$ref": "#/definitions/budget"
+          },
+          "correlationId": {
+            "$ref": "#/definitions/id"
+          },
+          "purpose": {
+            "enum": [
+              "ORCHESTRATION",
+              "RESPONSE",
+              "EVALUATION",
+              "REPAIR"
+            ]
+          }
+        }
+      }
+    },
+    "events": {
+      "turn/start": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "correlationId"
+        ],
+        "properties": {
+          "correlationId": {
+            "$ref": "#/definitions/id"
+          }
+        }
+      },
+      "model/request": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "correlationId",
+          "request"
+        ],
+        "properties": {
+          "correlationId": {
+            "$ref": "#/definitions/id"
+          },
+          "request": {
+            "$ref": "#/definitions/request"
+          }
+        }
+      },
+      "model/result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "correlationId",
+          "provider",
+          "inputTokens",
+          "outputTokens"
+        ],
+        "properties": {
+          "correlationId": {
+            "$ref": "#/definitions/id"
+          },
+          "provider": {
+            "$ref": "#/definitions/id"
+          },
+          "inputTokens": {
+            "$ref": "#/definitions/count"
+          },
+          "outputTokens": {
+            "$ref": "#/definitions/count"
+          }
+        }
+      },
+      "tool/call": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "correlationId",
+          "toolId",
+          "operationKey",
+          "input"
+        ],
+        "properties": {
+          "correlationId": {
+            "$ref": "#/definitions/id"
+          },
+          "toolId": {
+            "$ref": "#/definitions/id"
+          },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "input": {}
+        }
+      },
+      "tool/result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "correlationId",
+          "toolId",
+          "outcome"
+        ],
+        "properties": {
+          "correlationId": {
+            "$ref": "#/definitions/id"
+          },
+          "toolId": {
+            "$ref": "#/definitions/id"
+          },
+          "outcome": {
+            "enum": [
+              "not_started",
+              "deadline",
+              "cancelled",
+              "threw",
+              "failed",
+              "succeeded",
+              "confirm_failed"
+            ]
+          }
+        }
+      },
+      "turn/end": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "correlationId",
+          "stopReason"
+        ],
+        "properties": {
+          "correlationId": {
+            "$ref": "#/definitions/id"
+          },
+          "stopReason": {
+            "enum": [
+              "COMPLETED",
+              "NEEDS_USER_INPUT",
+              "APPROVAL_REQUIRED",
+              "HUMAN_TAKEOVER",
+              "POLICY_DENIED",
+              "INSUFFICIENT_EVIDENCE",
+              "MAX_STEPS",
+              "MAX_COST",
+              "MAX_DURATION",
+              "MAX_TOKENS",
+              "MAX_MODEL_CALLS",
+              "MAX_TOOL_CALLS",
+              "MAX_REPLANS",
+              "MAX_KNOWLEDGE_CALLS",
+              "MAX_VERIFICATION_CALLS",
+              "VERIFICATION_FAILED",
+              "LOOP_DETECTED",
+              "TOOL_FAILURE",
+              "MODEL_FAILURE",
+              "INTERNAL_FAILURE",
+              "STATE_CONFLICT",
+              "CANCELLED",
+              "UNSAFE_REQUEST"
+            ]
+          }
+        }
+      },
+      "message/user": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "$ref": "#/definitions/text"
+          }
+        }
+      },
+      "message/assistant": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "$ref": "#/definitions/text"
+          }
+        }
+      },
+      "context/compacted": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "throughSequence",
+          "summary",
+          "sourceDigest",
+          "strategyVersion"
+        ],
+        "properties": {
+          "throughSequence": {
+            "$ref": "#/definitions/count"
+          },
+          "summary": {
+            "$ref": "#/definitions/text"
+          },
+          "sourceDigest": {
+            "$ref": "#/definitions/hash"
+          },
+          "strategyVersion": {
+            "$ref": "#/definitions/id"
+          }
+        }
+      }
+    }
+  },
+  "event_fingerprints": {
+    "turn/start": "87a9978378e95a399c015b0994dd6b195f75aa0cee565631c7ffc1e28f067e6b",
+    "model/request": "175eb26e6ef99bd12a92c52ddf6fa573d97886cb14d3eacbf115f6671cf0694f",
+    "model/result": "031921bd01ba191c4d087cee12e7f40de8ff87cc2a00646211d83a54c74e9b65",
+    "tool/call": "799dfa1789c49177fb1d8d679b83add2b69485f9cc5b817c7e3759a7ed0e2101",
+    "tool/result": "92fb433c6515ea2bd2d51e555de77993e232cfa643e43c48fc03a6a125412a3c",
+    "turn/end": "01e3072ea573cdd68e51af5198f99c3da8b02193610fe4876255d6e2278f24df",
+    "message/user": "698b10ac7dad265e7741e1f3cb5f141b1075ec0d433e31e66432100f39d398a7",
+    "message/assistant": "5089bf2e538e977100d4de8a0528576cef1e3f12d6a43107e2f7d0666a0a124b",
+    "context/compacted": "2a6d208e8269911dda250095f5eea71fd89fdb47917a9f27f5edc0b62b5c8c4b"
+  },
+  "events": [
+    {
+      "correlationId": "c",
+      "eventId": "e0",
+      "formatVersion": 1,
+      "payload": {
+        "correlationId": "c"
+      },
+      "schemaFingerprint": "87a9978378e95a399c015b0994dd6b195f75aa0cee565631c7ffc1e28f067e6b",
+      "sequence": 3,
+      "sessionId": "s",
+      "tenantId": "sdk_stdio_synthetic",
+      "timestamp": "0000-02-29T00:00:00.000Z",
+      "traceId": "trace",
+      "type": "turn/start"
+    },
+    {
+      "correlationId": "c",
+      "eventId": "e1",
+      "formatVersion": 1,
+      "payload": {
+        "correlationId": "c",
+        "request": {
+          "budget": {
+            "maxCostUsd": 1,
+            "maxDurationMs": 30000,
+            "maxModelCalls": 2,
+            "maxSteps": 4,
+            "maxTokens": 4000,
+            "maxToolCalls": 2
+          },
+          "context": {
+            "capturedAt": "synthetic",
+            "sourceIds": [],
+            "values": {
+              "z": 0,
+              "🌿": 1e-07
+            }
+          },
+          "correlationId": "c",
+          "messages": [
+            {
+              "content": "Olá 🌿",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "schemaFingerprint": "175eb26e6ef99bd12a92c52ddf6fa573d97886cb14d3eacbf115f6671cf0694f",
+      "sequence": 4,
+      "sessionId": "s",
+      "tenantId": "sdk_stdio_synthetic",
+      "timestamp": "0000-02-29T00:00:00.000Z",
+      "traceId": "trace",
+      "type": "model/request"
+    },
+    {
+      "correlationId": "c",
+      "eventId": "e2",
+      "formatVersion": 1,
+      "payload": {
+        "correlationId": "c",
+        "inputTokens": 3,
+        "outputTokens": 4,
+        "provider": "deterministic"
+      },
+      "schemaFingerprint": "031921bd01ba191c4d087cee12e7f40de8ff87cc2a00646211d83a54c74e9b65",
+      "sequence": 5,
+      "sessionId": "s",
+      "tenantId": "sdk_stdio_synthetic",
+      "timestamp": "0000-02-29T00:00:00.000Z",
+      "traceId": "trace",
+      "type": "model/result"
+    },
+    {
+      "correlationId": "c",
+      "eventId": "e3",
+      "formatVersion": 1,
+      "payload": {
+        "correlationId": "c",
+        "input": {
+          "n": 100000000000000000000,
+          "🌿": 0
+        },
+        "operationKey": "op",
+        "toolId": "synthetic"
+      },
+      "schemaFingerprint": "799dfa1789c49177fb1d8d679b83add2b69485f9cc5b817c7e3759a7ed0e2101",
+      "sequence": 6,
+      "sessionId": "s",
+      "tenantId": "sdk_stdio_synthetic",
+      "timestamp": "0000-02-29T00:00:00.000Z",
+      "traceId": "trace",
+      "type": "tool/call"
+    },
+    {
+      "correlationId": "c",
+      "eventId": "e4",
+      "formatVersion": 1,
+      "payload": {
+        "correlationId": "c",
+        "outcome": "not_started",
+        "toolId": "synthetic"
+      },
+      "schemaFingerprint": "92fb433c6515ea2bd2d51e555de77993e232cfa643e43c48fc03a6a125412a3c",
+      "sequence": 7,
+      "sessionId": "s",
+      "tenantId": "sdk_stdio_synthetic",
+      "timestamp": "0000-02-29T00:00:00.000Z",
+      "traceId": "trace",
+      "type": "tool/result"
+    },
+    {
+      "correlationId": "c",
+      "eventId": "e5",
+      "formatVersion": 1,
+      "payload": {
+        "correlationId": "c",
+        "stopReason": "COMPLETED"
+      },
+      "schemaFingerprint": "01e3072ea573cdd68e51af5198f99c3da8b02193610fe4876255d6e2278f24df",
+      "sequence": 8,
+      "sessionId": "s",
+      "tenantId": "sdk_stdio_synthetic",
+      "timestamp": "0000-02-29T00:00:00.000Z",
+      "traceId": "trace",
+      "type": "turn/end"
+    },
+    {
+      "correlationId": "c",
+      "eventId": "e6",
+      "formatVersion": 1,
+      "payload": {
+        "text": "Olá 🌿"
+      },
+      "schemaFingerprint": "698b10ac7dad265e7741e1f3cb5f141b1075ec0d433e31e66432100f39d398a7",
+      "sequence": 9,
+      "sessionId": "s",
+      "tenantId": "sdk_stdio_synthetic",
+      "timestamp": "0000-02-29T00:00:00.000Z",
+      "traceId": "trace",
+      "type": "message/user"
+    },
+    {
+      "correlationId": "c",
+      "eventId": "e7",
+      "formatVersion": 1,
+      "payload": {
+        "text": "synthetic"
+      },
+      "schemaFingerprint": "5089bf2e538e977100d4de8a0528576cef1e3f12d6a43107e2f7d0666a0a124b",
+      "sequence": 10,
+      "sessionId": "s",
+      "tenantId": "sdk_stdio_synthetic",
+      "timestamp": "0000-02-29T00:00:00.000Z",
+      "traceId": "trace",
+      "type": "message/assistant"
+    },
+    {
+      "correlationId": "c",
+      "eventId": "e8",
+      "formatVersion": 1,
+      "payload": {
+        "sourceDigest": "0000000000000000000000000000000000000000000000000000000000000000",
+        "strategyVersion": "v1",
+        "summary": "synthetic",
+        "throughSequence": 1
+      },
+      "schemaFingerprint": "2a6d208e8269911dda250095f5eea71fd89fdb47917a9f27f5edc0b62b5c8c4b",
+      "sequence": 11,
+      "sessionId": "s",
+      "tenantId": "sdk_stdio_synthetic",
+      "timestamp": "0000-02-29T00:00:00.000Z",
+      "traceId": "trace",
+      "type": "context/compacted"
+    }
+  ],
+  "canonical_sizes": [
+    312,
+    592,
+    374,
+    397,
+    358,
+    335,
+    313,
+    319,
+    447
+  ],
+  "canonical_limit_probe": {
+    "textLength": 1048203,
+    "canonicalBytes": 1048575,
+    "tsAccepted": true
+  },
+  "public_resolution": [
+    "file:///tmp/cvg-pare100-exec-20261014-6az3hlay/certification-r6-worktree/packages/sdk/dist/index.js",
+    "file:///tmp/cvg-pare100-exec-20261014-6az3hlay/certification-r6-worktree/packages/harness/dist/index.js",
+    "file:///tmp/cvg-pare100-exec-20261014-6az3hlay/certification-r6-worktree/packages/contracts/dist/index.js"
+  ]
+}

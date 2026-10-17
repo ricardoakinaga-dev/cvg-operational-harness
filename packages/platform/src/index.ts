@@ -20,3 +20,32 @@ export * from './safety-assessment.ts'
 export * from './release-candidate.ts'
 export * from './output-policy.ts'
 export * from './trace-governance.ts'
+export {
+  CONTROLLED_PUBLISHED_ADAPTER,
+  CONTROLLED_SETTLEMENT_PHASES,
+  controlledCanonicalJson,
+  controlledDigest,
+  prepareControlledPublishedAdmission,
+  validateControlledSnapshot
+} from './controlled-kernel-continuation.ts'
+export type {
+  ControlledKernelFence,
+  ControlledKernelIdentity,
+  ControlledPhaseRef,
+  ControlledEvidenceAck,
+  ControlledApprovalReceipt,
+  ControlledBoundApprovalConsumption,
+  ControlledBoundApprovalVerification,
+  ControlledResumeSeal,
+  ControlledDispatchPermit,
+  ControlledCanonicalCommand,
+  ControlledSerializedAttempt,
+  ControlledPublishedSnapshot,
+  ControlledPublishedState,
+  ControlledPublishedPrepared,
+  ControlledKernelContinuation,
+  ControlledKernelHostContext,
+  ControlledPublishedAdmissionInput,
+  ControlledPublishedAdmission
+} from './controlled-kernel-continuation.ts'
+export type { ControlledKernelCompositionPorts } from './controlled-kernel-adapters.ts'

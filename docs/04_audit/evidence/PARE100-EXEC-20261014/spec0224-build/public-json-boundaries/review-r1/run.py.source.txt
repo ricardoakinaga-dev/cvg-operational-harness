@@ -1,0 +1,14 @@
+import pathlib,os,subprocess,json,datetime,sys
+W=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree');O=W.parent/'spec0224-build/public-json-boundaries/review-r1';NODE='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+mode=sys.argv[1];assert mode in ['memory','postgres']
+env={'PATH':str(pathlib.Path(NODE).parent)+':/usr/bin:/bin','HOME':str(O/'home'),'TMPDIR':str(O/'tmp'),'TMP':str(O/'tmp'),'TEMP':str(O/'tmp'),'XDG_CONFIG_HOME':str(O/'xdg/config'),'XDG_CACHE_HOME':str(O/'xdg/cache'),'XDG_DATA_HOME':str(O/'xdg/data'),'XDG_STATE_HOME':str(O/'xdg/state'),'NODE_COMPILE_CACHE':str(O/'node-compile-cache'),'NODE_ENV':'test','LANG':'C.UTF-8','TZ':'UTC','SPEC0224_JSON_EVIDENCE':str(O/(mode+'-run'))}
+if mode=='postgres':env['SPEC0224_JSON_RESOURCE']=str(O/'actual-resource-private.json')
+else:env['CVG_COMPLETE_PUBLIC_EVIDENCE']=str(O/'memory-run/observations.json')
+argv=[NODE,str(W/'node_modules/vitest/vitest.mjs'),'run','--config',str(O/('vitest-'+mode+'.mts')),'--reporter=verbose','--reporter=json','--outputFile.json='+str(O/(mode+'-vitest.json'))]
+if mode=='memory':argv+=['-t','TR02']
+record={'argv':argv,'cwd':str(W),'env':env,'start':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+with (O/(mode+'.stdout.log')).open('xb') as out,(O/(mode+'.stderr.log')).open('xb') as err:
+ try:
+  r=subprocess.run(argv,cwd=W,env=env,stdout=out,stderr=err,timeout=240);record['exit']=r.returncode
+ except Exception as e: record.update(exit=None,error=type(e).__name__+': '+str(e))
+record['end']=datetime.datetime.now(datetime.timezone.utc).isoformat();(O/(mode+'-command.json')).write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record))

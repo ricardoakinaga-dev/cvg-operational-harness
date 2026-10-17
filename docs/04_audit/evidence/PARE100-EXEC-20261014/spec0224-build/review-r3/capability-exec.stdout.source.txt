@@ -1,0 +1,77 @@
+   343 
+   344 function toTool(
+   345   registration: StoredRegistration,
+   346   prepareResult?: (result: unknown) => ToolResult
+   347 ): ToolDefinition {
+   348   const descriptor = cloneDescriptor(registration.descriptor)
+   349   return {
+   350     ...descriptor,
+   351     execute: (input: unknown, context: ToolExecutionContext) =>
+   352       executeBound(registration.implementation, input, context, prepareResult)
+   353   }
+   354 }
+   355 
+   356 async function executeBound(
+   357   implementation: CapabilityImplementation,
+   358   input: unknown,
+   359   context: ToolExecutionContext,
+   360   prepareResult?: (result: unknown) => ToolResult
+   361 ): Promise<ToolResult> {
+   362   let safeInput: unknown
+   363   try {
+   364     safeInput = cloneJsonValue(input)
+   365     if (!inputMatchesExecutionContext(safeInput, context)) {
+   366       return { status: 'REJECTED', error: 'capability_input_invalid' }
+   367     }
+   368     if (implementation.validateInput(safeInput) !== true) {
+   369       return { status: 'REJECTED', error: 'capability_input_invalid' }
+   370     }
+   371   } catch {
+   372     return { status: 'REJECTED', error: 'capability_input_invalid' }
+   373   }
+   374 
+   375   let result: ToolResult
+   376   let preparing = false
+   377   try {
+   378     const safeContext = Object.freeze({ ...context }) as ToolExecutionContext
+   379     const rawResult = await implementation.execute(safeInput, safeContext)
+   380     preparing = Boolean(prepareResult)
+   381     const normalizedResult = prepareResult
+   382       ? prepareResult(rawResult)
+   383       : normalizeToolResult(rawResult)
+   384     preparing = false
+   385     if (!normalizedResult) {
+   386       return { status: 'REJECTED', error: 'capability_result_invalid' }
+   387     }
+   388     result = normalizedResult
+   389   } catch {
+   390     if (preparing)
+   391       throw new Error('unknown_effect: complete_result_not_representable')
+   392     return { status: 'FAILED', error: 'capability_execution_failed' }
+   393   }
+   394 
+   395   if (result.status === 'SUCCEEDED') {
+   396     try {
+   397       if (implementation.validateOutput(result.output) !== true) {
+   398         return { status: 'REJECTED', error: 'capability_output_invalid' }
+   399       }
+   400     } catch {
+   401       return { status: 'REJECTED', error: 'capability_output_invalid' }
+   402     }
+   403   }
+   404 
+   405   try {
+   406     if (prepareResult) return prepareResult(result)
+   407     return {
+   408       status: result.status,
+   409       ...(result.output !== undefined
+   410         ? { output: cloneJsonValue(result.output) }
+   411         : {}),
+   412       ...(result.error !== undefined ? { error: result.error } : {})
+   413     }
+   414   } catch {
+   415     return { status: 'REJECTED', error: 'capability_result_invalid' }
+   416   }
+   417 }
+   418 
+   419 function cloneDescriptor(

@@ -1,0 +1,3 @@
+import fs from "node:fs"
+import {vi} from "vitest"
+vi.mock("node:child_process", async importOriginal=>{const actual=await importOriginal<typeof import("node:child_process")>();return {...actual,spawnSync:(command:any,args:any,options:any)=>{if(args?.[0]?.endsWith("reference-tool-driver.mjs")){const argv=[process.cwd()+"/critic-reference-timeout.mjs",args[1],"fault-hang"];fs.appendFileSync(process.cwd()+"/evidence/critic/fault-injection-timeout.jsonl",JSON.stringify({command,originalArgv:args,injectedArgv:argv,cwd:options.cwd,timeout:options.timeout})+"\n");return (actual.spawnSync as any)(command,argv,options)}return (actual.spawnSync as any)(command,args,options)}}})

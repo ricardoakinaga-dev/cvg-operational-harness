@@ -1,0 +1,108 @@
+FILE spec.md 300-358
+300: | Receipt  | Identidade nativa de operação/decisão e snapshot imutável do pedido; pending é observação do mesmo trabalho, não permissão para repetir.                                                                                                                                                                                                                                     |
+301: 
+302: Códigos estáveis propostos: INVALID_INPUT, OWNER_CLOSED, OWNER_FENCED, TENANT_MISMATCH, STALE_REVISION, REQUEST_CONFLICT, QUOTA_EXCEEDED, POLICY_BLOCKED, HANDOFF_REQUIRED, CATALOG_MISMATCH, BOOT_FAILED, PUBLICATION_PENDING, CLEANUP_PENDING, CLEANUP_FAILED, REENTRANT_OPERATION, UNSUPPORTED_DURABLE_BINDING, TURN_ADMISSION_CLOSED, OWNER_CLOSED_EVIDENCE_UNCERTAIN. Diagnóstico carrega somente IDs/digests/phase/counters e causa sanitizada. Não emitir corpo de ferramenta, credenciais/config ou path sensível; audit/log indisponível impede novo trabalho de gerenciamento, sem inventar evidência de ausência de efeito.
+303: 
+304: ## 9. Compatibilidade, durable bindings e limites de escopo
+305: 
+306: Não alterar bytes das SPECs217/220/221, migrations históricas ou log v1. Stores compartilhados, effect journal e approval authority não migram para o manager. O worker/API durável217 não recebe o novo owner nem leases desta fundação; eles não são serializáveis, não têm `.run/.execute` de OperationalHarness e rejeitam inputs de resume/fingerprint/executionId. Tests de entrypoint/import e tipos devem mostrar que a composição publicada0217 continua no root imutável atual. Uma integração futura precisa de contrato explícito de retenção de artefatos/fingerprint e pins duráveis entre processos antes de trocar capabilities sob jobs pendentes. Não tratar ticket local como esse contrato.
+307: 
+308: O lifecycle de writer/conexão em0221 tem outro owner. Recursos de sessão/store são emprestados por esta fundação e não fechados ao retirar geração. Se a composição pai for um owner0221 futuro, o shutdown precisa primeiro fechar admissão de turnos/gerações, juntar seu trabalho e depois fechar o writer; aprovação desta SPEC não aprova0221 nem cria esse adapter.
+309: 
+310: Restart reconstrói um owner novo exclusivamente do bootstrapPlan/catálogo confiáveis do host. Histórico de audit não é desired config nem protocolo de commit da configuração; receipts locais não podem ser ressuscitados. Não reexecutar automaticamente mutações anteriores. Persistência de desired config, file lock/mixed process, applied/restart-required/override, instalação de bundles/registries/build scripts/version exemptions, inventário cross-host/presets e novas capacidades continuam P100-012/040/052 e exigem SPECs/execução próprias. Seus271requisitos e29UNKNOWN permanecem visíveis; esta fundação não os substitui por12famílias de teste.
+311: 
+312: OBS-I1-001 (tool result longo truncado em summary300) continua aberto em P100-004/014/020; lifetime correto não restaura conteúdo perdido. SDKsingle_pass, forks/resume/search/backends, topology16vs3, sideEffecting, contenção nativa, interfaces/hosts e gates globais permanecem no objetivo integral. Nenhuma produção, provider real, dado real ou efeito clínico/financeiro/agenda automático é autorizado.
+313: 
+314: ## 10. Arquivos futuros, rollout e rollback
+315: 
+316: Somente após aprovação desta SPEC: contrato/owner novos em `packages/harness/src/managed-lifecycle.ts` e export público; helpers internos mínimos em factory/runtime/kernel para receber o MESMO host preparado, sem nova implementação de loop; host/types para sandbox protegido e erro observável de cleanup; wrappers de ownership dos ports de capability; correção compartilhada de normalizeDescriptor em `packages/harness/src/capability-boundary.ts` para sandbox preservado antes do fingerprint conforme5.3. Tipos novos ficam locais ao pacote harness. Os contratos atuais de packages/contracts permanecem byte-identical nesta fatia; se o BUILD revelar que precisam mudar, parar e revisar a SPEC concreta e seu gate humano antes dessa alteração. Testes novos em harness/kernel e fixtures públicas, com type/API/architecture checks. Nenhuma mudança no worker/API/platform/persistence/SDK/manifests/lock ou SQL nesta fatia; adapters dessas superfícies são gates posteriores.
+317: 
+318: Opt-in por chamada explícita da nova fábrica; criarManaged não troca o default de hosts existentes. Antes de integração, produzir nova candidata isolada, inventariar delta exato e reemitir provas/gates afetados. Alterações futuras em pins/input0220 exigem requalificação e decisão sobre o pacote concreto; não editar snapshots antigos para torná-los verdes.
+319: 
+320: Rollback impede novas composições gerenciadas e deixa terminar/fecha explicitamente os owners já criados; nunca troca controles de um owner vivo nem descarta seus recursos para fingir volta à baseline. Remover o diff apenas de uma candidata descartável/reconstruída, preservando histórico/evidência e sem reset/restore no trabalho compartilhado. Sem schema novo, sem replay de corpos ou registros de approval. Qualquer cleanup incerto continua pendente no operador, não some na reversão do código.
+321: 
+322: ## 11. Aceitação futura, toda NOT_RUN
+323: 
+324: | ID   | Prova pelo limite público real                                                                                                                                                                                        | Controle que precisa falhar                                                                                                                                    |
+325: | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+326: | ML01 | Boot completo single_pass/iterative e troca usam KernelHost/mesmo pipeline/mesmos controls                                                                                                                            | Segundo boot/profile divergente ou executor do manager que pula kernel                                                                                         |
+327: | ML02 | Ordem/dependências/ciclo/duplicata/ausente/erro de apply e rollback dos recursos                                                                                                                                      | Publicar candidato incompleto ou perder recurso adquirido antes do erro                                                                                        |
+328: | ML03 | Matriz finita de observers e controles/sandbox protegidos; turn/end formatter de COMPLETED e around/replacement hooks recusados antes de init                                                                         | Confundir OPTIONAL com não protegido; unload/bypass por plugin/modelo                                                                                          |
+329: | ML04 | IDs/digests/config/catalog/DTO/quotas, sem getters ou import de JSON                                                                                                                                                  | Trocar código mantendo só descriptorDigest ou aceitar versão latest                                                                                            |
+330: | ML05 | Pin nativo tenant/agent-bound, clone/Proxy/receipt externo recusados antes de IO                                                                                                                                      | Lease estrutural, pin de outra geração/tenant e uso depois de release                                                                                          |
+331: | ML06 | Turno usa uma geração inteira; novo pin após commit usa a nova, antigo permanece retido                                                                                                                               | Metade das ferramentas/modelo/hooks de cada geração                                                                                                            |
+332: | ML07 | Dois replace/staleRevision/dedup/digest conflito;512IDs sequenciais, oldest-key retry após quota e compaction sem reativação                                                                                          | Duas publicações ou duas ativações para o mesmo request                                                                                                        |
+333: | ML08 | Cancel/timeout antes/depois do commit preserva ponto de linearização e cleanup                                                                                                                                        | Caller abortado recria efeito, rollback falso ou recurso abandonado                                                                                            |
+334: | ML09 | Policy/audit no shape NATIVO: target/invocation/envelope e result ML1 lido sem perda; audit failure nunca vira sucesso de capability                                                                                  | Admitir novo turno sem evidência, restaurar ponteiro ou reativar na reconciliação                                                                              |
+335: | ML10 | Reconciliação audit/close concorrentes não reabrem owner nem executam capacidade                                                                                                                                      | Confundir nova observação de commit com repetição do commit                                                                                                    |
+336: | ML11 | Promises originais de planner/orchestrator sem modelo, model/tool/observer e audit/control/store ainda vivas após timeout conservam seus recursos                                                                     | Dispor recurso em uso só porque a corrida ou lease terminou                                                                                                    |
+337: | ML12 | Aquisição chega após cancel/close, disposer é retido e executado uma vez                                                                                                                                              | Throw tardio perde handle; close afirma CLOSED antes da aquisição terminar                                                                                     |
+338: | ML13 | Join de IO original de controles/stores/journal, OWNED versus BORROWED; disposers reversos/singleflight/falha/hang                                                                                                    | Paralelizar dependentes, repetir disposer incerto ou fechar controle/store emprestado                                                                          |
+339: | ML14 | close durante boot/replace/pin/turn e close/release repetidos, waits cancelados                                                                                                                                       | Late publish/acquisition revive owner ou novo trabalho passa após close                                                                                        |
+340: | ML15 | Reentrância de activate/dispose/audit/modelo e self-wait recusados sem deadlock                                                                                                                                       | Callback bloqueia a fila que espera sua conclusão                                                                                                              |
+341: | ML16 | Gateway/registry por geração e matriz de hooks por perfil; exatamente um finalizer nativo, sem turn/end capability inerte ou audit/telemetry duplos                                                                   | Provider novo com orquestrador antigo ou registry alternativo                                                                                                  |
+342: | ML17 | Inventory de estados/contadores/histórico compactado verdadeiro; original result envelopes distinguem requests/revisões/attempts                                                                                      | Desired plan ou método retornado é rotulado disposed/applied sem join                                                                                          |
+343: | ML18 | Bootstrap/restart explícitos e root217/SDK/owner0221 preservados                                                                                                                                                      | Injetar lease local em worker durable/resume ou fechar writer emprestado                                                                                       |
+344: | ML19 | Bootstrap/read/pin/replace/reconcile mapeados ao PolicyRequest real; todos não-ALLOW bloqueiam; envelope actor/tenant/target/digest bound                                                                             | Actor/permissão do payload, bypass de controle ou grant herdado de outra geração                                                                               |
+345: | ML20 | Quotas concorrentes e lifetime512requests/4096leases/16attempts/16MiB, oldest-key retry/latecleanup não são expulsos para abrir espaço                                                                                | Quota amplia para esconder leaks; sucesso de stop sem saída real                                                                                               |
+346: | ML21 | Latch nativo de turno fecha antes de finish/deadline/cancel; planner atrasado não inicia outro model/tool enquanto owner continua OPEN; IO já iniciado permanece vivo                                                 | Usar producer ACTIVE como permissão de body novo após o turno terminar                                                                                         |
+347: | ML22 | D2 retorna/rejeita após race mas filho Q usa recurso D1; barrier de subtree bloqueia D1 em rollback/retirement/late acquire/owner cleanup                                                                             | Esperar só Promise do disposer ou self-join do item root                                                                                                       |
+348: | ML23 | AgentProfile/turn snapshots agregados, scanner antes de clone/hash/policy, reserva de charge e retenção até subtree original zero                                                                                     | Muitas strings válidas contornam16MiB ou release devolve bytes de callback ainda vivo                                                                          |
+349: | ML24 | Audit→release→wait, policy→inventory, activate→ready, disposer→close e ciclos transitivos recusados antes de nova espera/autorização                                                                                  | Polls finitos mantêm self-join ou read-only recursa PolicyEngine                                                                                               |
+350: | ML25 | Bootstrap BOOTING e replace OPEN usam predicados próprios; ACK normal/reconcile só EVIDENCE_PENDING elegível; close domina ACK tardio                                                                                 | Exigir OPEN antes de bootstrap ou ACK revive owner CLOSING                                                                                                     |
+351: | ML26 | Tabela única action/kind/operation/phase em audit nativo e outcomes locais failed/unknown sem ACK presumido                                                                                                           | Alias semv1 perde fatos ou append lançado é rotulado persistido                                                                                                |
+352: | ML27 | Signal genuíno do caller nunca abortado e reutilizado em turnos single_pass/iterative sequenciais; bindings nativos/charges voltam à baseline só após subtree original zero, incluindo early failure e promise tardia | Contar só registro interno, confiar em once, devolver charge antes de detach, quebrar cancelamento de trabalho ainda vivo ou abortar/remover listeners alheios |
+353: | ML28 | Binding A→B muda versão nativa/fingerprint; K conflita sem replay indevido, K2 explícita usa B; retry A e owners/leases concorrentes preservam idempotência                                                           | Versão antiga com config/artefato/target novo, journal por geração ou prefixo oculto de operationKey                                                           |
+354: | ML29 | Modos sandbox nativos preservados em catálogo/registry/fingerprint/ToolDefinition/gate nos dois perfis; falhas impedem body e NONE legado conserva hash                                                               | Normalização perde WORKSPACE/EGRESS, gate não chamado, modo alterado só após hash ou downgrade silencioso                                                      |
+355: 
+356: Fixtures são locais e sintéticas; modelo e recursos externos podem ser portas scripted, mas kernel, dispatcher, policy/approval/journal, lifecycle owner, leases, promises e cleanup precisam ser reais. Sem monkeypatch do motor como baseline. Provar RED/known-bad do harness, GREEN atual, regressão de perfis/controles/217 e fresh critic independente contra candidata congelada.
+357: 
+358: Node22 typecheck/lint/unit/PG/E2E e gates de core/global/per-file/certificação aplicáveis continuam exigidos na integração de código; NOT_RUN não vira waiver. Matriz semântica precisa ligar cada contrato exigido a procedimento/evidência real, além destas famílias. Esta revisão de desenho não prova runtime, não fecha34cartões e não concede release.
+PRIMARY LINE COUNTS
+cvg/docs/architecture/adrs/ADR-011-kernel-de-plugins-com-controles-obrigatorios.md 106
+cvg/packages/contracts/package.json 18
+cvg/packages/contracts/src/canonical-json.ts 123
+cvg/packages/contracts/src/contracts.ts 570
+cvg/packages/contracts/src/execution-v2.ts 734
+cvg/packages/contracts/src/index.ts 4
+cvg/packages/contracts/src/session-events.ts 48
+cvg/packages/harness/src/capability-boundary.ts 625
+cvg/packages/harness/src/createOperationalHarness.ts 253
+cvg/packages/harness/src/effect-journal.ts 397
+cvg/packages/harness/src/iterative-dispatch.ts 1136
+cvg/packages/harness/src/iterative-runtime.ts 1789
+cvg/packages/harness/src/kernel/__tests__/host.test.ts 135
+cvg/packages/harness/src/kernel/controls.ts 807
+cvg/packages/harness/src/kernel/host.ts 272
+cvg/packages/harness/src/kernel/kernel-runtime.ts 671
+cvg/packages/harness/src/kernel/pipeline.ts 665
+cvg/packages/harness/src/kernel/profile.ts 88
+cvg/packages/harness/src/kernel/types.ts 348
+cvg/packages/harness/src/runtime.ts 55
+cvg/packages/orchestrator/src/hybrid-orchestrator.ts 245
+cvg/packages/platform/src/controlled-kernel-continuation.ts 1072
+cvg/packages/platform/src/controlled-kernel-execution.ts 947
+cvg/packages/platform/src/plugin-gateway.ts 917
+cvg/packages/sdk/src/composition.ts 76
+cvg/packages/shared/src/lifecycle.ts 102
+cvg/tsconfig.base.json 54
+reference/packages/boot/hmr/package.json 55
+reference/packages/boot/hmr/src/index.ts 590
+reference/packages/boot/plugin-manager/package.json 106
+reference/packages/boot/plugin-manager/src/index.ts 880
+reference/packages/boot/plugin-manager/src/tools.ts 92
+reference/packages/boot/plugin-manager/src/types.ts 259
+reference/packages/boot/plugin-manager/tests/patch.spec.ts 84
+reference/packages/boot/plugin-manager/tests/tools.spec.ts 249
+reference/packages/host/plugin-inventory/package.json 69
+reference/packages/host/plugin-inventory/src/index.ts 114
+reference/packages/host/plugin-inventory/src/types.ts 75
+reference/packages/host/plugin-inventory/tests/inventory.spec.ts 230
+reference/packages/preset/agent-preset-registry/package.json 98
+reference/packages/preset/agent-preset-registry/src/index.ts 366
+reference/packages/preset/agent-preset-registry/src/invariant.ts 68
+reference/packages/preset/agent-preset-registry/src/mount.ts 272
+reference/packages/preset/agent-preset-registry/tests/mount.spec.ts 129
+reference/packages/preset/agent-preset-registry/tests/registry.spec.ts 369
+ORIGINAL BINDING STRUCTURE
+list 271

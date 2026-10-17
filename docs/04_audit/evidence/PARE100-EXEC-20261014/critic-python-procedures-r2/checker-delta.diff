@@ -1,0 +1,59 @@
+--- R1/verify_static.py
++++ R2/verify_static.py
+@@ -14,7 +14,7 @@
+ import tomllib
+ 
+ OUT = pathlib.Path(__file__).resolve().parent
+-PACKET = OUT.with_name('critic-python-procedures-r1-packet')
++PACKET = OUT.with_name('critic-python-procedures-r2-packet')
+ INV = json.loads((PACKET / 'inventory.json').read_text())
+ PROC = json.loads((PACKET / 'procedures.json').read_text())
+ HASHES = json.loads((PACKET / 'source-hashes.json').read_text())
+@@ -218,7 +218,46 @@
+ client_class = next(n for n in client_tree.body if isinstance(n, ast.ClassDef) and n.name == 'HarnessClient')
+ filter_method = next(n for n in client_class.body if isinstance(n, ast.FunctionDef) and n.name == '_notification_belongs_to_session_tree')
+ record('counterexample_AST_anchors', any(isinstance(n, ast.Return) and ast.unparse(n.value) == "payload.get('childSessionId') == session_id" for n in ast.walk(filter_method)) and any(isinstance(n, ast.Call) and ast.unparse(n) == 'self._session_is_descendant_of(parent_id, session_id)' for n in ast.walk(filter_method)), {'filter_source_lines': [filter_method.lineno, filter_method.end_lineno], 'child_presence_guard_on_parent_match': 'ABSENT_BY_MANUAL_AST_REVIEW', 'source_hash': next(m['source']['sha256'] for m in INV['modules'] if m['module'] == 'deepseek_harness.client')})
+-record('SESSION_TREE_missing_ids_oracle_fidelity', not any(c['delivery_by_static_interpretation'] for c in counterexamples[:2]), {'expected_text': groups['SESSION_TREE']['cases'][0]['expected_observable'][0], 'source': 'client.py:492-523', 'counterexamples': counterexamples, 'finding': 'F001: missing ancestry edge is rejected for graph recording, but lifecycle notification delivery can still match root.'})
++# R2 replacement of the R1 oracle-fidelity check. Existing 24 checks unchanged.
++# Each boundary frame starts with a separate ancestry map. Models are reviewer-owned.
++boundaries = PROC['shared_vectors']['V-TREE-BOUNDARIES']
++rows = []
++for case in boundaries['cases']:
++    for frame in case['frames_each_tested_independently']:
++        ancestry = copy.deepcopy(case['initial_ancestry'])
++        delivery = route(ancestry, frame, boundaries['root'])
++        rows.append({'case': case['id'], 'frame': frame, 'initial_ancestry': case['initial_ancestry'], 'actual_ancestry': ancestry, 'expected_ancestry': case['expected_ancestry_after'], 'actual_delivery': delivery, 'expected_delivery': case['expected_delivery_each'], 'pass': ancestry == case['expected_ancestry_after'] and delivery is case['expected_delivery_each']})
++record('SESSION_TREE_missing_ids_oracle_fidelity', len(rows) == 8 and all(r['pass'] for r in rows) and {c['id'] for c in boundaries['cases']} == {'parent_only', 'child_only', 'self_edge', 'neither'} and all(c['initial_ancestry'] == {} and {f['method'] for f in c['frames_each_tested_independently']} == {'subagent.started', 'subagent.finished'} for c in boundaries['cases']), {'observations': rows, 'F001': 'RESOLVED_STATIC_ONLY'})
++
++# Defeat strict delivery and permissive ancestry mutants separately.
++strict_rejections, invalid_edge_rejections, always_deliver_rejections = [], [], []
++for row in rows:
++    frame, root = row['frame'], boundaries['root']
++    p = frame['params']
++    strict_delivery = bool(isinstance(p.get('parentSessionId'), str) and p.get('parentSessionId') and isinstance(p.get('childSessionId'), str) and p.get('childSessionId') and route({}, frame, root))
++    if strict_delivery is not row['expected_delivery']:
++        strict_rejections.append({'case': row['case'], 'method': frame['method']})
++    # Deliberately wrong graph recorder without either presence or self-edge guards.
++    bad_ancestry = {}
++    if frame['method'] == 'subagent.started':
++        bad_ancestry[p.get('childSessionId')] = p.get('parentSessionId')
++    if bad_ancestry != row['expected_ancestry']:
++        invalid_edge_rejections.append({'case': row['case'], 'method': frame['method']})
++    if row['expected_delivery'] is not True:
++        always_deliver_rejections.append({'case': row['case'], 'method': frame['method']})
++record('R2_strict_filter_mutant_rejected', len(strict_rejections) == 4, {'rejected_by': strict_rejections})
++record('R2_invalid_edge_mutant_rejected', len(invalid_edge_rejections) == 4, {'rejected_by': invalid_edge_rejections})
++record('R2_always_deliver_mutant_rejected', len(always_deliver_rejections) == 2, {'rejected_by': always_deliver_rejections})
++# The good case must still register a valid started edge. The finished case must not.
++good_rows = []
++for method in ['subagent.started', 'subagent.finished']:
++    ancestry = {}
++    delivered = route(ancestry, {'method': method, 'params': {'parentSessionId': 's', 'childSessionId': 'c'}}, 's')
++    expected_ancestry = {'c': 's'} if method == 'subagent.started' else {}
++    good_rows.append({'method': method, 'ancestry': ancestry, 'expected_ancestry': expected_ancestry, 'delivery': delivered, 'pass': delivered and ancestry == expected_ancestry})
++record('R2_valid_edge_positive_and_finished_no_record', all(r['pass'] for r in good_rows), {'observations': good_rows, 'never_register_mutant_rejected': good_rows[0]['expected_ancestry'] != {}, 'original_V_TREE_retained': True})
++(OUT / 'r2-boundary-controls.json').write_text(json.dumps({'evidence_kind': 'REVIEWER_STATIC_MODEL_ONLY', 'F001': 'RESOLVED_STATIC_ONLY', 'boundary_observations': rows, 'strict_mutant_rejections': strict_rejections, 'invalid_edge_mutant_rejections': invalid_edge_rejections, 'always_deliver_mutant_rejections': always_deliver_rejections, 'positive_controls': good_rows, 'behavior_procedures_executed': 0}, ensure_ascii=False, indent=2) + '\n')
++
+ 
+ summary = {'static_checks': len(checks), 'passed': sum(c['pass'] for c in checks), 'failed': [c['name'] for c in checks if not c['pass']], 'behavior_procedures_executed': 0, 'reference_or_CVG_code_imported_or_executed': False, 'checks': checks}
+ (OUT / 'static-checks.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2) + '\n')

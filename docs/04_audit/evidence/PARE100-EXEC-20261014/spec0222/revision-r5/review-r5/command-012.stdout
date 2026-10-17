@@ -1,0 +1,602 @@
+
+FILE cvg/packages/harness/src/capability-boundary.ts 1 70
+1: import { createHash } from 'node:crypto'
+2: import type {
+3:   CapabilityDescriptor,
+4:   CapabilityImplementation,
+5:   CapabilityOrigin,
+6:   CapabilityRegistration,
+7:   CapabilityRegistry as CapabilityRegistryPort,
+8:   ToolDefinition,
+9:   ToolExecutionContext,
+10:   ToolRegistry,
+11:   ToolResult
+12: } from '@cvg/harness-contracts'
+13: 
+14: const CAPABILITY_ID_PATTERN = /^[A-Za-z0-9._:-]+$/
+15: const MAX_ID_LENGTH = 120
+16: const MAX_VERSION_LENGTH = 80
+17: const MAX_DESCRIPTION_LENGTH = 4000
+18: const MAX_JSON_DEPTH = 64
+19: const MAX_JSON_NODES = 20_000
+20: const MAX_JSON_STRING_LENGTH = 16_384
+21: const MAX_JSON_KEY_LENGTH = 512
+22: const MAX_JSON_KEYS = 512
+23: const MAX_JSON_ARRAY_LENGTH = 512
+24: const MAX_JSON_BYTES = 256 * 1024
+25: const UNSAFE_JSON_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+26: const AUTHORITY_FIELDS = [
+27:   'tenantId',
+28:   'agentId',
+29:   'correlationId',
+30:   'traceId'
+31: ] as const
+32: const ORIGINS: readonly CapabilityOrigin[] = [
+33:   'core',
+34:   'skill',
+35:   'plugin',
+36:   'knowledge',
+37:   'mcp'
+38: ]
+39: 
+40: export type CapabilityRegistryErrorCode =
+41:   | 'invalid_descriptor'
+42:   | 'invalid_implementation'
+43:   | 'duplicate_capability'
+44: 
+45: export class CapabilityRegistryError extends Error {
+46:   public readonly code: CapabilityRegistryErrorCode
+47: 
+48:   public constructor(code: CapabilityRegistryErrorCode, message: string) {
+49:     super(message)
+50:     this.name = 'CapabilityRegistryError'
+51:     this.code = code
+52:   }
+53: }
+54: 
+55: interface StoredRegistration {
+56:   readonly descriptor: CapabilityDescriptor
+57:   readonly implementation: CapabilityImplementation
+58: }
+59: 
+60: const registrationsByRegistry = new WeakMap<
+61:   object,
+62:   readonly StoredRegistration[]
+63: >()
+64: 
+65: /**
+66:  * Explicit, immutable capability composition for the neutral harness.
+67:  * Implementations are retained in a private module-owned store. The
+68:  * executable adapter is only reachable from the composition root.
+69:  */
+70: export class CapabilityRegistry implements CapabilityRegistryPort {
+
+FILE cvg/packages/harness/src/capability-boundary.ts 159 206
+159: export function createCapabilityRegistry(
+160:   registrations: readonly CapabilityRegistration[] = []
+161: ): CapabilityRegistry {
+162:   return new CapabilityRegistry(registrations)
+163: }
+164: 
+165: export interface CapabilityComposition {
+166:   readonly registry: CapabilityRegistry
+167:   readonly fingerprint: string
+168: }
+169: 
+170: export function composeCapabilities(
+171:   registrations: readonly CapabilityRegistration[] = []
+172: ): CapabilityComposition {
+173:   const registry = createCapabilityRegistry(registrations)
+174:   return {
+175:     registry,
+176:     fingerprint: registry.compositionFingerprint()
+177:   }
+178: }
+179: 
+180: /**
+181:  * Internal executable bridge for the public harness composition root. This is
+182:  * deliberately not re-exported from the package entrypoint.
+183:  */
+184: export function createCapabilityToolRegistry(
+185:   registry: CapabilityRegistryPort
+186: ): ToolRegistry {
+187:   const snapshot = sorted(getRegistrations(registry))
+188:   return {
+189:     list: () => snapshot.map((registration) => toTool(registration)),
+190:     resolve: (capabilityId, version) => {
+191:       if (
+192:         !isBoundedIdentifier(capabilityId, MAX_ID_LENGTH) ||
+193:         !isBoundedVersion(version)
+194:       ) {
+195:         return undefined
+196:       }
+197:       const registration = snapshot.find(
+198:         (candidate) =>
+199:           candidate.descriptor.id === capabilityId &&
+200:           candidate.descriptor.version === version
+201:       )
+202:       return registration ? toTool(registration) : undefined
+203:     }
+204:   }
+205: }
+206: 
+
+FILE cvg/packages/harness/src/capability-boundary.ts 300 341
+300: function normalizeImplementation(value: unknown): CapabilityImplementation {
+301:   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+302:     throw new CapabilityRegistryError(
+303:       'invalid_implementation',
+304:       'Capability implementation requires input validation, execution, and output validation'
+305:     )
+306:   }
+307: 
+308:   let validateInput: CapabilityImplementation['validateInput']
+309:   let execute: CapabilityImplementation['execute']
+310:   let validateOutput: CapabilityImplementation['validateOutput']
+311:   try {
+312:     const implementation = value as Record<string, unknown>
+313:     if (
+314:       typeof implementation.validateInput !== 'function' ||
+315:       typeof implementation.execute !== 'function' ||
+316:       typeof implementation.validateOutput !== 'function'
+317:     ) {
+318:       throw new Error('missing implementation method')
+319:     }
+320:     validateInput = (
+321:       implementation.validateInput as CapabilityImplementation['validateInput']
+322:     ).bind(value)
+323:     execute = (
+324:       implementation.execute as CapabilityImplementation['execute']
+325:     ).bind(value)
+326:     validateOutput = (
+327:       implementation.validateOutput as CapabilityImplementation['validateOutput']
+328:     ).bind(value)
+329:   } catch {
+330:     throw new CapabilityRegistryError(
+331:       'invalid_implementation',
+332:       'Capability implementation requires input validation, execution, and output validation'
+333:     )
+334:   }
+335:   return Object.freeze({
+336:     validateInput,
+337:     execute,
+338:     validateOutput
+339:   }) as CapabilityImplementation
+340: }
+341: 
+
+FILE cvg/docs/architecture/adrs/ADR-011-kernel-de-plugins-com-controles-obrigatorios.md 34 98
+34: 1. **Kernel mínimo.** O kernel contém só o loop do agente (turno → passo →
+35:    chamada ao modelo → chamadas de ferramenta), o host de plugins e os pontos de
+36:    interceptação. Não contém política, provedor, canal ou domínio.
+37: 2. **Tudo o mais é plugin**, registrado por chave de serviço, com dependências
+38:    declaradas e registro reversível (descarregar desfaz; o dispose espera a
+39:    quiescência).
+40: 3. **Duas classes de plugin.**
+41:    - **Capacidade**, livremente trocável: adapter de modelo, ferramentas,
+42:      canais, transcrição, armazenamento.
+43:    - **Controle**, obrigatória: política, aprovação, orçamento, auditoria,
+44:      journal de efeitos, pausa e, depois, guarda de saída.
+45: 4. **Pontos de interceptação**, com modo de despacho declarado:
+46: 
+47:    | Ponto                        | Uso típico                                                             |
+48:    | ---------------------------- | ---------------------------------------------------------------------- |
+49:    | antes do passo               | aceitar ou rejeitar a entrada; pausa                                   |
+50:    | antes de chamar o modelo     | orçamento; redação de dados pessoais                                   |
+51:    | antes de chamar a ferramenta | política: permitir, negar ou pedir aprovação                           |
+52:    | guardas finais               | controles que só podem negar                                           |
+53:    | em volta da execução         | timeout, retry, métricas                                               |
+54:    | depois da ferramenta         | journal de efeitos; auditoria                                          |
+55:    | saída ao usuário             | guarda de saída (bloqueio de diagnóstico e prescrição, fase posterior) |
+56: 
+57: 5. **Invariantes de controle**, todas fail-closed:
+58:    - O kernel **não inicia** sem os controles obrigatórios do perfil.
+59:    - Controles não podem ser descarregados nem reordenados pelo agente, por
+60:      plugin de capacidade ou por configuração em runtime.
+61:    - **Guardas monotônicas** retornam "negar" ou "abster-se", nunca "permitir".
+62:      Nenhum plugin posterior desfaz uma negação.
+63:    - Aprovação ausente, sem canal ou sem resposta vira negação. Aprovação
+64:      concedida é de uso único e vinculada a tenant, ação, recurso, agente e
+65:      classificação.
+66:    - Toda chamada de ferramenta é registrada antes de executar. O resultado
+67:      final é imutável e registrado uma vez.
+68:    - Toda requisição ao modelo é reconstruível pelo log.
+69:    - Exceção em plugin vira erro normalizado e não derruba o loop.
+70:    - O cancelamento (`signal`) é obrigatório em todo o pipeline.
+71: 6. **Um só pipeline.** Single-pass, iterativo e o kernel durável do worker
+72:    passam a ser modos do mesmo loop, cumprindo o ENG-007.
+73: 7. **Preservar o que já é mais forte que a referência:** journal de efeitos e
+74:    aprovação duráveis em PostgreSQL, RLS por tenant e auditoria encadeada por
+75:    hash. Esses componentes viram plugins de controle sem perder comportamento.
+76: 
+77: ## O que se copia do DeepSeek Harness, e o que não
+78: 
+79: | Copia-se (o padrão)                                                                       | Não se copia                                                                                                        |
+80: | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+81: | Serviços por chave, dependência declarada e registro reversível (Cordis)                  | O código: é release candidate, avisa de quebras incompatíveis e o `SAFETY.md` diz que não está pronto para produção |
+82: | Eventos com modo de despacho declarado (`waterfall`, `serial`, `bail`, `emit`)            | Presets com shell, sistema de arquivos e rede livre                                                                 |
+83: | Pipeline pre-execute → guardas monotônicas → execute → post-execute → resultado congelado | Loop trocável por configuração: aqui o loop é do kernel                                                             |
+84: | "Model-visible means logged" e `tool/call` antes da execução                              | Skills e plugins de registro público instalados em runtime                                                          |
+85: | Padrões defensivos (`docs/defensive-patterns.md`)                                         | Sessão em JSONL local como fonte de verdade: aqui ela fica em PostgreSQL com RLS                                    |
+86: 
+87: ## Consequências
+88: 
+89: - Os perfis de agente declaram plugins de capacidade. Os controles vêm do perfil
+90:   do kernel e não são opcionais.
+91: - O Assistente de Plantão passa a ser um conjunto de plugins (canal WhatsApp,
+92:   transcrição, organizador) e usa aprovação, journal e auditoria do núcleo. Esta
+93:   ADR emenda a ADR-009 no ponto da missão: o assistente é o consumidor de
+94:   validação do harness. D1–D4, SPEC 0177 e barra 0368 continuam valendo para o
+95:   produto.
+96: - Antes do kernel, uma suíte de conformidade derivada das invariantes acima roda
+97:   contra o motor atual (caracterização). Ela continua verde durante toda a
+98:   migração.
+
+FILE reference/packages/boot/plugin-manager/src/types.ts 1 132
+1: /** Public plugin management records shared with clients. */
+2: import type { Branded } from '@deepseek-ai/dsh-brand'
+3: import type { PluginLocalizedMeta } from '@deepseek-ai/dsh-package-manifest'
+4: import type { PluginInventoryEntry } from '@deepseek-ai/dsh-host-plugin-inventory/types'
+5: export type { PluginEntryId } from '@deepseek-ai/dsh-host-plugin-inventory/types'
+6: import type { PluginEntryId } from '@deepseek-ai/dsh-host-plugin-inventory/types'
+7: 
+8: /** Reasons a profile control cannot modify its target. */
+9: export type ReadOnlyReason = 'management-required' | 'unaddressable'
+10: 
+11: /** A package whose declared DSH peers reject the running DSH version, without an exemption for the exact pair. */
+12: export interface IncompatiblePlugin {
+13:   name: string
+14:   version: string
+15:   runtimeVersion: string
+16:   /** Only the DSH peer ranges the running version does not satisfy. */
+17:   peers: Record<string, string>
+18: }
+19: 
+20: /** Localizable management failure and optional external diagnostic. */
+21: export interface ManagementError {
+22:   code: ReadOnlyReason | 'unknown-plugin' | 'invalid-spec' | 'ambiguous-install' | 'not-bundle' | 'not-removable' | 'stop-profile' | 'bundle-in-use' | 'stale-approval' | 'incompatible-version' | 'operation-error'
+23:   diagnostic?: string
+24:   /** Present with `incompatible-version`: the packages the running DSH version rejects. */
+25:   incompatible?: IncompatiblePlugin[]
+26: }
+27: 
+28: /** One running-profile entry and its persistent control availability. */
+29: export type PluginInfo = PluginInventoryEntry & (
+30:   | { patchId: string; readOnlyReason?: never }
+31:   | { patchId?: never; readOnlyReason: ReadOnlyReason }
+32: )
+33: 
+34: /** One row a bundle's patch declares, with its live entry while the bundle contributes it. */
+35: export interface BundleRowInfo {
+36:   /** The row id as the patch declares it. */
+37:   rowId: string
+38:   /** The module the row names. */
+39:   moduleName: string
+40:   /** Local package display metadata, including rows whose bundle is disabled. */
+41:   meta?: PluginLocalizedMeta
+42:   /** The Loader entry carrying this row, when exactly one live entry has its id. */
+43:   entryId?: PluginEntryId
+44: }
+45: 
+46: /** One installed or installation-provided bundle. */
+47: export interface BundleInfo {
+48:   name: string
+49:   version?: string
+50:   /** Local display text with available translations or literal fallbacks, or a metadata diagnostic. */
+51:   meta?: PluginLocalizedMeta
+52:   /** Untranslated `description` of this bundle's package manifest. */
+53:   description?: string
+54:   /** Selected in the profile manifest; a load error means its layer was skipped. */
+55:   enabled: boolean
+56:   /** Whether the profile's own dependencies hold the package; false for a bundle the dsh installation supplies. */
+57:   installed: boolean
+58:   /**
+59:    * Whether the installation ships the bundle for the person to switch on: named by the launcher's `OPTIONAL_BUNDLES`,
+60:    * held by the installation's dependencies, selected by no shipped template, and never removable.
+61:    */
+62:   optional: boolean
+63:   removable: boolean
+64:   readOnlyReason?: ReadOnlyReason
+65:   error?: ManagementError
+66:   /** The rows the bundle's patch inserts, in declaration order; empty when the patch cannot be read. */
+67:   rows: BundleRowInfo[]
+68:   /** Ids of rows the bundle's patch changes without declaring them: the built-in rows it configures or disables. */
+69:   overrides: string[]
+70: }
+71: 
+72: /** A registry to install from: an http(s) URL, or null for the one pnpm's own configuration names. */
+73: export type Registry = string | null
+74: 
+75: /** The registries the manager asks: the configured first one, its fallbacks in order, and what pnpm's own configuration names. */
+76: export interface PluginRegistries {
+77:   readonly registry: Registry
+78:   readonly fallbackRegistries: readonly string[]
+79:   /** The URL pnpm's own configuration names in the profile, read from pnpm; null when it could not be read. */
+80:   readonly resolved: string | null
+81: }
+82: 
+83: /** How a package operation failed, read off how it ended and what it printed. */
+84: export type PluginInstallFailureKind =
+85:   | 'pnpm-missing'
+86:   | 'timeout'
+87:   | 'not-found'
+88:   | 'no-matching-version'
+89:   | 'network'
+90:   | 'disk-full'
+91:   | 'permission'
+92:   | 'build-blocked'
+93:   | 'integrity'
+94:   | 'unknown'
+95: 
+96: /** Package operation completion, including Git checks and a retrieval path for unabridged diagnostics. */
+97: export interface PackageResult {
+98:   exitCode: number
+99:   output: string
+100:   truncated: boolean
+101:   logPath: string
+102:   /** Present when the run failed: what kind of failure its exit and output describe. */
+103:   kind?: PluginInstallFailureKind
+104:   /** The manager terminated the run after it printed nothing for its silence bound; `exitCode` still reports how it ended. */
+105:   timedOut?: boolean
+106:   /** Present when a compatibility check refused the run: the packages the running DSH version rejects. */
+107:   incompatible?: IncompatiblePlugin[]
+108: }
+109: 
+110: /** Persisted change and independently observed application outcome. */
+111: export interface ChangeResult {
+112:   changed: boolean
+113:   /** `cancelled` is an installation the caller stopped, its files restored. */
+114:   application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled'
+115:   /** Last attempted step; successful installation can proceed to enablement. */
+116:   stage: 'install' | 'enable' | 'remove'
+117:   target: string
+118:   enabled?: boolean
+119:   error?: ManagementError
+120:   /** Pre-existing inactive entries the operation left as they were. */
+121:   warnings?: string[]
+122:   packageResult?: PackageResult
+123:   /** The bundle an installation added, once pnpm and the bundle check accepted it. */
+124:   bundle?: string
+125:   /** Exact package names awaiting explicit script approval in the profile's pnpm settings, read after a failed run. */
+126:   pendingBuilds?: string[]
+127:   /** Package script permissions saved before this installation attempt. */
+128:   approvedBuilds?: string[]
+129:   /** The registries the installation asked, in order; `packageResult` is the last one's run. */
+130:   registries?: Registry[]
+131:   /**
+132:    * What the last failed run could not reach or get an answer from: the registry it asked, or the host a git or
+
+FILE reference/packages/boot/plugin-manager/src/types.ts 230 255
+230: export interface PluginChange {
+231:   /** The operation that changed it. */
+232:   readonly reason: 'plugin' | 'bundle' | 'install' | 'remove'
+233: }
+234: 
+235: declare module '@deepseek-ai/cordis' {
+236:   interface Events {
+237:     /**
+238:      * The profile's plugins, bundles, or composition changed: a manager
+239:      * operation completed. A patch generation applied outside the manager,
+240:      * by HMR's watcher after a CLI or hand edit, announces nothing here.
+241:      * @mode emit
+242:      * @param change - what changed.
+243:      */
+244:     'plugin-manager/changed'(change: PluginChange): void
+245:     /**
+246:      * One chunk of a pnpm run's output, streamed as the run produces it.
+247:      * @mode emit
+248:      * @param chunk - the chunk and the run it belongs to.
+249:      */
+250:     'plugin-manager/install-log'(chunk: PluginInstallLogChunk): void
+251:     /**
+252:      * An installation moved between its Host phases. `installing` is announced once per registry the
+253:      * installation asks, with the attempt's registry and position; `cancelling` and `applying` once.
+254:      * @mode emit
+255:      * @param progress - the installation's request id and phase, with the attempt while installing.
+
+FILE reference/packages/host/plugin-inventory/src/types.ts 1 88
+1: import type { Branded } from '@deepseek-ai/dsh-brand'
+2: import type { PluginLocalizedMeta } from '@deepseek-ai/dsh-package-manifest'
+3: 
+4: /** Stable Loader-tree identity of one configured plugin entry. */
+5: export type PluginEntryId = Branded<'PluginEntryId'>
+6: 
+7: /** Lifecycle state of an entry's root Fiber, or null when it has no live root Fiber. */
+8: export type PluginFiberPhase =
+9:   | 'pending'
+10:   | 'loading'
+11:   | 'active'
+12:   | 'failed'
+13:   | 'unloading'
+14:   | null
+15: 
+16: /** One non-group Loader entry exposed to trusted clients. */
+17: export interface PluginInventoryEntry {
+18:   readonly entryId: PluginEntryId
+19:   /** Exact module specifier imported by the Loader entry. */
+20:   readonly moduleName: string
+21:   /** Local package display metadata, independent of whether the entry is enabled. */
+22:   readonly meta?: PluginLocalizedMeta
+23:   /** Effective Loader enablement, including disabled ancestor groups. */
+24:   readonly enabled: boolean
+25:   readonly fiberPhase: PluginFiberPhase
+26: }
+27: 
+28: /** Effective enablement of one preset composition row. */
+29: export type PresetPluginEnablement = boolean | 'conditional'
+30: 
+31: /** One plugin row an agent preset's composition names. */
+32: export interface AgentPresetPluginRow {
+33:   /** Composition row id, or null when the row declares none. */
+34:   readonly entryId: string | null
+35:   /** Module specifier the row names. */
+36:   readonly moduleName: string
+37:   /** Local package display metadata, independent of whether the preset is mounted. */
+38:   readonly meta?: PluginLocalizedMeta
+39:   /**
+40:    * Effective enablement, including disabled ancestor groups. `'conditional'`
+41:    * marks a `!!js` disabled expression on a composition no session has
+42:    * mounted, which only a Loader context can decide.
+43:    */
+44:   readonly enabled: PresetPluginEnablement
+45:   /** The row's own `!!js` disabled expression, when it carries one. */
+46:   readonly condition?: string
+47:   /** Root-fiber phase when the composition is live; null otherwise. */
+48:   readonly fiberPhase: PluginFiberPhase
+49: }
+50: 
+51: /** One agent preset's identity and flattened composition in the inventory. */
+52: export interface AgentPresetPluginGroup {
+53:   /** Stable preset id. */
+54:   readonly id: string
+55:   /** Display name the preset published; a reader falls back to the id. */
+56:   readonly name?: string
+57:   /** Whether a session naming no preset composes this one. */
+58:   readonly isDefault: boolean
+59:   /** Why this preset's composition cannot be read; absent when rows answer. */
+60:   readonly broken?: string
+61:   /** Plugin rows in composition order; empty when the preset is broken. */
+62:   readonly rows: readonly AgentPresetPluginRow[]
+63: }
+64: 
+65: /** Point-in-time inventory returned by the plugin inventory Remote. */
+66: export interface PluginInventorySnapshot {
+67:   /** Whether this Host exposes persistent current-profile management. */
+68:   readonly managementAvailable?: boolean
+69:   readonly entries: readonly PluginInventoryEntry[]
+70:   /**
+71:    * Per-preset compositions, present only when an agent-preset roster is
+72:    * composed in this deployment.
+73:    */
+74:   readonly agentPresets?: readonly AgentPresetPluginGroup[]
+75: }
+
+FILE reference/packages/preset/agent-preset-registry/src/mount.ts 1 67
+1: /** Runtime plugin trees shared by Agents selecting one preset revision. */
+2: import { Context, type Fiber } from '@deepseek-ai/cordis'
+3: import { EntryTree, type EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
+4: import { prepareProfileEntries } from '@deepseek-ai/dsh-app-boot'
+5: import type { PresetDefinition } from './definition.ts'
+6: import { scopeOf, scopeParentOf, type ScopeKey } from '@deepseek-ai/dsh-scope'
+7: 
+8: /** In-memory Loader tree; only the profile configuration editor persists definitions. */
+9: class PresetTree extends EntryTree {
+10:   constructor(ctx: Context) {
+11:     const owner = ctx.fiber.entry
+12:     const subtree = owner?.subtree
+13:     const subgroup = owner?.subgroup
+14:     super(ctx)
+15:     if (owner !== undefined) {
+16:       if (subtree === undefined) delete owner.subtree
+17:       else owner.subtree = subtree
+18:       if (subgroup === undefined) delete owner.subgroup
+19:       else owner.subgroup = subgroup
+20:     }
+21:   }
+22: 
+23:   override write(): void {}
+24: }
+25: 
+26: /** One live revision shared by Agents and scoped readers. */
+27: export interface PresetMount {
+28:   /** The preset the subtree was composed from. */
+29:   readonly presetId: string
+30:   /** The mounted subtree's fiber. */
+31:   readonly fiber: Fiber
+32:   /** Loader entry tree whose active rows form this standing composition. */
+33:   readonly tree: EntryTree
+34:   /** The standing scope key agents are parented to (undefined only in torn-down records). */
+35:   readonly key: ScopeKey | undefined
+36: }
+37: 
+38: const mounts = new Set<PresetMount>()
+39: 
+40: /**
+41:  * Every preset composition retained by the registry.
+42:  *
+43:  * The record set is module state and therefore spans every Cordis runtime in
+44:  * the process; a reader that serves one runtime passes that runtime's root
+45:  * fiber so another runtime mounting the same preset id (a second embedded
+46:  * app, a test's second harness) never answers for it.
+47:  * @param within - when present, only mounts inside this fiber's subtree.
+48:  * @returns the live mounts.
+49:  */
+50: export function livePresetMounts(within?: Fiber): PresetMount[] {
+51:   const all = [...mounts]
+52:   return within === undefined ? all : all.filter(mount => withinFiber(mount.fiber, within))
+53: }
+54: 
+55: /**
+56:  * Whether `fiber` is `root` itself or is mounted anywhere inside its subtree.
+57:  *
+58:  * Membership is object identity. `uid` looks like a cheaper key but is a
+59:  * per-registry counter, so fibers in two different roots collide on it and a
+60:  * subtree in one runtime would be blamed for a service published in another.
+61:  * @param fiber - the fiber to locate.
+62:  * @param root - the subtree root to test membership against.
+63:  * @returns true when `fiber` belongs to `root`'s subtree.
+64:  */
+65: function withinFiber(fiber: Fiber, root: Fiber): boolean {
+66:   let current = fiber
+67:   while (true) {
+
+FILE reference/packages/preset/agent-preset-registry/src/mount.ts 258 313
+258: export async function mountPreset(ctx: Context, id: string, plugins: PresetDefinition['plugins']): Promise<PresetMount> {
+259:   if (scopeOf(ctx) === undefined) throw new Error('agent-preset: mounting requires a scope')
+260:   await ctx.fiber.await()
+261:   const tree = new PresetTree(ctx)
+262:   ctx.effect(() => () =>{  tree.root.stop() }, 'agent-preset.tree')
+263:   await tree.root.update(prepareProfileEntries(ctx, plugins as EntryOptions[], ctx.baseUrl))
+264:   const audit = await auditRows(tree)
+265:   const leaked = leakedServices(ctx, ctx.fiber)
+266:   if (audit.failed.length > 0) throw new Error(audit.failed.join('\n'))
+267:   if (leaked.length > 0) throw new Error(`Preset services require isolate realms: ${leaked.join(', ')}`)
+268:   const mount = { presetId: id, fiber: ctx.fiber, tree, key: scopeOf(ctx) }
+269:   mounts.add(mount)
+270:   ctx.effect(() => () => { mounts.delete(mount) }, 'agent-preset.mount')
+271:   return mount
+272: }
+
+FILE reference/packages/boot/hmr/src/index.ts 129 170
+129:   private operations: Promise<unknown> = Promise.resolve()
+130:   private readonly executing = new AsyncLocalStorage<boolean>()
+131:   private applicationReady: Promise<boolean> = Promise.resolve(true)
+132:   private closing = false
+133:   private readonly configPaths = new Set<string>()
+134: 
+135:   /** Serialize a caller-owned mutation with all automatic reload paths.
+136:    * @param operation Work that must not overlap module or configuration replacement.
+137:    * @returns The operation result after its asynchronous work completes.
+138:    */
+139:   runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+140:     if (this.executing.getStore()) return Promise.reject(new Error('HMR transactions cannot be nested'))
+141:     const task = this.operations.then(async () => {
+142:       if (this.closing) throw new Error('HMR is disposed')
+143:       return this.executing.run(true, operation)
+144:     })
+145:     this.operations = task.catch(() => {})
+146:     return task
+147:   }
+148: 
+149:   private runReload(operation: () => Promise<void>): Promise<void> {
+150:     return this.runExclusive(async () => {
+151:       if (await this.applicationReady) await operation()
+152:     })
+153:   }
+154: 
+155:   /** Watch a configuration path through the same queue as module replacement.
+156:    * @param filename Absolute path, which may not exist yet.
+157:    * @param refresh Rebuilds configuration from its current files and awaits Loader completion.
+158:    * @returns Disposer closing this registration and waiting for its pending refresh.
+159:    */
+160:   async watchConfig(filename: string, refresh: () => Promise<void>): Promise<() => Promise<void>> {
+161:     const paths = [resolve(filename), canonicalPath(filename)]
+162:     if (paths.some(path => this.configPaths.has(path))) throw new Error(`config path already registered: ${filename}`)
+163:     for (const path of paths) this.configPaths.add(path)
+164:     try {
+165:       const dispose = await this.executing.exit(() => watchExactConfig(
+166:         this.ownerContext, filename, this.config, () => this.runReload(refresh), () => this.executing.getStore() === true,
+167:       ))
+168:       return async () => {
+169:         await dispose()
+170:         for (const path of paths) this.configPaths.delete(path)

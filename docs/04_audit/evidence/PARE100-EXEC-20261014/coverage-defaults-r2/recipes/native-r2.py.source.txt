@@ -1,0 +1,43 @@
+from pathlib import Path
+import ast,os,shutil,json,hashlib,subprocess,time,signal,sys
+p=Path(__file__).parent;n=p/'native-proof';n.mkdir();old=p.parent/'coverage-defaults-r1/native-proof';T=old/'toolchain';S=old/'originals';W=p.parent/'worktree'
+sha=lambda f:hashlib.sha256(f.read_bytes()).hexdigest()
+def inventory(root):return {str(f.relative_to(root)):sha(f) for f in root.rglob('*') if f.is_file() and not f.is_symlink()}
+before=inventory(T);(n/'toolchain-before.json').write_text(json.dumps(before,indent=2)+'\n')
+base=n/'private'
+for x in ['home','tmp','xdg-cache','xdg-config','xdg-data','xdg-state','npm-cache','npm-prefix','xdg-runtime']: (base/x).mkdir(parents=True)
+for x in ['npm-userconfig','npm-globalconfig']:(base/x).write_text('')
+env=json.loads((old/'environment-base.json').read_text());env={k:v.replace(str(old/'private'),str(base)) for k,v in env.items()};(n/'environment-base.json').write_text(json.dumps(env,indent=2)+'\n')
+# Load only finite helper function definitions. Do not execute old module globals or rewrite its toolchain/stubs.
+tree=ast.parse((old/'prove.py').read_text());selected=[x for x in tree.body if isinstance(x,ast.FunctionDef) and x.name in ['sha','write','dump','run','fixture','case']];ns=globals();ns.update(P=n,BASE=base);exec(compile(ast.Module(body=selected,type_ignores=[]),str(old/'prove.py')+'#function-definitions-only','exec'),ns)
+original_fixture=fixture
+def fixture(name,artifact,variant):
+ R,E=original_fixture(name,artifact,variant)
+ # Local node_modules root keeps Vite cache writes private; package links target
+ # the already owned physical R1 toolchain, never W. Existing toolchain is readonly.
+ (R/'node_modules').unlink();(R/'node_modules').mkdir()
+ for dep in (T/'node_modules').iterdir():
+  if dep.name in ['.vite','.vite-temp','.cache']:continue
+  (R/'node_modules'/dep.name).symlink_to(dep,target_is_directory=dep.is_dir())
+ return R,E
+art=n/'current';(art/'scripts').mkdir(parents=True)
+for name in ['ci-bar.mjs','phase10-certify.mjs']:shutil.copyfile(W/'scripts'/name,art/'scripts'/name)
+results=[]
+for flag in ['default','flag0']:
+ for variant in ['perfilebad','aggregatebad','good']:results.append(case('green-r2','ci',variant,flag,art))
+for flag in ['default','flag0']:
+ for variant in ['perfilebad','good']:results.append(case('green-r2','ci-certify',variant,flag,art))
+rows=[]
+for r in results:
+ g=r['gate'] if r['name'].startswith('green-r2-ci-') and not r['name'].startswith('green-r2-ci-certify-') else r['coverage_subgate'];expected='PASS' if r['variant']=='good' else 'FAIL';assert g['status']==expected,(r['name'],g)
+ assert not r['termination_reason'];assert not r['live_descendants_after_exit_before_cleanup'];assert r['elapsed_seconds']<90
+ R=Path(r['cwd']);summary=r['summary'];assert len(summary)==3
+ c=[json.loads(x) for x in (R.parent/'child-env.jsonl').read_text().splitlines() if x];assert all(x['env']['CVG_COVERAGE_PER_FILE']=='1' and x['env']['CVG_TEST_SCOPE']=='core' for x in c)
+ if 'ci-certify' in r['name']:assert r['decision']==r['certification']=='NO_GO'
+ rows.append({'case':r['name'],'coverageStatus':g['status'],'driverExit':r['exit'],'decision':r.get('decision'),'summary':r['summary'],'command':str((R.parent/'driver.command.json').relative_to(n)),'driverSHA256':r['driver_sha256']})
+(n/'matrix.json').write_text(json.dumps(rows,indent=2)+'\n');after=inventory(T);assert before==after,'readonly toolchain drift';(n/'toolchain-after.json').write_text(json.dumps({'files':len(after),'allMatch':True,'beforeSHA256':sha(n/'toolchain-before.json')},indent=2)+'\n')
+manifest=[]
+for f in n.rglob('*'):
+ if f.is_symlink() or not f.is_file() or any(x in f.parts for x in ['node_modules','.git','private']):continue
+ manifest.append({'path':str(f.relative_to(n)),'sha256':sha(f),'bytes':f.stat().st_size})
+(n/'manifest.json').write_text(json.dumps({'scope':'10currentdriver toy cases only; globalcert NOT_RUN and phase10 alwaysNO_GO','files':manifest,'toolchainReadonlyVerified':len(after),'toolchainRoot':str(T),'sourceRecipeSHA256':sha(Path(__file__))},indent=2)+'\n');print('NATIVE_R2_10_CASES_VERIFIED',flush=True)

@@ -1,0 +1,24 @@
+import hashlib,json,pathlib,sys,datetime
+R=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r4')
+P=R.parent/'review-packet-r4'; W=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree')
+def item(p):
+ b=p.read_bytes(); return {'path':str(p),'sha256':hashlib.sha256(b).hexdigest(),'bytes':len(b)}
+m=item(P/'manifest.json'); expected='9033fbe8c33caa96cb020f568bfdfd0d9128c0e7b10f52bd55224620cd2afd11'; assert m['sha256']==expected,m
+manifest=json.loads((P/'manifest.json').read_bytes()); entries=[]; failures=[]
+for s in manifest['sources']:
+ for kind,p in [('live',pathlib.Path(s['live'])),('copy',P/s['copy'])]:
+  v=item(p); v['kind']=kind; v['ok']=v['sha256']==s['sha256'] and v['bytes']==s['bytes']; entries.append(v)
+  if not v['ok']: failures.append(v)
+for s in manifest['proofs']:
+ v=item(P/s['path']);v['kind']='proof';v['ok']=v['sha256']==s['sha256'] and v['bytes']==s['bytes'];entries.append(v)
+ if not v['ok']:failures.append(v)
+source=[]
+for base in ['packages/harness/src','packages/contracts/src','packages/orchestrator/src']:
+ for p in sorted((W/base).rglob('*.ts')):source.append(item(p))
+for f in ['package.json','tsconfig.json','tsconfig.base.json']:
+ if (W/f).is_file():source.append(item(W/f))
+phase=sys.argv[1]; out={'phase':phase,'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'manifest':m,'sourceCount':len(manifest['sources']),'proofCount':len(manifest['proofs']),'entries':entries,'failures':failures,'transitiveCurrentSourceSentinel':source}
+if phase=='after':
+ before=json.loads((R/'integrity-before.json').read_text());out['sourceSentinelUnchanged']=source==before['transitiveCurrentSourceSentinel'];assert out['sourceSentinelUnchanged']
+(R/f'integrity-{phase}.json').write_text(json.dumps(out,indent=2)+'\n')
+print(json.dumps({'phase':phase,'manifest':m,'sourceCount':len(manifest['sources']),'proofCount':len(manifest['proofs']),'verifiedBindings':len(entries),'failures':len(failures),'transitiveSentinelFiles':len(source)}));sys.exit(bool(failures))

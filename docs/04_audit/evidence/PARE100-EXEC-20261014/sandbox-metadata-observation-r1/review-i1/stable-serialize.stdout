@@ -1,0 +1,31 @@
+529:function stableSerialize(
+530-  value: unknown,
+531-  state: SerializationState = { seen: new WeakSet<object>(), nodes: 0 },
+532-  depth = 0
+533-): string {
+534-  state.nodes += 1
+535-  if (state.nodes > MAX_JSON_NODES) {
+536-    throw new Error('JSON node budget exceeded')
+537-  }
+538-  if (depth > MAX_JSON_DEPTH) {
+539-    throw new Error('JSON depth budget exceeded')
+540-  }
+541-
+542-  if (value === null) return 'null'
+543-  if (typeof value === 'string') {
+544-    if (value.length > MAX_JSON_STRING_LENGTH) {
+545-      throw new Error('JSON string budget exceeded')
+546-    }
+547-    return JSON.stringify(value)
+548-  }
+549-  if (typeof value === 'boolean') return value ? 'true' : 'false'
+550-  if (typeof value === 'number') {
+551-    if (!Number.isFinite(value)) throw new Error('Non-finite value')
+552-    return JSON.stringify(value)
+553-  }
+554-  if (typeof value !== 'object' || value === undefined) {
+555-    throw new Error('Value is not JSON serializable')
+556-  }
+557-  if (state.seen.has(value)) throw new Error('Value contains a cycle')
+558-  state.seen.add(value)
+559-  try {

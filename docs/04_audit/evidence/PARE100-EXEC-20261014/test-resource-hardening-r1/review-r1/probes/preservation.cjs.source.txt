@@ -1,0 +1,13 @@
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const ts=require('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/typescript/lib/typescript.js');
+const packet='/tmp/cvg-pare100-exec-20261014-6az3hlay/test-resource-hardening-r1/review-packet-r1';
+const printer=ts.createPrinter({removeComments:true});
+function inventory(file){const source=ts.createSourceFile(file,fs.readFileSync(file,'utf8'),ts.ScriptTarget.Latest,true);let expects=[],cases=[],literals=[];
+function visit(n){
+ if(ts.isCallExpression(n)&&ts.isIdentifier(n.expression)&&n.expression.text==='expect') {let top=n;while(top.parent&&(ts.isPropertyAccessExpression(top.parent)||ts.isElementAccessExpression(top.parent)||ts.isCallExpression(top.parent))&&top.parent.expression===top)top=top.parent;expects.push(printer.printNode(ts.EmitHint.Unspecified,top,source));}
+ if(ts.isCallExpression(n)&&((ts.isIdentifier(n.expression)&&['it','describe'].includes(n.expression.text))||n.expression.getText(source).startsWith('it.each(')))cases.push(n.arguments.slice(0,1).map(a=>printer.printNode(ts.EmitHint.Unspecified,a,source)).join(''));
+ if(ts.isStringLiteralLike(n)&&(/\0|NUL|Olá|漢字|😀|🙂/.test(n.text)))literals.push(n.text);
+ ts.forEachChild(n,visit);
+}visit(source);return {expects,cases,literals};}
+let rows=[];for(const name of fs.readdirSync(packet+'/before/packages/persistence/src/__tests__')){const rel='packages/persistence/src/__tests__/'+name,a=inventory(packet+'/before/'+rel),b=inventory(packet+'/artifact/'+rel); rows.push({path:rel,expectations:a.expects.length,expectationsUnchanged:JSON.stringify(a.expects)===JSON.stringify(b.expects),caseSelectionsUnchanged:JSON.stringify(a.cases)===JSON.stringify(b.cases),NulUnicodeLiteralsUnchanged:JSON.stringify(a.literals)===JSON.stringify(b.literals),before:a,after:b});}
+console.log(JSON.stringify({totalOriginalExpectations:rows.reduce((a,b)=>a+b.expectations,0),allPreserved:rows.every(x=>x.expectationsUnchanged&&x.caseSelectionsUnchanged&&x.NulUnicodeLiteralsUnchanged),rows},null,2));

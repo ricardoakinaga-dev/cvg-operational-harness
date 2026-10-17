@@ -1,0 +1,57 @@
+48:  operationKey(run: LoopRun, stepNumber: number, toolId: string): string
+85:  persistCheckpoint(run: LoopRun): Promise<void>
+160:  checkpoint: ExecutionCheckpoint | null
+162:  const resume = run.input.resume
+163:  if (!resume) return null
+164:  if (!checkpoint) {
+168:      response: 'Resume input arrived without a durable checkpoint.'
+171:  if (resume.kind === 'approval') {
+173:      // Wrong-kind resume: the execution is paused for an answer, not for an
+178:        response: 'Approval resume arrived while a user question is pending.',
+191:      // The approval was already consumed and the checkpoint cleared the
+195:    if (run.state.pendingApprovalId !== resume.approvalId) {
+215:      resume.message
+232:    payload: { message: resume.message },
+248:      [`answer_${stepNumber}`]: resume.message
+323:  // of this attempt. Only this dispatch's success may populate toolResult.
+325:  // A resumed in-flight step was already counted when it reached dispatch.
+347:  const operationKey = ctx.operationKey(run, stepNumber, tool.id)
+352:    operationKey
+362:  // A resumed step already holds this step number as a tool step (waiting for
+363:  // approval or in flight), and the dispatch checkpoint opens it as RUNNING;
+366:  // the checkpoint ends (AUD-0599 F02).
+368:  // Opened as RUNNING by this invocation's dispatch checkpoint.
+371:  // step waits for the resume instead of looking in flight, so a later
+427:  // pipeline (SPEC 0181); this loop only adds its checkpoint and its steps.
+445:      // approval is only reserved after this checkpoint.
+450:      // execution resumes (AUD-0598 R02).
+453:        pendingDecision: decision,
+458:      await ctx.persistCheckpoint(run)
+543:        // Any other block (a guard, cancellation, a conflicting resume) ends
+574:        // The reservation was released as certain; the step resumes later.
+614:          type: 'TOOL_RESULT',
+627:            operationKey,
+628:            ...(unknownEffect ? { effectRef: operationKey } : {})
+632:      // Preserve this kernel settlement cause losslessly in the step's error
+636:          toolError === 'unknown_effect: effect_settlement_failed'
+655:          type: 'TOOL_RESULT',
+665:            operationKey,
+666:            effectRef: operationKey
+679:        type: 'TOOL_RESULT',
+685:          output: boundedPayload(
+686:            outcome.result.output,
+691:          outcome.result.output,
+697:          operationKey,
+698:          effectRef: operationKey
+746:  await ctx.persistCheckpoint(run)
+872:        `Response claims are not supported by evidence: ${implicitVerification.unsupportedClaims.join('; ')}`
+876:    await ctx.persistCheckpoint(run)
+886:          target: 'response-claims',
+890:        summary: 'Response contains claims without evidence references.',
+906:      detail: 'The response must be revised with grounded claims.'
+946:          'Never claim an external action succeeded without an effect observation.',
+979:      run.usage.outputTokens += outcome.result.outputTokens
+1005:    run.usage.outputTokens += evaluation.usage.outputTokens
+1099:    await ctx.persistCheckpoint(run)
+1114:    pendingDecision: decision ?? undefined,
+1127:  await ctx.persistCheckpoint(run)

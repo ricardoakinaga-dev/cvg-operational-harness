@@ -1,0 +1,123 @@
+// Exact locations of incidental transport data in these three pinned native
+// witnesses. Payload text, call identities, outcomes and topology stay literal.
+export const TOOL_TRANSPORT = [
+  { path: /^\/reference\/native\/events\/\d+\/time$/, kind: 'epoch-ms' },
+  {
+    path: /^\/reference\/native\/events\/8\/data\/stream\/[0-3]\/time$/,
+    kind: 'epoch-ms'
+  },
+  {
+    path: /^\/reference\/native\/events\/13\/data\/stream\/(0|2|3|4)\/time$/,
+    kind: 'epoch-ms'
+  },
+  {
+    path: /^\/reference\/native\/events\/13\/data\/stream\/1\/time0$/,
+    kind: 'epoch-ms'
+  },
+  {
+    path: /^\/reference\/native\/events\/(4|8|10|13)\/data\/message\/id$/,
+    kind: 'uuid',
+    namespace: 'reference-message'
+  },
+  {
+    path: /^\/reference\/native\/messages\/(0|2|3|4)\/id$/,
+    kind: 'uuid',
+    namespace: 'reference-message'
+  },
+  {
+    path: /^\/reference\/native\/requests\/0\/request\/messages\/0\/id$/,
+    kind: 'uuid',
+    namespace: 'reference-message'
+  },
+  {
+    path: /^\/reference\/native\/requests\/1\/request\/messages\/(0|2|3)\/id$/,
+    kind: 'uuid',
+    namespace: 'reference-message'
+  },
+  {
+    path: /^\/cvg\/native\/events\/[12]\/eventId$/,
+    kind: 'uuid',
+    namespace: 'cvg-event'
+  },
+  { path: /^\/cvg\/native\/events\/[12]\/timestamp$/, kind: 'iso-time' },
+  {
+    path: /^\/cvg\/native\/steps\/[01]\/(startedAt|completedAt)$/,
+    kind: 'iso-time'
+  },
+  {
+    path: /^\/cvg\/native\/steps\/0\/observationRefs\/0$/,
+    kind: 'observation-uuid',
+    namespace: 'cvg-observation'
+  },
+  {
+    path: /^\/cvg\/native\/requests\/[01]\/request\/context\/capturedAt$/,
+    kind: 'iso-time'
+  },
+  {
+    path: /^\/cvg\/native\/audit\/(0|1|2|3|4|5|6|7|8|9|10)\/timestamp$/,
+    kind: 'iso-time'
+  }
+]
+
+export function normalizeToolTransport(value) {
+  const aliases = new Map()
+  const applied = []
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+  const fail = () => {
+    throw new Error('invalid tool transport field')
+  }
+  const walk = (node, pointer) => {
+    const rule = TOOL_TRANSPORT.find((entry) => entry.path.test(pointer))
+    if (rule) {
+      applied.push(pointer)
+      if (rule.kind === 'epoch-ms') {
+        if (
+          !Number.isSafeInteger(node) ||
+          node < 0 ||
+          !Number.isFinite(new Date(node).getTime())
+        )
+          fail()
+        return '<epoch-ms>'
+      }
+      if (rule.kind === 'iso-time') {
+        if (
+          typeof node !== 'string' ||
+          !Number.isFinite(Date.parse(node)) ||
+          new Date(node).toISOString() !== node
+        )
+          fail()
+        return '<iso-time>'
+      }
+      if (
+        rule.kind === 'observation-uuid' &&
+        (typeof node !== 'string' || !node.startsWith('obs_'))
+      )
+        fail()
+      const raw = rule.kind === 'observation-uuid' ? node.slice(4) : node
+      if (typeof raw !== 'string' || !uuid.test(raw)) fail()
+      let map = aliases.get(rule.namespace)
+      if (!map) {
+        map = new Map()
+        aliases.set(rule.namespace, map)
+      }
+      if (!map.has(node)) map.set(node, `${rule.namespace}:${map.size}`)
+      return `<${map.get(node)}>`
+    }
+    if (Array.isArray(node))
+      return node.map((child, i) => walk(child, `${pointer}/${i}`))
+    if (node !== null && typeof node === 'object')
+      return Object.fromEntries(
+        Object.keys(node)
+          .sort()
+          .map((key) => [
+            key,
+            walk(
+              node[key],
+              `${pointer}/${key.replaceAll('~', '~0').replaceAll('/', '~1')}`
+            )
+          ])
+      )
+    return node
+  }
+  return { value: walk(value, ''), normalizedPaths: applied }
+}

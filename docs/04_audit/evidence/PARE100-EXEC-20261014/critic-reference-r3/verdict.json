@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "lane": "critic-ref-r3",
+  "verdict": "FAIL",
+  "scope": "Frozen CVG contract-inventory helper; independent bounded ordinary library static QA only",
+  "basis": "Two source-backed material gaps; no executable verification inferred",
+  "completed_utc": "2026-10-15T02:54:45.880422+00:00",
+  "packet_root": "/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-ref-r3-packet",
+  "result_root": "/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-ref-r3-result",
+  "sentinel": {
+    "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-ref-r3-packet.sentinel.json",
+    "expected_sha256": "a62b1d4857611c82e4eed0801b232656ef902699fbce0b5859e0f26071696f76",
+    "before_sha256": "a62b1d4857611c82e4eed0801b232656ef902699fbce0b5859e0f26071696f76",
+    "after_sha256": "a62b1d4857611c82e4eed0801b232656ef902699fbce0b5859e0f26071696f76",
+    "before_matches": true,
+    "after_matches": true,
+    "exact_packet_file_set": true,
+    "packet_unchanged": true
+  },
+  "inspected_hashes": [
+    {
+      "path": "docs/02_spec/0209_pare100_reference_catalog.md",
+      "sha256": "6183bb50a4e9711fe13b21a3f97601d3c94dab2de46eb4a10d5328fc58871b94",
+      "bytes": 2692,
+      "inspection": "DIRECT_CONTENT_STATIC"
+    },
+    {
+      "path": "docs/04_audit/evidence/PARE100-EXEC-20261014/lead/reference-r3-focused.json",
+      "sha256": "dcaab7aa687173b0662619648a00245c490bbbfacd9448a7e3eab5aa194a6000",
+      "bytes": 466,
+      "inspection": "HASH_ONLY_NOT_USED_AS_BUILDER_EVIDENCE"
+    },
+    {
+      "path": "docs/04_audit/evidence/PARE100-EXEC-20261014/lead/reference-r3-freeze.json",
+      "sha256": "791ac6c0113403f955785e33ae4e04273b679d87e81a3104c33f3e1477256fcd",
+      "bytes": 916,
+      "inspection": "HASH_ONLY_NOT_USED_AS_BUILDER_EVIDENCE"
+    },
+    {
+      "path": "docs/04_audit/evidence/PARE100-EXEC-20261014/reference/r2/catalog-summary.json",
+      "sha256": "5e64d8f89c8ffc54b1b5ba5d015d3f80dfaf2962c5df3051e20ace3a099335c1",
+      "bytes": 3131,
+      "inspection": "HASH_ONLY_NOT_USED_AS_BUILDER_EVIDENCE"
+    },
+    {
+      "path": "scripts/reference-contract-catalog.mjs",
+      "sha256": "605ae13089a376bcb57976e3092e6e88a05d4a906a398f6f415d69032213ba53",
+      "bytes": 49037,
+      "inspection": "DIRECT_CONTENT_STATIC"
+    },
+    {
+      "path": "tests/reference-contract-catalog.test.js",
+      "sha256": "0c49aacaa145ccf30217973bb90458adfe778b05c8fa55a59c4d669f44385685",
+      "bytes": 27771,
+      "inspection": "DIRECT_CONTENT_STATIC"
+    }
+  ],
+  "governance_hashes": [
+    {
+      "path": "docs/07_agents/AGENTS.md",
+      "sha256": "8306af1bb3a09658bcc9e08102184b78bbd91dd2075e016a8009026f1908bede",
+      "use": "governance only; no worktree implementation/history read"
+    },
+    {
+      "path": "docs/08_runtime/agent_coordination.md",
+      "sha256": "84eac002b223520264be1b70e4f6f3a320f6a267d296e0cb8229e41d9f9418ed",
+      "use": "governance only; no worktree implementation/history read"
+    },
+    {
+      "path": "docs/architecture/adrs/ADR-010-harness-product-isolation.md",
+      "sha256": "13554b485ccf0af22c2f85a728801c3ed52f9712cc6b0da6362e7ec9ab2c3abe",
+      "use": "governance only; no worktree implementation/history read"
+    }
+  ],
+  "findings": [
+    {
+      "id": "REF-R3-F01",
+      "severity": "HIGH",
+      "priority": "P1",
+      "status": "OPEN",
+      "basis": "SOURCE_BACKED_STATIC",
+      "acceptance_blocker": true,
+      "title": "JSON contract paths bypass literal-code redaction",
+      "locations": [
+        {
+          "path": "scripts/reference-contract-catalog.mjs",
+          "line": 852,
+          "end_line": 859
+        },
+        {
+          "path": "scripts/reference-contract-catalog.mjs",
+          "line": 1110,
+          "end_line": 1111
+        },
+        {
+          "path": "scripts/reference-contract-catalog.mjs",
+          "line": 1036,
+          "end_line": 1039
+        },
+        {
+          "path": "scripts/reference-contract-catalog.mjs",
+          "line": 467,
+          "end_line": 486
+        },
+        {
+          "path": "tests/reference-contract-catalog.test.js",
+          "line": 590,
+          "end_line": 631
+        }
+      ],
+      "finding": "Document JSON fences are passed directly from JSON.parse to document-json shapes, and selected .schema.json/document .json sources are passed directly to json-schema-data. Their arbitrary nested strings are serialized verbatim and generally marked STATIC. staticData string hashing is only on the TypeScript initializer path and is never applied here.",
+      "impact": "A valid JSON Schema default/const/example containing guest implementation source would be copied into the catalog. No external reference was inspected, so occurrence in the pinned reference is not claimed. This is a supported-input library gap against the metadata-only/no literal code acceptance condition.",
+      "remediation": "Use a schema-aware bounded contract-data projection for JSON documents and schemas. Retain approved structural/type vocabulary, but represent unclassified payload/code-bearing strings with UNKNOWN, reason, source provenance, hash and byte length. Keep entries and owners rather than removing requirements. Review the analogous raw table/graph/annotation string channels under the same policy.",
+      "verification": "NOT_RUN: negative cases for code strings in both a schema file and a documented JSON fence; assert no literal bytes, preserved source/entry/owner and visible UNKNOWN."
+    },
+    {
+      "id": "REF-R3-F02",
+      "severity": "MEDIUM",
+      "priority": "P2",
+      "status": "OPEN",
+      "basis": "SOURCE_BACKED_STATIC",
+      "acceptance_blocker": true,
+      "title": "Live exported validation checks self-declared hashes without rebinding sources to the pinned tree",
+      "locations": [
+        {
+          "path": "scripts/reference-contract-catalog.mjs",
+          "line": 1237,
+          "end_line": 1244
+        },
+        {
+          "path": "scripts/reference-contract-catalog.mjs",
+          "line": 1262,
+          "end_line": 1282
+        },
+        {
+          "path": "scripts/reference-contract-catalog.mjs",
+          "line": 181,
+          "end_line": 205
+        }
+      ],
+      "finding": "validateCatalog(catalog,{root}) compares each source SHA-256 to live bytes, then calls inspectReference, which authenticates package.json but does not read the supplied catalog sources through its pin-checking read function. source.git_blob is not checked. The filesystem inventory only rejects new candidate paths, not modifications at tracked paths.",
+      "impact": "With unchanged HEAD/package.json, a modified tracked source plus correspondingly recomputed catalog/source hashes can satisfy the live validator despite disagreeing with the pinned blob. This affects the exported standalone validator. The normal collector authenticates candidate bytes correctly; comparing against a trusted, unchanged frozen digest also supplies a separate protection.",
+      "remediation": "Create one inspectReference context and validate every supplied source through ref.read(path); compare its authenticated SHA-256 and relevant blob metadata. Refuse sources outside the declared candidate set or define such sources explicitly. Recomputable catalog hashes should remain integrity checks, not substitute for pin authentication.",
+      "verification": "NOT_RUN: change a tracked candidate while leaving HEAD/package.json unchanged, recompute only self-declared digests, and require validateCatalog(...,{root}) to reject it against the pinned blob."
+    }
+  ],
+  "notes": [
+    {
+      "id": "REF-R3-N01",
+      "severity": "INFO",
+      "basis": "SOURCE_BACKED_STATIC_WITH_EXTERNAL_FACTS_NOT_RUN",
+      "title": "Generated distribution exclusion has a narrow path rule but no authenticated generatedness in this packet",
+      "locations": [
+        {
+          "path": "scripts/reference-contract-catalog.mjs",
+          "line": 217,
+          "end_line": 244
+        },
+        {
+          "path": "scripts/reference-contract-catalog.mjs",
+          "line": 1042,
+          "end_line": 1043
+        },
+        {
+          "path": "scripts/reference-contract-catalog.mjs",
+          "line": 1203,
+          "end_line": 1209
+        }
+      ],
+      "detail": "The literal subtree python/sdk-runtime/src/deepseek_harness_runtime/runtime/ is excluded unconditionally, including any tracked files there. The comment retains artifact closure under P100-052; generatedness/ignored status is asserted in a comment, not verified by the helper, and the specific exclusion is not emitted as a catalog limitation or UNKNOWN closure entry. The rule is syntactically bounded. Whether that subtree is actually generated/untracked at the intended pin, and whether another artifact owns the complete denominator, was NOT_RUN and cannot be inferred here. Prefer emitting the exact exclusion, reason and owner to make this bound visible to downstream consumers. This note does not allege real lost reference requirements or establish parity."
+    }
+  ],
+  "checks_actually_performed": [
+    {
+      "id": "INTEGRITY_BEFORE",
+      "status": "PASS",
+      "performed": "SHA-256 sentinel against supplied digest; exact six regular packet file hashes against sentinel; saved integrity-before.json."
+    },
+    {
+      "id": "DIRECT_ARTIFACT_REVIEW",
+      "status": "PERFORMED_STATIC",
+      "performed": "Read all 1432 script lines, 760 test lines and 20 SPEC0209 lines; traced selection, reads, extraction, emission, validation, freeze and CLI output. Read only allowed governance in the worktree."
+    },
+    {
+      "id": "GIT_STATUS_REMOVAL",
+      "status": "STATIC_SUPPORTED_WITH_RUNTIME_NOT_RUN",
+      "performed": "Enumerated remaining Git calls: rev-parse, local config lookup and ls-tree. No status/diff/index-worktree conversion call remains. Inspected wrapper config/env overrides, replacement-object refusal, raw blob hashing and pre/post filesystem inventory. Read relevant negative test definitions without executing them."
+    },
+    {
+      "id": "METADATA_ONLY_SERIALIZATION",
+      "status": "FAIL_STATIC",
+      "performed": "Traced JSON inputs through emit/shape/serialization and TypeScript string hashing; REF-R3-F01."
+    },
+    {
+      "id": "PINNED_BYTE_AUTHENTICATION",
+      "status": "MIXED_STATIC",
+      "performed": "Collector read closure hashes raw bytes with Git blob header against pinned tree. Exported live validation lacks this binding for supplied sources; REF-R3-F02."
+    },
+    {
+      "id": "OWN_OUTPUT_HANDLING",
+      "status": "STATIC_SUPPORTED_WITH_RUNTIME_NOT_RUN",
+      "performed": "Read reference/input path guards, ancestor canonicalization, symlink/nonregular/hardlink refusal, exclusive O_NOFOLLOW temporary inode, fsync and atomic rename. No output write by collector was attempted."
+    },
+    {
+      "id": "UNKNOWN_AND_FREEZE_DENOMINATOR",
+      "status": "STATIC_SUPPORTED_FOR_SELECTED_SOURCES",
+      "performed": "Read per-source UNKNOWN surfaces, nested UNKNOWN propagation, NOT_VERIFIED statuses, deterministic identities/order and exact freeze/removal/digest rejection. No full reference or parity denominator was inspected."
+    },
+    {
+      "id": "GENERATED_DISTRIBUTION_BOUND",
+      "status": "PARTIAL_STATIC_EXTERNAL_FACTS_NOT_RUN",
+      "performed": "Read exact prefix exclusion and retained P100-052 comment; noted lack of emitted explicit exclusion/closure metadata. Did not inspect target distributions or ignore configuration."
+    },
+    {
+      "id": "INTEGRITY_AFTER",
+      "status": "PASS",
+      "performed": "Rehashed sentinel and exact six packet files after direct inspection; all equal supplied digest, sentinel map and before snapshot."
+    }
+  ],
+  "not_run_schedules": [
+    {
+      "id": "NR01",
+      "status": "NOT_RUN",
+      "schedule": "Run the existing focused library tests and CLI negative cases only in a separately authorized disposable environment. Tests were read, not executed here."
+    },
+    {
+      "id": "NR02",
+      "status": "NOT_RUN",
+      "schedule": "Add/execute regression cases for F01 JSON literal-code projection and F02 live validator pin rebinding."
+    },
+    {
+      "id": "NR03",
+      "status": "NOT_RUN",
+      "schedule": "Check supported Git versions and effective promisor/config forms for no implicit fetch or configured execution. The local-config guard and environment switches were inspected statically; their runtime compatibility is unverified."
+    },
+    {
+      "id": "NR04",
+      "status": "NOT_RUN",
+      "schedule": "Owner verifies generated distribution provenance and explicit artifact closure/denominator using an approved separate lane. No target, configuration, provider or external data was inspected in this review."
+    },
+    {
+      "id": "NR05",
+      "status": "NOT_RUN",
+      "schedule": "Any whole-reference collection, 318-manifest/55-family completeness, semantic equivalence, 36-card acceptance, integration, release or certification belongs to separate authorized work; none is granted by this verdict."
+    }
+  ],
+  "limitations": [
+    "Static review only: no collector/module import, Node/Python collector subprocess, unit test, synthetic repository, external reference/config/hooks/filters, network/provider/data access or descendant agent.",
+    "Three packet evidence JSON files were hashed only; builder/Lead result claims were not read or used as verification.",
+    "No worktree source/history, runtime state, execution log or backlog was inspected/edited; the user narrowed this lane to packet review and result-only writes, superseding general shared-ledger requirements.",
+    "No claim of actual reference contents, literal-code occurrence, 318/55 completeness, parity, full 36-card acceptance or executable safety.",
+    "Output and source path checks are ordinary pathname-based checks; hostile concurrent filesystem replacement/race immunity was not established. The static output assessment assumes stable parent directories and a trusted local toolchain/PATH.",
+    "Partial/promisor guard behavior across installed Git versions and effective config variants is unverified; no real config or hook was read or triggered."
+  ],
+  "executable_verification": false,
+  "external_reference_inspected": false,
+  "parity_established": false,
+  "full_36_card_acceptance": false
+}

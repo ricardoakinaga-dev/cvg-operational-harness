@@ -1,0 +1,284 @@
+{
+  "kind": "STATIC_TEXT_AND_ARITHMETIC_ONLY",
+  "utc": "2026-10-16T05:20:54.340598+00:00",
+  "runtime_execution": false,
+  "witnesses": {
+    "spec": {
+      "owner BOOTING": [
+        {
+          "line": 60,
+          "text": "Export de `@cvg/harness`: `createManagedOperationalHarness(options): ManagedHarnessOwner`. A f\u00e1brica valida os dados puros e retorna sincronamente um owner BOOTING, antes de executar qualquer activate; bootstrap \u00e9 uma tarefa possu\u00edda agendada depois desse retorno. Assim, erro ou aquisi\u00e7\u00e3o tardia nunca perde seu supervisor. A f\u00e1brica exige control ports expl\u00edcitos e um bootstrapPlan v\u00e1lido; n\u00e3o altera o default de `createOperationalHarness` nem seleciona esse modo por payload. S\u00f3 ready com boot e evid\u00eancia ACK permite OPEN/pins/turnos; o objeto BOOTING n\u00e3o \u00e9 um runtime operacional. Fechar durante bootstrap j\u00e1 tem um owner nativo para conservar e juntar seus recursos."
+        }
+      ],
+      "checar owner OPEN": [
+        {
+          "line": 124,
+          "text": "4. Ap\u00f3s o ACK acima, entrar em uma se\u00e7\u00e3o s\u00edncrona sem await: checar owner OPEN, signal n\u00e3o abortado, expectedRevision e candidato READY; fechar admiss\u00e3o de novos pins/turnos, trocar o ponteiro corrente, incrementar revis\u00e3o e marcar a anterior RETIRING. Esse \u00e9 o ponto local de commit; n\u00e3o h\u00e1 rollback autom\u00e1tico a partir daqui."
+        }
+      ],
+      "se o owner ainda estiver OPEN": [
+        {
+          "line": 126,
+          "text": "6. `reconcileEvidence(receipt)` autentica o registro privado imut\u00e1vel da decis\u00e3o, reavalia policy e acrescenta uma observa\u00e7\u00e3o com novo attemptId sobre o mesmo commit. AuditSink n\u00e3o oferece dedup/readback: a primeira escrita pode existir e haver\u00e1 m\u00faltiplas observa\u00e7\u00f5es leg\u00edtimas, sem alegar exatamente-uma-vez de audit. S\u00f3 o ACK da nova observa\u00e7\u00e3o abre admiss\u00e3o, se o owner ainda estiver OPEN; nunca reativa candidato, muda revis\u00e3o ou reexecuta efeito. Falha mant\u00e9m fence. Se close venceu, finalizar evid\u00eancia n\u00e3o reabre owner."
+        }
+      ],
+      "EVIDENCE_PENDING pode voltar OPEN": [
+        {
+          "line": 177,
+          "text": "| Owner    | BOOTING \u2192 OPEN, falha de boot com cleanup possu\u00eddo ou CLOSING; OPEN \u2192 EVIDENCE_PENDING ou CLOSING; EVIDENCE_PENDING pode voltar OPEN somente por receipt/ACK v\u00e1lido e sem close; CLOSING \u00e9 monot\u00f4nico; CLOSED requer joins e cleanup conclu\u00eddos. CLEANUP_FAILED permanece terminal com falhas expl\u00edcitas, sem sucesso de close. |"
+        }
+      ],
+      "16MiB": [
+        {
+          "line": 133,
+          "text": "O owner tem limites de lifetime al\u00e9m das quotas concorrentes:512requestIds de muta\u00e7\u00e3o incluindo bootstrap,4096leases emitidos e16tentativas de evid\u00eancia por muta\u00e7\u00e3o (primeira publica\u00e7\u00e3o mais reconcilia\u00e7\u00f5es),16MiB de bookkeeping reservado. Emitir no m\u00e1ximo um receipt por muta\u00e7\u00e3o, um por release de lease e um por close: no m\u00e1ximo4609receipts por owner; ready/wait/retry/reconcile reutilizam os mesmos objetos/joins. N\u00e3o emitir um receipt novo por poll. Receipt/lease live usa registro autenticado privado; terminal guarda s\u00f3 estado m\u00ednimo e IDs/digests, sem closure do plugin/port/recurso j\u00e1 descartado."
+        },
+        {
+          "line": 225,
+          "text": "| ML20 | Quotas concorrentes e lifetime512requests/4096leases/16attempts/16MiB, oldest-key retry/latecleanup n\u00e3o s\u00e3o expulsos para abrir espa\u00e7o              | Quota amplia para esconder leaks; sucesso de stop sem sa\u00edda real                      |"
+        }
+      ],
+      "AgentProfile inteiro": [
+        {
+          "line": 65,
+          "text": "| `owner.pinCurrent({agent, signal?})`                                      | Obt\u00e9m lease nativo da revis\u00e3o corrente para o tenant/profile do owner. Captura o AgentProfile inteiro como dados validados e seu digest, al\u00e9m de identity/version; n\u00e3o recebe generationId arbitr\u00e1rio nem reidrata um lease de JSON. Owner fechado/fenced recusa antes de efeito.                                                                                                                                                                          |"
+        },
+        {
+          "line": 66,
+          "text": "| `lease.runTurn(input)`                                                    | Admite um turno no kernel real daquela gera\u00e7\u00e3o. Tenant/agent/version e o digest do AgentProfile inteiro precisam coincidir com o snapshot do pin; n\u00e3o aceitar allowedTools/skills/instructions ampliados sob os mesmos IDs. Usar o snapshot autenticado do pin no kernel, nunca o objeto mut\u00e1vel do caller; request \u00e9 capturado antes de await. Retorna `{generationId, revision, result: RuntimeResult}`; n\u00e3o exp\u00f5e runtime/KernelHost/registry privados. |"
+        }
+      ],
+      "Close n\u00e3o pode fazer self-join": [
+        {
+          "line": 119,
+          "text": "Uma fila por owner serializa bootstrap/replace/publication/reconcilia\u00e7\u00e3o de evid\u00eancia. Pins e turnos usam admiss\u00e3o s\u00edncrona separada, sem esperar um plugin arbitr\u00e1rio terminar enquanto um lock l\u00f3gico de admiss\u00e3o est\u00e1 retido. Chamadas de muta\u00e7\u00e3o reentrantes a partir de activate/dispose/audit do pr\u00f3prio owner s\u00e3o recusadas, evitando aguardar a pr\u00f3pria fila; inventory \u00e9 somente leitura. Close n\u00e3o pode fazer self-join: se chamado dentro de callback possu\u00eddo, fecha a admiss\u00e3o e retorna receipt pendente; wait desse receipt pelo mesmo callback \u00e9 recusado."
+        }
+      ],
+      "lease.release": [
+        {
+          "line": 50,
+          "text": "A\u00e7\u00f5es: bootstrap e replace usam `plugin.lifecycle.replace` com target manage; reconcile usa `plugin.lifecycle.reconcile` com target manage; pin/inventory usam `plugin.lifecycle.read` com target read. Bootstrap autoriza antes de activate e imediatamente antes da primeira publica\u00e7\u00e3o, como replace. Reconcile autoriza antes de acrescentar observa\u00e7\u00e3o. Owner.ready/lease.release/owner.close/wait s\u00e3o observa\u00e7\u00e3o ou limpeza de uma capability nativa j\u00e1 emitida: podem terminar sem grants novos e n\u00e3o iniciam nova capacidade. Nenhum outcome diferente de ALLOW autoriza gerenciamento: DENY bloqueia, REQUIRE_APPROVAL/HANDOFF retorna HANDOFF_REQUIRED e erro/shape/policyVersion inv\u00e1lido bloqueia sem init/publica\u00e7\u00e3o. N\u00e3o criar outro PolicyEngine nem preencher tool/invocation com uma ferramenta de execu\u00e7\u00e3o arbitr\u00e1ria."
+        },
+        {
+          "line": 67,
+          "text": "| `lease.release({timeoutMs?, signal?})`                                    | Marca o lease como releasing sincronamente e exatamente uma vez, impedindo novos turnos. Espera os usos j\u00e1 admitidos, ou retorna receipt de espera pendente; uma segunda chamada observa o mesmo join.                                                                                                                                                                                                                                                     |"
+        }
+      ],
+      "unwinds reversos": [
+        {
+          "line": 169,
+          "text": "Cleanup de uma gera\u00e7\u00e3o \u00e9 single-flight. S\u00f3 inicia depois de zero pins/turnos/opera\u00e7\u00f5es/aquisi\u00e7\u00f5es; unwinds reversos t\u00eam estado privado registrado por item, invoca\u00e7\u00e3o no m\u00e1ximo uma vez, e os outros itens continuam ap\u00f3s uma falha j\u00e1 resolvida. Falha de disposer \u00e9 registrada e retorna CLEANUP_FAILED, n\u00e3o silenciosamente DISPOSED. Disposer pendente/hung conserva CLEANUP_PENDING e sua refer\u00eancia; n\u00e3o executar automaticamente de novo. N\u00e3o descartar outro recurso que o disposer pendente ainda pode usar: manter ordem reversa sequencial at\u00e9 ele resolver ou at\u00e9 uma pol\u00edtica expl\u00edcita de depend\u00eancia comprovar independ\u00eancia; esta funda\u00e7\u00e3o n\u00e3o introduz esse paralelismo."
+        }
+      ],
+      "antes de esperar tarefas": [
+        {
+          "line": 163,
+          "text": "Ao entrar em retirada sem pins nem runTurn nativo original ainda aguardando sua execu\u00e7\u00e3o, sinalizar cancelamento da gera\u00e7\u00e3o antes de esperar tarefas de background ou callbacks destacados por timeout j\u00e1 registrados. N\u00e3o abortar uma execu\u00e7\u00e3o nativa ainda em andamento s\u00f3 porque seu lease entrou em releasing; owner.close \u00e9 a opera\u00e7\u00e3o expl\u00edcita que cancela trabalho ativo. Essas tarefas precisam observar o signal sem depender do disposer final para terminar; caso contr\u00e1rio permanecer\u00e3o CLEANUP_PENDING e bloquear\u00e3o nova quota, sem prova falsa de quiesc\u00eancia. N\u00e3o iniciar task nova depois de fechado o produtor. C\u00f3digo arbitr\u00e1rio que esconde IO fora do port/track/acquire viola o cat\u00e1logo; n\u00e3o se promete rastreamento de internals de bibliotecas n\u00e3o declarados."
+        }
+      ]
+    },
+    "native_host": {
+      "await host.dispose()": [
+        {
+          "line": 89,
+          "text": "await host.dispose()"
+        }
+      ],
+      "await dispose?.()": [
+        {
+          "line": 133,
+          "text": "await dispose?.()"
+        }
+      ],
+      "this.#disposers.pop()": [
+        {
+          "line": 131,
+          "text": "const dispose = this.#disposers.pop()"
+        }
+      ],
+      "isControlService": [
+        {
+          "line": 41,
+          "text": "const isControlService = (key: ServiceKey): boolean =>"
+        },
+        {
+          "line": 201,
+          "text": "if (plugin.kind === 'capability' && isControlService(key)) {"
+        }
+      ]
+    },
+    "native_iterative": {
+      "return this.earlyFinish": [
+        {
+          "line": 536,
+          "text": "return this.earlyFinish("
+        },
+        {
+          "line": 547,
+          "text": "return this.earlyFinish("
+        },
+        {
+          "line": 555,
+          "text": "return this.earlyFinish("
+        },
+        {
+          "line": 563,
+          "text": "return this.earlyFinish("
+        },
+        {
+          "line": 576,
+          "text": "return this.earlyFinish("
+        },
+        {
+          "line": 592,
+          "text": "return this.earlyFinish("
+        },
+        {
+          "line": 603,
+          "text": "return this.earlyFinish(input, rejection, 'STATE_CONFLICT', startedAtMs)"
+        }
+      ],
+      "private async earlyFinish": [
+        {
+          "line": 1724,
+          "text": "private async earlyFinish("
+        }
+      ],
+      "private async finalize": [
+        {
+          "line": 1569,
+          "text": "private async finalize("
+        }
+      ],
+      "this.recordTelemetry": [
+        {
+          "line": 1640,
+          "text": "this.recordTelemetry(run, finalResult, startedAtMs)"
+        }
+      ],
+      "runtime.completed": [
+        {
+          "line": 1651,
+          "text": "? 'runtime.completed'"
+        }
+      ],
+      "runtime.paused": [
+        {
+          "line": 1654,
+          "text": "? 'runtime.paused'"
+        }
+      ],
+      "runtime.stopped": [
+        {
+          "line": 1655,
+          "text": ": 'runtime.stopped'"
+        },
+        {
+          "line": 1744,
+          "text": "action: 'runtime.stopped',"
+        }
+      ],
+      "runtime_v2.started": [
+        {
+          "line": 714,
+          "text": "await this.safeAudit(run, 'runtime_v2.started', {"
+        }
+      ],
+      "observation.recorded": [
+        {
+          "line": 1424,
+          "text": "await this.safeAudit(run, 'observation.recorded', {"
+        }
+      ],
+      "step.completed": [
+        {
+          "line": 1471,
+          "text": "input.status === 'RUNNING' ? 'step.started' : 'step.completed',"
+        }
+      ],
+      "orchestrator.decided": [
+        {
+          "line": 873,
+          "text": "await this.safeAudit(run, 'orchestrator.decided', {"
+        }
+      ]
+    },
+    "native_contract": {
+      "readonly instructions: readonly string[]": [
+        {
+          "line": 26,
+          "text": "readonly instructions: readonly string[]"
+        }
+      ],
+      "readonly result: string": [
+        {
+          "line": 501,
+          "text": "readonly result: string"
+        }
+      ],
+      "readonly action: string": [
+        {
+          "line": 297,
+          "text": "readonly action: string"
+        },
+        {
+          "line": 358,
+          "text": "readonly action: string"
+        },
+        {
+          "line": 497,
+          "text": "readonly action: string"
+        }
+      ]
+    }
+  },
+  "leaf_inventory": {
+    "count": 271,
+    "extraction_status": {
+      "STATIC": 242,
+      "UNKNOWN": 29
+    },
+    "parity_status": {
+      "NOT_VERIFIED": 271
+    },
+    "procedure_status": {
+      "PENDING_BEHAVIORAL_CONTRACT": 271
+    },
+    "assigned_procedures": 0
+  },
+  "memory_counterexample_arithmetic": {
+    "instruction_count": 2048,
+    "ascii_bytes_each": 16384,
+    "payload_bytes_excluding_json_overhead": 33554432,
+    "bookkeeping_mib": 16,
+    "note": "One native AgentProfile can contain this array; each string meets the proposed per-string ceiling. This computes a size only; no profile is allocated and no lifecycle is simulated."
+  },
+  "future_procedures": {
+    "ML": [
+      "ML01",
+      "ML02",
+      "ML03",
+      "ML04",
+      "ML05",
+      "ML06",
+      "ML07",
+      "ML08",
+      "ML09",
+      "ML10",
+      "ML11",
+      "ML12",
+      "ML13",
+      "ML14",
+      "ML15",
+      "ML16",
+      "ML17",
+      "ML18",
+      "ML19",
+      "ML20"
+    ],
+    "ML_status": "NOT_RUN",
+    "PL_family_count": 12,
+    "PL_status": "NOT_RUN",
+    "PL_limit": "Family count supplied by task/spec; no procedures.json outside packet was accessed."
+  }
+}

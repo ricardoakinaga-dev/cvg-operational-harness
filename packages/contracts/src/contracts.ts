@@ -114,6 +114,8 @@ export interface ToolExecutionContext {
   readonly traceId: TraceId
   readonly operationKey?: string
   readonly signal?: AbortSignal
+  /** Validated, frozen grant supplied by the kernel after sandbox approval. */
+  readonly sandboxHandle?: SandboxHandle
 }
 
 export interface ToolDescriptor {
@@ -263,6 +265,8 @@ export type ModelCallPurpose =
   | 'REPAIR'
 
 export interface ModelRequest {
+  /** Enforced by a qualified complete-tool-v1 model adapter when supplied. */
+  readonly maxOutputTokens?: number
   readonly messages: readonly ModelMessage[]
   readonly context: ContextSnapshot
   readonly budget: ExecutionBudget

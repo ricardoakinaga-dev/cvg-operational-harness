@@ -1,0 +1,89 @@
+"""Read-only independent reconstruction of recipe-encoded native checkpoints."""
+import copy
+import hashlib
+import json
+from pathlib import Path
+
+base = Path(__file__).parent
+source = base / 'observations-02.json'
+rows = json.loads(source.read_text())
+count = 0
+def check(value, message):
+    global count
+    count += 1
+    if not value:
+        raise AssertionError(message)
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+def canonical(value):
+    # These fixtures have ASCII keys/strings and finite integer numbers only.
+    # No native CVG serializer, codec, digest or test helper is imported.
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+
+def reconstruct(entry):
+    checkpoint = copy.deepcopy(entry['checkpointWithoutFixturePadding'])
+    recipe = entry['paddingRecipe']
+    check(recipe['character'] == 'p', 'Unexpected padding alphabet')
+    padding = recipe['character'] * recipe['repeat']
+    check(sha(padding.encode()) == recipe['sha256'], 'Padding hash mismatch')
+    if recipe['present']:
+        checkpoint['state']['resolvedInputs']['fixturePadding'] = padding
+    unsigned = {k: v for k, v in checkpoint.items() if k not in ['checkpointId', 'createdAt', 'digest']}
+    raw = canonical(unsigned)
+    check(len(raw) == entry['logicalUnsignedBytes'], 'Logical bytes mismatch')
+    check(8388608 - len(raw) == entry['remainingBytes'], 'Remaining bytes mismatch')
+    check(sha(b'cvg.checkpoint.v2\n' + raw) == checkpoint['digest'], 'Domain digest mismatch')
+    check(len(raw) <= 8388608, 'Unsigned checkpoint overflow')
+    return checkpoint
+
+cases = []
+for row in rows:
+    before = reconstruct(row['before'])
+    after = reconstruct(row['after'])
+    for write in row['writes']:
+        check(write['result']['status'] == 'APPLIED', 'Non-applied CAS')
+        committed = reconstruct(write['next'])
+        check(committed['digest'] == write['result']['token']['digest'], 'Wrong committed digest')
+        check(committed['checkpointId'] == write['result']['token']['checkpointId'], 'Wrong CAS token')
+    refusal = '80000' in row['name']
+    prior = row['name'].endswith('true')
+    old = [o for o in before['state']['observations'] if o['type'] == 'TOOL_RESULT']
+    new = [o for o in after['state']['observations'] if o['type'] == 'TOOL_RESULT']
+    check(len(old) == int(prior), 'Wrong number of actual initial results')
+    check(new[:len(old)] == old, 'Prior tool result changed')
+    check(row['modelCalls'] == 0, 'Unexpected model call')
+    check(row['bodies'] == int(prior) + int(not refusal), 'Body count mismatch')
+    check(row['before']['remainingBytes'] == (80000 if refusal else 200000), 'Wrong fixture size')
+    for field in ['modelCalls', 'inputTokens', 'outputTokens', 'costUsd', 'decisionRepairs']:
+        check(before['budgetUsage'][field] == after['budgetUsage'][field], 'Unexpected spending: ' + field)
+    check(after['state']['resolvedInputs']['fixturePadding'] == before['state']['resolvedInputs']['fixturePadding'], 'Seeded data changed')
+    check(after['state']['toolResultContext']['decisionAdmissions'] == [], 'Invented model receipt')
+    check(after['state']['toolResultContext']['deliveredThroughStep'] == 0, 'Invented model delivery')
+    if prior:
+        check(row['oldJournal']['state'] == 'CONFIRMED', 'Prior effect not confirmed')
+        check(row['oldJournal']['result'] == old[0]['payload']['output'], 'Prior journal/result mismatch')
+    if refusal:
+        check(row['result']['response'] == 'CONTEXT_OVERFLOW: Prospective checkpoint cannot reserve full tool result and step overhead.', 'Wrong refusal cause')
+        check(row['result']['stopReason'] == 'INSUFFICIENT_EVIDENCE', 'Wrong stop reason')
+        check(row['attemptedJournal'] is None, 'Reserved journal despite refusal')
+        check(new == old, 'New or changed result on refusal')
+        for field in ['steps', 'toolCalls']:
+            check(before['budgetUsage'][field] == after['budgetUsage'][field], 'Charged refused ' + field)
+    else:
+        check(row['result']['stopReason'] == 'COMPLETED', 'Positive control incomplete')
+        check(row['attemptedJournal']['state'] == 'CONFIRMED', 'Positive journal not confirmed')
+        check(len(new) == len(old) + 1, 'Positive full result missing')
+        check(after['budgetUsage']['toolCalls'] == before['budgetUsage']['toolCalls'] + 1, 'Wrong tool charge')
+        check(new[-1]['payload']['completion'] == 'COMPLETE', 'Incomplete positive capture')
+    for observation in new:
+        payload = observation['payload']
+        raw = canonical(payload['output'])
+        check(len(raw) == payload['outputBytes'], 'Output byte mismatch')
+        check(sha(raw) == payload['outputSha256'], 'Output hash mismatch')
+    cases.append({'case': row['name'], 'beforeBytes': row['before']['logicalUnsignedBytes'], 'afterBytes': row['after']['logicalUnsignedBytes'], 'bodies': row['bodies'], 'models': row['modelCalls'], 'stopReason': row['result']['stopReason']})
+check(len(cases) == 4, 'Missing cases')
+result = {'status': 'PASS', 'checks': count, 'sourceSha256': sha(source.read_bytes()), 'cases': cases, 'scope': 'Independent Python recipe/unsigned digest/bytes/usage/raw evidence verification; not a runtime rerun or global acceptance.'}
+(base / 'lead-recompute.json').write_text(json.dumps(result, indent=2) + '\n')
+print(json.dumps(result))

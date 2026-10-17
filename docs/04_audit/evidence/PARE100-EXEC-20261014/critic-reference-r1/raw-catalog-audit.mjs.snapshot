@@ -1,0 +1,41 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import crypto from 'node:crypto'
+import ts from './packet/node_modules/typescript/lib/typescript.js'
+import {validateCatalog,serializeCatalog,extractTypeScriptContracts} from './packet/scripts/reference-contract-catalog.mjs'
+const base='/tmp/cvg-pare100-exec-20261014-6az3hlay'
+const packet=path.join(base,'critic-f0-packet')
+const result=path.join(base,'critic-reference-result')
+const sha=x=>crypto.createHash('sha256').update(x).digest('hex')
+const c=JSON.parse(fs.readFileSync(path.join(packet,'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/catalog.json'),'utf8'))
+const m=JSON.parse(fs.readFileSync(path.join(packet,'docs/04_audit/evidence/PARE100-20261014/capability-family-map.json'),'utf8'))
+const u=JSON.parse(fs.readFileSync(path.join(packet,'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/unknown-index.json'),'utf8'))
+const checks=[];const check=(name,ok,details)=>{checks.push({name,ok,details});console.log(JSON.stringify(checks.at(-1)))}
+check('catalog validator integrity',validateCatalog(c).status==='VALID_STATIC_CATALOG',{entries:c.entries.length,sources:c.sources.length})
+const packages=m.package_owners.map(p=>{const hits=c.entries.filter(e=>e.kind==='manifest'&&e.source===p.manifest);return {path:p.manifest,hits:hits.length,match:hits.length===1&&hits[0].package===p.reference_package&&hits[0].family===p.group&&hits[0].owner_task===p.owner_task&&hits[0].source_sha256===p.manifest_sha256&&hits[0].parity_status==='NOT_VERIFIED'}})
+check('318 original package owner mappings',packages.length===318&&packages.every(x=>x.match),{count:packages.length,mismatches:packages.filter(x=>!x.match)})
+const groups=[...new Set(m.package_owners.map(x=>x.group))].sort();check('55 distinct original families',groups.length===55&&JSON.stringify(groups)===JSON.stringify(Object.keys(m.family_owners).sort()),{count:groups.length,catalog:c.summary.mapped_families})
+const additional=m.additional_surfaces.map(s=>{const entries=c.entries.filter(e=>e.source.startsWith(s.reference_path+'/'));return {path:s.reference_path,entries:entries.length,owner:s.owner_task,mismatches:entries.filter(e=>e.owner_task!==s.owner_task).map(e=>e.id)}})
+check('8 additional surface owners',additional.length===8&&additional.every(x=>x.entries>0&&x.mismatches.length===0),additional)
+check('unknown index preserves complete UNKNOWN denominator',u.length===c.entries.filter(x=>x.extraction_status==='UNKNOWN').length&&new Set(u.map(x=>x.id)).size===u.length&&u.every(x=>c.entries.some(e=>e.id===x.id&&e.extraction_status==='UNKNOWN')),{index:u.length,catalog_unknown:c.summary.by_extraction_status.UNKNOWN})
+check('NOT_VERIFIED remains entire denominator',c.entries.every(e=>e.parity_status==='NOT_VERIFIED')&&c.parity_status==='NOT_VERIFIED',{NOT_VERIFIED:c.entries.length,PASS:c.entries.filter(e=>e.parity_status==='PASS').length})
+const closure=c.entries.filter(e=>['util','test-support'].includes(e.family));check('utility and test-support infrastructure retained',closure.length>0&&closure.every(e=>e.scope==='INFRASTRUCTURE_CLOSURE'),{entries:closure.length,sources:new Set(closure.map(e=>e.source)).size})
+// READ only the tracked contract source paths declared by the frozen catalog;
+// never reference git/private state, and never execute/import its modules.
+const sourceIssues=[];let byteTotal=0
+for(const s of c.sources){
+ if(!s.path||path.isAbsolute(s.path)||s.path.split('/').some(x=>!x||x==='.'||x==='..')||/(^|\/)(\.git|\.env[^/]*|\.dsh|node_modules)(\/|$)/.test(s.path))throw Error('unsafe source path '+s.path)
+ const full=path.join(c.reference.root,s.path);if(fs.realpathSync(full)!==full){sourceIssues.push({path:s.path,error:'symlink'});continue}
+ const bytes=fs.readFileSync(full);byteTotal+=bytes.length;const blob=crypto.createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');if(sha(bytes)!==s.sha256||blob!==s.git_blob)sourceIssues.push({path:s.path,error:'hash mismatch'})
+}
+check('all catalogued reference contract hashes match pin metadata',sourceIssues.length===0,{sources:c.sources.length,bytes:byteTotal,issues:sourceIssues})
+const guest=c.entries.find(e=>e.source==='packages/workflow/workflow-ptc/src/guest-source.ts'&&e.symbol==='WORKFLOW_GUEST_SOURCE')
+const embedded=guest.shape.declarations[0].value
+const sf=ts.createSourceFile('inert-embedded-text.ts',embedded,ts.ScriptTarget.Latest,true)
+let functionsWithBodies=0,classes=0,blocks=0
+const visit=n=>{if(ts.isFunctionLike(n)&&n.body)functionsWithBodies++;if(ts.isClassDeclaration(n))classes++;if(ts.isBlock(n))blocks++;ts.forEachChild(n,visit)};visit(sf)
+const filename=path.join(c.reference.root,guest.source);const src=fs.readFileSync(filename,'utf8');const lineno=src.split('\n').findIndex(x=>x.includes('export const WORKFLOW_GUEST_SOURCE'))+1
+check('implementation payload string excluded',typeof embedded!=='string'||functionsWithBodies===0,{entry_id:guest.id,source:guest.source,reference_line:lineno,source_sha256:guest.source_sha256,extraction_status:guest.extraction_status,payload_characters:embedded.length,payload_sha256:sha(embedded),functionsWithBodies,classes,blocks,parseErrors:sf.parseDiagnostics.length,prefix:embedded.slice(0,140)})
+const rows=[];extractTypeScriptContracts('export const WORKER_SOURCE = "function run(value) { return value + 1; /* IMPLEMENTATION_STRING_MARKER */ }";',(...r)=>rows.push(r))
+check('known-bad executable string body excluded',!JSON.stringify(rows).includes('IMPLEMENTATION_STRING_MARKER'),{rows})
+fs.writeFileSync(path.join(result,'raw-catalog-audit.json'),JSON.stringify(checks,null,2)+'\n');process.exitCode=checks.some(x=>!x.ok)?1:0

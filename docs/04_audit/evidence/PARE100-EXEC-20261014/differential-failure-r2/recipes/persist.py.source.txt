@@ -1,0 +1,26 @@
+from pathlib import Path
+import json,hashlib,shutil,datetime
+root=Path('/home/ricardo/Área de trabalho/cvg-operational-harness');o=Path(__file__).parent;w=o.parent/'worktree';h=lambda f:hashlib.sha256(f.read_bytes()).hexdigest();source=json.loads((o/'source-freeze.json').read_text());assert len(source)==17 and all(h(w/k)==v for k,v in source.items());proposal=json.loads((o.parent/'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json').read_text());assert all(h(w/k)==v for k,v in proposal['newGroups'][0]['pins'].items())
+for label in ['focused-r3','default-focused','types-final','lint-final','format-final']:assert json.loads((o/(label+'-command.json')).read_text())['exit']==0
+commands=[]
+for f in (o/'observed/focused-r3').rglob('*.command.json'):
+ a=json.loads(f.read_text());assert a['exit']==0 and a['error'] is None and a['signal'] is None and a['childExitObserved'];assert a['elapsedMs']<a['timeoutMs']==5000;assert a['maxBuffer']==1048576;assert all(k in a['environment'] for k in ['TMPDIR','TMP','TEMP','XDG_CACHE_HOME','XDG_STATE_HOME','HOME']);assert 'NODE_OPTIONS' not in a['environment'];commands.append({'path':str(f.relative_to(o)),'sha256':h(f),'pid':a['pid'],'exit':a['exit'],'elapsedMs':a['elapsedMs']})
+assert len(commands)==6
+tmpRemaining=[f.name for f in (o/'private/tmp').iterdir()]
+assert set(tmpRemaining)<= {'node-compile-cache'},'default success cleanup left fixture resources'
+(o/'lead-integrity.json').write_text(json.dumps({'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'scope':'R2test-support, I1pending, not parity','source17Verified':source,'nativeCommandsVerified':commands,'nativeFailureCases':3,'nativeReplyCases':3,'explicitFocusedTests':19,'defaultFocusedTests':19,'negativeFailureControls':87,'replyNegativeControls':18,'compositionPinsVerified':465,'defaultFixtureTmpEmptyAfterSuccess':True,'remainingPrivateRuntimeCaches':tmpRemaining,'fault23Integration':'PENDING_INDEPENDENT_REVIEW','parity':'NOT_MEASURED','sourceLibEquivalence':'NOT_VERIFIED','referenceTransitiveClosure':'NOT_VERIFIED','wholeGoalComplete':False},indent=2)+'\n')
+rel=Path('docs/04_audit/evidence/PARE100-EXEC-20261014/differential-failure-r2');out=root/rel;out.mkdir();entries=[];empty=[]
+def cp(f,rel):
+ if not f.stat().st_size:empty.append({'source':str(f),'sha256':h(f),'bytes':0});return
+ d=out/rel;d.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(f,d);entries.append({'path':str(rel),'source':str(f),'sha256':h(d),'bytes':d.stat().st_size})
+for label in ['red-schema','green-schema','focused-r2','focused-r3','default-focused','types-final','lint-final','format-final']:
+ for suffix in ['.log','-command.json']:cp(o/(label+suffix),Path('lead')/(label+suffix))
+for name in ['source-freeze.json','lead-integrity.json']:cp(o/name,Path('lead')/name)
+for name in ['run-check.py','persist.py']:cp(o/name,Path('recipes')/(name+'.source.txt'))
+for f in (o/'observed/focused-r3').rglob('*'):
+ if f.is_file():cp(f,Path('current-native')/f.relative_to(o/'observed/focused-r3'))
+for cat in ['current','before']:
+ for f in (o/'review-packet'/cat).rglob('*'):
+  if f.is_file():cp(f,Path('source-snapshots')/cat/(str(f.relative_to(o/'review-packet'/cat))+'.source.txt'))
+(out/'omitted-empty-logs.json').write_text(json.dumps({'reason':'expected empty streams represented by exact command/exit/hash; originals retained privately','files':empty},indent=2)+'\n');(out/'initial-evidence-manifest.json').write_text(json.dumps({'scope':'R2current source/proof only, I1pending','files':entries},indent=2)+'\n');(out/'status.json').write_text(json.dumps({'status':'UNDER_REVIEW','task':'P100-004/F-DIF-ERR-001R2','critic':'01a14269-15d1-7b61-ac8b-fbcf5196cd4d','sourceSHA256':source,'fault23Integration':'PENDING_I1','priorR1':'REVISE preserved','wholeGoalComplete':False},indent=2)+'\n');shutil.copytree(out,w/rel)
+print(json.dumps({'canonicalFiles':len(entries),'emptyLogsRepresented':len(empty),'commandsVerified':6,'defaultFixtureTmpEmpty':True,'privateRuntimeCaches':tmpRemaining,'pins':465,'I1':'PENDING'}))

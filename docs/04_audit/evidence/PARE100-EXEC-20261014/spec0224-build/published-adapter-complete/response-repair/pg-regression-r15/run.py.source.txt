@@ -1,0 +1,92 @@
+"""Assigned PG fence regression, fresh namespace and finally-only owned cleanup."""
+from pathlib import Path
+from urllib.parse import urlparse, urlunparse
+import json
+import os
+import subprocess
+import time
+import hashlib
+
+p = Path(__file__).parent
+e = p.parents[1] / 'response-repro'
+b = p.parents[2]
+w = b.parent / 'worktree'
+container = '0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c'
+image = 'sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c'
+node = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+
+
+def inspect():
+    x = subprocess.run(['docker', 'inspect', '--format', '{{json .Id}} {{json .State.Status}} {{json .Image}} {{json .NetworkSettings.Ports}}', container], capture_output=True, check=True)
+    decoder = json.JSONDecoder()
+    remaining = x.stdout.decode().strip()
+    values = []
+    while remaining:
+        value, end = decoder.raw_decode(remaining)
+        values.append(value)
+        remaining = remaining[end:].lstrip()
+    return dict(zip(['id', 'status', 'image', 'ports'], values))
+
+
+def save(name, value):
+    (p / name).write_text(json.dumps(value, indent=2) + '\n')
+
+
+before = inspect()
+assert before['id'] == container and before['image'] == image and before['status'] == 'exited'
+save('container-before.json', before)
+started = False
+code = 99
+try:
+    subprocess.run(['docker', 'start', container], check=True, capture_output=True)
+    started = True
+    current = inspect()
+    assert current['id'] == container and current['image'] == image and current['status'] == 'running'
+    ports = current['ports']['5432/tcp']
+    assert len(ports) == 1 and ports[0]['HostIp'] == '127.0.0.1'
+    resource = json.loads((b / 'public-json-boundaries/assigned-i1-resource-prototype-private.json').read_text())
+    url = urlparse(resource['test_database_url'])
+    assert url.hostname == '127.0.0.1' and url.username == 'pare224' and url.path == '/pare224_synthetic'
+    authority = url.netloc.rsplit('@', 1)[0]
+    resource.update(test_database_url=urlunparse(url._replace(netloc=authority + '@127.0.0.1:' + ports[0]['HostPort'])), hostPort=ports[0], schemaName='pare224_fence_r15_regression', roleName='pare224_fence_r15_service', exclusiveClaim='Lead R15 assigned PG fence regression fresh namespace only')
+    private = p / 'assigned-resource-private.json'
+    fd = os.open(private, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        json.dump(resource, f)
+    save('container-running.json', current)
+    helper = p / 'resource-check.cjs'
+    helper.write_text("const fs=require('node:fs');const {Client}=require(" + json.dumps(str(w / 'node_modules/pg')) + ");const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));const mode=process.argv[3];(async()=>{const c=new Client({connectionString:r.test_database_url,connectionTimeoutMillis:2000,query_timeout:3000});try{await c.connect();if(mode==='before'){const q=await c.query('SELECT (SELECT count(*)::int FROM pg_namespace WHERE nspname=$1) AS schemas,(SELECT count(*)::int FROM pg_roles WHERE rolname=$2) AS roles',[r.schemaName,r.roleName]);console.log(JSON.stringify(q.rows[0]));if(q.rows[0].schemas||q.rows[0].roles)process.exitCode=2;}else{const q=await c.query('SELECT count(*)::int AS clients FROM pg_stat_activity WHERE datname=current_database() AND usename=$1',[r.roleName]);console.log(JSON.stringify({serviceClients:q.rows[0].clients,closed:q.rows[0].clients===0,preservedData:true}));if(q.rows[0].clients)process.exitCode=3;}}finally{await c.end();}})().catch(e=>{console.error(e.message);process.exitCode=1;});\n")
+    readiness = []
+    for attempt in range(20):
+        result = subprocess.run([node, str(helper), str(private), 'before'], capture_output=True)
+        readiness.append({'attempt': attempt + 1, 'exit': result.returncode, 'stdout': result.stdout.decode(), 'stderr': result.stderr.decode()})
+        if result.returncode == 0:
+            break
+        time.sleep(0.25)
+    save('absence-readiness.json', readiness)
+    assert result.returncode == 0, 'Fresh namespace readiness/absence required'
+    cfg = json.loads((e / 'vitest.config.mjs').read_text().removeprefix('export default '))
+    cfg['test']['include'] = ['packages/persistence/src/__tests__/complete-checkpoint-bound-fence.test.ts']
+    cfg['cacheDir'] = str(p / 'cache')
+    (p / 'vitest.config.mjs').write_text('export default ' + json.dumps(cfg, indent=2) + '\n')
+    env = os.environ.copy()
+    env.update(SPEC0224_FENCE_RESOURCE=str(private), SPEC0224_FENCE_EVIDENCE=str(p))
+    result = subprocess.run(['python3', str(e / 'run.py'), 'r15-assigned-pg-fence', './node_modules/.bin/vitest', 'run', '--config', str(p / 'vitest.config.mjs'), '--configLoader', 'native'], env=env, capture_output=True)
+    (p / 'runner.stdout.log').write_bytes(result.stdout)
+    (p / 'runner.stderr.log').write_bytes(result.stderr)
+    code = result.returncode
+finally:
+    if started:
+        try:
+            if 'private' in locals() and 'helper' in locals():
+                closed = subprocess.run([node, str(helper), str(private), 'after'], capture_output=True)
+                save('connection-close-proof.json', {'exit': closed.returncode, 'observation': json.loads(closed.stdout) if closed.stdout else None, 'error': closed.stderr.decode()})
+                if closed.returncode != 0:
+                    code = 98
+        finally:
+            stopped = subprocess.run(['docker', 'stop', container], capture_output=True)
+            observed = inspect()
+            save('container-stopped.json', {'stopExit': stopped.returncode, 'observed': observed, 'dataPreserved': True})
+            assert stopped.returncode == 0 and observed['status'] == 'exited' and observed['id'] == container
+print(json.dumps({'exit': code, 'scope': 'One assigned PG bound-fence primitive regression; no model/tool/consumer lifecycle acceptance', 'dataPreserved': True}))
+raise SystemExit(code)

@@ -1,0 +1,38 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import crypto from 'node:crypto'
+import {execFileSync,spawnSync} from 'node:child_process'
+import {collectReferenceCatalog,compareCatalogFreeze,extractTypeScriptContracts,serializeCatalog,validateCatalog} from './packet/scripts/reference-contract-catalog.mjs'
+const base='/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-reference-scratch'
+const result='/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-reference-result'
+const sha=x=>crypto.createHash('sha256').update(x).digest('hex')
+const rows=[]
+function record(name,expected,actual,evidence){const passed=expected===actual;const row={name,expected,actual,passed,evidence};rows.push(row);console.log(JSON.stringify(row));}
+function fixture(extra={}){
+ const root=fs.mkdtempSync(path.join(base,'independent-fixture-'))
+ const files={'package.json':JSON.stringify({name:'@probe/root',version:'fixture-v1'}),'packages/core/service/package.json':JSON.stringify({name:'@probe/service',main:'src/index.ts'}),'packages/core/service/src/index.ts':'export interface Service { run(input: string): number }\n','apps/ui/src/index.ts':'export interface App { readonly safe: true }\n',...extra}
+ for(const [name,text] of Object.entries(files)){const filename=path.join(root,name);fs.mkdirSync(path.dirname(filename),{recursive:true});fs.writeFileSync(filename,text)}
+ const run=(args,input)=>execFileSync('git',['-C',root,...args],{input,encoding:'utf8',env:{...process.env,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_AUTHOR_NAME:'Independent',GIT_AUTHOR_EMAIL:'probe@example.invalid',GIT_COMMITTER_NAME:'Independent',GIT_COMMITTER_EMAIL:'probe@example.invalid',GIT_AUTHOR_DATE:'2026-10-14T00:00:00Z',GIT_COMMITTER_DATE:'2026-10-14T00:00:00Z'}}).trim()
+ run(['init','-q','-b','main']);run(['add','--',...Object.keys(files)]);const commit=run(['commit-tree',run(['write-tree'])],'independent synthetic reference\n');run(['update-ref','refs/heads/main',commit]);
+ const manifest='packages/core/service/package.json'
+ const ownerMap={reference_commit:commit,reference_version:'fixture-v1',inventory_coverage:{packages:1,families:1},family_owners:{core:'P100-012'},package_owners:[{reference_package:'@probe/service',manifest,manifest_sha256:sha(files[manifest]),group:'core',owner_task:'P100-012'}],additional_surfaces:[{reference_path:'apps/ui',owner_task:'P100-041'}]}
+ const options={root,expectedCommit:commit,expectedVersion:'fixture-v1',ownerMap};return {root,files,run,options,collect:()=>collectReferenceCatalog(options)}
+}
+function rejection(name,callback,pattern){try{const actual=callback();record(name,'REJECT','ACCEPT',actual)}catch(e){record(name,'REJECT',pattern.test(e.message)?'REJECT':'WRONG_ERROR',{message:e.message})}}
+const good=fixture();const catalog=good.collect();record('known-good live freeze','UNCHANGED_STATIC_FREEZE',compareCatalogFreeze(catalog,good.collect(),{root:good.root}).status,{entries:catalog.entries.length})
+const drift=fixture();const driftCatalog=drift.collect();fs.appendFileSync(path.join(drift.root,'packages/core/service/src/index.ts'),'export type Drift = string\n');rejection('known-bad live tracked drift',()=>compareCatalogFreeze(driftCatalog,driftCatalog,{root:drift.root}),/SOURCE_DRIFT/)
+const newfile=fixture();const newCatalog=newfile.collect();fs.writeFileSync(path.join(newfile.root,'packages/core/service/src/new.ts'),'export type New = string\n');rejection('known-bad live untracked source',()=>compareCatalogFreeze(newCatalog,newCatalog,{root:newfile.root}),/SOURCE_DRIFT/)
+const symlink=fixture();const symlinkCatalog=symlink.collect();const target=path.join(symlink.root,'packages/core/service/src/index.ts');fs.unlinkSync(target);fs.symlinkSync(path.join(good.root,'packages/core/service/src/index.ts'),target);rejection('known-bad live symlink alias',()=>compareCatalogFreeze(symlinkCatalog,symlinkCatalog,{root:symlink.root}),/SYMLINK_SOURCE/)
+const dup=structuredClone(catalog);dup.entries.push(dup.entries[0]);rejection('known-bad duplicate IDs',()=>compareCatalogFreeze(catalog,dup),/DUPLICATE_ID/)
+const pass=structuredClone(catalog);pass.entries[0].parity_status='PASS';rejection('known-bad parity PASS upgrade',()=>validateCatalog(pass),/INVALID_ENTRY/)
+const canon=x=>JSON.parse(serializeCatalog(x)); const resign=c=>{const {catalog_sha256,...rest}=c;c.catalog_sha256=sha(JSON.stringify(canon(rest)));return c}
+const removed=structuredClone(catalog);removed.entries.pop();removed.summary.entries--;resign(removed);rejection('known-bad rehashed requirement removal',()=>compareCatalogFreeze(catalog,removed),/REQUIREMENT_REMOVED/)
+const missing=structuredClone(catalog);missing.sources=missing.sources.filter(x=>x.path!==missing.entries[0].source);missing.summary.sources--;resign(missing);rejection('known-bad missing source record',()=>compareCatalogFreeze(catalog,missing),/MISSING_SOURCE/)
+// A normal external output path can be an inode alias, not just a symbolic link.
+const hard=fixture();const manifest=path.join(hard.root,'packages/core/service/package.json');const output=path.join(base,'hardlinked-output.json');fs.linkSync(manifest,output);const map=path.join(base,'hardlink-owner-map.json');fs.writeFileSync(map,JSON.stringify(hard.options.ownerMap));const before=sha(fs.readFileSync(manifest));const cli=spawnSync(process.execPath,[path.join(base,'packet/scripts/reference-contract-catalog.mjs'),'--root',hard.root,'--commit',hard.options.expectedCommit,'--version','fixture-v1','--owner-map',map,'--output',output],{encoding:'utf8',cwd:path.join(base,'packet')});const after=sha(fs.readFileSync(manifest));record('known-bad hardlink output into reference','REJECT_AND_UNCHANGED',cli.status!==0&&before===after?'REJECT_AND_UNCHANGED':'REFERENCE_MUTATED',{exit:cli.status,stdout:cli.stdout,stderr:cli.stderr,before,after,manifest,output,nlink:fs.statSync(output).nlink});
+// Defaults/object methods must not disappear into a fabricated static success.
+const dynamic=[];extractTypeScriptContracts('export const Config = makeConfig({ handler: () => { return "TS_BODY_MARKER" } }); export class C extends makeBase(() => { return "TS_BODY_MARKER" }) { f(a = (() => "TS_BODY_MARKER")()): void {} }',(...x)=>dynamic.push(x));record('implementation bodies excluded','NO_BODY',JSON.stringify(dynamic).includes('TS_BODY_MARKER')?'BODY_COPIED':'NO_BODY',{containsUnknown:JSON.stringify(dynamic).includes('UNKNOWN')});
+const ordered=[],reordered=[];extractTypeScriptContracts('export interface B { b: number }; export interface A { a: string }',(...x)=>ordered.push(x));extractTypeScriptContracts('\n\nexport interface A { a: string }; export interface B { b: number }',(...x)=>reordered.push(x));record('declaration reorder and lines stable','SAME',JSON.stringify(ordered)===JSON.stringify(reordered)?'SAME':'DIFFERENT',{});
+// These are valid export forms with a body only within the signature's default value.
+const python=fixture({'python/sdk/api.py':'def run(callback: str = "safe") -> str:\n    return "PY_BODY_MARKER"\n'});python.options.ownerMap.additional_surfaces.push({reference_path:'python/sdk',owner_task:'P100-025'});const pc=python.collect();record('Python implementation bodies excluded','NO_BODY',serializeCatalog(pc).includes('PY_BODY_MARKER')?'BODY_COPIED':'NO_BODY',{});
+fs.writeFileSync(path.join(result,'independent-probes.json'),JSON.stringify(rows,null,2)+'\n');process.exitCode=rows.some(x=>!x.passed)?1:0

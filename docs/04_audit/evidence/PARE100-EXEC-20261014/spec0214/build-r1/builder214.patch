@@ -1,0 +1,3773 @@
+diff --git a/packages/platform/src/__tests__/controlled-tool-registry.test.ts b/packages/platform/src/__tests__/controlled-tool-registry.test.ts
+index c88f372..9c4903d 100644
+--- a/packages/platform/src/__tests__/controlled-tool-registry.test.ts
++++ b/packages/platform/src/__tests__/controlled-tool-registry.test.ts
+@@ -278,7 +278,7 @@ describe('controlled tool registry identity boundary', () => {
+     expect(left).toHaveBeenCalledTimes(1)
+   })
+ 
+-  it('plans a compiled fixture tool by intent and executes it through Test Lab', async () => {
++  it('plans a custom fixture by intent but refuses unreviewed code in Test Lab', async () => {
+     const handler = vi.fn<PluginHandler>(async () => ({
+       status: 'succeeded',
+       data: { fixtureOnly: true }
+@@ -346,9 +346,12 @@ describe('controlled tool registry identity boundary', () => {
+     })
+ 
+     expect(trace.tools).toEqual([
+-      { name: 'find_controlled_schedule', status: 'succeeded' }
++      { name: 'find_controlled_schedule', status: 'not_run' }
+     ])
+-    expect(handler).toHaveBeenCalledTimes(1)
++    expect(trace.status).toBe('blocked')
++    expect(trace.handoff.reason).toBe('controlled_runtime_unsafe_request')
++    expect(trace.response.mode).toBe('handoff')
++    expect(handler).not.toHaveBeenCalled()
+   })
+ 
+   it('never turns a catalog-only binding into executable code', async () => {
+diff --git a/packages/platform/src/__tests__/platform-foundation.test.ts b/packages/platform/src/__tests__/platform-foundation.test.ts
+index bb5bfd1..4a82f18 100644
+--- a/packages/platform/src/__tests__/platform-foundation.test.ts
++++ b/packages/platform/src/__tests__/platform-foundation.test.ts
+@@ -1017,12 +1017,14 @@ describe('Test Lab dry-run', () => {
+     })
+ 
+     expect(trace.policy[0]).toMatchObject({
+-      decision: 'requires_approval'
++      decision: 'requires_approval',
++      reason: 'approval_required_by_published_policy'
+     })
+     expect(trace.handoff).toMatchObject({
+       requested: true,
+-      reason: 'approval_required_by_published_policy'
++      reason: 'controlled_runtime_policy_denied'
+     })
++    expect(trace.status).toBe('blocked')
+     expect(trace.response.mode).toBe('handoff')
+     expect(trace.tools).toEqual([
+       { name: 'find_available_slots', status: 'blocked' }
+diff --git a/packages/platform/src/controlled-plugins.ts b/packages/platform/src/controlled-plugins.ts
+index 741ce39..c4ab11a 100644
+--- a/packages/platform/src/controlled-plugins.ts
++++ b/packages/platform/src/controlled-plugins.ts
+@@ -6,6 +6,7 @@ import {
+   type RegisteredPlugin
+ } from './plugin-gateway.ts'
+ import { z } from 'zod'
++import { attestReviewedPlugin } from './plugin-execution-core.ts'
+ 
+ export const CONTROLLED_SCHEDULING_PLUGIN = 'scheduling.controlled'
+ export const CONTROLLED_SCHEDULING_TOOL = 'find_available_slots'
+@@ -19,7 +20,7 @@ const controlledActorAuthorizer: CapabilityActorAuthorizer = ({
+     : []
+ 
+ export function createControlledSchedulingPlugin(): RegisteredPlugin {
+-  return {
++  const plugin: RegisteredPlugin = {
+     manifest: {
+       name: CONTROLLED_SCHEDULING_PLUGIN,
+       version: '1.0.0',
+@@ -66,6 +67,21 @@ export function createControlledSchedulingPlugin(): RegisteredPlugin {
+         .strict()
+     }
+   }
++  attestReviewedPlugin(plugin, {
++    id: CONTROLLED_SCHEDULING_TOOL,
++    version: '1.0.0',
++    description: 'Pure synthetic constant scheduling slots',
++    inputSchema: { type: 'object' },
++    outputSchema: { type: 'object' },
++    risk: 'LOW',
++    sideEffect: 'NONE',
++    idempotent: true,
++    requiresApproval: false,
++    origin: 'plugin',
++    providerId: CONTROLLED_SCHEDULING_PLUGIN,
++    providerVersion: '1.0.0'
++  })
++  return plugin
+ }
+ 
+ export function createControlledCapabilityGateway(
+diff --git a/packages/platform/src/plugin-gateway.ts b/packages/platform/src/plugin-gateway.ts
+index 6940ef6..d86b81a 100644
+--- a/packages/platform/src/plugin-gateway.ts
++++ b/packages/platform/src/plugin-gateway.ts
+@@ -31,10 +31,14 @@ import type { PluginHookHandler } from './event-bus.ts'
+ import {
+   blockedResult,
+   createSafeExecutionInput,
+-  isPlainRecord,
+-  normalizePluginHandlerResult,
+-  parseToolInput
++  isPlainRecord
+ } from './tool-invocation-boundary.ts'
++import {
++  prepareCapabilityCommand,
++  executeAuthorizedPreparedCommand,
++  propagatePluginAttestation,
++  registerGatewayCore
++} from './plugin-execution-core.ts'
+ 
+ export interface PluginHandlerContext {
+   tenantId: TenantId
+@@ -345,6 +349,28 @@ export class CapabilityGateway {
+     private readonly options: CapabilityGatewayOptions = {}
+   ) {
+     this.now = options.now ?? (() => new Date())
++    registerGatewayCore(this, {
++      options,
++      now: this.now,
++      parseApproval: (value) => {
++        try {
++          const result = CapabilityApprovalSchema.safeParse(value)
++          return result.success ? result.data : null
++        } catch {
++          return null
++        }
++      },
++      catalog: (config, intent) =>
++        this.registry.listPlannedTools(config, intent),
++      resolve: (config, name) => {
++        const result = this.resolveBoundTool(config, name)
++        return result.status === 'resolved' ? result : null
++      },
++      authorize: (input, permission) =>
++        CapabilityActorSchema.safeParse(input.actor).success
++          ? this.authorizeActor(input, permission)
++          : Promise.resolve(null)
++    })
+   }
+ 
+   planTools(config: AgentConfig, intent: string): PlannedCapabilityTool[] {
+@@ -457,19 +483,16 @@ export class CapabilityGateway {
+         return this.blocked(safeInput, correlationId, resolved.reason)
+       }
+ 
+-      const parsedToolInput = parseToolInput(
+-        resolved.inputValidator,
+-        input.input
++      const command = prepareCapabilityCommand(
++        { ...safeInput, input: input.input },
++        resolved
+       )
+-      if (!parsedToolInput.success) {
++      if (!command) {
+         return this.blocked(safeInput, correlationId, 'tool_input_invalid')
+       }
+ 
+-      const executionInput = {
+-        ...safeInput,
+-        input: parsedToolInput.data
+-      }
+-      const { tool, handler } = resolved
++      const executionInput = command.execution
++      const { tool } = resolved
+       if (!this.options.actorAuthorizer) {
+         return this.blocked(
+           executionInput,
+@@ -516,30 +539,10 @@ export class CapabilityGateway {
+       }
+ 
+       try {
+-        const rawResult = await handler(executionInput.input, {
+-          tenantId: executionInput.tenantId,
+-          agentId: executionInput.agentId,
+-          versionId: executionInput.versionId,
+-          toolName: executionInput.toolName,
+-          dryRun: executionInput.dryRun
+-        })
+-        const result = normalizePluginHandlerResult(
+-          rawResult,
+-          resolved.outputValidator
++        const result = await executeAuthorizedPreparedCommand(
++          command,
++          () => true
+         )
+-        if (!result) {
+-          const audited = await this.auditSafely(
+-            executionInput,
+-            correlationId,
+-            'failed',
+-            undefined
+-          )
+-          return {
+-            status: 'failed',
+-            reason: audited ? 'tool_result_invalid' : 'audit_unavailable',
+-            correlationId
+-          }
+-        }
+         const audited = await this.auditSafely(
+           executionInput,
+           correlationId,
+@@ -852,13 +855,13 @@ function normalizeRegisteredPlugin(plugin: RegisteredPlugin): RegisteredPlugin {
+       return [name, handler]
+     })
+   )
+-  return {
++  return propagatePluginAttestation(plugin, {
+     manifest,
+     handlers,
+     inputValidators: { ...inputValidators },
+     outputValidators: { ...outputValidators },
+     hooks
+-  }
++  })
+ }
+ 
+ function safeParseAgentConfig(value: unknown): AgentConfig | null {
+@@ -871,7 +874,7 @@ function safeParseAgentConfig(value: unknown): AgentConfig | null {
+ }
+ 
+ function cloneRegisteredPlugin(plugin: RegisteredPlugin): RegisteredPlugin {
+-  return {
++  return propagatePluginAttestation(plugin, {
+     manifest: {
+       ...plugin.manifest,
+       capabilities: [...plugin.manifest.capabilities],
+@@ -888,7 +891,7 @@ function cloneRegisteredPlugin(plugin: RegisteredPlugin): RegisteredPlugin {
+       ? { outputValidators: { ...plugin.outputValidators } }
+       : {}),
+     ...(plugin.hooks ? { hooks: { ...plugin.hooks } } : {})
+-  }
++  })
+ }
+ 
+ function cloneTool(tool: PluginTool): PluginTool {
+diff --git a/packages/platform/src/test-lab.ts b/packages/platform/src/test-lab.ts
+index 064f50d..ca3d63e 100644
+--- a/packages/platform/src/test-lab.ts
++++ b/packages/platform/src/test-lab.ts
+@@ -35,10 +35,9 @@ import type { PlatformEventBus, PlatformEventName } from './event-bus.ts'
+ import { composePrompt } from './prompt-composer.ts'
+ import { createPromptProfileSnapshot } from './prompt-profile.ts'
+ import { evaluatePlatformPolicy } from './policy-evaluator.ts'
+-import {
+-  CONTROLLED_SAFE_OUTPUTS,
+-  enforceControlledOutput
+-} from './output-policy.ts'
++import { CONTROLLED_SAFE_OUTPUTS } from './output-policy.ts'
++import { executeControlledKernel } from './controlled-kernel-execution.ts'
++import { CONTROLLED_STOP_PROJECTION } from './controlled-execution-plan.ts'
+ 
+ export interface TestLabInput {
+   store: ControlPlaneStore
+@@ -321,73 +320,43 @@ export async function executeConfiguredAgent(
+   const promptWithHistory = history.length
+     ? `${prompt.text}\n\nConversation history:\n${history.join('\n')}`
+     : prompt.text
+-  await emitPlatformEvent(executionInput, 'model.before', {
+-    provider: modelProvider.name,
+-    model: config.model.model,
+-    promptLength: promptWithHistory.length
+-  })
+-  let rawCompletion: unknown
+-  try {
+-    rawCompletion = await timing.measureAsync('model', () =>
+-      modelProvider.complete({
+-        prompt: promptWithHistory,
+-        fallbackText: response.text
+-      })
+-    )
+-  } catch (error) {
+-    await emitPlatformEvent(executionInput, 'model.error', {
+-      provider: modelProvider.name,
+-      model: config.model.model,
+-      reason: 'model_execution_failed'
+-    })
+-    throw error
+-  }
+-  const completionText = readCompletionText(rawCompletion)
+-  await emitPlatformEvent(executionInput, 'model.after', {
+-    provider: modelProvider.name,
+-    model: config.model.model,
+-    externalCall: false,
+-    responseLength:
+-      typeof completionText === 'string' ? completionText.length : 0
+-  })
+-  await emitPlatformEvent(executionInput, 'policy.output.before', {
+-    mode: response.mode,
+-    riskLevel: risk.level,
+-    responseLength:
+-      typeof completionText === 'string' ? completionText.length : 0
+-  })
+-  const output = timing.measure('response', () =>
+-    enforceControlledOutput({
+-      text: completionText,
+-      mode: response.mode,
+-      riskLevel: risk.level
+-    })
+-  )
+-  await emitPlatformEvent(executionInput, 'policy.output.after', {
+-    decision: output.decision,
+-    reason: output.reason,
+-    mode: output.mode,
+-    redacted: output.redacted,
+-    responseLength: output.text.length
++  const kernel = await executeControlledKernel({
++    input: executionInput,
++    version,
++    config,
++    intent: intent.name,
++    policy,
++    risk,
++    response,
++    promptWithHistory,
++    provider: modelProvider,
++    timing,
++    sourceIds:
++      knowledge.trace.status === 'answered' && knowledge.trace.source
++        ? [knowledge.trace.source]
++        : [],
++    emit: (name, payload) => emitPlatformEvent(executionInput, name, payload)
+   })
+-  const completedResponse = {
+-    ...response,
+-    mode: output.mode,
+-    text: output.text
+-  }
++  const output = kernel.output
++  const completedResponse = kernel.response
++  const projection = CONTROLLED_STOP_PROJECTION[kernel.stop]
+   const handoff = timing.measure('handoff', () => {
+     const outputCausedHandoff =
+       !handoffRequested && completedResponse.mode === 'handoff'
+-    const finalHandoffRequested = handoffRequested || outputCausedHandoff
++    const finalHandoffRequested =
++      kernel.stop !== 'COMPLETED' || handoffRequested || outputCausedHandoff
+     const outputRejectedHandoff =
+-      output.decision === 'rewritten' && completedResponse.mode === 'handoff'
+-    const finalHandoffReason = outputRejectedHandoff
+-      ? output.reason
+-      : handoffRequested
+-        ? handoffReason
+-        : outputCausedHandoff
+-          ? output.reason
+-          : null
++      output?.decision === 'rewritten' && completedResponse.mode === 'handoff'
++    const finalHandoffReason =
++      kernel.stop !== 'COMPLETED'
++        ? projection.reason
++        : outputRejectedHandoff
++          ? output!.reason
++          : handoffRequested
++            ? handoffReason
++            : outputCausedHandoff
++              ? output!.reason
++              : null
+     const finalHandoffDestination = finalHandoffRequested
+       ? config.handoff.lowConfidenceDestination
+       : undefined
+@@ -419,26 +388,16 @@ export async function executeConfiguredAgent(
+       priority: finalHandoffPriority
+     })
+   }
+-  const tools = await timing.measureAsync('tool', () =>
+-    output.decision === 'rewritten' ||
+-    risk.level === 'high' ||
+-    risk.level === 'critical'
+-      ? []
+-      : executePlannedTools({
+-          input: executionInput,
+-          config,
+-          intent: intent.name,
+-          policy,
+-          traceId
+-        })
+-  )
++  const tools = kernel.tools
+   await emitPlatformEvent(executionInput, 'response.after', {
+     mode: completedResponse.mode,
+     responseLength: completedResponse.text.length
+   })
+   const completedAt = new Date()
+-  const promptTokens = estimateTokenCount(promptWithHistory)
+-  const completionTokens = estimateTokenCount(completedResponse.text)
++  const promptTokens = kernel.providerInvoked
++    ? estimateTokenCount(redactTestMessage(promptWithHistory))
++    : 0
++  const completionTokens = output ? estimateTokenCount(output.text) : 0
+   const trace: TestRunTrace = {
+     traceId,
+     tenantId: input.tenantId,
+@@ -465,12 +424,19 @@ export async function executeConfiguredAgent(
+       ...(finalHandoffPriority ? { priority: finalHandoffPriority } : {})
+     },
+     response: completedResponse,
+-    outputPolicy: {
+-      decision: output.decision,
+-      reason: output.reason,
+-      mode: output.mode,
+-      redacted: output.redacted
+-    },
++    ...(output &&
++    (kernel.stop === 'COMPLETED' ||
++      (output.mode === completedResponse.mode &&
++        output.text === completedResponse.text))
++      ? {
++          outputPolicy: {
++            decision: output.decision,
++            reason: output.reason,
++            mode: output.mode,
++            redacted: output.redacted
++          }
++        }
++      : {}),
+     provider: {
+       provider: modelProvider.name,
+       model: config.model.model,
+@@ -484,7 +450,10 @@ export async function executeConfiguredAgent(
+     },
+     configVersion: `${version.id}:v${version.version}`,
+     executionMode: input.executionMode,
+-    status: policy.decision === 'blocked' ? 'blocked' : 'completed',
++    status:
++      kernel.stop === 'COMPLETED' && policy.decision === 'blocked'
++        ? 'blocked'
++        : projection.status,
+     startedAt,
+     completedAt,
+     latencyMs: Math.max(0, completedAt.getTime() - startedAt.getTime()),
+@@ -556,17 +525,6 @@ function validateHistoryItem(rawItem: string): string {
+   return rawItem
+ }
+ 
+-function readCompletionText(completion: unknown): unknown {
+-  if (
+-    typeof completion !== 'object' ||
+-    completion === null ||
+-    Array.isArray(completion)
+-  ) {
+-    return undefined
+-  }
+-  return (completion as { text?: unknown }).text
+-}
+-
+ function validateApprovedKnowledge(
+   approvedKnowledge: ApprovedKnowledgeForTest | undefined
+ ): ApprovedKnowledgeForTest | undefined {
+@@ -827,78 +785,6 @@ function fitTraceDurations(
+   )
+ }
+ 
+-async function executePlannedTools(input: {
+-  input: ControlledAgentExecutionInput
+-  config: AgentConfig
+-  intent: string
+-  policy: ReturnType<typeof evaluatePlatformPolicy>
+-  traceId: TraceId
+-}): Promise<TestRunTrace['tools']> {
+-  const toolNames = input.input.capabilityGateway
+-    ? input.input.capabilityGateway
+-        .planTools(input.config, input.intent)
+-        .map((tool) => tool.toolName)
+-    : []
+-  if (toolNames.length === 0) return []
+-
+-  return Promise.all(
+-    toolNames.map(async (toolName) => {
+-      await emitPlatformEvent(input.input, 'tool.before', {
+-        toolName,
+-        dryRun: input.input.executionMode === 'TEST_LAB'
+-      })
+-      if (!input.input.capabilityGateway || !input.input.actor) {
+-        const blocked = { name: toolName, status: 'blocked' as const }
+-        await emitPlatformEvent(input.input, 'tool.after', blocked)
+-        return blocked
+-      }
+-      const toolInput = { message: redactTestMessage(input.input.message) }
+-      try {
+-        let approval = input.input.capabilityApproval
+-        if (!approval && input.input.resolveCapabilityApproval) {
+-          approval =
+-            (await input.input.resolveCapabilityApproval({
+-              tenantId: input.input.tenantId,
+-              agentId: input.input.agentId,
+-              versionId: input.input.versionId,
+-              toolName,
+-              input: toolInput,
+-              actor: input.input.actor!
+-            })) ?? undefined
+-        }
+-        const result = await input.input.capabilityGateway.execute({
+-          tenantId: input.input.tenantId,
+-          agentId: input.input.agentId,
+-          versionId: input.input.versionId,
+-          config: input.config,
+-          toolName,
+-          input: toolInput,
+-          actor: input.input.actor,
+-          policy: input.policy,
+-          dryRun: input.input.executionMode === 'TEST_LAB',
+-          traceId: input.traceId,
+-          ...(approval ? { approval } : {}),
+-          ...(input.input.requireCapabilityApproval
+-            ? { requireApproval: true }
+-            : {}),
+-          ...(input.input.onToolAudit
+-            ? { onAudit: input.input.onToolAudit }
+-            : {})
+-        })
+-        const completed = { name: toolName, status: result.status }
+-        await emitPlatformEvent(input.input, 'tool.after', completed)
+-        return completed
+-      } catch (error) {
+-        await emitPlatformEvent(input.input, 'tool.error', {
+-          toolName,
+-          reason: 'tool_execution_failed'
+-        })
+-        throw error
+-      }
+-    })
+-  )
+-}
+-
+ function resolveExecutionTraceId(rawTraceId: unknown): TraceId {
+   if (rawTraceId === undefined) return createTraceId()
+   const parsed = TraceIdSchema.safeParse(rawTraceId)
+diff --git a/packages/platform/src/tool-invocation-boundary.ts b/packages/platform/src/tool-invocation-boundary.ts
+index b4ec97b..7cf0bf4 100644
+--- a/packages/platform/src/tool-invocation-boundary.ts
++++ b/packages/platform/src/tool-invocation-boundary.ts
+@@ -125,7 +125,7 @@ function normalizeHandlerError(
+   return status === 'failed' ? 'tool_handler_failed' : 'tool_handler_blocked'
+ }
+ 
+-function cloneBoundedValue(value: unknown): unknown {
++export function cloneBoundedValue(value: unknown): unknown {
+   const seen = new WeakSet<object>()
+   let totalChars = 0
+   let totalNodes = 0
+diff --git a/packages/platform/src/controlled-execution-plan.ts b/packages/platform/src/controlled-execution-plan.ts
+new file mode 100644
+index 0000000..00a689e
+--- /dev/null
++++ b/packages/platform/src/controlled-execution-plan.ts
+@@ -0,0 +1,120 @@
++import type { StopReason } from '@cvg/harness-contracts'
++import type { TestRunTrace } from './contracts.ts'
++import type { PreparedCapabilityCommand } from './plugin-execution-core.ts'
++
++export const CONTROLLED_STOP_PROJECTION: Record<
++  StopReason,
++  { status: NonNullable<TestRunTrace['status']>; reason: string | null }
++> = {
++  COMPLETED: { status: 'completed', reason: null },
++  NEEDS_USER_INPUT: {
++    status: 'blocked',
++    reason: 'controlled_runtime_needs_user_input'
++  },
++  APPROVAL_REQUIRED: {
++    status: 'blocked',
++    reason: 'controlled_runtime_approval_required'
++  },
++  HUMAN_TAKEOVER: {
++    status: 'blocked',
++    reason: 'controlled_runtime_human_takeover'
++  },
++  POLICY_DENIED: {
++    status: 'blocked',
++    reason: 'controlled_runtime_policy_denied'
++  },
++  INSUFFICIENT_EVIDENCE: {
++    status: 'failed',
++    reason: 'controlled_runtime_evidence_unavailable'
++  },
++  MAX_STEPS: { status: 'failed', reason: 'controlled_runtime_max_steps' },
++  MAX_COST: { status: 'failed', reason: 'controlled_runtime_max_cost' },
++  MAX_DURATION: { status: 'failed', reason: 'controlled_runtime_max_duration' },
++  MAX_TOKENS: { status: 'failed', reason: 'controlled_runtime_max_tokens' },
++  MAX_MODEL_CALLS: {
++    status: 'failed',
++    reason: 'controlled_runtime_max_model_calls'
++  },
++  MAX_TOOL_CALLS: {
++    status: 'failed',
++    reason: 'controlled_runtime_max_tool_calls'
++  },
++  MAX_REPLANS: { status: 'failed', reason: 'controlled_runtime_max_replans' },
++  MAX_KNOWLEDGE_CALLS: {
++    status: 'failed',
++    reason: 'controlled_runtime_max_knowledge_calls'
++  },
++  MAX_VERIFICATION_CALLS: {
++    status: 'failed',
++    reason: 'controlled_runtime_max_verification_calls'
++  },
++  VERIFICATION_FAILED: {
++    status: 'failed',
++    reason: 'controlled_runtime_verification_failed'
++  },
++  LOOP_DETECTED: {
++    status: 'failed',
++    reason: 'controlled_runtime_loop_detected'
++  },
++  TOOL_FAILURE: { status: 'failed', reason: 'controlled_runtime_tool_failure' },
++  MODEL_FAILURE: {
++    status: 'failed',
++    reason: 'controlled_runtime_model_failure'
++  },
++  INTERNAL_FAILURE: {
++    status: 'failed',
++    reason: 'controlled_runtime_internal_failure'
++  },
++  STATE_CONFLICT: {
++    status: 'failed',
++    reason: 'controlled_runtime_state_conflict'
++  },
++  CANCELLED: { status: 'failed', reason: 'controlled_runtime_cancelled' },
++  UNSAFE_REQUEST: {
++    status: 'blocked',
++    reason: 'controlled_runtime_unsafe_request'
++  }
++}
++
++export interface ControlledAttempt {
++  command: PreparedCapabilityCommand
++  phase: 'PENDING' | 'ENTERED' | 'CLOSED_WITHOUT_ENTRY'
++  closed: boolean
++  cause: StopReason | 'TERMINAL_BEFORE_ENTRY' | null
++  operationKey?: string
++  policyAllowed: boolean
++  approvalRequired: boolean
++  approvalConsumed: boolean
++  resultAcknowledged: boolean
++  logAcknowledged: boolean
++  callbackAcknowledged: boolean
++  attempted: boolean
++  denied: boolean
++}
++
++/** Whole-turn authorization masks public success without erasing private facts. */
++export function projectControlledTools(
++  names: readonly string[],
++  attempts: readonly ControlledAttempt[],
++  stop: StopReason
++): TestRunTrace['tools'] {
++  return names.map((name) => {
++    const a = attempts.find((item) => item.command.execution.toolName === name)
++    if (!a || !a.attempted) return { name, status: 'not_run' as const }
++    if (stop === 'INSUFFICIENT_EVIDENCE')
++      return { name, status: 'failed' as const }
++    if (
++      stop === 'COMPLETED' &&
++      a.resultAcknowledged &&
++      a.command.output?.status === 'succeeded'
++    )
++      return { name, status: 'succeeded' as const }
++    if (
++      a.cause === 'HUMAN_TAKEOVER' ||
++      a.denied ||
++      a.command.output?.status === 'blocked'
++    )
++      return { name, status: 'blocked' as const }
++    return { name, status: 'failed' as const }
++  })
++}
+diff --git a/packages/platform/src/controlled-kernel-execution.ts b/packages/platform/src/controlled-kernel-execution.ts
+new file mode 100644
+index 0000000..c733d52
+--- /dev/null
++++ b/packages/platform/src/controlled-kernel-execution.ts
+@@ -0,0 +1,529 @@
++import { createCorrelationId, redactSensitiveText } from '@cvg/shared'
++import {
++  createOperationalHarness,
++  composeCapabilities,
++  InMemoryEffectJournal,
++  InMemoryExecutionStepStore
++} from '@cvg/harness'
++import { STOP_REASONS } from '@cvg/harness-contracts'
++import type {
++  RuntimeInput,
++  RuntimeResult,
++  StopReason,
++  IterativeOrchestrator,
++  CompletionEvaluator,
++  AgentId,
++  AgentVersion,
++  TenantId,
++  TraceId,
++  CorrelationId,
++  ConversationId,
++  SessionId
++} from '@cvg/harness-contracts'
++import type {
++  AgentConfig,
++  AgentVersionRecord,
++  TestRunTrace
++} from './contracts.ts'
++import type {
++  ControlledAgentExecutionInput,
++  ControlledTraceTiming
++} from './test-lab.ts'
++import type { ModelProvider } from './model-provider.ts'
++import {
++  CONTROLLED_SAFE_OUTPUTS,
++  enforceControlledOutput
++} from './output-policy.ts'
++import {
++  gatewayCore,
++  reviewedDescriptor,
++  prepareCapabilityCommand
++} from './plugin-execution-core.ts'
++import {
++  InvocationEvidenceState,
++  guardedPorts,
++  controlledPolicy,
++  controlledApprovals,
++  controlledRegistration,
++  type ControlledKernelCompositionPorts
++} from './controlled-kernel-adapters.ts'
++import {
++  projectControlledTools,
++  type ControlledAttempt
++} from './controlled-execution-plan.ts'
++import { canonicalizeCapabilityInput } from './approval-authority.ts'
++
++export function createLocalControlledPorts(): ControlledKernelCompositionPorts {
++  const audit: unknown[] = []
++  const log: unknown[] = []
++  const effects: unknown[] = []
++  return {
++    effectJournal: new InMemoryEffectJournal(),
++    stepStore: new InMemoryExecutionStepStore(),
++    audit: {
++      append: async (event) => {
++        audit.push(structuredClone(event))
++      }
++    },
++    telemetry: { record: () => undefined },
++    log: {
++      append: (event) => {
++        log.push(structuredClone(event))
++      }
++    },
++    effects: {
++      started: (ref) => {
++        effects.push({ ...ref, phase: 'started' })
++      },
++      finished: (ref, outcome) => {
++        effects.push({ ...ref, outcome, phase: 'finished' })
++      }
++    },
++    pause: { isPaused: () => false }
++  }
++}
++export interface ControlledKernelInput {
++  input: ControlledAgentExecutionInput
++  version: AgentVersionRecord
++  config: AgentConfig
++  intent: string
++  policy: TestRunTrace['policy'][number]
++  risk: NonNullable<TestRunTrace['risk']>
++  response: TestRunTrace['response']
++  promptWithHistory: string
++  sourceIds: readonly string[]
++  provider: ModelProvider
++  timing: ControlledTraceTiming
++  emit: (
++    name:
++      | 'model.before'
++      | 'model.after'
++      | 'model.error'
++      | 'policy.output.before'
++      | 'policy.output.after'
++      | 'tool.before'
++      | 'tool.after'
++      | 'tool.error',
++    payload: Record<string, unknown>
++  ) => Promise<void>
++}
++
++/** Only internal synthetic tests can supply ports. No HTTP/config option is added. */
++export async function executeControlledKernel(
++  prepared: ControlledKernelInput,
++  ports: ControlledKernelCompositionPorts = createLocalControlledPorts()
++) {
++  const { input, config, version, timing } = prepared
++  const attempts: ControlledAttempt[] = []
++  const evidence = new InvocationEvidenceState(
++    attempts,
++    ports.pause,
++    input.tenantId
++  )
++  const guarded = guardedPorts(ports, evidence, input.onToolAudit)
++  const core = gatewayCore(input.capabilityGateway)
++  const inventory = config.plugins
++    .flatMap((binding) =>
++      !binding.enabled || !binding.version
++        ? []
++        : binding.allowedTools.flatMap((name) => {
++            const resolved = core?.resolve(config, name)
++            const descriptor = resolved && reviewedDescriptor(resolved)
++            return descriptor ? [{ resolved, descriptor }] : []
++          })
++    )
++    .filter(
++      (item, index, all) =>
++        all.findIndex(
++          (other) =>
++            other.descriptor.id === item.descriptor.id &&
++            other.descriptor.version === item.descriptor.version
++        ) === index
++    )
++  let scopeRejected = inventory.length > 128
++  const catalog = scopeRejected ? [] : inventory
++  let fingerprint = ''
++  const composition = composeCapabilities(
++    catalog.map(({ descriptor }) =>
++      controlledRegistration(
++        () =>
++          attempts.find((a) => a.command.execution.toolName === descriptor.id),
++        descriptor,
++        evidence,
++        () => fingerprint,
++        (operation) => timing.measureAsync('tool', operation)
++      )
++    )
++  )
++  fingerprint = composition.fingerprint
++  const correlationId = createCorrelationId()
++  const agentVersion = `${version.id}:v${version.version}`
++  let output: ReturnType<typeof enforceControlledOutput> | undefined
++  let providerInvoked = false
++  let names: string[] = []
++  let planSealed = false
++  let finalIssued = false
++  let expectedStep = 1
++  const stopDecision = () => ({
++    decision: {
++      decisionType: 'HANDOFF' as const,
++      reasonCode: 'HANDOFF_REQUIRED' as const
++    }
++  })
++  const planner: IterativeOrchestrator = {
++    decide: async ({ context }) => {
++      evidence.check()
++      if (context.stepNumber !== expectedStep++)
++        throw new Error('controlled_step_conflict')
++      if (context.stepNumber === 1)
++        return {
++          decision: {
++            decisionType: 'RESPOND',
++            reasonCode: 'POLICY_REQUIRED',
++            responseIntent: 'controlled_output_guard'
++          }
++        }
++      if (!output) throw new Error('controlled_output_missing')
++      if (!planSealed) {
++        planSealed = true
++        if (
++          output.decision !== 'rewritten' &&
++          prepared.risk.level !== 'high' &&
++          prepared.risk.level !== 'critical'
++        ) {
++          if (input.capabilityGateway && !core) {
++            scopeRejected = true
++            return stopDecision()
++          }
++          const plans =
++            input.capabilityGateway?.planTools(config, prepared.intent) ?? []
++          names = plans.map((p) => p.toolName)
++          const trusted = core?.catalog(config, prepared.intent) ?? []
++          if (
++            plans.length > 1 ||
++            new Set(names).size !== names.length ||
++            canonicalizeCapabilityInput(plans) !==
++              canonicalizeCapabilityInput(trusted)
++          )
++            scopeRejected = true
++          for (const plan of plans) {
++            const r = core?.resolve(config, plan.toolName)
++            if (
++              !r ||
++              r.plugin.manifest.name !== plan.plugin ||
++              r.plugin.manifest.version !== plan.version ||
++              !reviewedDescriptor(r) ||
++              !catalog.some(
++                (item) =>
++                  item.descriptor.id === plan.toolName &&
++                  item.descriptor.version === plan.version
++              )
++            )
++              scopeRejected = true
++          }
++          if (scopeRejected) return stopDecision()
++          for (const plan of plans) {
++            if (!input.actor) {
++              scopeRejected = true
++              return stopDecision()
++            }
++            const resolved = core!.resolve(config, plan.toolName)!
++            const command = prepareCapabilityCommand(
++              {
++                tenantId: input.tenantId,
++                agentId: input.agentId,
++                versionId: input.versionId,
++                ...(input.traceId ? { traceId: input.traceId } : {}),
++                config,
++                toolName: plan.toolName,
++                input: { message: redactSensitiveText(input.message) },
++                actor: input.actor,
++                policy: prepared.policy,
++                dryRun: input.executionMode === 'TEST_LAB',
++                ...(input.requireCapabilityApproval
++                  ? { requireApproval: true }
++                  : {})
++              },
++              resolved,
++              true
++            )
++            if (!command) {
++              scopeRejected = true
++              return stopDecision()
++            }
++            attempts.push({
++              command,
++              phase: 'PENDING',
++              closed: false,
++              cause: null,
++              policyAllowed: false,
++              approvalRequired: false,
++              approvalConsumed: false,
++              resultAcknowledged: false,
++              logAcknowledged: false,
++              callbackAcknowledged: false,
++              attempted: false,
++              denied: false
++            })
++          }
++        }
++      }
++      if (scopeRejected) return stopDecision()
++      const index = context.stepNumber - 2
++      const a = attempts[index]
++      if (a) {
++        if (index > 0 && !attempts[index - 1]?.resultAcknowledged)
++          throw new Error('controlled_previous_unsettled')
++        await prepared.emit('tool.before', {
++          toolName: a.command.execution.toolName,
++          dryRun: a.command.execution.dryRun
++        })
++        return {
++          decision: {
++            decisionType: 'CALL_TOOL',
++            reasonCode: 'TOOL_REQUIRED',
++            toolId: a.command.execution.toolName,
++            toolVersion: a.command.resolved.plugin.manifest.version,
++            toolInput: a.command.execution.input
++          }
++        }
++      }
++      if (
++        context.stepNumber !== attempts.length + 2 ||
++        attempts.some((a) => !a.resultAcknowledged)
++      )
++        throw new Error('controlled_final_unsettled')
++      finalIssued = true
++      return {
++        decision: {
++          decisionType: 'RESPOND',
++          reasonCode: 'GOAL_SATISFIED',
++          responseText: output.text,
++          ...(attempts.length
++            ? {
++                selectedCapability:
++                  attempts[attempts.length - 1]!.command.execution.toolName
++              }
++            : {})
++        }
++      }
++    }
++  }
++  const evaluator: CompletionEvaluator = {
++    evaluate: async ({ lastDecision }) => {
++      evidence.check()
++      const complete =
++        finalIssued &&
++        lastDecision?.decisionType === 'RESPOND' &&
++        lastDecision.reasonCode === 'GOAL_SATISFIED' &&
++        !!output &&
++        attempts.every((a) => a.resultAcknowledged)
++      return {
++        outcome: complete ? 'COMPLETE' : 'INCOMPLETE',
++        reasonCode: complete ? 'COMPLETION_CONFIRMED' : 'POLICY_REQUIRED',
++        deterministic: true
++      }
++    }
++  }
++  const harness = createOperationalHarness({
++    ...guarded,
++    capabilities: composition.registry,
++    defaultRuntimeProfile: 'iterative',
++    iterativeOrchestrator: planner,
++    completionEvaluator: evaluator,
++    policy: controlledPolicy(evidence, core),
++    approvals: controlledApprovals(
++      evidence,
++      core,
++      () => fingerprint,
++      agentVersion,
++      correlationId,
++      async (a) => {
++        return (
++          input.capabilityApproval ??
++          (await input.resolveCapabilityApproval?.({
++            tenantId: input.tenantId,
++            agentId: input.agentId,
++            versionId: input.versionId,
++            toolName: a.command.execution.toolName,
++            input: a.command.execution.input,
++            actor: a.command.execution.actor
++          })) ??
++          undefined
++        )
++      }
++    ),
++    modelGateway: {
++      complete: async (request) => {
++        evidence.check()
++        const context = request.context.values
++        if (
++          context.transformVersion !== 'controlled-model-v1' ||
++          typeof context.promptWithHistory !== 'string' ||
++          typeof context.fallbackText !== 'string' ||
++          providerInvoked
++        )
++          throw new Error('controlled_model_binding_invalid')
++        await prepared.emit('model.before', {
++          provider: prepared.provider.name,
++          model: config.model.model,
++          promptLength: context.promptWithHistory.length
++        })
++        providerInvoked = true
++        let raw: unknown
++        try {
++          raw = await timing.measureAsync('model', () =>
++            prepared.provider.complete({
++              prompt: context.promptWithHistory as string,
++              fallbackText: context.fallbackText as string
++            })
++          )
++        } catch {
++          await prepared.emit('model.error', {
++            provider: prepared.provider.name,
++            model: config.model.model,
++            reason: 'model_execution_failed'
++          })
++          throw new Error('controlled_model_failure')
++        }
++        evidence.check()
++        const text =
++          raw && typeof raw === 'object' && !Array.isArray(raw)
++            ? (raw as { text?: unknown }).text
++            : undefined
++        await prepared.emit('model.after', {
++          provider: prepared.provider.name,
++          model: config.model.model,
++          externalCall: false,
++          responseLength: typeof text === 'string' ? text.length : 0
++        })
++        await prepared.emit('policy.output.before', {
++          mode: prepared.response.mode,
++          riskLevel: prepared.risk.level,
++          responseLength: typeof text === 'string' ? text.length : 0
++        })
++        const guardedOutput = timing.measure('response', () =>
++          enforceControlledOutput({
++            text,
++            mode: prepared.response.mode,
++            riskLevel: prepared.risk.level
++          })
++        )
++        output = guardedOutput
++        evidence.outputAllowsTools =
++          guardedOutput.decision !== 'rewritten' &&
++          prepared.risk.level !== 'high' &&
++          prepared.risk.level !== 'critical'
++        await prepared.emit('policy.output.after', {
++          ...guardedOutput,
++          text: undefined,
++          responseLength: guardedOutput.text.length
++        })
++        evidence.check()
++        return {
++          text: guardedOutput.text,
++          provider: prepared.provider.name,
++          model: config.model.model,
++          inputTokens: Math.ceil(context.promptWithHistory.length / 4),
++          outputTokens: Math.ceil(guardedOutput.text.length / 4),
++          costUsd: 0
++        }
++      }
++    }
++  })
++  const now = new Date().toISOString()
++  const runtimeInput: RuntimeInput = {
++    agent: {
++      id: input.agentId as unknown as AgentId,
++      version: agentVersion as AgentVersion,
++      objective: 'Controlled configured response',
++      instructions: [],
++      skills: [],
++      tools: catalog.map((x) => x.descriptor.id),
++      policies: [config.policies.version]
++    },
++    tenantId: input.tenantId as unknown as TenantId,
++    traceId: input.traceId as unknown as TraceId,
++    correlationId: correlationId as unknown as CorrelationId,
++    conversationId: (input.context?.conversationId ??
++      `${input.traceId}:conversation`) as ConversationId,
++    sessionId: (input.context?.sessionId ??
++      `${input.traceId}:session`) as SessionId,
++    userMessage: redactSensitiveText(input.message),
++    runtimeProfile: 'iterative',
++    signal: evidence.controller.signal,
++    context: {
++      values: {
++        transformVersion: 'controlled-model-v1',
++        promptWithHistory: redactSensitiveText(prepared.promptWithHistory),
++        fallbackText: redactSensitiveText(prepared.response.text)
++      },
++      sourceIds: prepared.sourceIds,
++      capturedAt: now
++    },
++    state: { version: 1, values: {}, updatedAt: now },
++    budget: {
++      maxSteps: catalog.length + 2,
++      maxModelCalls: 1,
++      maxToolCalls: catalog.length,
++      maxDurationMs: config.model.timeoutMs,
++      maxCostUsd: 0,
++      maxTokens:
++        Math.ceil(redactSensitiveText(prepared.promptWithHistory).length / 4) +
++        1000,
++      maxKnowledgeCalls: 0,
++      maxReplans: 0,
++      maxDecisionRepairs: 0,
++      maxVerificationCalls: 2
++    }
++  }
++  evidence.expiresAt = Date.now() + config.model.timeoutMs
++  let result: RuntimeResult | undefined
++  try {
++    result = await harness.execute(runtimeInput)
++  } catch {
++    /* Invalid/throwing kernels project INTERNAL_FAILURE after preparation. */
++  } finally {
++    evidence.close()
++  }
++  const rawStop =
++    result &&
++    STOP_REASONS.includes(result.stopReason) &&
++    typeof result.response === 'string' &&
++    Number.isFinite(result.modelCalls) &&
++    Number.isFinite(result.toolCalls) &&
++    Number.isFinite(result.steps)
++      ? result.stopReason
++      : undefined
++  let stop: StopReason = rawStop ?? 'INTERNAL_FAILURE'
++  if (evidence.fault) stop = 'INSUFFICIENT_EVIDENCE'
++  else if (scopeRejected) stop = 'UNSAFE_REQUEST'
++  else {
++    const admissionStop = attempts.find(
++      (a) => a.cause && a.cause !== 'TERMINAL_BEFORE_ENTRY'
++    )?.cause
++    if (admissionStop && admissionStop !== 'TERMINAL_BEFORE_ENTRY')
++      stop = admissionStop
++    if (
++      stop === 'COMPLETED' &&
++      (!finalIssued || !output || attempts.some((a) => !a.resultAcknowledged))
++    )
++      stop = 'STATE_CONFLICT'
++  }
++  const tools = projectControlledTools(names, attempts, stop)
++  for (const tool of tools) await prepared.emit('tool.after', { ...tool })
++  return {
++    stop,
++    rawStop,
++    output,
++    tools,
++    providerInvoked,
++    result,
++    attempts,
++    evidence,
++    response:
++      stop === 'COMPLETED' && output
++        ? { mode: output.mode, text: output.text }
++        : { mode: 'handoff' as const, text: CONTROLLED_SAFE_OUTPUTS.handoff }
++  }
++}
+diff --git a/packages/platform/src/controlled-kernel-adapters.ts b/packages/platform/src/controlled-kernel-adapters.ts
+new file mode 100644
+index 0000000..570ace1
+--- /dev/null
++++ b/packages/platform/src/controlled-kernel-adapters.ts
+@@ -0,0 +1,657 @@
++import { createCorrelationId, sanitizeAuditEvidencePayload } from '@cvg/shared'
++import type {
++  ApprovalEngine,
++  ApprovalExecutionRequest,
++  ApprovalRequest,
++  ApprovalId,
++  PolicyEngine,
++  StopReason,
++  ToolExecutionContext,
++  CapabilityRegistration
++} from '@cvg/harness-contracts'
++import type { OperationalHarnessOptions } from '@cvg/harness'
++import type { CapabilityApproval, PluginAuditEvent } from './plugin-gateway.ts'
++import type { ControlledAttempt } from './controlled-execution-plan.ts'
++import {
++  reviewedDescriptor,
++  matchesPreparedInput,
++  matchesPreparedOutput,
++  executeAuthorizedPreparedCommand,
++  type GatewayCore
++} from './plugin-execution-core.ts'
++import { createCapabilityInputHash } from './approval-authority.ts'
++import { cloneBoundedValue, isPlainRecord } from './tool-invocation-boundary.ts'
++
++export interface ControlledKernelCompositionPorts {
++  effectJournal: NonNullable<OperationalHarnessOptions['effectJournal']>
++  stepStore: NonNullable<OperationalHarnessOptions['stepStore']>
++  audit: OperationalHarnessOptions['audit']
++  telemetry: OperationalHarnessOptions['telemetry']
++  log: NonNullable<OperationalHarnessOptions['log']>
++  effects: NonNullable<OperationalHarnessOptions['effects']>
++  pause: NonNullable<OperationalHarnessOptions['pause']>
++}
++export class InvocationEvidenceState {
++  fault: {
++    phase: string
++    code: 'evidence_unavailable'
++    bodyStarted: boolean
++  } | null = null
++  readonly controller = new AbortController()
++  expiresAt = Infinity
++  closed = false
++  paused = false
++  pauseInvalid = false
++  outputAllowsTools = false
++  finalizing = false
++  constructor(
++    readonly attempts: ControlledAttempt[],
++    readonly pause: ControlledKernelCompositionPorts['pause'],
++    readonly tenantId: string
++  ) {}
++  fail(phase: string): void {
++    this.fault ??= {
++      phase,
++      code: 'evidence_unavailable',
++      bodyStarted: this.attempts.some((a) => a.phase === 'ENTERED')
++    }
++    this.controller.abort()
++  }
++  check(): void {
++    if (this.fault || this.closed) throw new Error('controlled_evidence_closed')
++  }
++  async io<T>(
++    phase: string,
++    operation: () => T | PromiseLike<T>,
++    terminal = false
++  ): Promise<T> {
++    this.check()
++    let timer: ReturnType<typeof setTimeout> | undefined
++    try {
++      const duration =
++        terminal || this.finalizing
++          ? Math.max(this.expiresAt - Date.now(), 200)
++          : this.expiresAt - Date.now()
++      if (!Number.isFinite(duration) || duration <= 0)
++        throw new Error('controlled_evidence_deadline')
++      const result = await Promise.race([
++        Promise.resolve().then(operation),
++        new Promise<never>((_, reject) => {
++          timer = setTimeout(
++            () => reject(new Error('controlled_evidence_deadline')),
++            duration
++          )
++        })
++      ])
++      this.check()
++      return result
++    } catch {
++      this.fail(phase)
++      throw new Error('controlled_evidence_unavailable')
++    } finally {
++      if (timer) clearTimeout(timer)
++    }
++  }
++  readPause(): void {
++    try {
++      const value = this.pause.isPaused(this.tenantId)
++      if (typeof value !== 'boolean') {
++        this.pauseInvalid = true
++        // Observe a rejected async delegate, but never treat it as unpaused.
++        Promise.resolve(value).catch(() => undefined)
++      } else if (value) this.paused = true
++    } catch {
++      this.pauseInvalid = true
++    }
++  }
++  veto(signal?: AbortSignal): StopReason | null {
++    if (this.fault) return 'INSUFFICIENT_EVIDENCE'
++    this.readPause()
++    if (this.fault) return 'INSUFFICIENT_EVIDENCE'
++    if (signal?.aborted || this.controller.signal.aborted) return 'CANCELLED'
++    if (Date.now() >= this.expiresAt) return 'MAX_DURATION'
++    if (!signal || this.pauseInvalid) return 'INTERNAL_FAILURE'
++    return this.paused ? 'HUMAN_TAKEOVER' : null
++  }
++  admit(
++    attempt: ControlledAttempt,
++    context: ToolExecutionContext,
++    fingerprint: string
++  ): boolean {
++    if (
++      attempt.closed ||
++      this.closed ||
++      this.finalizing ||
++      attempt.phase !== 'PENDING'
++    )
++      return false
++    const e = attempt.command.execution
++    if (
++      !this.outputAllowsTools ||
++      !reviewedDescriptor(attempt.command.resolved) ||
++      !attempt.policyAllowed ||
++      (attempt.approvalRequired && !attempt.approvalConsumed) ||
++      !fingerprint ||
++      context.operationKey !== attempt.operationKey ||
++      context.tenantId !== e.tenantId ||
++      context.agentId !== e.agentId ||
++      context.traceId !== e.traceId
++    ) {
++      attempt.cause = 'UNSAFE_REQUEST'
++      return false
++    }
++    const veto = this.veto(context.signal)
++    if (veto) {
++      attempt.cause = veto
++      return false
++    }
++    attempt.phase = 'ENTERED'
++    return true
++  }
++  /** Synchronous, before projection or final awaits. A late ACK cannot reopen entry. */
++  close(): void {
++    for (const attempt of this.attempts) {
++      if (attempt.closed) continue
++      if (attempt.phase === 'PENDING') {
++        attempt.cause ??=
++          this.veto(this.controller.signal) ?? 'TERMINAL_BEFORE_ENTRY'
++        attempt.phase = 'CLOSED_WITHOUT_ENTRY'
++      }
++      attempt.closed = true
++    }
++    this.closed = true
++  }
++}
++
++export function guardedPorts(
++  ports: ControlledKernelCompositionPorts,
++  state: InvocationEvidenceState,
++  onAudit?: (event: PluginAuditEvent) => void | Promise<void>
++): ControlledKernelCompositionPorts {
++  const journal = ports.effectJournal
++  const steps = ports.stepStore
++  const audited = new Set<string>()
++  return {
++    telemetry: ports.telemetry,
++    pause: {
++      isPaused: () => {
++        state.readPause()
++        if (state.pauseInvalid) throw new Error('pause_unavailable')
++        return state.paused
++      }
++    },
++    audit: {
++      append: (event) =>
++        state.io(
++          `audit.${event.action}`,
++          () => ports.audit.append(event),
++          ['runtime.completed', 'runtime.stopped', 'runtime.paused'].includes(
++            event.action
++          )
++        )
++    },
++    log: {
++      append: async (event) => {
++        await state.io(
++          `log.${event.type}`,
++          () => ports.log.append(event),
++          event.type === 'turn/end'
++        )
++        if (event.type === 'tool/call') {
++          const a = state.attempts.find(
++            (a) => a.command.execution.toolName === event.toolId
++          )
++          if (a) {
++            a.attempted = true
++            a.operationKey = event.operationKey
++          }
++        }
++        if (event.type !== 'tool/result') return
++        const a = state.attempts.find(
++          (a) => a.command.execution.toolName === event.toolId
++        )
++        if (!a || !a.operationKey) throw new Error('controlled_attempt_missing')
++        a.logAcknowledged = true
++        if (audited.has(a.operationKey)) return
++        audited.add(a.operationKey)
++        const e = a.command.execution
++        const status =
++          event.outcome === 'succeeded' &&
++          a.command.output?.status === 'succeeded'
++            ? 'succeeded'
++            : a.phase === 'PENDING' ||
++                a.denied ||
++                a.command.output?.status === 'blocked'
++              ? 'blocked'
++              : 'failed'
++        if (onAudit)
++          await state.io(
++            'callback.tool',
++            () =>
++              onAudit({
++                type: 'tool_call',
++                correlationId: a.command.correlationId,
++                traceId: e.traceId!,
++                tenantId: e.tenantId,
++                agentId: e.agentId,
++                versionId: e.versionId,
++                plugin: a.command.resolved.plugin.manifest.name,
++                toolName: e.toolName,
++                status,
++                payload: sanitizeAuditEvidencePayload({
++                  toolName: e.toolName,
++                  input: e.input,
++                  result: a.command.output?.data
++                }).payload
++              }),
++            true
++          )
++        a.callbackAcknowledged = true
++        a.resultAcknowledged =
++          event.outcome === 'succeeded' && status === 'succeeded'
++      }
++    },
++    effects: {
++      started: (ref) =>
++        state.io('effects.started', () => ports.effects.started(ref)),
++      finished: (ref, outcome) =>
++        state.io(
++          'effects.finished',
++          () => ports.effects.finished(ref, outcome),
++          true
++        )
++    },
++    effectJournal: {
++      reserve: (input) =>
++        state.io('journal.reserve', async () => {
++          const record = await journal.reserve(input)
++          if (
++            record.tenantId !== input.tenantId ||
++            record.operationKey !== input.operationKey ||
++            record.proposalHash !== input.proposalHash
++          )
++            throw new Error('journal_binding_invalid')
++          if (record.state === 'CONFIRMED') {
++            const a = state.attempts.find(
++              (a) => a.operationKey === input.operationKey
++            )
++            if (!a || a.closed || a.command.output)
++              throw new Error('journal_receipt_invalid')
++            a.command.output = {
++              status: 'succeeded',
++              ...(record.result !== undefined
++                ? { data: cloneBoundedValue(record.result) }
++                : {})
++            }
++          }
++          return record
++        }),
++      markStarted: (input) =>
++        state.io('journal.markStarted', () => journal.markStarted(input)),
++      confirm: (input) =>
++        state.io('journal.confirm', () => journal.confirm(input), true),
++      fail: (input) =>
++        state.io('journal.fail', () => journal.fail(input), true),
++      markUncertain: (input) =>
++        state.io(
++          'journal.markUncertain',
++          () => journal.markUncertain(input),
++          true
++        ),
++      get: (tenant, key) =>
++        state.io('journal.get', () => journal.get(tenant, key))
++    },
++    stepStore: {
++      recordStep: (step) => {
++        if (step.status === 'FAILED' || step.stopReason !== undefined)
++          state.finalizing = true
++        return state.io('step.recordStep', () => steps.recordStep(step))
++      },
++      saveCheckpoint: (checkpoint) => {
++        if (checkpoint.state.stopReason !== undefined) state.finalizing = true
++        return state.io('step.saveCheckpoint', () =>
++          steps.saveCheckpoint(checkpoint)
++        )
++      },
++      listSteps: (tenant, id) => {
++        if (state.controller.signal.aborted || Date.now() >= state.expiresAt)
++          state.finalizing = true
++        return state.io('step.listSteps', () => steps.listSteps(tenant, id))
++      },
++      loadCheckpoint: (tenant, id) =>
++        state.io('step.loadCheckpoint', () => steps.loadCheckpoint(tenant, id))
++    }
++  }
++}
++
++export function controlledRegistration(
++  attempt: () => ControlledAttempt | undefined,
++  descriptor: CapabilityRegistration['descriptor'],
++  state: InvocationEvidenceState,
++  fingerprint: () => string,
++  measure: <T>(operation: () => Promise<T>) => Promise<T>
++): CapabilityRegistration {
++  return {
++    descriptor,
++    implementation: {
++      validateInput: (input) => {
++        const a = attempt()
++        return (
++          !state.fault &&
++          !state.finalizing &&
++          state.outputAllowsTools &&
++          !!a &&
++          !!reviewedDescriptor(a.command.resolved) &&
++          matchesPreparedInput(a.command, input)
++        )
++      },
++      execute: async (input, context) => {
++        const a = attempt()
++        if (
++          !a ||
++          a.closed ||
++          state.closed ||
++          !matchesPreparedInput(a.command, input)
++        )
++          return { status: 'REJECTED', error: 'terminal_admission_closed' }
++        const result = await measure(() =>
++          executeAuthorizedPreparedCommand(
++            a.command,
++            () => state.admit(a, context, fingerprint()),
++            true
++          )
++        )
++        return {
++          status:
++            result.status === 'succeeded'
++              ? 'SUCCEEDED'
++              : result.status === 'blocked'
++                ? 'REJECTED'
++                : 'FAILED',
++          ...(result.data !== undefined ? { output: result.data } : {}),
++          ...(result.reason ? { error: result.reason } : {})
++        }
++      },
++      validateOutput: (output) => {
++        const a = attempt()
++        return !state.fault && !!a && matchesPreparedOutput(a.command, output)
++      }
++    }
++  }
++}
++
++export function controlledPolicy(
++  state: InvocationEvidenceState,
++  core: GatewayCore | undefined
++): PolicyEngine {
++  return {
++    evaluate: async (request) => {
++      state.check()
++      const a = state.attempts.find(
++        (a) => a.command.execution.toolName === request.tool.id
++      )
++      const deny = (reason: string) => {
++        if (a) a.denied = true
++        return {
++          outcome: 'DENY' as const,
++          reason,
++          policyVersion:
++            a?.command.execution.config.policies.version ?? 'controlled-policy'
++        }
++      }
++      if (
++        state.finalizing ||
++        !state.outputAllowsTools ||
++        !a ||
++        !core ||
++        !reviewedDescriptor(a.command.resolved) ||
++        !matchesPreparedInput(a.command, request.invocation.input)
++      )
++        return deny('controlled_command_invalid')
++      const e = a.command.execution
++      if (
++        request.tenantId !== e.tenantId ||
++        request.agentId !== e.agentId ||
++        request.tool.version !== a.command.resolved.plugin.manifest.version ||
++        !e.config.plugins.some(
++          (p) =>
++            p.enabled &&
++            p.plugin === a.command.resolved.plugin.manifest.name &&
++            p.version === request.tool.version &&
++            p.allowedTools.includes(request.tool.id)
++        )
++      )
++        return deny('controlled_binding_invalid')
++      const permissions = await state.io('actor.authorize', () =>
++        core.authorize(e, a.command.resolved.tool.permission)
++      )
++      if (!permissions?.includes(a.command.resolved.tool.permission))
++        return deny('actor_authorization_denied')
++      const policy = e.policy
++      if (
++        policy.decision !== 'allowed' &&
++        policy.decision !== 'requires_approval'
++      ) {
++        a.denied = true
++        return {
++          outcome: policy.decision === 'handoff' ? 'HANDOFF' : 'DENY',
++          reason: policy.reason,
++          policyVersion: e.config.policies.version
++        }
++      }
++      a.operationKey = request.invocation.operationKey
++      a.policyAllowed = true
++      a.approvalRequired =
++        e.requireApproval === true ||
++        a.command.resolved.tool.requiresApproval ||
++        policy.decision === 'requires_approval'
++      return {
++        outcome: a.approvalRequired ? 'REQUIRE_APPROVAL' : 'ALLOW',
++        reason: policy.reason,
++        policyVersion: e.config.policies.version
++      }
++    }
++  }
++}
++
++export function controlledApprovals(
++  state: InvocationEvidenceState,
++  core: GatewayCore | undefined,
++  fingerprint: () => string,
++  agentVersion: string,
++  correlationId: string,
++  resolve: (
++    attempt: ControlledAttempt
++  ) => Promise<CapabilityApproval | undefined>
++): ApprovalEngine {
++  const grants = new Map<
++    string,
++    {
++      attempt: ControlledAttempt
++      approval: CapabilityApproval
++      request: ApprovalRequest
++      begun: boolean
++      reservation?: string
++      settled: boolean
++    }
++  >()
++  const validRequest = (
++    a: ControlledAttempt,
++    r: ApprovalRequest | ApprovalExecutionRequest
++  ): boolean => {
++    const e = a.command.execution
++    return (
++      a.policyAllowed &&
++      r.tenantId === e.tenantId &&
++      r.agentId === e.agentId &&
++      r.action === 'tool.execute' &&
++      r.resource?.type === 'tool' &&
++      r.resource.id === e.toolName &&
++      r.policyVersion === e.config.policies.version &&
++      r.operationKey === a.operationKey &&
++      typeof r.executionRef === 'string' &&
++      r.executionRef.length > 0 &&
++      r.executionRef.length <= 500 &&
++      r.agentVersion === agentVersion &&
++      (!('correlationId' in r) || r.correlationId === correlationId) &&
++      isPlainRecord(r.payload) &&
++      r.payload.capabilityFingerprint === fingerprint() &&
++      matchesPreparedInput(a.command, r.payload.input)
++    )
++  }
++  const read = async (
++    a: ControlledAttempt,
++    approval: CapabilityApproval
++  ): Promise<boolean> => {
++    const e = a.command.execution
++    let now: number
++    try {
++      now = core?.now().getTime() ?? NaN
++    } catch {
++      return false
++    }
++    if (
++      !Number.isFinite(now) ||
++      !(approval.expiresAt instanceof Date) ||
++      !(approval.expiresAt.getTime() > now) ||
++      approval.tenantId !== e.tenantId ||
++      approval.agentId !== e.agentId ||
++      approval.versionId !== e.versionId ||
++      approval.toolName !== e.toolName ||
++      approval.actorId !== e.actor.id ||
++      !core?.options.approvalAuthority
++    )
++      return false
++    const record = await state.io('approval.get', () =>
++      core.options.approvalAuthority!.get(approval.id, e.tenantId)
++    )
++    return (
++      !!record &&
++      record.status === 'issued' &&
++      record.id === approval.id &&
++      record.tenantId === e.tenantId &&
++      record.agentId === e.agentId &&
++      record.versionId === e.versionId &&
++      record.actorId === e.actor.id &&
++      record.toolName === e.toolName &&
++      record.expiresAt.getTime() > now &&
++      record.inputHash === a.command.inputHash
++    )
++  }
++  const settle = async (input: {
++    request: ApprovalExecutionRequest
++    reservationId: string
++    evidenceRef: string
++  }): Promise<void> => {
++    await state.io(
++      'approval.settlement',
++      () => {
++        const g = grants.get(input.request.operationKey)
++        if (
++          !g ||
++          !g.begun ||
++          g.settled ||
++          g.reservation !== input.reservationId ||
++          !validRequest(g.attempt, input.request) ||
++          input.request.executionRef !== g.request.executionRef ||
++          input.request.approvalId !== g.approval.id ||
++          !input.evidenceRef
++        )
++          throw new Error('approval_binding_invalid')
++        g.settled = true
++      },
++      true
++    )
++  }
++  return {
++    request: async (request) => {
++      state.check()
++      const a = state.attempts.find(
++        (a) => a.command.execution.toolName === request.toolId
++      )
++      const denied = { status: 'DENIED' as const, reason: 'approval_required' }
++      if (
++        !a ||
++        !validRequest(a, request) ||
++        request.operatorId !== a.command.execution.agentId ||
++        grants.has(request.operationKey)
++      ) {
++        if (a) a.denied = true
++        return denied
++      }
++      const approval = core?.parseApproval(
++        await state.io('approval.resolve', () => resolve(a))
++      )
++      if (!approval || !(await read(a, approval))) {
++        a.denied = true
++        return denied
++      }
++      grants.set(request.operationKey, {
++        attempt: a,
++        approval,
++        request,
++        begun: false,
++        settled: false
++      })
++      return {
++        status: 'APPROVED',
++        approvalId: approval.id as ApprovalId,
++        reason: 'controlled_one_use'
++      }
++    },
++    execution: {
++      begin: async (request) => {
++        state.check()
++        const g = grants.get(request.operationKey)
++        if (
++          !g ||
++          g.begun ||
++          !validRequest(g.attempt, request) ||
++          request.agentVersion !== g.request.agentVersion ||
++          request.executionRef !== g.request.executionRef ||
++          request.approvalId !== g.approval.id ||
++          !(await read(g.attempt, g.approval))
++        )
++          throw new Error('approval_binding_invalid')
++        g.begun = true // uncertain ACK is never retried
++        const e = g.attempt.command.execution
++        const consumed = await state.io('approval.begin', () =>
++          core!.options.approvalAuthority!.verifyAndConsume({
++            approvalId: g.approval.id,
++            tenantId: e.tenantId,
++            agentId: e.agentId,
++            versionId: e.versionId,
++            toolName: e.toolName,
++            input: e.input,
++            actorId: e.actor.id,
++            consumptionAudit: {
++              correlationId: g.attempt.command.correlationId,
++              policyVersion: 'capability-approval-v1',
++              ...(e.traceId ? { traceId: e.traceId } : {})
++            }
++          })
++        )
++        if (
++          !consumed ||
++          consumed.status !== 'consumed' ||
++          consumed.id !== g.approval.id ||
++          consumed.tenantId !== e.tenantId ||
++          consumed.agentId !== e.agentId ||
++          consumed.versionId !== e.versionId ||
++          consumed.toolName !== e.toolName ||
++          consumed.actorId !== e.actor.id ||
++          consumed.inputHash !== createCapabilityInputHash(e)
++        ) {
++          g.attempt.denied = true
++          throw new Error('approval_consumption_denied')
++        }
++        g.attempt.approvalConsumed = true
++        g.reservation = createCorrelationId()
++        return { approvalId: request.approvalId, reservationId: g.reservation }
++      },
++      complete: settle,
++      fail: settle,
++      uncertain: settle
++    }
++  }
++}
+diff --git a/packages/platform/src/plugin-execution-core.ts b/packages/platform/src/plugin-execution-core.ts
+new file mode 100644
+index 0000000..8361262
+--- /dev/null
++++ b/packages/platform/src/plugin-execution-core.ts
+@@ -0,0 +1,223 @@
++import { createCorrelationId } from '@cvg/shared'
++import type { CapabilityDescriptor } from '@cvg/harness-contracts'
++import type {
++  CapabilityExecutionInput,
++  CapabilityExecutionResult,
++  CapabilityGateway,
++  CapabilityApproval,
++  CapabilityGatewayOptions,
++  PlannedCapabilityTool,
++  RegisteredPlugin,
++  PluginHandler,
++  PluginToolInputValidator,
++  PluginToolOutputValidator
++} from './plugin-gateway.ts'
++import type { AgentConfig, PluginTool } from './contracts.ts'
++import {
++  canonicalizeCapabilityInput,
++  createCapabilityInputHash
++} from './approval-authority.ts'
++import {
++  cloneBoundedValue,
++  normalizePluginHandlerResult,
++  parseToolInput
++} from './tool-invocation-boundary.ts'
++
++interface Attestation {
++  manifest: string
++  handler: PluginHandler
++  input: PluginToolInputValidator
++  output: PluginToolOutputValidator
++  inputParse: PluginToolInputValidator['safeParse']
++  outputParse: PluginToolOutputValidator['safeParse']
++  descriptor: CapabilityDescriptor
++}
++const attestations = new WeakMap<RegisteredPlugin, Attestation>()
++
++/** Internal trusted-code entry point; never exported by platform/index. */
++export function attestReviewedPlugin(
++  plugin: RegisteredPlugin,
++  descriptor: CapabilityDescriptor
++): void {
++  const handler = plugin.handlers[descriptor.id]!
++  const input = plugin.inputValidators![descriptor.id]!
++  const output = plugin.outputValidators![descriptor.id]!
++  attestations.set(plugin, {
++    manifest: canonicalizeCapabilityInput(plugin.manifest),
++    handler,
++    input,
++    output,
++    inputParse: input.safeParse,
++    outputParse: output.safeParse,
++    descriptor: Object.freeze({ ...descriptor })
++  })
++}
++
++function attestation(plugin: RegisteredPlugin): Attestation | undefined {
++  const a = attestations.get(plugin)
++  if (!a) return undefined
++  try {
++    return a.manifest === canonicalizeCapabilityInput(plugin.manifest) &&
++      plugin.handlers[a.descriptor.id] === a.handler &&
++      plugin.inputValidators?.[a.descriptor.id] === a.input &&
++      plugin.outputValidators?.[a.descriptor.id] === a.output &&
++      Object.getOwnPropertyDescriptor(a.input, 'safeParse')?.value ===
++        a.inputParse &&
++      Object.getOwnPropertyDescriptor(a.output, 'safeParse')?.value ===
++        a.outputParse
++      ? a
++      : undefined
++  } catch {
++    return undefined
++  }
++}
++
++export function propagatePluginAttestation(
++  source: RegisteredPlugin,
++  clone: RegisteredPlugin
++): RegisteredPlugin {
++  const a = attestation(source)
++  if (a) {
++    attestations.set(clone, a)
++    if (!attestation(clone)) attestations.delete(clone)
++  }
++  return clone
++}
++
++export interface ResolvedPluginCommand {
++  plugin: RegisteredPlugin
++  tool: PluginTool
++  handler: PluginHandler
++  inputValidator: PluginToolInputValidator
++  outputValidator: PluginToolOutputValidator
++}
++export interface GatewayCore {
++  options: CapabilityGatewayOptions
++  now: () => Date
++  parseApproval(value: unknown): CapabilityApproval | null
++  catalog(config: AgentConfig, intent: string): PlannedCapabilityTool[]
++  resolve(config: AgentConfig, name: string): ResolvedPluginCommand | null
++  authorize(
++    input: CapabilityExecutionInput,
++    permission: string
++  ): Promise<string[] | null>
++}
++const gateways = new WeakMap<CapabilityGateway, GatewayCore>()
++export function registerGatewayCore(
++  gateway: CapabilityGateway,
++  core: GatewayCore
++): void {
++  gateways.set(gateway, core)
++}
++export function gatewayCore(
++  gateway: CapabilityGateway | undefined
++): GatewayCore | undefined {
++  return gateway && gateways.get(gateway)
++}
++
++export function reviewedDescriptor(
++  resolved: ResolvedPluginCommand
++): CapabilityDescriptor | undefined {
++  const a = attestation(resolved.plugin)
++  return a &&
++    a.handler === resolved.handler &&
++    a.input === resolved.inputValidator &&
++    a.output === resolved.outputValidator
++    ? a.descriptor
++    : undefined
++}
++
++export interface PreparedCapabilityCommand {
++  readonly execution: CapabilityExecutionInput
++  readonly resolved: ResolvedPluginCommand
++  readonly canonical: string
++  readonly inputHash: string
++  readonly correlationId: CapabilityExecutionResult['correlationId']
++  output?: Omit<CapabilityExecutionResult, 'correlationId'>
++}
++export function prepareCapabilityCommand(
++  execution: CapabilityExecutionInput,
++  resolved: ResolvedPluginCommand,
++  freeze = false
++): PreparedCapabilityCommand | null {
++  const parsed = parseToolInput(resolved.inputValidator, execution.input)
++  if (!parsed.success) return null
++  const safe = {
++    ...execution,
++    input: freeze ? freezeValue(parsed.data) : parsed.data
++  }
++  return {
++    execution: safe,
++    resolved,
++    canonical: canonicalizeCapabilityInput(parsed.data),
++    inputHash: createCapabilityInputHash(safe),
++    correlationId: createCorrelationId()
++  }
++}
++export function matchesPreparedInput(
++  command: PreparedCapabilityCommand,
++  value: unknown
++): boolean {
++  try {
++    return (
++      canonicalizeCapabilityInput(cloneBoundedValue(value)) ===
++      command.canonical
++    )
++  } catch {
++    return false
++  }
++}
++export function matchesPreparedOutput(
++  command: PreparedCapabilityCommand,
++  value: unknown
++): boolean {
++  try {
++    return (
++      command.output?.status === 'succeeded' &&
++      (command.output.data === undefined
++        ? value === undefined
++        : canonicalizeCapabilityInput(cloneBoundedValue(value)) ===
++          canonicalizeCapabilityInput(command.output.data))
++    )
++  } catch {
++    return false
++  }
++}
++/** The admission callback and captured handler call share one synchronous turn. */
++export async function executeAuthorizedPreparedCommand(
++  command: PreparedCapabilityCommand,
++  admit: () => boolean,
++  requireReviewed = false
++): Promise<Omit<CapabilityExecutionResult, 'correlationId'>> {
++  const { execution, resolved } = command
++  if (!admit())
++    return { status: 'blocked', reason: 'terminal_admission_closed' }
++  try {
++    const raw = resolved.handler(execution.input, {
++      tenantId: execution.tenantId,
++      agentId: execution.agentId,
++      versionId: execution.versionId,
++      toolName: execution.toolName,
++      dryRun: execution.dryRun
++    })
++    const rawResult = await raw
++    const result =
++      requireReviewed && !reviewedDescriptor(resolved)
++        ? null
++        : normalizePluginHandlerResult(rawResult, resolved.outputValidator)
++    command.output = result ?? {
++      status: 'failed',
++      reason: 'tool_result_invalid'
++    }
++  } catch {
++    command.output = { status: 'failed', reason: 'tool_execution_failed' }
++  }
++  return command.output
++}
++function freezeValue<T>(value: T): T {
++  if (value && typeof value === 'object') {
++    Object.values(value).forEach(freezeValue)
++    Object.freeze(value)
++  }
++  return value
++}
+diff --git a/packages/platform/src/__tests__/controlled-kernel-delegation.test.ts b/packages/platform/src/__tests__/controlled-kernel-delegation.test.ts
+new file mode 100644
+index 0000000..832e93e
+--- /dev/null
++++ b/packages/platform/src/__tests__/controlled-kernel-delegation.test.ts
+@@ -0,0 +1,340 @@
++import { afterEach, describe, expect, it, vi } from 'vitest'
++
++import { STOP_REASONS } from '@cvg/harness-contracts'
++import { AgentConfigSchema } from '../contracts.ts'
++import { InMemoryControlPlaneStore } from '../control-plane-store.ts'
++import { createControlledCapabilityGateway } from '../controlled-plugins.ts'
++import { CapabilityGateway } from '../plugin-gateway.ts'
++
++import { DeterministicModelProvider } from '../model-provider.ts'
++import {
++  executeConfiguredAgent,
++  createControlledTraceTiming
++} from '../test-lab.ts'
++import { createTraceId } from '../ids.ts'
++import {
++  executeControlledKernel,
++  createLocalControlledPorts,
++  type ControlledKernelInput
++} from '../controlled-kernel-execution.ts'
++
++import {
++  CONTROLLED_STOP_PROJECTION,
++  projectControlledTools
++} from '../controlled-execution-plan.ts'
++
++async function fixture() {
++  const tenantId = 'tenant_00000000-0000-4000-8000-000000000214'
++  const config = AgentConfigSchema.parse({
++    persona: { name: 'Synthetic', role: 'assistant', tone: 'calm' },
++    greeting: 'Resposta controlada.',
++    promptBlocks: [],
++    responseTemplates: {},
++    model: {
++      provider: 'fake',
++      model: 'deterministic-v1',
++      temperature: 0,
++      maxTokens: 128,
++      timeoutMs: 1000,
++      retries: 0,
++      secretRef: 'secret://controlled/synthetic'
++    },
++    policies: {
++      version: 'synthetic-v1',
++      minConfidence: 0.7,
++      lowConfidence: 'clarify',
++      maxClarifications: 2,
++      enabledActions: ['respond', 'scheduling'],
++      approvalActions: [],
++      blockedActions: []
++    },
++    plugins: [
++      {
++        plugin: 'scheduling.controlled',
++        version: '1.0.0',
++        enabled: true,
++        allowedTools: ['find_available_slots'],
++        config: {}
++      }
++    ],
++    knowledge: [],
++    handoff: {
++      lowConfidenceDestination: 'synthetic',
++      destinations: ['synthetic'],
++      maxClarifications: 2
++    }
++  })
++  const store = new InMemoryControlPlaneStore()
++  const agent = await store.createAgent(
++    { tenantId },
++    { slug: 'synthetic-214', name: 'Synthetic', description: 'Synthetic only' }
++  )
++  const version = await store.createVersion(
++    { tenantId },
++    agent.id,
++    config,
++    'synthetic'
++  )
++  const input = {
++    store,
++    tenantId,
++    agentId: agent.id,
++    versionId: version.id,
++    traceId: createTraceId(),
++    message: 'Quero uma consulta',
++    history: [],
++    executionMode: 'TEST_LAB' as const,
++    actor: {
++      id: 'system.synthetic',
++      role: 'System',
++      permissions: ['untrusted']
++    },
++    capabilityGateway: createControlledCapabilityGateway()
++  }
++  const provider = new DeterministicModelProvider()
++  const prepared: ControlledKernelInput = {
++    input,
++    version,
++    config,
++    intent: 'scheduling',
++    policy: {
++      decision: 'allowed',
++      reason: 'synthetic',
++      layer: 'agent_behavior',
++      policyVersion: 'synthetic-v1'
++    },
++    risk: { level: 'low', reason: 'synthetic' },
++    response: { mode: 'answer', text: 'Resposta controlada.' },
++    promptWithHistory: 'Synthetic prompt',
++    sourceIds: [],
++    provider,
++    timing: createControlledTraceTiming(),
++    emit: async () => undefined
++  }
++  return {
++    input,
++    config,
++    version,
++    provider,
++    prepared,
++    ports: createLocalControlledPorts()
++  }
++}
++afterEach(() => {
++  vi.restoreAllMocks()
++  vi.useRealTimers()
++})
++
++describe('configured execution on the real iterative kernel', () => {
++  it('records one model request and a real governed tool before final response', async () => {
++    const f = await fixture()
++    const events: string[] = []
++    const append = f.ports.log.append
++    f.ports.log.append = async (event) => {
++      events.push(event.type)
++      await append(event)
++    }
++    const model = vi.spyOn(DeterministicModelProvider.prototype, 'complete')
++    const publicGateway = vi.spyOn(f.input.capabilityGateway, 'execute')
++    const result = await executeControlledKernel(f.prepared, f.ports)
++    expect({
++      stop: result.stop,
++      raw: result.rawStop,
++      fault: result.evidence.fault,
++      result: result.result,
++      attempts: result.attempts
++    }).toMatchObject({ stop: 'COMPLETED' })
++    expect(result.result).toMatchObject({
++      modelCalls: 1,
++      toolCalls: 1,
++      steps: 3
++    })
++    expect(result.tools).toEqual([
++      { name: 'find_available_slots', status: 'succeeded' }
++    ])
++    expect(events).toEqual([
++      'model/request',
++      'model/result',
++      'tool/call',
++      'tool/result'
++    ])
++    expect(model).toHaveBeenCalledTimes(1)
++    expect(publicGateway).not.toHaveBeenCalled()
++    expect(result.attempts[0]).toMatchObject({
++      phase: 'ENTERED',
++      closed: true,
++      policyAllowed: true,
++      resultAcknowledged: true
++    })
++  })
++
++  it('normalizes provider exceptions through the public façade', async () => {
++    const f = await fixture()
++    vi.spyOn(
++      DeterministicModelProvider.prototype,
++      'complete'
++    ).mockRejectedValue(new Error('private provider stack'))
++    const trace = await executeConfiguredAgent(f.input)
++    expect(trace).toMatchObject({
++      status: 'failed',
++      response: {
++        mode: 'handoff',
++        text: 'Vou encaminhar sua solicitação para a equipe responsável.'
++      },
++      handoff: { reason: 'controlled_runtime_model_failure' },
++      tools: []
++    })
++    expect(trace.outputPolicy).toBeUndefined()
++    expect(JSON.stringify(trace)).not.toContain('private provider stack')
++    expect(trace.tokenUsage?.completion).toBe(0)
++  })
++
++  it.each([
++    null,
++    {},
++    { text: '' },
++    { text: 'x'.repeat(4001) },
++    { text: 'Prescreva ibuprofeno.' }
++  ])(
++    'guards malformed/hostile output before opaque planning (%j)',
++    async (completion) => {
++      const f = await fixture()
++      const opaque = {
++        planTools: vi.fn(),
++        execute: vi.fn()
++      } as unknown as CapabilityGateway
++      f.prepared.input.capabilityGateway = opaque
++      vi.spyOn(
++        DeterministicModelProvider.prototype,
++        'complete'
++      ).mockResolvedValue(completion as never)
++      const result = await executeControlledKernel(f.prepared, f.ports)
++      expect(result.stop).toBe('COMPLETED')
++      expect(result.output?.decision).toBe('rewritten')
++      expect(opaque.planTools).not.toHaveBeenCalled()
++      expect(result.tools).toEqual([])
++    }
++  )
++
++  it('maps exactly all 23 stops and masks successes beyond the checkpoint window', () => {
++    expect(Object.keys(CONTROLLED_STOP_PROJECTION)).toEqual([...STOP_REASONS])
++    expect(
++      Object.values(CONTROLLED_STOP_PROJECTION).filter(
++        (x) => x.status === 'blocked'
++      )
++    ).toHaveLength(5)
++    const names = Array.from({ length: 61 }, (_, i) => `synthetic_${i}`)
++    const attempts = names.map((name) => ({
++      command: {
++        execution: { toolName: name },
++        output: { status: 'succeeded' }
++      },
++      attempted: true,
++      resultAcknowledged: true,
++      phase: 'ENTERED'
++    })) as unknown as Parameters<typeof projectControlledTools>[1]
++    expect(
++      projectControlledTools(names, attempts, 'COMPLETED').every(
++        (t) => t.status === 'succeeded'
++      )
++    ).toBe(true)
++    for (const stop of STOP_REASONS.filter((s) => s !== 'COMPLETED')) {
++      expect(projectControlledTools(names, attempts, stop)).toEqual(
++        names.map((name) => ({ name, status: 'failed' }))
++      )
++    }
++    const denied = { ...attempts[0]!, denied: true }
++    const untried = { ...attempts[1]!, attempted: false }
++    expect(
++      projectControlledTools(
++        names.slice(0, 2),
++        [denied, untried],
++        'POLICY_DENIED'
++      )
++    ).toEqual([
++      { name: names[0], status: 'blocked' },
++      { name: names[1], status: 'not_run' }
++    ])
++    const failed = {
++      ...attempts[1]!,
++      command: {
++        ...attempts[1]!.command,
++        output: { status: 'failed' as const }
++      }
++    }
++    expect(
++      projectControlledTools(
++        names.slice(0, 2),
++        [attempts[0]!, failed],
++        'TOOL_FAILURE'
++      )
++    ).toEqual([
++      { name: names[0], status: 'failed' },
++      { name: names[1], status: 'failed' }
++    ])
++  })
++
++  it('uses the translated prompt budget, not config.maxTokens or a second model call', async () => {
++    const f = await fixture()
++    f.config.plugins = []
++    f.prepared.promptWithHistory = 'p'.repeat(1000)
++    const model = vi
++      .spyOn(DeterministicModelProvider.prototype, 'complete')
++      .mockResolvedValue({
++        text: 'x'.repeat(4000),
++        provider: 'fake',
++        model: 'deterministic-v1',
++        externalCall: false
++      })
++    const result = await executeControlledKernel(f.prepared, f.ports)
++    expect(result.stop).toBe('COMPLETED')
++    expect(result.result?.usage).toEqual({
++      inputTokens: 250,
++      outputTokens: 1000,
++      costUsd: 0
++    })
++    expect(model).toHaveBeenCalledTimes(1)
++  })
++
++  it('does not restore output or tool entry after a late model result past deadline', async () => {
++    vi.useFakeTimers()
++    const f = await fixture()
++    vi.spyOn(
++      DeterministicModelProvider.prototype,
++      'complete'
++    ).mockImplementation(
++      () =>
++        new Promise((resolve) =>
++          setTimeout(
++            () =>
++              resolve({
++                text: 'Resposta controlada.',
++                provider: 'fake',
++                model: 'deterministic-v1',
++                externalCall: false
++              }),
++            1100
++          )
++        )
++    )
++    const running = executeControlledKernel(f.prepared, f.ports)
++    await vi.advanceTimersByTimeAsync(1001)
++    const result = await running
++    expect(result.stop).toBe('MAX_DURATION')
++    expect(result.attempts).toEqual([])
++    expect(result.output).toBeUndefined()
++    const first = JSON.stringify({
++      stop: result.stop,
++      response: result.response,
++      tools: result.tools
++    })
++    await vi.advanceTimersByTimeAsync(200)
++    expect(
++      JSON.stringify({
++        stop: result.stop,
++        response: result.response,
++        tools: result.tools
++      })
++    ).toBe(first)
++  })
++})
+diff --git a/packages/platform/src/__tests__/controlled-kernel-approval.test.ts b/packages/platform/src/__tests__/controlled-kernel-approval.test.ts
+new file mode 100644
+index 0000000..b34def1
+--- /dev/null
++++ b/packages/platform/src/__tests__/controlled-kernel-approval.test.ts
+@@ -0,0 +1,291 @@
++import { afterEach, describe, expect, it, vi } from 'vitest'
++
++import { AgentConfigSchema } from '../contracts.ts'
++import { InMemoryControlPlaneStore } from '../control-plane-store.ts'
++import { createControlledCapabilityGateway } from '../controlled-plugins.ts'
++
++import { InMemoryCapabilityApprovalAuthority } from '../approval-authority.ts'
++import { DeterministicModelProvider } from '../model-provider.ts'
++import { createControlledTraceTiming } from '../test-lab.ts'
++import { createTraceId } from '../ids.ts'
++import {
++  executeControlledKernel,
++  createLocalControlledPorts,
++  type ControlledKernelInput
++} from '../controlled-kernel-execution.ts'
++import { InvocationEvidenceState } from '../controlled-kernel-adapters.ts'
++
++async function fixture() {
++  const tenantId = 'tenant_00000000-0000-4000-8000-000000000214'
++  const config = AgentConfigSchema.parse({
++    persona: { name: 'Synthetic', role: 'assistant', tone: 'calm' },
++    greeting: 'Resposta controlada.',
++    promptBlocks: [],
++    responseTemplates: {},
++    model: {
++      provider: 'fake',
++      model: 'deterministic-v1',
++      temperature: 0,
++      maxTokens: 128,
++      timeoutMs: 1000,
++      retries: 0,
++      secretRef: 'secret://controlled/synthetic'
++    },
++    policies: {
++      version: 'synthetic-v1',
++      minConfidence: 0.7,
++      lowConfidence: 'clarify',
++      maxClarifications: 2,
++      enabledActions: ['respond', 'scheduling'],
++      approvalActions: [],
++      blockedActions: []
++    },
++    plugins: [
++      {
++        plugin: 'scheduling.controlled',
++        version: '1.0.0',
++        enabled: true,
++        allowedTools: ['find_available_slots'],
++        config: {}
++      }
++    ],
++    knowledge: [],
++    handoff: {
++      lowConfidenceDestination: 'synthetic',
++      destinations: ['synthetic'],
++      maxClarifications: 2
++    }
++  })
++  const store = new InMemoryControlPlaneStore()
++  const agent = await store.createAgent(
++    { tenantId },
++    { slug: 'synthetic-214', name: 'Synthetic', description: 'Synthetic only' }
++  )
++  const version = await store.createVersion(
++    { tenantId },
++    agent.id,
++    config,
++    'synthetic'
++  )
++  const input = {
++    store,
++    tenantId,
++    agentId: agent.id,
++    versionId: version.id,
++    traceId: createTraceId(),
++    message: 'Quero uma consulta',
++    history: [],
++    executionMode: 'TEST_LAB' as const,
++    actor: {
++      id: 'system.synthetic',
++      role: 'System',
++      permissions: ['untrusted']
++    },
++    capabilityGateway: createControlledCapabilityGateway()
++  }
++  const provider = new DeterministicModelProvider()
++  const prepared: ControlledKernelInput = {
++    input,
++    version,
++    config,
++    intent: 'scheduling',
++    policy: {
++      decision: 'allowed',
++      reason: 'synthetic',
++      layer: 'agent_behavior',
++      policyVersion: 'synthetic-v1'
++    },
++    risk: { level: 'low', reason: 'synthetic' },
++    response: { mode: 'answer', text: 'Resposta controlada.' },
++    promptWithHistory: 'Synthetic prompt',
++    sourceIds: [],
++    provider,
++    timing: createControlledTraceTiming(),
++    emit: async () => undefined
++  }
++  return {
++    input,
++    config,
++    version,
++    provider,
++    prepared,
++    ports: createLocalControlledPorts()
++  }
++}
++afterEach(() => {
++  vi.restoreAllMocks()
++  vi.useRealTimers()
++})
++
++async function approvedFixture() {
++  const f = await fixture()
++  const authority = new InMemoryCapabilityApprovalAuthority()
++  const approval = await authority.issue({
++    tenantId: f.input.tenantId,
++    agentId: f.input.agentId,
++    versionId: f.input.versionId,
++    toolName: 'find_available_slots',
++    input: { message: f.input.message },
++    actorId: f.input.actor.id,
++    issuer: 'human.synthetic',
++    expiresAt: new Date(Date.now() + 60_000)
++  })
++  f.prepared.input.capabilityApproval = {
++    id: approval.id,
++    tenantId: approval.tenantId,
++    agentId: approval.agentId,
++    versionId: approval.versionId,
++    toolName: approval.toolName,
++    actorId: approval.actorId,
++    expiresAt: approval.expiresAt
++  }
++  f.prepared.input.requireCapabilityApproval = true
++  f.prepared.input.capabilityGateway = createControlledCapabilityGateway({
++    approvalAuthority: authority
++  })
++  return { ...f, authority, approval }
++}
++
++describe('legacy atomic one-use approval inside the real kernel', () => {
++  it('consumes once before entry and denies replay with no release', async () => {
++    const f = await approvedFixture()
++    const consume = vi.spyOn(f.authority, 'verifyAndConsume')
++    const result = await executeControlledKernel(f.prepared, f.ports)
++    expect(result.stop).toBe('COMPLETED')
++    expect(result.attempts[0]).toMatchObject({
++      approvalRequired: true,
++      approvalConsumed: true,
++      phase: 'ENTERED'
++    })
++    expect(consume).toHaveBeenCalledTimes(1)
++    expect(consume.mock.calls[0]![0]).toMatchObject({
++      input: { message: f.input.message },
++      actorId: f.input.actor.id,
++      consumptionAudit: { traceId: f.input.traceId }
++    })
++    expect(
++      (await f.authority.get(f.approval.id, f.input.tenantId))?.status
++    ).toBe('consumed')
++    const replay = await executeControlledKernel(f.prepared)
++    expect(replay.stop).toBe('POLICY_DENIED')
++    expect(replay.attempts[0]?.phase).toBe('CLOSED_WITHOUT_ENTRY')
++    expect(consume).toHaveBeenCalledTimes(1)
++  })
++
++  it('allows at most one body under two callers racing on the authority', async () => {
++    const f = await approvedFixture()
++    const results = await Promise.all([
++      executeControlledKernel(f.prepared),
++      executeControlledKernel(f.prepared)
++    ])
++    expect(results.filter((r) => r.stop === 'COMPLETED')).toHaveLength(1)
++    expect(
++      results.flatMap((r) => r.attempts).filter((a) => a.phase === 'ENTERED')
++    ).toHaveLength(1)
++    expect(
++      (await f.authority.get(f.approval.id, f.input.tenantId))?.status
++    ).toBe('consumed')
++  })
++
++  it.each([
++    'actor',
++    'tenant',
++    'version',
++    'tool',
++    'input',
++    'expired',
++    'revoked',
++    'clock'
++  ] as const)(
++    'rejects changed %s without consuming or entering',
++    async (field) => {
++      const f = await approvedFixture()
++      const consume = vi.spyOn(f.authority, 'verifyAndConsume')
++      const approval = { ...f.approval }
++      if (field === 'actor') approval.actorId = 'system.other'
++      if (field === 'tenant')
++        approval.tenantId = 'tenant_00000000-0000-4000-8000-000000000215'
++      if (field === 'version')
++        approval.versionId =
++          'agent_version_00000000-0000-4000-8000-000000000215'
++      if (field === 'tool') approval.toolName = 'different_tool'
++      if (field === 'input') f.prepared.input.message += ' changed'
++      if (field === 'expired') approval.expiresAt = new Date(Date.now() - 1)
++      if (field === 'revoked')
++        await f.authority.revoke(
++          approval.id,
++          'human.synthetic',
++          f.input.tenantId
++        )
++      if (field === 'clock')
++        f.prepared.input.capabilityGateway = createControlledCapabilityGateway({
++          approvalAuthority: f.authority,
++          now: () => new Date(NaN)
++        })
++      f.prepared.input.capabilityApproval = {
++        id: approval.id,
++        tenantId: approval.tenantId,
++        agentId: approval.agentId,
++        versionId: approval.versionId,
++        toolName: approval.toolName,
++        actorId: approval.actorId,
++        expiresAt: approval.expiresAt
++      }
++      const result = await executeControlledKernel(f.prepared)
++      expect(result.stop).toBe('POLICY_DENIED')
++      expect(result.attempts[0]?.phase).toBe('CLOSED_WITHOUT_ENTRY')
++      expect(consume).not.toHaveBeenCalled()
++    }
++  )
++
++  it('never releases a consumed grant after a terminal audit fault', async () => {
++    const f = await approvedFixture()
++    const append = f.ports.audit.append
++    f.ports.audit.append = (event) =>
++      event.action === 'runtime.completed'
++        ? Promise.reject(new Error('synthetic'))
++        : append(event)
++    const result = await executeControlledKernel(f.prepared, f.ports)
++    expect(result.attempts[0]?.approvalConsumed).toBe(true)
++    expect(result.stop).toBe('INSUFFICIENT_EVIDENCE')
++    expect(result.tools[0]?.status).toBe('failed')
++    expect(
++      (await f.authority.get(f.approval.id, f.input.tenantId))?.status
++    ).toBe('consumed')
++  })
++
++  it('keeps a consumed grant uncertain when begin ACK is lost, without body or automatic replay', async () => {
++    vi.useFakeTimers()
++    const f = await approvedFixture()
++    const consume = vi.spyOn(f.authority, 'verifyAndConsume')
++    const io = InvocationEvidenceState.prototype.io
++    vi.spyOn(InvocationEvidenceState.prototype, 'io').mockImplementation(
++      function <T>(
++        this: InvocationEvidenceState,
++        phase: string,
++        operation: () => T | PromiseLike<T>,
++        terminal?: boolean
++      ) {
++        return io.call(
++          this,
++          phase,
++          async () => {
++            const value = await operation()
++            if (phase === 'approval.begin') await new Promise(() => undefined)
++            return value
++          },
++          terminal
++        ) as Promise<T>
++      }
++    )
++    const running = executeControlledKernel(f.prepared, f.ports)
++    await vi.advanceTimersByTimeAsync(1600)
++    const result = await running
++    expect(result.stop).toBe('INSUFFICIENT_EVIDENCE')
++    expect(result.attempts[0]?.phase).toBe('CLOSED_WITHOUT_ENTRY')
++    expect(consume).toHaveBeenCalledTimes(1)
++    expect(
++      (await f.authority.get(f.approval.id, f.input.tenantId))?.status
++    ).toBe('consumed')
++  })
++})
+diff --git a/packages/platform/src/__tests__/controlled-kernel-canonical-command.test.ts b/packages/platform/src/__tests__/controlled-kernel-canonical-command.test.ts
+new file mode 100644
+index 0000000..1ba692e
+--- /dev/null
++++ b/packages/platform/src/__tests__/controlled-kernel-canonical-command.test.ts
+@@ -0,0 +1,238 @@
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import { z } from 'zod'
++
++import { AgentConfigSchema } from '../contracts.ts'
++import { InMemoryControlPlaneStore } from '../control-plane-store.ts'
++import {
++  createControlledCapabilityGateway,
++  createControlledSchedulingPlugin
++} from '../controlled-plugins.ts'
++import { CapabilityGateway, PluginRegistry } from '../plugin-gateway.ts'
++
++import { DeterministicModelProvider } from '../model-provider.ts'
++import { createControlledTraceTiming } from '../test-lab.ts'
++import { createTraceId } from '../ids.ts'
++import {
++  executeControlledKernel,
++  createLocalControlledPorts,
++  type ControlledKernelInput
++} from '../controlled-kernel-execution.ts'
++
++import {
++  attestReviewedPlugin,
++  gatewayCore,
++  reviewedDescriptor,
++  matchesPreparedInput,
++  matchesPreparedOutput
++} from '../plugin-execution-core.ts'
++
++async function fixture() {
++  const tenantId = 'tenant_00000000-0000-4000-8000-000000000214'
++  const config = AgentConfigSchema.parse({
++    persona: { name: 'Synthetic', role: 'assistant', tone: 'calm' },
++    greeting: 'Resposta controlada.',
++    promptBlocks: [],
++    responseTemplates: {},
++    model: {
++      provider: 'fake',
++      model: 'deterministic-v1',
++      temperature: 0,
++      maxTokens: 128,
++      timeoutMs: 1000,
++      retries: 0,
++      secretRef: 'secret://controlled/synthetic'
++    },
++    policies: {
++      version: 'synthetic-v1',
++      minConfidence: 0.7,
++      lowConfidence: 'clarify',
++      maxClarifications: 2,
++      enabledActions: ['respond', 'scheduling'],
++      approvalActions: [],
++      blockedActions: []
++    },
++    plugins: [
++      {
++        plugin: 'scheduling.controlled',
++        version: '1.0.0',
++        enabled: true,
++        allowedTools: ['find_available_slots'],
++        config: {}
++      }
++    ],
++    knowledge: [],
++    handoff: {
++      lowConfidenceDestination: 'synthetic',
++      destinations: ['synthetic'],
++      maxClarifications: 2
++    }
++  })
++  const store = new InMemoryControlPlaneStore()
++  const agent = await store.createAgent(
++    { tenantId },
++    { slug: 'synthetic-214', name: 'Synthetic', description: 'Synthetic only' }
++  )
++  const version = await store.createVersion(
++    { tenantId },
++    agent.id,
++    config,
++    'synthetic'
++  )
++  const input = {
++    store,
++    tenantId,
++    agentId: agent.id,
++    versionId: version.id,
++    traceId: createTraceId(),
++    message: 'Quero uma consulta',
++    history: [],
++    executionMode: 'TEST_LAB' as const,
++    actor: {
++      id: 'system.synthetic',
++      role: 'System',
++      permissions: ['untrusted']
++    },
++    capabilityGateway: createControlledCapabilityGateway()
++  }
++  const provider = new DeterministicModelProvider()
++  const prepared: ControlledKernelInput = {
++    input,
++    version,
++    config,
++    intent: 'scheduling',
++    policy: {
++      decision: 'allowed',
++      reason: 'synthetic',
++      layer: 'agent_behavior',
++      policyVersion: 'synthetic-v1'
++    },
++    risk: { level: 'low', reason: 'synthetic' },
++    response: { mode: 'answer', text: 'Resposta controlada.' },
++    promptWithHistory: 'Synthetic prompt',
++    sourceIds: [],
++    provider,
++    timing: createControlledTraceTiming(),
++    emit: async () => undefined
++  }
++  return {
++    input,
++    config,
++    version,
++    provider,
++    prepared,
++    ports: createLocalControlledPorts()
++  }
++}
++afterEach(() => {
++  vi.restoreAllMocks()
++  vi.useRealTimers()
++})
++
++describe('one canonical input and one canonical output transformation', () => {
++  it.each(['gateway', 'kernel'] as const)(
++    'applies defaults/transforms exactly once through %s',
++    async (path) => {
++      const f = await fixture()
++      let inputParses = 0
++      let outputParses = 0
++      const received: unknown[] = []
++      const plugin = createControlledSchedulingPlugin()
++      const descriptor = reviewedDescriptor(
++        gatewayCore(f.input.capabilityGateway)!.resolve(
++          f.config,
++          'find_available_slots'
++        )!
++      )!
++      plugin.inputValidators!.find_available_slots = z
++        .object({ message: z.string(), number: z.string().default('7') })
++        .transform((value) => ({
++          ...value,
++          number: Number(value.number) + inputParses++
++        }))
++      plugin.outputValidators!.find_available_slots = z
++        .object({ value: z.string() })
++        .transform((value) => ({ value: Number(value.value) + outputParses++ }))
++      plugin.handlers.find_available_slots = (value) => {
++        received.push(value)
++        return { status: 'succeeded', data: { value: '11' } }
++      }
++      attestReviewedPlugin(plugin, descriptor) // trusted reviewed test implementation, never client metadata
++      const authorized: unknown[] = []
++      const gateway = new CapabilityGateway(new PluginRegistry([plugin]), {
++        actorAuthorizer: ({ requiredPermission }) => [requiredPermission]
++      })
++      f.prepared.input.capabilityGateway = gateway
++      if (path === 'gateway') {
++        expect(
++          await gateway.execute({
++            tenantId: f.input.tenantId,
++            agentId: f.input.agentId,
++            versionId: f.input.versionId,
++            config: f.config,
++            toolName: 'find_available_slots',
++            input: { message: f.input.message },
++            actor: f.input.actor,
++            policy: f.prepared.policy,
++            dryRun: true
++          })
++        ).toMatchObject({ status: 'succeeded', data: { value: 11 } })
++      } else {
++        const append = f.ports.log.append
++        f.ports.log.append = (event) => {
++          if (event.type === 'tool/call') authorized.push(event.input)
++          return append(event)
++        }
++        const result = await executeControlledKernel(f.prepared, f.ports)
++        expect(result.stop).toBe('COMPLETED')
++        expect(result.attempts[0]!.command.output).toMatchObject({
++          data: { value: 11 }
++        })
++        expect(authorized).toEqual([{ message: f.input.message, number: 7 }])
++        expect(
++          matchesPreparedInput(result.attempts[0]!.command, {
++            message: f.input.message,
++            number: 7
++          })
++        ).toBe(true)
++        expect(
++          matchesPreparedInput(result.attempts[0]!.command, {
++            message: f.input.message,
++            number: 8
++          })
++        ).toBe(false)
++        expect(
++          matchesPreparedOutput(result.attempts[0]!.command, { value: 11 })
++        ).toBe(true)
++      }
++      expect(received).toEqual([{ message: f.input.message, number: 7 }])
++      expect(inputParses).toBe(1)
++      expect(outputParses).toBe(1)
++    }
++  )
++
++  it('keeps output undefined without invoking the output validator', async () => {
++    const f = await fixture()
++    const plugin = createControlledSchedulingPlugin()
++    plugin.handlers.find_available_slots = () => ({ status: 'succeeded' })
++    const parse = vi.fn(() => {
++      throw new Error('must not parse absent output')
++    })
++    plugin.outputValidators!.find_available_slots = { safeParse: parse }
++    attestReviewedPlugin(
++      plugin,
++      reviewedDescriptor(
++        gatewayCore(f.input.capabilityGateway)!.resolve(
++          f.config,
++          'find_available_slots'
++        )!
++      )!
++    )
++    f.prepared.input.capabilityGateway = new CapabilityGateway(
++      new PluginRegistry([plugin]),
++      { actorAuthorizer: ({ requiredPermission }) => [requiredPermission] }
++    )
++    const result = await executeControlledKernel(f.prepared, f.ports)
++    expect(result.stop).toBe('COMPLETED')
++    expect(parse).not.toHaveBeenCalled()
++  })
++})
+diff --git a/packages/platform/src/__tests__/controlled-kernel-provenance.test.ts b/packages/platform/src/__tests__/controlled-kernel-provenance.test.ts
+new file mode 100644
+index 0000000..9fe311a
+--- /dev/null
++++ b/packages/platform/src/__tests__/controlled-kernel-provenance.test.ts
+@@ -0,0 +1,295 @@
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import { z } from 'zod'
++
++import { AgentConfigSchema } from '../contracts.ts'
++import { InMemoryControlPlaneStore } from '../control-plane-store.ts'
++import {
++  createControlledCapabilityGateway,
++  createControlledSchedulingPlugin
++} from '../controlled-plugins.ts'
++import { CapabilityGateway, PluginRegistry } from '../plugin-gateway.ts'
++
++import { DeterministicModelProvider } from '../model-provider.ts'
++import { createControlledTraceTiming } from '../test-lab.ts'
++import { createTraceId } from '../ids.ts'
++import {
++  executeControlledKernel,
++  createLocalControlledPorts,
++  type ControlledKernelInput
++} from '../controlled-kernel-execution.ts'
++
++import {
++  attestReviewedPlugin,
++  gatewayCore,
++  reviewedDescriptor
++} from '../plugin-execution-core.ts'
++
++async function fixture() {
++  const tenantId = 'tenant_00000000-0000-4000-8000-000000000214'
++  const config = AgentConfigSchema.parse({
++    persona: { name: 'Synthetic', role: 'assistant', tone: 'calm' },
++    greeting: 'Resposta controlada.',
++    promptBlocks: [],
++    responseTemplates: {},
++    model: {
++      provider: 'fake',
++      model: 'deterministic-v1',
++      temperature: 0,
++      maxTokens: 128,
++      timeoutMs: 1000,
++      retries: 0,
++      secretRef: 'secret://controlled/synthetic'
++    },
++    policies: {
++      version: 'synthetic-v1',
++      minConfidence: 0.7,
++      lowConfidence: 'clarify',
++      maxClarifications: 2,
++      enabledActions: ['respond', 'scheduling'],
++      approvalActions: [],
++      blockedActions: []
++    },
++    plugins: [
++      {
++        plugin: 'scheduling.controlled',
++        version: '1.0.0',
++        enabled: true,
++        allowedTools: ['find_available_slots'],
++        config: {}
++      }
++    ],
++    knowledge: [],
++    handoff: {
++      lowConfidenceDestination: 'synthetic',
++      destinations: ['synthetic'],
++      maxClarifications: 2
++    }
++  })
++  const store = new InMemoryControlPlaneStore()
++  const agent = await store.createAgent(
++    { tenantId },
++    { slug: 'synthetic-214', name: 'Synthetic', description: 'Synthetic only' }
++  )
++  const version = await store.createVersion(
++    { tenantId },
++    agent.id,
++    config,
++    'synthetic'
++  )
++  const input = {
++    store,
++    tenantId,
++    agentId: agent.id,
++    versionId: version.id,
++    traceId: createTraceId(),
++    message: 'Quero uma consulta',
++    history: [],
++    executionMode: 'TEST_LAB' as const,
++    actor: {
++      id: 'system.synthetic',
++      role: 'System',
++      permissions: ['untrusted']
++    },
++    capabilityGateway: createControlledCapabilityGateway()
++  }
++  const provider = new DeterministicModelProvider()
++  const prepared: ControlledKernelInput = {
++    input,
++    version,
++    config,
++    intent: 'scheduling',
++    policy: {
++      decision: 'allowed',
++      reason: 'synthetic',
++      layer: 'agent_behavior',
++      policyVersion: 'synthetic-v1'
++    },
++    risk: { level: 'low', reason: 'synthetic' },
++    response: { mode: 'answer', text: 'Resposta controlada.' },
++    promptWithHistory: 'Synthetic prompt',
++    sourceIds: [],
++    provider,
++    timing: createControlledTraceTiming(),
++    emit: async () => undefined
++  }
++  return {
++    input,
++    config,
++    version,
++    provider,
++    prepared,
++    ports: createLocalControlledPorts()
++  }
++}
++afterEach(() => {
++  vi.restoreAllMocks()
++  vi.useRealTimers()
++})
++
++describe('implementation provenance, not descriptor strings', () => {
++  it('propagates the real attestation through registry normalization and clones', async () => {
++    const f = await fixture()
++    const core = gatewayCore(f.input.capabilityGateway)!
++    expect(
++      reviewedDescriptor(core.resolve(f.config, 'find_available_slots')!)
++    ).toMatchObject({
++      risk: 'LOW',
++      sideEffect: 'NONE',
++      idempotent: true,
++      requiresApproval: false
++    })
++    expect((await executeControlledKernel(f.prepared, f.ports)).stop).toBe(
++      'COMPLETED'
++    )
++  })
++
++  it.each([
++    'handler',
++    'validator',
++    'safeParse',
++    'accessor',
++    'manifest',
++    'copy'
++  ] as const)(
++    'refuses a legitimate gateway with changed %s',
++    async (change) => {
++      const f = await fixture()
++      let plugin = createControlledSchedulingPlugin()
++      const body = vi.fn(() => ({ status: 'succeeded' as const }))
++      if (change === 'handler') plugin.handlers.find_available_slots = body
++      if (change === 'accessor') {
++        const validator = plugin.inputValidators!.find_available_slots!
++        const parse = validator.safeParse
++        Object.defineProperty(validator, 'safeParse', { get: () => parse })
++      }
++      if (change === 'validator')
++        plugin.inputValidators!.find_available_slots = z.object({
++          message: z.string()
++        })
++      if (change === 'safeParse')
++        plugin.inputValidators!.find_available_slots!.safeParse = () => ({
++          success: true,
++          data: {}
++        })
++      if (change === 'manifest') plugin.manifest.configSchemaVersion = '2'
++      if (change === 'copy') plugin = { ...plugin }
++      const authorizer = vi.fn(({ requiredPermission }) => [requiredPermission])
++      f.prepared.input.capabilityGateway = new CapabilityGateway(
++        new PluginRegistry([plugin]),
++        { actorAuthorizer: authorizer }
++      )
++      const result = await executeControlledKernel(f.prepared, f.ports)
++      expect(result.stop).toBe('UNSAFE_REQUEST')
++      expect(result.tools).toEqual([
++        { name: 'find_available_slots', status: 'not_run' }
++      ])
++      expect(result.attempts).toEqual([])
++      expect(body).not.toHaveBeenCalled()
++      expect(authorizer).not.toHaveBeenCalled()
++    }
++  )
++
++  it('rejects a mutation of safeParse after registry registration', async () => {
++    const f = await fixture()
++    const plugin = createControlledSchedulingPlugin()
++    const gateway = new CapabilityGateway(new PluginRegistry([plugin]), {
++      actorAuthorizer: ({ requiredPermission }) => [requiredPermission]
++    })
++    plugin.outputValidators!.find_available_slots!.safeParse = () => ({
++      success: true,
++      data: {}
++    })
++    f.prepared.input.capabilityGateway = gateway
++    const result = await executeControlledKernel(f.prepared, f.ports)
++    expect(result.stop).toBe('UNSAFE_REQUEST')
++    expect(result.attempts).toEqual([])
++  })
++
++  it('refuses a validator changed while an admitted handler is pending', async () => {
++    const f = await fixture()
++    const plugin = createControlledSchedulingPlugin()
++    let release!: () => void
++    let entered!: () => void
++    const pending = new Promise<void>((resolve) => {
++      release = resolve
++    })
++    const atBody = new Promise<void>((resolve) => {
++      entered = resolve
++    })
++    plugin.handlers.find_available_slots = async () => {
++      entered()
++      await pending
++      return {
++        status: 'succeeded',
++        data: { slots: [], controlled: true, dryRun: true }
++      }
++    }
++    attestReviewedPlugin(
++      plugin,
++      reviewedDescriptor(
++        gatewayCore(f.input.capabilityGateway)!.resolve(
++          f.config,
++          'find_available_slots'
++        )!
++      )!
++    )
++    f.prepared.input.capabilityGateway = new CapabilityGateway(
++      new PluginRegistry([plugin]),
++      { actorAuthorizer: ({ requiredPermission }) => [requiredPermission] }
++    )
++    const running = executeControlledKernel(f.prepared, f.ports)
++    await atBody
++    const replaced = vi.fn(() => ({ success: true, data: {} }))
++    plugin.outputValidators!.find_available_slots!.safeParse = replaced
++    release()
++    const result = await running
++    expect(result.stop).toBe('TOOL_FAILURE')
++    expect(result.attempts[0]?.phase).toBe('ENTERED')
++    expect(result.tools[0]?.status).toBe('failed')
++    expect(replaced).not.toHaveBeenCalled()
++  })
++
++  it('refuses N>1 before prepare/approval/body even for reviewed synthetic fixtures', async () => {
++    const f = await fixture()
++    const one = createControlledSchedulingPlugin()
++    const two = createControlledSchedulingPlugin()
++    const original = two.handlers.find_available_slots!
++    two.manifest.name = 'synthetic.second'
++    two.manifest.tools[0]!.name = 'synthetic_second'
++    two.handlers = { synthetic_second: original }
++    two.inputValidators = {
++      synthetic_second: two.inputValidators!.find_available_slots!
++    }
++    two.outputValidators = {
++      synthetic_second: two.outputValidators!.find_available_slots!
++    }
++    attestReviewedPlugin(two, {
++      ...reviewedDescriptor(
++        gatewayCore(f.input.capabilityGateway)!.resolve(
++          f.config,
++          'find_available_slots'
++        )!
++      )!,
++      id: 'synthetic_second',
++      providerId: 'synthetic.second'
++    })
++    f.config.plugins.push({
++      plugin: 'synthetic.second',
++      version: '1.0.0',
++      enabled: true,
++      allowedTools: ['synthetic_second'],
++      config: {}
++    })
++    f.prepared.input.capabilityGateway = new CapabilityGateway(
++      new PluginRegistry([one, two]),
++      { actorAuthorizer: ({ requiredPermission }) => [requiredPermission] }
++    )
++    const resolve = vi.fn()
++    f.prepared.input.resolveCapabilityApproval = resolve
++    const result = await executeControlledKernel(f.prepared, f.ports)
++    expect(result.stop).toBe('UNSAFE_REQUEST')
++    expect(result.tools.map((t) => t.status)).toEqual(['not_run', 'not_run'])
++    expect(result.attempts).toEqual([])
++    expect(resolve).not.toHaveBeenCalled()
++  })
++})
+diff --git a/packages/platform/src/__tests__/controlled-kernel-evidence-faults.test.ts b/packages/platform/src/__tests__/controlled-kernel-evidence-faults.test.ts
+new file mode 100644
+index 0000000..1da83bb
+--- /dev/null
++++ b/packages/platform/src/__tests__/controlled-kernel-evidence-faults.test.ts
+@@ -0,0 +1,455 @@
++import { afterEach, describe, expect, it, vi } from 'vitest'
++
++import { AgentConfigSchema } from '../contracts.ts'
++import { InMemoryControlPlaneStore } from '../control-plane-store.ts'
++import { createControlledCapabilityGateway } from '../controlled-plugins.ts'
++
++import { InMemoryCapabilityApprovalAuthority } from '../approval-authority.ts'
++import { DeterministicModelProvider } from '../model-provider.ts'
++import { createControlledTraceTiming } from '../test-lab.ts'
++import { createTraceId } from '../ids.ts'
++import {
++  executeControlledKernel,
++  createLocalControlledPorts,
++  type ControlledKernelInput
++} from '../controlled-kernel-execution.ts'
++import { InvocationEvidenceState } from '../controlled-kernel-adapters.ts'
++
++async function fixture() {
++  const tenantId = 'tenant_00000000-0000-4000-8000-000000000214'
++  const config = AgentConfigSchema.parse({
++    persona: { name: 'Synthetic', role: 'assistant', tone: 'calm' },
++    greeting: 'Resposta controlada.',
++    promptBlocks: [],
++    responseTemplates: {},
++    model: {
++      provider: 'fake',
++      model: 'deterministic-v1',
++      temperature: 0,
++      maxTokens: 128,
++      timeoutMs: 1000,
++      retries: 0,
++      secretRef: 'secret://controlled/synthetic'
++    },
++    policies: {
++      version: 'synthetic-v1',
++      minConfidence: 0.7,
++      lowConfidence: 'clarify',
++      maxClarifications: 2,
++      enabledActions: ['respond', 'scheduling'],
++      approvalActions: [],
++      blockedActions: []
++    },
++    plugins: [
++      {
++        plugin: 'scheduling.controlled',
++        version: '1.0.0',
++        enabled: true,
++        allowedTools: ['find_available_slots'],
++        config: {}
++      }
++    ],
++    knowledge: [],
++    handoff: {
++      lowConfidenceDestination: 'synthetic',
++      destinations: ['synthetic'],
++      maxClarifications: 2
++    }
++  })
++  const store = new InMemoryControlPlaneStore()
++  const agent = await store.createAgent(
++    { tenantId },
++    { slug: 'synthetic-214', name: 'Synthetic', description: 'Synthetic only' }
++  )
++  const version = await store.createVersion(
++    { tenantId },
++    agent.id,
++    config,
++    'synthetic'
++  )
++  const input = {
++    store,
++    tenantId,
++    agentId: agent.id,
++    versionId: version.id,
++    traceId: createTraceId(),
++    message: 'Quero uma consulta',
++    history: [],
++    executionMode: 'TEST_LAB' as const,
++    actor: {
++      id: 'system.synthetic',
++      role: 'System',
++      permissions: ['untrusted']
++    },
++    capabilityGateway: createControlledCapabilityGateway()
++  }
++  const provider = new DeterministicModelProvider()
++  const prepared: ControlledKernelInput = {
++    input,
++    version,
++    config,
++    intent: 'scheduling',
++    policy: {
++      decision: 'allowed',
++      reason: 'synthetic',
++      layer: 'agent_behavior',
++      policyVersion: 'synthetic-v1'
++    },
++    risk: { level: 'low', reason: 'synthetic' },
++    response: { mode: 'answer', text: 'Resposta controlada.' },
++    promptWithHistory: 'Synthetic prompt',
++    sourceIds: [],
++    provider,
++    timing: createControlledTraceTiming(),
++    emit: async () => undefined
++  }
++  return {
++    input,
++    config,
++    version,
++    provider,
++    prepared,
++    ports: createLocalControlledPorts()
++  }
++}
++afterEach(() => {
++  vi.restoreAllMocks()
++  vi.useRealTimers()
++})
++
++const phases = [
++  'audit.runtime_v2.started',
++  'audit.orchestrator.decided',
++  'audit.observation.recorded',
++  'audit.step.started',
++  'audit.step.completed',
++  'audit.evaluation.completed',
++  'audit.runtime.completed',
++  'log.model/request',
++  'log.model/result',
++  'log.tool/call',
++  'log.tool/result',
++  'effects.started',
++  'effects.finished',
++  'journal.reserve',
++  'journal.markStarted',
++  'journal.confirm',
++  'step.recordStep',
++  'step.saveCheckpoint'
++]
++describe('mandatory evidence latches and final handler admission', () => {
++  it.each(
++    phases.flatMap((phase) =>
++      ['reject', 'hang'].map((mode) => ({ phase, mode }))
++    )
++  )('fails closed at $phase ($mode)', async ({ phase, mode }) => {
++    vi.useFakeTimers()
++    const f = await fixture()
++    let injected = false
++    const io = InvocationEvidenceState.prototype.io
++    vi.spyOn(InvocationEvidenceState.prototype, 'io').mockImplementation(
++      function <T>(
++        this: InvocationEvidenceState,
++        observed: string,
++        operation: () => T | PromiseLike<T>,
++        terminal?: boolean
++      ) {
++        if (observed === phase && !injected) {
++          injected = true
++          return io.call(
++            this,
++            observed,
++            () =>
++              mode === 'reject'
++                ? Promise.reject(new Error('private synthetic detail'))
++                : new Promise<T>(() => undefined),
++            terminal
++          ) as Promise<T>
++        }
++        return io.call(this, observed, operation, terminal) as Promise<T>
++      }
++    )
++    const running = executeControlledKernel(f.prepared, f.ports)
++    await vi.advanceTimersByTimeAsync(1600)
++    const result = await running
++    expect(injected).toBe(true)
++    expect(result.stop).toBe('INSUFFICIENT_EVIDENCE')
++    expect(result.evidence.fault).not.toBeNull()
++    if (mode === 'reject') expect(result.evidence.fault?.phase).toBe(phase)
++    expect(result.tools.every((t) => t.status !== 'succeeded')).toBe(true)
++    if (
++      ![
++        'journal.confirm',
++        'effects.finished',
++        'log.tool/result',
++        'audit.runtime.completed'
++      ].includes(phase)
++    ) {
++      expect(result.attempts.every((a) => a.phase !== 'ENTERED')).toBe(true)
++    }
++    expect(result.response).toEqual({
++      mode: 'handoff',
++      text: 'Vou encaminhar sua solicitação para a equipe responsável.'
++    })
++  })
++
++  it('keeps CONFIRMED privately after callback failure and invokes the callback once', async () => {
++    const f = await fixture()
++    const audit = vi.fn().mockRejectedValue(new Error('callback synthetic'))
++    f.prepared.input.onToolAudit = audit
++    const result = await executeControlledKernel(f.prepared, f.ports)
++    expect(result.stop).toBe('INSUFFICIENT_EVIDENCE')
++    expect(audit).toHaveBeenCalledTimes(1)
++    expect(result.tools[0]?.status).toBe('failed')
++    const record = await f.ports.effectJournal.get(
++      f.input.tenantId,
++      result.attempts[0]!.operationKey!
++    )
++    expect(record?.state).toBe('CONFIRMED')
++  })
++
++  it.each([
++    'CONFIRMED',
++    'EFFECT_STARTED',
++    'UNCERTAIN',
++    'FOREIGN_RESERVED',
++    'WRONG_HASH'
++  ] as const)(
++    'honors bound journal state %s without a second handler entry',
++    async (status) => {
++      const f = await fixture()
++      const journal = f.ports.effectJournal
++      const reserve = journal.reserve.bind(journal)
++      journal.reserve = async (input) => {
++        const r = await reserve(input)
++        if (status === 'WRONG_HASH') return { ...r, proposalHash: 'different' }
++        if (status === 'FOREIGN_RESERVED')
++          return { ...r, attemptId: 'attempt_other' }
++        await journal.markStarted(input)
++        if (status === 'CONFIRMED')
++          return journal.confirm({
++            ...input,
++            result: { controlled: true, dryRun: true, slots: [] }
++          })
++        if (status === 'UNCERTAIN')
++          return journal.markUncertain({
++            ...input,
++            reason: 'synthetic_previous_uncertainty'
++          })
++        return (await journal.get(input.tenantId, input.operationKey))!
++      }
++      const result = await executeControlledKernel(f.prepared, f.ports)
++      expect(result.attempts[0]?.phase).toBe('CLOSED_WITHOUT_ENTRY')
++      expect(result.stop === 'COMPLETED').toBe(status === 'CONFIRMED')
++      if (status === 'CONFIRMED')
++        expect(result.tools[0]?.status).toBe('succeeded')
++      else expect(result.tools[0]?.status).not.toBe('succeeded')
++    }
++  )
++
++  it.each(['effects.started', 'journal.markStarted'])(
++    'rechecks pause after %s ACK, without handler entry',
++    async (phase) => {
++      const f = await fixture()
++      let paused = false
++      f.ports.pause = { isPaused: () => paused }
++      const io = InvocationEvidenceState.prototype.io
++      vi.spyOn(InvocationEvidenceState.prototype, 'io').mockImplementation(
++        function <T>(
++          this: InvocationEvidenceState,
++          observed: string,
++          operation: () => T | PromiseLike<T>,
++          terminal?: boolean
++        ) {
++          return io.call(
++            this,
++            observed,
++            async () => {
++              const value = await operation()
++              if (observed === phase) paused = true
++              return value
++            },
++            terminal
++          ) as Promise<T>
++        }
++      )
++      const result = await executeControlledKernel(f.prepared, f.ports)
++      expect(result.stop).toBe('HUMAN_TAKEOVER')
++      expect(result.attempts[0]).toMatchObject({
++        phase: 'CLOSED_WITHOUT_ENTRY',
++        cause: 'HUMAN_TAKEOVER',
++        closed: true
++      })
++      expect(result.tools[0]?.status).toBe('blocked')
++    }
++  )
++
++  it('checks cancellation again after the synchronous final pause read', async () => {
++    const f = await fixture()
++    let controller: AbortController | undefined
++    let atFinalAdmission = false
++    f.ports.pause = {
++      isPaused: () => {
++        if (atFinalAdmission) controller!.abort()
++        return false
++      }
++    }
++    const io = InvocationEvidenceState.prototype.io
++    vi.spyOn(InvocationEvidenceState.prototype, 'io').mockImplementation(
++      function <T>(
++        this: InvocationEvidenceState,
++        phase: string,
++        operation: () => T | PromiseLike<T>,
++        terminal?: boolean
++      ) {
++        controller = this.controller
++        return io.call(
++          this,
++          phase,
++          async () => {
++            const value = await operation()
++            if (phase === 'journal.markStarted') atFinalAdmission = true
++            return value
++          },
++          terminal
++        ) as Promise<T>
++      }
++    )
++    const result = await executeControlledKernel(f.prepared, f.ports)
++    expect(result.stop).toBe('CANCELLED')
++    expect(result.attempts[0]).toMatchObject({
++      phase: 'CLOSED_WITHOUT_ENTRY',
++      cause: 'CANCELLED',
++      closed: true
++    })
++  })
++
++  it('closes PENDING on cancellation before a journal ACK and keeps the first result immutable after late ACK', async () => {
++    const f = await fixture()
++    const authority = new InMemoryCapabilityApprovalAuthority()
++    const approval = await authority.issue({
++      tenantId: f.input.tenantId,
++      agentId: f.input.agentId,
++      versionId: f.input.versionId,
++      toolName: 'find_available_slots',
++      input: { message: f.input.message },
++      actorId: f.input.actor.id,
++      issuer: 'human.synthetic',
++      expiresAt: new Date(Date.now() + 60_000)
++    })
++    f.prepared.input.capabilityApproval = {
++      id: approval.id,
++      tenantId: approval.tenantId,
++      agentId: approval.agentId,
++      versionId: approval.versionId,
++      toolName: approval.toolName,
++      actorId: approval.actorId,
++      expiresAt: approval.expiresAt
++    }
++    f.prepared.input.requireCapabilityApproval = true
++    f.prepared.input.capabilityGateway = createControlledCapabilityGateway({
++      approvalAuthority: authority
++    })
++    let acknowledge!: () => void
++    const held = new Promise<void>((resolve) => {
++      acknowledge = resolve
++    })
++    let entered!: () => void
++    const atJournal = new Promise<void>((resolve) => {
++      entered = resolve
++    })
++    let controller!: AbortController
++    const io = InvocationEvidenceState.prototype.io
++    vi.spyOn(InvocationEvidenceState.prototype, 'io').mockImplementation(
++      function <T>(
++        this: InvocationEvidenceState,
++        phase: string,
++        operation: () => T | PromiseLike<T>,
++        terminal?: boolean
++      ) {
++        controller = this.controller
++        return io.call(
++          this,
++          phase,
++          async () => {
++            const result = await operation()
++            if (phase === 'journal.markStarted') {
++              entered()
++              await held
++            }
++            return result
++          },
++          terminal
++        ) as Promise<T>
++      }
++    )
++    const running = executeControlledKernel(f.prepared, f.ports)
++    await atJournal
++    controller.abort()
++    const result = await running
++    expect(result.stop).toBe('CANCELLED')
++    expect(result.attempts[0]).toMatchObject({
++      phase: 'CLOSED_WITHOUT_ENTRY',
++      cause: 'CANCELLED',
++      closed: true,
++      approvalConsumed: true
++    })
++    const first = JSON.stringify({
++      tools: result.tools,
++      response: result.response,
++      stop: result.stop,
++      admission: result.attempts[0]
++    })
++    acknowledge()
++    await new Promise((resolve) => setTimeout(resolve, 20))
++    expect(
++      JSON.stringify({
++        tools: result.tools,
++        response: result.response,
++        stop: result.stop,
++        admission: result.attempts[0]
++      })
++    ).toBe(first)
++    expect(
++      (
++        await authority.get(
++          f.prepared.input.capabilityApproval.id,
++          f.input.tenantId
++        )
++      )?.status
++    ).toBe('consumed')
++    expect(
++      (
++        await f.ports.effectJournal.get(
++          f.input.tenantId,
++          result.attempts[0]!.operationKey!
++        )
++      )?.state
++    ).not.toBe('CONFIRMED')
++  })
++
++  it.each(['throw', 'async', 'invalid'] as const)(
++    'fails closed for a %s pause reader',
++    async (kind) => {
++      const f = await fixture()
++      let started = false
++      const original = f.ports.effectJournal.markStarted
++      f.ports.effectJournal.markStarted = async (input) => {
++        const r = await original.call(f.ports.effectJournal, input)
++        started = true
++        return r
++      }
++      f.ports.pause = {
++        isPaused: () => {
++          if (!started) return false
++          if (kind === 'throw') throw new Error('synthetic')
++          if (kind === 'async') return Promise.resolve(false)
++          return 'invalid' as never
++        }
++      }
++      const result = await executeControlledKernel(f.prepared, f.ports)
++      expect(result.stop).toBe('INTERNAL_FAILURE')
++      expect(result.attempts[0]?.phase).toBe('CLOSED_WITHOUT_ENTRY')
++    }
++  )
++})
+diff --git a/tests/architecture/platform-kernel-delegation.test.ts b/tests/architecture/platform-kernel-delegation.test.ts
+new file mode 100644
+index 0000000..7cba52c
+--- /dev/null
++++ b/tests/architecture/platform-kernel-delegation.test.ts
+@@ -0,0 +1,24 @@
++import { readFileSync } from 'node:fs'
++import { describe, expect, it } from 'vitest'
++
++describe('SPEC0214 platform public kernel delegation', () => {
++  it('keeps the façade free of direct model/gateway execution and parallel tools', () => {
++    const source = readFileSync('packages/platform/src/test-lab.ts', 'utf8')
++    expect(source).not.toMatch(/modelProvider\.complete\s*\(/)
++    expect(source).not.toMatch(/capabilityGateway\.execute\s*\(/)
++    expect(source).not.toContain('executePlannedTools')
++    expect(source).toContain('executeControlledKernel')
++  })
++  it('uses exactly one supported factory and no deep imports', () => {
++    const source = readFileSync(
++      'packages/platform/src/controlled-kernel-execution.ts',
++      'utf8'
++    )
++    expect(source.match(/createOperationalHarness\s*\(/g)).toHaveLength(1)
++    expect(source).toContain("from '@cvg/harness'")
++    expect(source).toContain("runtimeProfile: 'iterative'")
++    expect(source).not.toMatch(/@cvg\/(?:harness|harness-contracts)\//)
++    const index = readFileSync('packages/platform/src/index.ts', 'utf8')
++    expect(index).not.toMatch(/controlled-kernel|plugin-execution-core/)
++  })
++})

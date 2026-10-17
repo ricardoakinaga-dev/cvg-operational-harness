@@ -6,6 +6,7 @@ import type {
   Observation,
   StepContext
 } from '@cvg/harness-contracts'
+import { completeToolItem } from './complete-tool-results.ts'
 
 export interface DefaultContextEngineOptions {
   /** Approximate model context budget in tokens. */
@@ -81,12 +82,31 @@ export class DefaultContextEngine implements ContextEngine {
   }
 
   public async build(input: ContextBuildInput): Promise<StepContext> {
-    const recentObservations = input.state.observations.slice(
-      -this.maxObservations
-    )
+    const complete = input.toolResultContext?.version === 1
+    const recentObservations = complete
+      ? [...input.state.observations]
+      : input.state.observations.slice(-this.maxObservations)
     const items = this.assembleItems(input, recentObservations)
-    const withUserMessage = this.trim(items)
+    const withUserMessage = complete ? items : this.trim(items)
     return {
+      ...(complete
+        ? {
+            toolResultContext: {
+              version: 1 as const,
+              requiredObservationIds: recentObservations
+                .filter((value) => value.type === 'TOOL_RESULT')
+                .map((value) => value.observationId),
+              settledDecisionAdmissionIds:
+                input.state.toolResultContext?.decisionAdmissions
+                  .filter(
+                    (value) =>
+                      value.stepNumber === input.stepNumber &&
+                      value.status === 'SETTLED'
+                  )
+                  .map((value) => value.admissionId) ?? []
+            }
+          }
+        : {}),
       executionId: input.runtime.executionId ?? 'execution_unbound',
       tenantId: input.runtime.tenantId,
       conversationId: input.runtime.conversationId,
@@ -158,13 +178,19 @@ export class DefaultContextEngine implements ContextEngine {
       )
     )
     items.push(
-      item('goal.current', 'CURRENT_GOAL', 'TRUSTED', 'goal', input.goal)
+      item(
+        'goal.current',
+        'CURRENT_GOAL',
+        input.toolResultContext ? 'UNTRUSTED' : 'TRUSTED',
+        'goal',
+        input.goal
+      )
     )
     items.push(
       item(
         'state.current',
         'CURRENT_STATE',
-        'TRUSTED',
+        input.toolResultContext ? 'UNTRUSTED' : 'TRUSTED',
         'execution-state',
         this.stateSummary(input, observations)
       )
@@ -186,6 +212,10 @@ export class DefaultContextEngine implements ContextEngine {
     )
 
     for (const observation of toolObservations) {
+      if (input.toolResultContext?.version === 1) {
+        items.push(completeToolItem(observation))
+        continue
+      }
       items.push(
         item(
           `tool.${observation.observationId}`,

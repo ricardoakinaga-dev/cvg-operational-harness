@@ -1,0 +1,94 @@
+import json,pathlib,hashlib,base64,copy,math,datetime,collections
+R=pathlib.Path(__file__).parent;P=R.parent/'review-packet-r1';M=json.loads((P/'manifest.json').read_text())
+def canon(x):return json.dumps(x,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False)
+def sha(x):return hashlib.sha256(x if isinstance(x,bytes) else x.encode()).hexdigest()
+def require(x,msg):
+ if not x:raise AssertionError(msg)
+def cpcheck(c):
+ u={k:v for k,v in c.items() if k not in ['checkpointId','createdAt','digest']}
+ require(c['checkpointVersion']==2,'cp version');require(sha('cvg.checkpoint.v2\n'+canon(u))==c['digest'],'domain checkpoint SHA')
+ for d in c['state']['toolResultContext']['decisionAdmissions']:
+  require(d['tenantId']==c['tenantId'] and d['executionId']==c['executionId'],'receipt binding')
+ return c
+def rowcheck(row):
+ w=row['state'];require(w['storageCodec']=='cvg.checkpoint-state/2' and w['encoding']=='base64','codec')
+ b=base64.b64decode(w['data'],validate=True);require(base64.b64encode(b).decode()==w['data'],'canonical base64')
+ require(len(b)==w['decodedBytes'],'decoded length');require(sha(b)==w['decodedSha256'],'decoded SHA')
+ state=json.loads(b.decode('utf8','strict'));require(canon(state).encode()==b,'canonical logical JSON')
+ if 'physical_state_text' in row:require(json.loads(row['physical_state_text'])==w,'SQL state text')
+ c={ 'checkpointId':row['checkpoint_id'],'executionId':row['execution_id'],'tenantId':row['tenant_id'],'checkpointVersion':row['checkpoint_version'],'runtimeProfile':row['runtime_profile'],'runtimeVersion':row['runtime_version'],'orchestratorVersion':row['orchestrator_version'],'stepNumber':row['step_number'],'state':state,'budgetUsage':row['budget_usage'],'digest':row['digest'],'createdAt':row['created_at']}
+ return cpcheck(c)
+def physical(x):
+ c=rowcheck(x['row']);require(c==x['checkpoint'],'logical equals physical checkpoint');a=x['authority'];i=x['identity']
+ require(i['current_user']==i['session_user'],'authenticated service identity');require(i['current_schema'] if 'current_schema' in i else i['current_schema()'],'schema')
+ require(a['execution_id']==c['executionId'] and a['tenant_id']==c['tenantId'],'parent cp binding')
+ require(a['admission_runtime']==a['prepared_runtime'],'native prepared runtime exact')
+ runtime=a['admission_runtime'];require(runtime['executionId']==c['executionId'],'runtime execution binding')
+ normalized=copy.deepcopy(runtime);del normalized['executionId'];require(normalized==a['request']['runtime'],'native parent normalization')
+ require(runtime['capabilityFingerprint']==a['capability_fingerprint']==c['state']['capabilityFingerprint'],'fingerprint')
+ require(runtime['context']['values']['requestDigest']==a['request_digest'],'request digest binding')
+ require(a['phase_state']=='OPEN' and a['open_phase_acked']==False and a['execution_state']=='RUNNING','real phase authority')
+ return c
+counts=collections.Counter();hashes=set();phy=[]
+def walk(x,origin):
+ if isinstance(x,dict):
+  if set(['identity','row','checkpoint','authority'])<=x.keys():
+   c=physical(x);counts['physicalObservations']+=1;phy.append((origin,c['digest']))
+  if set(['checkpoint_id','checkpoint_version','state','budget_usage','runtime_version','tenant_id','execution_id','digest'])<=x.keys() and x['checkpoint_version']==2:
+   c=rowcheck(x);counts['sqlRows']+=1;hashes.add(c['digest'])
+  if set(['checkpointId','checkpointVersion','state','budgetUsage','digest','createdAt'])<=x.keys() and x['checkpointVersion']==2:
+   cpcheck(x);counts['logicalCheckpoints']+=1;hashes.add(x['digest'])
+  for y in x.values():walk(y,origin)
+ elif isinstance(x,list):
+  for y in x:walk(y,origin)
+def load(p):return json.loads(p.read_text())
+def attempt(d):
+ e=d['events'];require([x['sequence'] for x in e]==list(range(1,len(e)+1)),'event order')
+ models=[x for x in e if x['type']=='model.complete-entry'];require(d['calls']==len(models),'actual model count');require(d['measurements']==sum(x['type']=='counter-entry' for x in e),'counter count')
+ for mo in models:
+  read=next(x for x in e if x['type']=='fresh-service-SQL' and x['entry']==mo['sequence']);nat=next(x for x in e if x['type']=='native-fake-provider-return' and x['entry']==mo['sequence']);comp=next(x for x in e if x['type']=='synthetic-response-computation' and x['entry']==mo['sequence'])
+  require(read['commit']<mo['sequence']<read['sequence']<comp['sequence']<nat['sequence'],'commit entry fresh SQL provider ordering')
+  ph=read['physical'];cp=physical(ph);ctx=cp['state']['toolResultContext'];rec=next(x for x in ctx['decisionAdmissions'] if x['admissionId']==ctx['pendingDecisionAdmission']);require(rec['status']=='RESERVED','preentry reserved')
+  committed=next(x for x in e if x['sequence']==read['commit']);require(committed['result']['status']=='APPLIED' and committed['digest']==cp['digest'],'actual applied reservation checkpoint')
+  require(ph['identity']['backend_pid'] not in read['writerBackends'],'fresh backend distinct from writers')
+  require(ph['authority']['admission_runtime']==d['input'],'native input unchanged')
+  require(ph['authority']['observed_at']<ph['authority']['expires_at'],'DB deadline live')
+  require(rec['requestSha256']==sha(canon(mo['request'])),'request SHA')
+  n=nat['nativeResult'];require(n['externalCall']==False and n['provider']=='fake' and n['model']=='deterministic-v1','native fake provider')
+  it=math.ceil(len(canon(mo['request']).encode())/64);ot=math.ceil(len(canon(n['text']).encode())/64)
+  require(rec['reserved']==dict(modelCalls=1,inputTokens=it,outputTokens=512,costUsd=0),'Toy64 reserve')
+  final=d['final'];recf=final['state']['toolResultContext']['decisionAdmissions'][0];require(recf['status']=='SETTLED' and recf['admissionId']==rec['admissionId'],'settled same receipt')
+  actual=dict(modelCalls=1,inputTokens=it,outputTokens=ot,costUsd=0);require(recf['actual']==actual,'actual Toy64 usage')
+  result=dict(text=n['text'],provider=n['provider'],model=n['model'],inputTokens=it,outputTokens=ot,costUsd=0);require(sha(canon(result))==recf['resultSha256'],'result SHA')
+  require(all(final['budgetUsage'][k]==v for k,v in actual.items()),'final debit settled exactly')
+  require(d['result']['modelCalls']==1 and d['result']['usage']=={k:v for k,v in actual.items() if k!='modelCalls'},'returned winner usage')
+  require(mo['request']['maxOutputTokens']==512 and ot<=512,'output bounds')
+ return {'pid':d['pid'],'actualModelEntries':d['calls'],'counterEntries':d['measurements'],'stop':d['result']['stopReason'],'returnedModelCalls':d['result']['modelCalls'],'returnedUsage':d['result']['usage'],'finalLoadedUsage':d['final']['budgetUsage'] if d['final'] else None}
+def suite(root,label):
+ out={};a=load(root/'BA01/positive/result.json');out['BA01']=attempt(a);require(a['calls']==1 and a['result']['stopReason']=='COMPLETED','positive')
+ neg=load(root/'BA01/negative-save-controls.json');require(neg['before']==neg['after'] and neg['conflict']['status']=='CONFLICT','old token save unchanged');physical(neg['physical'])
+ for id,kind in [('BA02','absent'),('BA03','stale'),('BA04','expired')]:
+  d=load(root/('negative-'+kind)/'attempt/result.json');out[id]=attempt(d);require(d['calls']==d['measurements']==0,'negative zero bodies')
+  sn=load(root/('negative-'+kind)/'before-after.json');changed=[k for k in sn['before'] if sn['before'][k]!=sn['after'][k]];require(changed==(['operational_execution_checkpoints'] if kind=='expired' else []),'negative physical table deltas');out[id]['changedTables']=changed
+  if kind=='expired':require(d['final']['state']['toolResultContext']['decisionAdmissions']==[] and d['final']['budgetUsage']['modelCalls']==0,'expired terminal no receipt');physical(load(root/'negative-expired/terminal-physical.json'))
+  else:require(d['final']==None,'invalid fence no checkpoint')
+ for id,kind in [('BA05','initial'),('BA06','reserve')]:
+  race=load(root/('race-'+kind)/'race-result.json');ch=race['children'];summ=[attempt(x) for x in ch];require(len({x['pid'] for x in ch})==2 and a['pid'] not in {x['pid'] for x in ch},'distinct OS pids')
+  for side,d in zip(['left','right'],ch):
+   cmd=load(root/('race-'+kind)/side/'command.json');require(cmd['pid']==d['pid'] and cmd['exit']==0 and cmd['signal']==None,'actual child exits')
+   barrier=load(root/('race-'+kind)/side/('loaded.json' if kind=='initial' else 'counter-entered.json'));require(barrier['pid']==d['pid'],'native barrier pid')
+   if kind=='initial':require(barrier['loaded']==None,'both initial native load null')
+  require(sum(x['calls'] for x in ch)==1 and sum(x['measurements'] for x in ch)==(1 if kind=='initial' else 2),'race aggregate calls counters')
+  loser=next(x for x in ch if x['calls']==0);require(loser['result']['stopReason']=='STATE_CONFLICT','loser conflict stop')
+  cp=physical(race['physical']);recs=cp['state']['toolResultContext']['decisionAdmissions'];require(len(recs)==1 and recs[0]['status']=='SETTLED' and cp['budgetUsage']['modelCalls']==1,'single durable settled receipt')
+  applied=[x for d in ch for x in d['events'] if x['type']=='CAS-return-after-transaction' and x['result']['status']=='APPLIED' and x['pendingReceipt']!=None];require(len(applied)==1,'one reservation CAS commit')
+  out[id]={'children':summ,'durableReceiptCount':len(recs),'durableUsage':cp['budgetUsage'],'appliedReservationCAS':len(applied),'returnedModelCallsSum':sum(x['result']['modelCalls'] for x in ch),'actualModelEntriesSum':sum(x['calls'] for x in ch)}
+ return {'label':label,'cases':out}
+if __name__=='__main__':
+ for e in M['proofs']:
+  if e['copy'].endswith('.json'):walk(load(pathlib.Path(e['copy'])),'supplied:'+e['relative'])
+ for p in sorted((R/'runs/r1').rglob('*.json')):
+  if 'private' not in p.name:walk(load(p),'independent:'+str(p.relative_to(R)))
+ supplied=suite(P/'proof','supplied');own=suite(R/'runs/r1','independently-executed')
+ result={'pass':True,'independentImplementation':'Python stdlib strict base64 UTF8 JSON canonical SHA256; no CVG decoder/import','counts':dict(counts),'uniqueCheckpointDigests':len(hashes),'supplied':supplied,'own':own,'physicalLocations':phy}
+ (R/'verification.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps({'pass':True,'counts':dict(counts),'uniqueCheckpointDigests':len(hashes)}))

@@ -1,0 +1,73 @@
+# Handoff para revisão independente — lane T1 P100-003/P100-025
+
+Entrega: `READY_FOR_INDEPENDENT_REVIEW`. Somente inventário e proposta; não é BUILD, SPEC nova, gate ou aceite funcional. Todos os procedimentos comportamentais continuam `NOT_RUN`; paridade `NOT_MEASURED`. Nenhum cartão foi fechado. A revisão independente ainda não ocorreu; a checagem local descrita abaixo é do próprio produtor.
+
+Claim local: Codex; escrita exclusiva em `/tmp/cvg-pare100-exec-20261014-6az3hlay/python-parity-procedures-r1/**`. Referência, SDK R6, SPEC0218 e backlog0378 somente leitura. A restrição expressa desta lane prevalece sobre atualização dos ledgers/claim compartilhados; este handoff permite ao integrador registrar continuidade sem esta lane editar docsRoot.
+
+## Artefatos
+
+- [inventory.json](inventory.json): módulos, imports classificados, `__all__`, declarações, campos/atributos e assinaturas com fonte/linhas/SHA-256, escopo, grupo e mapa CVG. Cada registro público aponta a procedimento; todos os itens sem correspondência permanecem como GAP.
+- [procedures.json](procedures.json): 19 grupos, 20 procedimentos com entrada sintética, resultado observável e controle negativo; vetores compartilhados concretos; requisito adicional de resume/cancel com oráculo ainda UNKNOWN. Responsabilidade principal P100-025, owners associados e direção das dependências explicadas por 0378; T3 necessário antes de código novo.
+- [source-hashes.json](source-hashes.json): hashes pre/post de 16 insumos, seis arquivos da referência conferidos contra blobs do pin, identidade dos artefatos finais (excluindo o próprio arquivo para evitar circularidade).
+
+## Escopo da completude
+
+A única completude declarada é **sintática dos cinco módulos delimitados** da referência `768fb1f3d3dcf9a16659ee354e927d05475f22dd`: `__init__.py`, `api.py`, `client.py`, `errors.py`, `models.py`. `pyproject.toml` é evidência adicional de manifesto, sem ampliar a declaração aos demais módulos, testes ou runtime.
+
+Foram enumerados 12 nomes em `__all__`, 71 declarações de classes/funções/métodos (incluindo dois locais aninhados), 69 declarações de módulo ou membros diretos, 39 campos de classe anotados e 120 registros de símbolos/campos/atributos. Desses registros, 99 são públicos/protocolos públicos e 21 privados/suporte de tipagem. Nenhum enum declarado nesses módulos. Os números têm denominadores distintos: reexports, campos e atributos não são novos métodos nem novas classes.
+
+`NotificationSubscription`, `normalize_input`, `final_response`, `finish_reason`, exceções adicionais e aliases JSON acessíveis nos módulos estão preservados mesmo sem exportação no root. `ModelT` é suporte genérico; imports como `BaseModel`, `Callable`, `TypeAlias`, `uuid` e anotações locais não foram convertidos em exports inventados. Membros de classes privadas permanecem privados. Campos declaram seu tipo e escopo; atributos públicos sem anotação mantêm tipo UNKNOWN.
+
+Métodos gerados por dataclass são implícitos; métodos herdados/dinâmicos de Pydantic e bibliotecas externas não foram enumerados como declarações locais. Inventário de imports expõe bindings não privados sem promovê-los automaticamente a contrato deliberado. Isso não demonstra domínio completo do protocolo, semântica remota, cobertura comportamental ou API dinâmica completa.
+
+## Mapa e procedimentos
+
+| Grupo | Capacidade sem correspondência integral no Python CVG inspecionado |
+| --- | --- |
+| CONFIG | 16 campos da configuração da facade e nove do launcher; encaminhamento e cópia de opções |
+| RUN_RESULT_TYPE | Resultado com eventos/notificações do intervalo de execução |
+| TYPES | Aliases recursivos, dataclasses de mensagens e modelos de initialize |
+| ERRORS | Hierarquia específica e detalhes de erro |
+| FACADE | API síncrona, início lazy, context manager, sessão wrapper |
+| SPAWN | Launch, resolução de runtime, env/profile/patches/home e threads |
+| SHUTDOWN | RPC shutdown, terminate/kill/reap e falha dos waiters |
+| INITIALIZE | cwd/provider/model/reasoning/tokens, erro e diagnóstico |
+| PROMPT | contentBlocks e messageId em session/prompt |
+| REQUEST | Request síncrono tipado e bombeamento de callback |
+| NOTIFY | Envio sem id |
+| NOTIFICATIONS | Push, filtros, fanout e fila global |
+| SUBSCRIPTIONS | next/drain/close e context manager |
+| SESSION_TREE | Descendentes descobertos por eventos, ciclos e reinício |
+| BIDIRECTIONAL | Requests recebidos e respostas do host |
+| RUN_INTERVAL | Receipt exato, coleta root/subtree e término em root idle |
+| INPUT | Normalização de texto/lista, preservando identidade |
+| PROJECTION | Última resposta textual e último reason.kind |
+| DISTRIBUTION | Manifesto, runtime-bin e limite da prova de empacotamento |
+
+Há mecanismos existentes no CVG, indicados com linhas/hashes no mapa: transporte assíncrono attach, correlação/validação de respostas, erros com code/message/data, fechamento local e os quatro wrappers `sdk.hello`, `session.open`, `turn.send`, `session.events`. São o escopo distinto de 0218. Sua existência não satisfaz initialize, session/prompt, facade/run, callbacks, subprocess spawning, runtime distribution ou projeções DeepSeek por semelhança de nome. GAP significa ausência de correspondência integral nesta superfície Python; não prova ausência em todos os pacotes CVG. Cada mapa conserva as evidências dos mecanismos relacionados.
+
+P100-025 tem pré-requisitos declarados AUD0611-G01/P100-020. P100-033, P100-040 e P100-052 são owners de capacidades relacionadas e dependem de P100-025; não foram transformados em pré-requisitos reversos. A fixture de roteamento pode testar eventos sintéticos de subagente sem executar subagentes. Empacotamento pertence também a P100-052; manifesto não prova existência nem instalação correta de wheel/runtime.
+
+## Limites importantes para o revisor
+
+- Não há callable de resume/cancel declarado nesses cinco módulos; o requisito de 0378 permanece aberto com oráculo UNKNOWN até contrato/fonte específicos. `session.open`, polling e cancelamento/close local não provam retomada ou cancelamento remoto.
+- A referência ignora certas linhas malformadas e normaliza alguns payloads não objeto para `{}`. CVG valida de outro modo. Diferenças estão preservadas; propostas não concedem waiver de segurança nem exigem copiar fragilidades sem T3.
+- `Session.run` não tem deadline próprio para receipt/idle. O procedimento propõe janela finita de observação e EOF sintético para cleanup, sem inventar timeout interno.
+- O último `proc.wait()` após kill não tem timeout explícito no fonte. Não foi prometido shutdown totalmente limitado, flush durável confirmado, contenção de processo ou kill de descendentes.
+- `NotificationSubscription.close` não promete limpar a fila nem acordar next já bloqueado. Proposta serial não afirma resolver a corrida de snapshot/fanout concorrente.
+- Campos anotados/dataclasses/aliases não implicam validação automática; coerção e API herdada de Pydantic ficam fora da completude. `reason.kind` não foi convertido para STOP_REASONS CVG.
+- Sem leitura de env/config/credenciais reais, import/execução de referência ou CVG, testes comportamentais, rede, DB, install, subagentes, comparação de runtime, commit/push ou alteração de código/docsRoot. Um script temporário local de geração foi removido; só os quatro artefatos solicitados compõem a entrega.
+
+## Verificação feita e próxima ação
+
+A validação local reanalisou AST por percurso distinto, conferiu conjunto/linhas de todas as declarações, membros diretos e campos anotados, resolução de todos os `__all__`, unicidade de IDs, mapeamento/grupo/procedimento de cada registro público e estrutura/status NOT_RUN. Dois controles estáticos em memória removeram um método e uma entrada de `__all__`; as verificações detectaram ambas as omissões. Esses checks só provam consistência/completude sintática no escopo; não são execução dos procedimentos nem revisão independente.
+
+O fechamento pre/post mede os insumos nomeados, não todo o filesystem. A captura pre ocorreu após leituras iniciais de reconhecimento e antes da geração dos artefatos; os bytes da referência também foram confrontados individualmente com o pin. O manifesto registra essa ordem, sem alegar uma captura anterior inexistente.
+
+Próxima ação do integrador: submeter estes quatro artefatos a revisão independente, conferindo especialmente agrupamento de todos os símbolos, fidelidade dos oráculos/negativos e direção das dependências em 0378. Revisão deverá preservar GAP/UNKNOWN e NOT_RUN. Só depois poderá propor contrato concreto e T3 para código adicional; nada nesta entrega constitui autorização. Atualização canônica de runtime/log/backlog fica para o integrador autorizado, sem esta lane tocar os documentos compartilhados.
+
+Adendo de fechamento: backlog0378 mudou entre pre e post (autoria não atribuída). O hash pre foi preservado, o post e um snapshot documental íntegro estão em source-hashes.json, e as citações das seções P100 foram reconciliadas com essa revisão capturada. Owners/dependências citados foram relidos. Os outros 15 insumos monitorados, incluindo os seis arquivos pinados e todas as fontes CVG delimitadas, não mudaram. Isso não altera NOT_RUN nem autoriza BUILD.
+
+## Adendo R2 do integrador — F001
+
+A primeira revisão independente recebeu REVISE por misturar registro de ancestry e entrega de lifecycle. A proposta agora distingue ambos e conserva quatro vetores explícitos (parent-only, child-only, self-edge, neither), cada um com ancestry vazio e os dois métodos de lifecycle. O negativo deve rejeitar filtro estrito que exija os dois IDs e gravação de aresta inválida. Nenhuma fonte da referência/CVG, implementação, inventário, owner ou procedimento fora SESSION_TREE foi alterado. R1 e seu resultado continuam preservados; nova revisão R2 pendente. Os 20 procedimentos continuam NOT_RUN.

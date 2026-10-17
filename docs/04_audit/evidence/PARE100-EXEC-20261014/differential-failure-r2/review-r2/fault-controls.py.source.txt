@@ -1,0 +1,13 @@
+from run import *
+import shutil
+Q=O/'project'
+for kind,suite,driver,pattern in [('reply','reply-differential.test.ts','reference-agent-driver.mjs','executes both real motors: ascii'),('failure','model-failure-differential.test.ts','reference-failure-driver.mjs','observes both real motors: error-ascii')]:
+ F=O/f'fault-project-{kind}';F.mkdir(exist_ok=True);shutil.copytree(Q/'tests',F/'tests',dirs_exist_ok=True)
+ for n in ['package.json','vitest.config.mjs']:shutil.copyfile(Q/n,F/n)
+ (F/'node_modules').symlink_to(Q/'node_modules',target_is_directory=True)
+ (F/'tests/differential'/driver).write_text("process.stdout.write('I1_FAULT_STDOUT_SENTINEL\\n'); process.stderr.write('I1_FAULT_STDERR_SENTINEL\\n'); process.exit(23);\n")
+ for mode in ['default','explicit']:
+  label=f'fault-{kind}-{mode}';extra={}
+  if mode=='explicit':
+   d=O/'own-results'/label;d.mkdir(exist_ok=True);(d/'unrelated.txt').write_text('I1_UNRELATED_PRIVATE_SENTINEL');extra={'CVG_DIFFERENTIAL_EVIDENCE_DIR':str(d)}
+  run(label,[NODE,str(Q/'node_modules/vitest/vitest.mjs'),'run','--config','vitest.config.mjs',f'tests/differential/{suite}','-t',pattern,'--reporter=verbose'],cwd=F,extra=extra)

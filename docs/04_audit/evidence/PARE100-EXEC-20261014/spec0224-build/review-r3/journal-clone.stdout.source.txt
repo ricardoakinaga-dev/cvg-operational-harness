@@ -1,0 +1,31 @@
+    80   if (typeof value !== 'string' || value.trim().length === 0) {
+    81     throw new EffectJournalError(`${label} is required`)
+    82   }
+    83   if (value.length > 500) throw new EffectJournalError(`${label} is too long`)
+    84   return value.trim()
+    85 }
+    86 
+    87 export type EffectAttemptIdFactory = () => string
+    88 
+    89 /**
+    90  * Generates the fencing identity for one effect attempt. The factory seam is
+    91  * intentionally explicit so synthetic tests can be deterministic; production
+    92  * callers use the node:crypto default and never a weak fallback.
+    93  */
+    94 export function createEffectAttemptId(
+    95   factory: EffectAttemptIdFactory = randomUUID
+    96 ): string {
+    97   const token = bounded(factory(), 'attemptId token')
+    98   return bounded(`attempt_${token}`, 'attemptId')
+    99 }
+   100 
+   101 function clone<T>(value: T): T {
+   102   return structuredClone(value)
+   103 }
+   104 
+   105 /** Process-local journal for synthetic crash/replay proofs. */
+   106 export class InMemoryEffectJournal implements EffectJournal {
+   107   private readonly records = new Map<string, EffectJournalRecord>()
+   108 
+   109   public async reserve(input: {
+   110     tenantId: string

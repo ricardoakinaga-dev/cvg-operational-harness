@@ -1,0 +1,302 @@
+FILE cvg/packages/harness/src/kernel/kernel-runtime.ts
+41:   return error instanceof Error ? error.message : 'unknown failure'
+45:   return typeof value === 'string' && value.trim().length > 0
+66:   return (
+76:   if (typeof value === 'string') return value
+78:     return JSON.stringify(value) ?? String(value)
+80:     return String(value)
+95:   return allowed.includes(ALL_AGENT_TOOLS) || allowed.includes(toolId)
+101:   const { execute, ...descriptor } = tool
+102:   void execute
+103:   return descriptor
+119:   return {
+138:   return result({
+163:   private constructor(
+172:   public static async boot(
+177:     return new KernelRuntime(plugins, host, options)
+185:     return new KernelRuntime(plugins, undefined, options)
+188:   public async dispose(): Promise<void> {
+191:     await host?.dispose()
+194:   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
+200:       return result({
+209:     return new Turn(host, input).run()
+219:   public constructor(host: KernelHost, input: RuntimeInput) {
+222:     if (input.signal?.aborted) this.#controller.abort()
+223:     input.signal?.addEventListener('abort', () => this.#controller.abort(), {
+234:   public async run(): Promise<RuntimeResult> {
+237:       return this.#finish(
+247:       return this.#finish(
+254:       return this.#finish(
+265:     if (logged) return this.#finish(fromStop(logged))
+268:     if (gate.kind === 'stop') return this.#finish(fromStop(gate))
+271:       if (this.#state.signal.aborted) {
+272:         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+275:         return this.#finish(
+289:         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+292:         return this.#finish(
+300:           return await this.#respond(decision.response)
+302:           return await this.#callTool(decision.toolInvocation)
+304:           return this.#finish(
+315:           return this.#finish(
+326:           return this.#finish(
+337:           return this.#finish(
+347:           return this.#finish(
+351:                 'This single-pass compatibility runtime does not execute retrieval or verification steps.'
+357:       return this.#finish(
+368:   async #respond(response: string | undefined): Promise<RuntimeResult> {
+370:       return this.#finish(
+398:         return this.#finish(fromStop(outcome.gate))
+400:         return this.#finish(
+404:         return this.#finish(
+414:         return this.#finish(
+422:         return this.#finish(
+441:         if (exhausted) return this.#finish(fromStop(exhausted))
+442:         return this.#finish(
+457:   async #callTool(
+463:       return this.#finish(
+468:       return this.#finish(
+482:       return this.#finish(
+491:       return this.#finish(
+511:       return this.#finish(
+526:       return this.#finish({
+535:     return this.#finish(toolResult)
+543:         return fromStop({ ...outcome.gate, ...withApproval })
+545:         return result({
+555:         return result({
+569:         return result({
+581:         return result({
+590:         return result({
+603:           return result({
+611:         return result({
+628:     return this.#host
+635:   async #finish(initial: RuntimeResult): Promise<RuntimeResult> {
+658:       return {
+669:     return current
+FILE cvg/packages/harness/src/iterative-runtime.ts
+323:    * The checkpoint holds a step that already passed the dispatch checkpoint
+339:        * terminal checkpoint; the operator can retry the correct binding.
+354:  * checkpoints, deterministic budgets and the completion evaluation. It never
+368:   #kernel: Promise<KernelHost> | undefined
+374:   public constructor(
+426:     this.#kernel ??= KernelHost.boot(
+449:     return this.#kernel
+472:         withDeadline: async (operation, ms = this.remainingDuration(run)) => {
+531:   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
+536:       return this.earlyFinish(
+547:       return this.earlyFinish(
+555:       return this.earlyFinish(
+563:       return this.earlyFinish(
+576:       return this.earlyFinish(
+585:     let checkpoint: ExecutionCheckpoint | null = null
+587:       checkpoint = await this.options.stepStore.loadCheckpoint(
+592:       return this.earlyFinish(
+594:         `Execution checkpoint could not be trusted: ${errorMessage(error)}.`,
+600:     if (checkpoint) {
+601:       const rejection = this.rejectCheckpoint(checkpoint, input)
+603:         return this.earlyFinish(input, rejection, 'STATE_CONFLICT', startedAtMs)
+611:       stepNumber: checkpoint?.state.stepNumber ?? 0,
+612:       state: checkpoint
+614:             ...checkpoint.state,
+615:             observations: [...checkpoint.state.observations],
+616:             openQuestions: [...checkpoint.state.openQuestions],
+617:             resolvedInputs: { ...checkpoint.state.resolvedInputs },
+618:             loopSignatures: [...checkpoint.state.loopSignatures]
+631:       usage: checkpoint
+632:         ? { ...checkpoint.budgetUsage }
+634:       observations: checkpoint ? [...checkpoint.state.observations] : [],
+644:         checkpoint?.state.pendingDecision && !checkpoint.state.stopReason
+649:     if (input.signal?.aborted) controller.abort()
+650:     input.signal?.addEventListener('abort', () => controller.abort(), {
+660:       checkpoint?.state.pendingStepNumber &&
+661:       (checkpoint.state.pendingDecision?.decisionType === 'CALL_TOOL' ||
+662:         checkpoint.state.pendingDecision?.decisionType === 'REQUEST_APPROVAL')
+671:         return this.finalize(
+688:             step.stepNumber === checkpoint.state.pendingStepNumber &&
+694:         return this.finalize(
+707:     const resumeOutcome = this.applyResume(run, checkpoint)
+709:       return this.finalize(run, resumeOutcome, startedAtMs)
+715:       result: checkpoint ? 'resumed' : 'started'
+720:       return await this.finalize(run, outcome, startedAtMs)
+722:       return await this.finalize(
+735:     checkpoint: ExecutionCheckpoint,
+738:     if (checkpoint.runtimeProfile !== 'iterative') {
+739:       return 'Execution checkpoint belongs to a different runtime profile.'
+741:     if (checkpoint.runtimeVersion !== RUNTIME_V2_VERSION) {
+742:       return `Execution checkpoint requires runtime ${checkpoint.runtimeVersion}, this runtime is ${RUNTIME_V2_VERSION}.`
+745:       return 'Execution checkpoint conflicts with the requested runtime profile.'
+749:       checkpoint.state.capabilityFingerprint !==
+752:       return 'Execution checkpoint belongs to a different capability composition.'
+755:       checkpoint.state.stopReason &&
+756:       TERMINAL_STOPS.has(checkpoint.state.stopReason) &&
+757:       checkpoint.state.stopReason !== 'NEEDS_USER_INPUT' &&
+758:       checkpoint.state.stopReason !== 'APPROVAL_REQUIRED'
+767:     checkpoint: ExecutionCheckpoint | null
+769:     return applyResume(this.dispatchContext, run, checkpoint)
+772:   private async runLoop(
+786:       if (this.#turns.get(run)?.signal.aborted) {
+796:         // An operator pause is not terminal: the durable checkpoint, with any
+937:   private async decide(
+1000:       decisionAbortController.abort()
+1097:   private async dispatch(
+1145:   private async dispatchTool(
+1160:   private async dispatchKnowledge(
+1168:   private async dispatchVerify(
+1265:   private async dispatchReplan(
+1303:   private async dispatchRespond(
+1311:   private async composeResponse(
+1332:   private async evaluate(
+1339:   private async pause(
+1416:   private async recordObservation(
+1429:   private async recordStep(
+1476:   private async persistCheckpoint(run: LoopRun): Promise<void> {
+1477:     const checkpoint = sealCheckpoint({
+1480:       checkpointVersion: 1,
+1491:     await this.options.stepStore.saveCheckpoint(checkpoint)
+1502:   private async safeAudit(
+1535:   private async closePendingStep(
+1569:   private async finalize(
+1580:         // The open step could not be closed: the terminal checkpoint must not
+1586:     let checkpointProven = true
+1594:         checkpointProven = false
+1597:     const claimedReason: StopReason = checkpointProven
+1600:     if (!checkpointProven) {
+1635:     const finalResult = await this.recordAuditOutcome(
+1640:     this.recordTelemetry(run, finalResult, startedAtMs)
+1644:   private async recordAuditOutcome(
+1680:       return result
+1691:   private recordTelemetry(
+1724:   private async earlyFinish(
+1761:     return result
+1764:   private async withDeadline<T>(
+1769:     let timer!: ReturnType<typeof setTimeout>
+1771:       timer = setTimeout(() => resolve(DEADLINE_EXCEEDED), remainingMs)
+1776:       clearTimeout(timer)
+FILE cvg/packages/harness/src/kernel/pipeline.ts
+6:   SandboxGateOutcome,
+7:   SandboxMode,
+38:   | 'tool/pre-execute'
+107: export async function appendLog(
+139: export async function race<T>(
+151:     return await Promise.race([turn.budget.withDeadline(operation), cancelled])
+162: async function raceInvoked<T>(
+179:       turn.budget.withDeadline(() => running),
+188: export async function runGuards(
+216: export async function revalidate(
+262:  * log `tool/call` → `tool/pre-execute` → guards → cancellation → hook →
+263:  * `tool/execute` around the body → `tool/post-execute` → log `tool/result`.
+265: export async function runToolCall(
+283:   const closeNotStarted = async (
+299:   const gate = await runGate(host, 'tool/pre-execute', call)
+305:   const sandbox = await enforceSandbox(host, call)
+351: export function requiredSandboxMode(descriptor: ToolDescriptor): SandboxMode {
+361: async function enforceSandbox(
+365:   const requiredMode = requiredSandboxMode(call.tool)
+383:     const outcome: SandboxGateOutcome = await gate.evaluate({
+402:         `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
+408:         `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
+436:         `Sandbox gate returned an invalid handle for tool "${call.tool.id}".`
+456:       `Sandbox gate failed for tool "${call.tool.id}": ${errorMessage(error)}.`
+461: async function dispatch(
+473:   const terminal = async (): Promise<ToolOutcome> => {
+505:         call.tool.execute(call.invocation.input, {
+534:   const listeners = host.listeners('tool/execute')
+574: async function postExecute(
+580:   for (const entry of host.listeners('tool/post-execute')) {
+615: export async function runModelCall(
+FILE cvg/packages/harness/src/kernel/controls.ts
+69:   public async withDeadline<T>(
+168: export function budgetControl(): KernelPlugin {
+178:       ctx.on('model/before-call', async (call, next) => {
+189:       ctx.on('tool/pre-execute', async (call, next) => {
+223: export function pauseControl(
+272: export function logControl(
+316: export function effectsControl(
+336: export function sandboxControl(sandbox: SandboxGate): KernelPlugin {
+347: export function policyControl(policy: PolicyEngine): KernelPlugin {
+355:       ctx.on('tool/pre-execute', async (call, next) => {
+359:           const decisionOrDeadline = await turn.budget.withDeadline(() =>
+421:  * The reservation is settled in `tool/post-execute` for every outcome.
+423: export function approvalsControl(
+434:       ctx.on('tool/pre-execute', async (call, next) => {
+441:       ctx.on('tool/execute', async (call, next) => {
+446:       ctx.on('tool/post-execute', (call, outcome) => settle(call, outcome))
+464:       const approvalOrDeadline = await turn.budget.withDeadline(() =>
+576:       const handleOrDeadline = await turn.budget.withDeadline(() =>
+690: export function auditControl(
+702:       ctx.on('turn/end', async (turn, result) => {
+705:           const recorded = await turn.budget.withDeadline(
+707:               audit.append({
+739: export function plannerCapability(planner: Orchestrator): KernelPlugin {
+748: export function modelCapability(model: ModelGateway): KernelPlugin {
+757: export function toolsCapability(tools: ToolRegistry): KernelPlugin {
+771: export function telemetryCapability(
+772:   telemetry: TelemetrySink,
+777:     name: 'capability.telemetry',
+779:     provides: ['telemetry'],
+781:       ctx.provide('telemetry', telemetry)
+782:       ctx.on('turn/end', async (turn, result) => {
+797:           telemetry.record(event)
+FILE cvg/packages/harness/src/effect-journal.ts
+12:   | 'CONFIRMED'
+18:   readonly operationKey: string
+19:   readonly proposalHash: string
+29:   reserve(input: {
+31:     operationKey: string
+32:     proposalHash: string
+35:   markStarted(input: {
+37:     operationKey: string
+42:     operationKey: string
+48:     operationKey: string
+54:     operationKey: string
+60:     operationKey: string
+71: function key(tenantId: string, operationKey: string): string {
+72:   return `${tenantId}\u0000${operationKey}`
+109:   public async reserve(input: {
+111:     operationKey: string
+112:     proposalHash: string
+116:     const operationKey = bounded(input.operationKey, 'operationKey')
+117:     const proposalHash = bounded(input.proposalHash, 'proposalHash')
+119:     const identity = key(tenantId, operationKey)
+122:       if (existing.proposalHash !== proposalHash) {
+131:           operationKey: existing.operationKey,
+132:           proposalHash: existing.proposalHash,
+146:       operationKey,
+147:       proposalHash,
+157:   public markStarted(input: {
+159:     operationKey: string
+167:     operationKey: string
+171:     return this.transition(input, 'CONFIRMED', { result: clone(input.result) })
+176:     operationKey: string
+187:     operationKey: string
+196:   public async get(
+198:     operationKey: string
+200:     const record = this.records.get(key(tenantId, operationKey))
+204:   private async transition(
+207:       operationKey: string
+213:     const identity = key(input.tenantId, input.operationKey)
+223:       (state === 'CONFIRMED' || state === 'FAILED' || state === 'UNCERTAIN') &&
+246:   readonly compositionFingerprint?: string
+251: function proposalHash(
+254:   compositionFingerprint: string | undefined
+260:         compositionFingerprint: compositionFingerprint ?? null,
+266:           providerId:
+267:             'providerId' in tool
+268:               ? (tool as { providerId?: unknown }).providerId
+270:           providerVersion:
+271:             'providerVersion' in tool
+272:               ? (tool as { providerVersion?: unknown }).providerVersion
+305:   const compositionFingerprint = options.compositionFingerprint
+306:     ? bounded(options.compositionFingerprint, 'compositionFingerprint')
+310:     execute: async (
+314:       const operationKey = bounded(context.operationKey ?? '', 'operationKey')
+316:       const reservation = await journal.reserve({
+318:         operationKey,
+319:         proposalHash: proposalHash(tool, input, compositionFingerprint),
+322:       if (reservation.state === 'CONFIRMED') {
+342:       await journal.markStarted({
+344:         operationKey,
+348:         const result = await tool.execute(input, context)
+355:             operationKey,
+368:             operationKey,
+375:             operationKey,
+386:           operationKey,

@@ -1,0 +1,52 @@
+Independent I1 decision: **REVISE**. This is a bounded T1 review of proposed procedures, not a measured product defect or functional acceptance. Two future oracles need stronger discrimination. `I1fork_context=false`; inherited model; `noDescendants=true`. No earlier drafts, critic reports, builder returns, history, shared ledgers, root redirect, or unlisted reference sources were consulted. Lead retains claims and ledger ownership.
+
+The largest material finding is **F1, MEDIUM severity, HIGH confidence**.
+
+- Location: sealed `payload/procedures.json:569–576`, SD11 steps and required observation; reference contract `packages/session/session-persistence/src/handle.ts:45–51,111–116`.
+- Problem: the writer is explicitly closed in the first step. The next step repeats close and invokes `Symbol.asyncDispose`. This exercises disposal of an already closed handle, not disposal as the sole teardown of a live writer. The oracle names close's drain/release behavior and post-close errors, but never requires those observations to follow disposal alone.
+- Rejecting example: retain correct ordinary close, but make async disposal resolve without doing anything. Ordinary close drains and releases the writer; subsequent no-op disposal resolves; repeated close and all post-close checks still behave correctly. This broken disposal can pass the specified trace. On a fresh live writer it would retain ownership and could lose pending accepted data.
+- Required revision: use separate fresh handles for ordinary close and disposal-only teardown. On the latter, append accepted data, invoke only async disposal, await its resolution, then independently observe durable prefix and ownership release. Include a no-op disposal control and a live-reader disposal case. Test repeated disposal separately. Preserve native boundary obligations and NOT_RUN status.
+
+**F2, MEDIUM severity, HIGH confidence** concerns revision soundness.
+
+- Location: sealed `payload/procedures.json:650–659`, SD13; reference contract `packages/session/session-persistence/src/index.ts:184–189` and `src/revision.ts:5–9`.
+- Problem: the steps compare revisions within one instance/session and vary ownership, but do not require a body-changing transition bracketed by metadata observations, nor a cache-reuse soundness observation. The statement about equal revisions permitting unchanged-cache reuse is not converted into a discriminating trace. SD09 checks prefix freshness, not revision equality against a changed log.
+- Rejecting example: a backend returns one constant opaque revision for each instance/session, returns correct current read/stat/list data, and leaves that revision stable during ownership churn. It passes the stated comparisons, optional-metadata checks and churn case. After append changes the log, an unchanged token would falsely license reuse of a cached earlier body.
+- Required revision: capture a baseline body and stat/list revision, append a valid nonempty continuation, await the existing happens-before barrier, and observe body plus stat/list revisions on the same instance/session. Reject equality that falsely certifies the earlier changed body as unchanged. Add the constant-token negative and retain a separate ownership-only unchanged-token positive. Do not parse/order tokens or require unequal tokens to imply changed contents; do not compare across instances/sessions.
+
+Integrity and traceability were preserved. All 9 sealed files, all 9 corresponding live files, and all 19 external inputs matched their envelope hashes both before and after this review. The envelope itself remained SHA-256 `901659ece56739d0a0409169ed9a93600095d8454610e953758ac0f87e680556`. The separate payload manifest's six entries match the exact payload bytes; the envelope binds that manifest too. Detailed expected/actual hashes and byte sizes are in `pre-sentinels.json` and `post-sentinels.json`.
+
+The independent data probe passed 31 checks and all 48 declared source/hash/line/anchor records. It compared the exact ID sets against both frozen originals, then compared contract hashes, source hashes, owners, extraction and parity states; symbol/kind were compared against the catalog. Exactly 75 leaves remain: 55 index, 20 handle, 71 STATIC and 4 UNKNOWN. All 75 retain owner P100-020 and NOT_VERIFIED functional/parity state. All procedure links resolve and their families agree; all 13 gap links resolve. The 4 UNKNOWN flags and 2 source-surface semantic obligations remain explicit. No catalog hash, frozen leaf hash, or global 44132 denominator changed; 44057 leaves remain outside this finite selection. Reference commit identity is verified as a consistent hash-bound declaration, not independently attested by prohibited git-history inspection.
+
+Procedure-by-procedure documentary assessment follows. Every row remains **NOT_RUN**; “adequate” means only that no additional material defect was found in this bounded contract review.
+
+| Procedure | Static assessment | Required boundary retained |
+| --- | --- | --- |
+| SD01 | Adequate identity/replacement/export/context design; source-surface UNKNOWN stays open | Public composition and future consumer resolution; abstract service is not a backend |
+| SD02 | Adequate create/duplicate/missing and local visibility discrimination | Actual backend visibility; no pre-materialization cross-process promise |
+| SD03 | Adequate immutable logical header/cut design; no parent-length equality or seeded-zero rejection invented | Create and body metadata; physical encoding remains distinct |
+| SD04 | Adequate exclusive writer/read concurrency and read-only refusal design | Native shared ownership boundary, not a fake in-process lock |
+| SD05 | Adequately conditional on actual native-loss availability | Native loss/fencing remains unqualified; error construction alone is insufficient |
+| SD06 | Adequate contiguous append and exact prefix/order comparisons | Actual validation/storage, not numeric helper alone |
+| SD07 | Adequate fixed local getter single-capture and separate later-mutation cases | Original in-process input before serialization, helper and actual route |
+| SD08 | Adequate positional slices and alias-state ownership | Caller-owned outer array; shared aliases frozen, independently owned values may be unfrozen |
+| SD09 | Adequate same-instance happens-before and non-backtracking design | Resolution/read-start barrier; concurrent prefix and cross-process limits explicit |
+| SD10 | Adequate flush/crash design, including empty materialization | Actual flush resolution and distinct-process crash/reopen; eager persistence allowed |
+| SD11 | **REVISE F1**: disposal-only live-handle case missing | Close native drain/release remains required; disposal needs its own observation |
+| SD12 | Adequate global partial flush and close-concurrent design | Captured write set, actual partial failure and B durability; readers untouched |
+| SD13 | **REVISE F2**: changed-body/equal-token soundness case missing | Metadata versus body/ownership paths; same-instance/session comparison only |
+| SD14 | Adequate pre-work cancellation design | Per-operation actual IO/claim/mutation observations; no post-start rollback invented |
+| SD15 | Adequate unsupported/corrupt distinction proposal | Helpers plus actual load/read; adoption runtime remains unresolved |
+| SD16 | Adequate public-helper and actual-route wiring proposal | Known-good/bad helper vectors plus real routes; compile-only evidence labeled |
+| SD17 | Adequate typed category/context/location proposal | Actual error routes; no fabricated native-loss evidence or arbitrary path API |
+| SD18 | Adequate torn-tail/transaction equivalence proposal | Actual physical repair or PG atomic visibility/rollback, unchanged committed prefix |
+
+The read literals decode unambiguously: `[]` means read with no positional arguments, `[1,2]` returns seq 1/2, and offsets 4/9 return empty slices for the four-event fixture. No null-to-undefined conversion is required. Logical header version 4, seq 0–3 and turn/end reason shape agree with the listed type declarations after the declared owned-path binding. This is a static compatibility assessment, not runtime admission.
+
+The getter witness has a sufficiently bounded local declaration: own enumerable property on an ordinary plain object, valid first/second JSON values, no Proxy or transport serialization. The listed util-values closure supports reading each original property once while validating and detaching; the storage materializers specify single-capture behavior. The synchronous double-traversal negative is distinguished by reads=2/captured second value, independently of mutation during pending IO. No getter was constructed or executed here. Future admission is expressly required first, with refusal recorded as admission divergence; no extra admission rule is invented. Unlisted adoption/format relationships, selected backend behavior and native ownership-loss availability remain unresolved rather than inferred from source bodies.
+
+The 13 current gaps are honest static observations of the listed public ports and supporting source surfaces, not measured runtime failures. The CVG format1/seq1/afterSequence-exclusive array port is not declared equivalent to reference format4/seq0/handles. A future lossless bridge still requires its own approved public contract and actual differential/native evidence. Job217 recovery remains separate. Supporting sources were inspected only for contract/observable-semantic reasoning; no implementation body is reproduced in this review's artifacts.
+
+Reproducible evidence is in `static_probe.py`, `static-probe-raw.json`, `counterexamples.json`, `commands.json`, both sentinel files, `result.json`, and `evidence-manifest.json`. The static probe ran under Python 3 and exited 0. An initial attempt used unavailable `python` and exited 127 before any review output write; the successful invocation used `python3`. No reference module, witness, backend, compiler, product test, service, native child, PG, network or install was executed. Only the permitted private review directory was written.
+
+All 18 procedures remain **NOT_RUN**, parity **NOT_MEASURED**, functional PASS count **0**. This review closes no full P100-003/P100-020/program36 obligation, grants no T3/BUILD/release authority, and does not change the pending human gate. The bounded documentary decision is justified by F1/F2; no further work was performed outside it.

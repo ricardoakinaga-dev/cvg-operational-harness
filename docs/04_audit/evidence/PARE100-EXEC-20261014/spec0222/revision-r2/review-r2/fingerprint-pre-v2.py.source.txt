@@ -1,0 +1,21 @@
+import json,hashlib,pathlib,datetime,os
+OUT=pathlib.Path.cwd(); PACKET=OUT.parent/'review-packet'
+def h(p):
+ p=pathlib.Path(p);return {'path':str(p),'size':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
+roots=[PACKET, pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree'),pathlib.Path('/home/ricardo/deepseek-harness-session-fixes')]
+inputs={}; candidates={}; shapes={}
+def walk(v,key=''):
+ if isinstance(v,dict):
+  for k,x in v.items():walk(x,key+'/'+k)
+ elif isinstance(v,list):
+  for i,x in enumerate(v):walk(x,key+'/'+str(i))
+ elif isinstance(v,str) and (v.startswith('/') or (' ' not in v and len(v)<500 and ('/' in v or v.endswith(('.md','.json','.ts','.js'))))):
+  ps=[pathlib.Path(v)] if v.startswith('/') else [r/v for r in roots]
+  for p in ps:
+   if p.is_file():candidates[str(p)]={'keys':candidates.get(str(p),{}).get('keys',[])+[key],**h(p)}
+for name in ['source-manifest.json','packet-manifest.json','constraints.json']:
+ p=PACKET/name;inputs[name]=h(p);o=json.loads(p.read_text());shapes[name]={'type':type(o).__name__,'keys':list(o) if isinstance(o,dict) else None};walk(o,name)
+packet=[h(p) for p in sorted(PACKET.rglob('*')) if p.is_file()]
+r={'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'manifests':inputs,'shapes':shapes,'resolved_path_inputs':list(candidates.values()),'packet_membership':packet}
+(OUT/'pre-inventory-raw.json').write_text(json.dumps(r,indent=2)+'\n')
+print(json.dumps({'utc':r['utc'],'shapes':shapes,'packet_count':len(packet),'resolved_count':len(candidates),'resolved_paths':list(candidates)},indent=2))

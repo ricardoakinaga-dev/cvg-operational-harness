@@ -1,0 +1,85 @@
+"""Independent Python evidence reconstruction. No CVG imports, no database mutations."""
+import sys,json,hashlib,base64,math,datetime
+from pathlib import Path
+run=Path(sys.argv[1]);checks=0;snapshots=0;calls=0
+canonical=lambda v:json.dumps(v,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()
+sha=lambda b:hashlib.sha256(b).hexdigest()
+read=lambda p:json.loads((run/p).read_text())
+def check(v,m):
+ global checks
+ checks+=1
+ if not v:raise AssertionError(m)
+def iso(v):return datetime.datetime.fromisoformat(v.replace('Z','+00:00'))
+def toy(v):return math.ceil(len(canonical(v))/64)
+def checkpoint(cp):
+ global snapshots
+ snapshots+=1
+ unsigned={k:v for k,v in cp.items() if k not in ['checkpointId','createdAt','digest']}
+ raw=canonical(unsigned);check(cp['checkpointVersion']==2,'CP version');check(len(raw)<=8388608,'CP size');check(sha(b'cvg.checkpoint.v2\n'+raw)==cp['digest'],'CP domain digest')
+ return cp
+def physical(value):
+ cp=checkpoint(value['checkpoint']);row=value['row'];wrapper=row['state'];wire=row['physical_state_text'];check(json.loads(wire)==wrapper,'SQL wire wrapper')
+ check(set(wrapper)=={'storageCodec','encoding','decodedBytes','decodedSha256','data'},'Wrapper fields');check(wrapper['storageCodec']=='cvg.checkpoint-state/2' and wrapper['encoding']=='base64','Wrapper codec')
+ raw=base64.b64decode(wrapper['data'],validate=True);check(base64.b64encode(raw).decode()==wrapper['data'],'Canonical base64');check(len(raw)==wrapper['decodedBytes'] and sha(raw)==wrapper['decodedSha256'],'Physical state hash/bytes');check(raw==canonical(cp['state']),'Physical state canonical binding')
+ for sql,key in [('checkpoint_id','checkpointId'),('execution_id','executionId'),('tenant_id','tenantId'),('checkpoint_version','checkpointVersion'),('runtime_profile','runtimeProfile'),('runtime_version','runtimeVersion'),('orchestrator_version','orchestratorVersion'),('step_number','stepNumber'),('digest','digest'),('created_at','createdAt'),('budget_usage','budgetUsage')]:check(row[sql]==cp[key],'Physical row header '+sql)
+ identity=value['identity'];authority=value['authority'];check(identity['current_user']==identity['session_user'],'Fresh authenticated service role');check(identity['tenant_context']==cp['tenantId'],'Tenant context');check(authority['tenant_id']==cp['tenantId'] and authority['execution_id']==cp['executionId'],'Authority binding');check(authority['phase_state']=='OPEN' and authority['open_phase_acked'] is False and authority['execution_state']=='RUNNING','Actual bound OPEN phase')
+ runtime=authority['admission_runtime'];check(authority['prepared_runtime']==runtime,'Native prepared runtime unchanged');check(authority['request']['runtime']=={k:v for k,v in runtime.items() if k!='executionId'} and runtime['executionId']==authority['execution_id'],'Native parent normalization removes only envelope executionId');check(runtime['context']['values']['adapterVersion']=='controlled-published-v1','Actual bound request marker');check(runtime['context']['values']['requestDigest']==authority['request_digest'],'Native request digest');check(runtime['capabilityFingerprint']==authority['capability_fingerprint']==cp['state']['capabilityFingerprint'],'Capability binding')
+ return cp
+
+def attempt(value,authority):
+ global calls
+ events=value['events'];check([e['sequence'] for e in events]==list(range(1,len(events)+1)),'Local event sequence');check(all(e['pid']==value['pid'] for e in events),'Event process identity');check(value['input']==authority['admission']['runtime'],'Input is native admission runtime')
+ entries={e['sequence']:e for e in events};check(sum(e['type']=='counter-entry' for e in events)==value['measurements'],'Actual counter entries');check(sum(e['type']=='model.complete-entry' for e in events)==value['calls'],'Firstline model entries')
+ for event in events:
+  if event['type']=='CAS-entry':checkpoint(event['checkpoint'])
+  elif event['type']=='CAS-return-after-transaction':
+   prior=entries[event['entry']];cp=prior['checkpoint'];check(prior['type']=='CAS-entry' and prior['sequence']<event['sequence'],'CAS order');check(cp['checkpointId']==event['checkpointId'] and cp['digest']==event['digest'],'CAS proposed token')
+   if event['result']['status']=='APPLIED':check(event['result']['token']=={'checkpointId':cp['checkpointId'],'digest':cp['digest']},'Applied token')
+   else:check(event['result']['status']=='CONFLICT','Unknown CAS disposition')
+  elif event['type']=='fresh-service-SQL':
+   calls+=1;cp=physical(event['physical']);start=entries[event['entry']];commit=entries[event['commit']];ctx=cp['state']['toolResultContext'];receipt=next(r for r in ctx['decisionAdmissions'] if r['admissionId']==ctx['pendingDecisionAdmission'])
+   check(commit['type']=='CAS-return-after-transaction' and commit['result']['status']=='APPLIED','No native committed reserve');check(commit['sequence']<start['sequence']<event['sequence'],'Commit before model entry/fresh SQL');check(commit['checkpointId']==cp['checkpointId'] and commit['digest']==cp['digest'] and commit['pendingReceipt']==receipt['admissionId'],'Committed model receipt binding');check(receipt['status']=='RESERVED','Model without actual RESERVED');check(event['physical']['identity']['backend_pid'] not in event['writerBackends'] and len(event['writerBackends'])>0,'Fresh reader physical backend')
+   request=start['request'];check(receipt['requestSha256']==sha(canonical(request)),'Actual request digest');check(receipt['measurement']['inputUpperBoundTokens']==toy(request),'Toy input counter');check(request['maxOutputTokens']==receipt['reserved']['outputTokens']==512,'Output cap');check(receipt['reserved']['modelCalls']==1 and receipt['reserved']['costUsd']==0,'Native zero-cost reserve');check(iso(event['physical']['authority']['expires_at'])>iso(event['physical']['authority']['observed_at']),'Model began with live native prepared deadline')
+   returns=[e for e in events if e['type']=='native-fake-provider-return' and e['entry']==start['sequence']];check(len(returns)==1 and returns[0]['sequence']>event['sequence'],'Native fake provider ordering');returned=returns[0]['nativeResult'];check(returned['externalCall'] is False and returned['provider']=='fake' and returned['model']=='deterministic-v1','Native fake provider identity');frame=json.loads(request['messages'][1]['content']);check(json.loads(returned['text'])['responseText']=='Bound response: '+frame['goal'],'Response from actual frame only')
+ if value['final']:checkpoint(value['final'])
+ return events
+
+def settled(cp):
+ ctx=cp['state']['toolResultContext'];check(ctx['pendingDecisionAdmission'] is None and len(ctx['decisionAdmissions'])==1,'Exactly one final receipt');receipt=ctx['decisionAdmissions'][0];check(receipt['status']=='SETTLED' and receipt['actual']['modelCalls']==1,'One settled actual model')
+ for field in ['modelCalls','inputTokens','outputTokens','costUsd']:check(cp['budgetUsage'][field]==receipt['actual'][field],'Durable actual usage '+field)
+ check(cp['budgetUsage']['costUsd']==0,'Native zero-cost budget');check(cp['state']['stopReason']=='COMPLETED','Positive terminal')
+
+pre=read('preexistence.json');check(pre=={'schema_exists':False,'role_exists':False},'Fresh namespace/principal')
+identity=read('identity-rls-grants.json');idn=identity['identity']
+for field in ['rolsuper','rolbypassrls','rolinherit','rolcreatedb','rolcreaterole']:check(idn[field] is False,'Privilege '+field)
+for field in ['memberships','owned_schemas','owned_relations']:check(idn[field]==0,'Ownership '+field)
+check(idn['current_user']==idn['session_user'],'No service SET ROLE');check(len(identity['rls'])==18,'Native table count');check(all(t['relrowsecurity'] and t['relforcerowsecurity'] for t in identity['rls']),'Forced RLS')
+expected={(t['relname'],p) for t in identity['rls'] for p in ['SELECT','INSERT','UPDATE'] if not(t['relname']=='controlled_published_evidence' and p=='UPDATE')};check({(g['table_name'],g['privilege_type']) for g in identity['grants']}==expected,'Exact grants53')
+positive=read('BA01/positive/result.json');auth=read('BA01/native-authority.json');attempt(positive,auth);check(positive['calls']==positive['measurements']==1,'Positive actual entry count');check(positive['result']['stopReason']=='COMPLETED','Positive incomplete');settled(positive['final'])
+control=read('BA01/negative-save-controls.json');check(control['before']==control['after'],'Old-token/simple-save mutation');check(control['conflict']['status']=='CONFLICT','Old token accepted');checkpoint(control['next']);check(control['old']['checkpointId']!=positive['final']['checkpointId'],'Not old token');physical(control['physical'])
+for name in ['absent','stale','expired']:
+ value=read('negative-'+name+'/attempt/result.json');auth=read('negative-'+name+'/native-authority.json');attempt(value,auth);check(value['calls']==value['measurements']==0,'Negative called model/counter '+name);check(value['result']['modelCalls']==0,'Negative model debit');snap=read('negative-'+name+'/before-after.json');faults=[e for e in value['events'] if e['type']=='CAS-error'];check(len(faults)>=1 and all(e['error']['code']=='lease_lost' for e in faults),'No native lease refusal')
+ if name!='expired':check(value['final'] is None and snap['before']==snap['after'],'Invalid authority changed state')
+ else:
+  cp=physical(read('negative-expired/terminal-physical.json'));check(cp==value['final'],'Terminal physical state');check(cp['state']['stopReason']=='INTERNAL_FAILURE' and cp['state']['toolResultContext']['decisionAdmissions']==[],'Expired deadline dispatched or invented receipt')
+  for field in ['modelCalls','inputTokens','outputTokens','costUsd','toolCalls']:check(cp['budgetUsage'][field]==0,'Expired diagnostic debit '+field)
+  for table in snap['before']:
+   if table!='operational_execution_checkpoints':check(snap['before'][table]==snap['after'][table],'Expiry modified authority '+table)
+  check(len(snap['after']['operational_execution_checkpoints'])==len(snap['before']['operational_execution_checkpoints'])+1,'Expiry terminal checkpoint count')
+  prior={r['row']['execution_id']:r for r in snap['before']['operational_execution_checkpoints']};after={r['row']['execution_id']:r for r in snap['after']['operational_execution_checkpoints']};check(all(after[k]==v for k,v in prior.items()),'Expiry altered old checkpoints')
+  observation=read('negative-expired/terminal-physical.json')['authority'];check(iso(observation['observed_at'])>iso(observation['expires_at']),'Deadline did not expire');check(iso(observation['lease_until'])>iso(observation['observed_at']),'Terminal used expired parent lease')
+races=[]
+for kind in ['initial','reserve']:
+ auth=read('race-'+kind+'/native-authority.json');result=read('race-'+kind+'/race-result.json');a,b=result['children'];attempt(a,auth);attempt(b,auth);check(a['pid']!=b['pid'],'No actual distinct processes');check(a['calls']+b['calls']==1,'Duplicate actual model');check(a['measurements']+b['measurements']==(1 if kind=='initial' else 2),'Missing native counters');winner=next(v for v in [a,b] if v['calls']==1);loser=next(v for v in [a,b] if v['calls']==0);check(winner['result']['stopReason']=='COMPLETED' and loser['result']['stopReason']=='STATE_CONFLICT','Wrong race winner/loser semantics')
+ for side,value in [('left',a),('right',b)]:
+  cmd=read('race-'+kind+'/'+side+'/command.json');check(cmd['exit']==0 and cmd['signal'] is None and cmd['pid']==value['pid'],'Actual child PID/exit binding')
+ events=a['events']+b['events'];reserved=[e for e in events if e['type']=='CAS-return-after-transaction' and e['result']['status']=='APPLIED' and e['pendingReceipt'] is not None];check(len(reserved)==1,'Duplicate committed reservations');cp=physical(result['physical']);settled(cp)
+ if kind=='initial':
+  check(read('race-initial/left/loaded.json')['loaded'] is None and read('race-initial/right/loaded.json')['loaded'] is None,'Initial race not both loaded null')
+  first=[next(e for e in v['events'] if e['type']=='CAS-return-after-transaction') for v in [a,b]];check(sorted(e['result']['status'] for e in first)==['APPLIED','CONFLICT'],'Not initial CAS conflict')
+ else:
+  firsta=next(e for e in a['events'] if e['type']=='CAS-return-after-transaction');firstb=next(e for e in b['events'] if e['type']=='CAS-entry');check(firstb['expected']==firsta['result']['token'],'B did not natively load/save A current checkpoint')
+  check(loser['result']['modelCalls']==1,'Conservative losing live usage changed; report separately, not durable billing')
+ races.append({'kind':kind,'pids':[a['pid'],b['pid']],'actualModelEntries':a['calls']+b['calls'],'durableModelCalls':cp['budgetUsage']['modelCalls'],'returnedModelCounts':[a['result']['modelCalls'],b['result']['modelCalls']],'loserStopReason':loser['result']['stopReason']})
+check(calls==3,'Expected onepositive+tworace actualmodel calls')
+print(json.dumps({'status':'PASS','checks':checks,'snapshots':snapshots,'actualModelEntries':calls,'races':races,'scope':'Independent offline reconstruction of native bound fixture datasets only; losing returned conservative counts explicitly distinct from actual calls/durableaccounting. No publishedadapter/fullTR05/global/realproviderbilling claim.'},indent=2))

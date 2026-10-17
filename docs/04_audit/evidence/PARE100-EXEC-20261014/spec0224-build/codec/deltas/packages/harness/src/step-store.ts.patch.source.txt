@@ -1,0 +1,125 @@
+--- baseline/packages/harness/src/step-store.ts
++++ candidate/packages/harness/src/step-store.ts
+@@ -4,8 +4,16 @@
+   isStepTransitionAllowed,
+   type ExecutionCheckpoint,
+   type ExecutionStep,
+-  type ExecutionStepStore
++  type ExecutionStepStore,
++  type CheckpointCompareAndSwapInput,
++  type CheckpointCompareAndSwapResult
+ } from '@cvg/harness-contracts'
++import {
++  completeCheckpointDigest,
++  encodeCompleteCheckpointState,
++  decodeCompleteCheckpointState,
++  validateCompleteCheckpointTransition
++} from './complete-checkpoint.ts'
+ 
+ export class CheckpointError extends Error {
+   public constructor(
+@@ -28,6 +36,8 @@
+ >
+ 
+ export function checkpointDigest(checkpoint: UnsignedCheckpoint): string {
++  if (checkpoint.checkpointVersion === 2)
++    return completeCheckpointDigest(checkpoint)
+   return createHash('sha256')
+     .update(JSON.stringify(normalizeForHash(checkpoint)))
+     .digest('hex')
+@@ -62,10 +72,26 @@
+   checkpoint: ExecutionCheckpoint,
+   expected: { readonly tenantId: string; readonly executionId: string }
+ ): void {
+-  if (checkpoint.checkpointVersion !== CHECKPOINT_VERSION) {
++  if (
++    checkpoint.checkpointVersion !== CHECKPOINT_VERSION &&
++    checkpoint.checkpointVersion !== 2
++  ) {
+     throw new CheckpointError(
+       'checkpoint_version',
+       `Checkpoint version ${checkpoint.checkpointVersion} is not supported`
++    )
++  }
++  if (
++    checkpoint.checkpointVersion === 2 &&
++    (typeof checkpoint.checkpointId !== 'string' ||
++      !checkpoint.checkpointId ||
++      checkpoint.checkpointId.includes('\u0000') ||
++      typeof checkpoint.createdAt !== 'string' ||
++      !Number.isFinite(Date.parse(checkpoint.createdAt)))
++  ) {
++    throw new CheckpointError(
++      'checkpoint_integrity',
++      'Invalid V2 checkpoint metadata'
+     )
+   }
+   if (
+@@ -163,6 +189,16 @@
+   }
+ 
+   public async saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {
++    if (
++      checkpoint.checkpointVersion === 2 ||
++      this.checkpoints.get(key(checkpoint.tenantId, checkpoint.executionId))
++        ?.checkpointVersion === 2
++    ) {
++      throw new CheckpointError(
++        'checkpoint_version',
++        'V2 checkpoints require compareAndSwapCheckpoint'
++      )
++    }
+     validateCheckpointIntegrity(checkpoint, {
+       tenantId: checkpoint.tenantId,
+       executionId: checkpoint.executionId
+@@ -171,6 +207,50 @@
+       key(checkpoint.tenantId, checkpoint.executionId),
+       copy(checkpoint)
+     )
++  }
++
++  public async compareAndSwapCheckpoint(
++    input: CheckpointCompareAndSwapInput
++  ): Promise<CheckpointCompareAndSwapResult> {
++    // The entire comparison/validation/replacement is synchronous: no await gap.
++    validateCheckpointIntegrity(input.next, input)
++    const identity = key(input.tenantId, input.executionId)
++    const current = this.checkpoints.get(identity) ?? null
++    if (current) validateCheckpointIntegrity(current, input)
++    if (
++      input.expected &&
++      input.expected.checkpointId === input.next.checkpointId
++    ) {
++      throw new CheckpointError(
++        'checkpoint_integrity',
++        'CAS requires a fresh checkpoint ID'
++      )
++    }
++    const token = current
++      ? { checkpointId: current.checkpointId, digest: current.digest }
++      : undefined
++    if (
++      input.expected === null
++        ? current !== null
++        : !current ||
++          input.expected.checkpointId !== current.checkpointId ||
++          input.expected.digest !== current.digest
++    ) {
++      return { status: 'CONFLICT', ...(token ? { currentToken: token } : {}) }
++    }
++    validateCompleteCheckpointTransition(current, input.next)
++    const next = copy(input.next)
++    if (next.checkpointVersion === 2) {
++      // Exercise the same physical codec as PG without leaking its wrapper to callers.
++      const state = decodeCompleteCheckpointState(
++        encodeCompleteCheckpointState(next.state)
++      )
++      this.checkpoints.set(identity, { ...next, state })
++    } else this.checkpoints.set(identity, next)
++    return {
++      status: 'APPLIED',
++      token: { checkpointId: next.checkpointId, digest: next.digest }
++    }
+   }
+ 
+   public async loadCheckpoint(

@@ -1,0 +1,118 @@
+"""Independent raw response/decision accounting reconstruction, no CVG imports."""
+import hashlib
+import json
+import math
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+raw = path.read_bytes()
+cases = json.loads(raw)
+checks = 0
+snapshots = 0
+canonical = lambda v: json.dumps(v, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+sha = lambda b: hashlib.sha256(b).hexdigest()
+toy = lambda v: math.ceil(len(canonical(v)) / 64)
+
+
+def check(value, message):
+    global checks
+    checks += 1
+    if not value:
+        raise AssertionError(message)
+
+
+def checkpoint(cp):
+    global snapshots
+    if cp is None or cp['checkpointVersion'] != 2:
+        return
+    snapshots += 1
+    unsigned = {k: v for k, v in cp.items() if k not in ['checkpointId', 'createdAt', 'digest']}
+    check(sha(b'cvg.checkpoint.v2\n' + canonical(unsigned)) == cp['digest'], 'CP domain digest')
+    check(cp['budgetUsage']['steps'] >= cp['stepNumber'] == cp['state']['stepNumber'], 'CP native step count')
+
+
+check([c['case'] for c in cases] == ['RR%02d' % i for i in range(1, 14)], 'Thirteen required cases')
+reports = []
+for case in cases:
+    cid = case['case']
+    requests = case['requests']
+    results = case['modelResults']
+    entries = case['modelEntryCheckpoints']
+    final = case['checkpoint']
+    checkpoint(final)
+    check(case['checkpointWriteErrors'] == [], cid + ': hidden CAS error')
+    check(case['bodies'] == len(case['journals']) == 1, cid + ': tool replay/missing journal')
+    journal = case['journals'][0]
+    check(journal['state'] == 'CONFIRMED', cid + ': tool not confirmed')
+    check(journal['result'] == case['output'], cid + ': journal result changed')
+    check(case['expected'] == 'sha256:' + sha(canonical(case['output'])), cid + ': fixture expected digest')
+    check(len(requests) == len(results) == len(entries) == case['result']['modelCalls'], cid + ': actual model count')
+    actual = {k: sum(r[k] for r in results) for k in ['inputTokens', 'outputTokens', 'costUsd']}
+    for key, value in actual.items():
+        check(case['result']['usage'][key] == value == final['budgetUsage'][key], cid + ': native shared usage ' + key)
+    check(final['budgetUsage']['modelCalls'] == len(requests), cid + ': durable call count')
+    receipts = final['state'].get('toolResultContext', {}).get('decisionAdmissions', [])
+    orchestration = [(q, r) for q, r in zip(requests, results) if q['purpose'] == 'ORCHESTRATION']
+    check(len(receipts) == len(orchestration) == case['measurements'], cid + ': decision accounting ownership')
+    for receipt, (request, result) in zip(receipts, orchestration):
+        check(receipt['status'] == 'SETTLED', cid + ': receipt not settled')
+        check(receipt['requestSha256'] == sha(canonical(request)), cid + ': decision request binding')
+        check(receipt['resultSha256'] == sha(canonical(result)), cid + ': decision result binding')
+        check(receipt['measurement']['inputUpperBoundTokens'] == toy(request), cid + ': declared Toy64 input')
+        check(receipt['reserved']['outputTokens'] == request['maxOutputTokens'] == 512, cid + ': unchanged decision cap')
+        check(receipt['actual'] == dict(modelCalls=1, inputTokens=result['inputTokens'], outputTokens=result['outputTokens'], costUsd=result['costUsd']), cid + ': actual receipt usage')
+    for request, result, cp in zip(requests, results, entries):
+        checkpoint(cp)
+        check(result['inputTokens'] == toy(request) and result['outputTokens'] == toy(result['text']), cid + ': actual synthetic usage')
+        check(result['provider'] == 'synthetic.response' and result['model'] == 'toy64-v1' and result['costUsd'] == 0, cid + ': synthetic pair')
+        if cid in ['RR04', 'RR13']:
+            check(request['messages'][1]['content'] == case['input']['userMessage'], 'Legacy wire changed')
+            continue
+        check(len(request['messages']) == 2, cid + ': message count')
+        check(len(request['messages'][0]['content']) <= 16000 and len(request['messages'][1]['content']) <= 32000, cid + ': message limits')
+        check(len(canonical(request)) <= 131072, cid + ': request byte limit')
+        frame = json.loads(request['messages'][1]['content'])
+        check(frame['schema'] == 'cvg.decision-context' and frame['version'] == 1, cid + ': frame schema')
+        tool_items = [i for i in frame['items'] if i['priority'] == 'FRESH_TOOL_RESULTS']
+        observations = [o for o in cp['state']['observations'] if o['type'] == 'TOOL_RESULT']
+        check(len(tool_items) == len(observations), cid + ': required actual model-entry observations')
+        for item, observation in zip(tool_items, observations):
+            check(item['trust'] == 'UNTRUSTED' and item['value'] == observation, cid + ': selected full observation')
+            payload = observation['payload']
+            check(payload['output'] == case['output'] and payload['completion'] == 'COMPLETE', cid + ': actual full output')
+            check(payload['outputBytes'] == len(canonical(case['output'])) and payload['outputSha256'] == sha(canonical(case['output'])), cid + ': full value byte/hash')
+        if request['purpose'] == 'RESPONSE':
+            check(len(observations) == 1, cid + ': response has no full durable result')
+            check(result['text'] == case['expected'], cid + ': response not frame-grounded')
+            check('maxOutputTokens' not in request, cid + ': new response output contract invented')
+        if cid == 'RR08':
+            for marker in ['UNTRUSTED_TOOL_224', 'UNTRUSTED_USER_224', 'UNTRUSTED_INTENT_224']:
+                check(marker not in request['messages'][0]['content'] and marker in request['messages'][1]['content'], 'Data became system instruction or was lost')
+    if cid in ['RR03', 'RR07']:
+        check(requests == [] and case['contextBuilds'] == 3, cid + ': incomplete selection/framing called model')
+        check('CONTEXT_OVERFLOW' in case['result']['response'] and case['result']['stopReason'] == final['state']['stopReason'] == 'INSUFFICIENT_EVIDENCE', cid + ': no durable context refusal')
+    elif cid in ['RR10', 'RR11', 'RR12', 'RR13']:
+        check(case['result']['stopReason'] == final['state']['stopReason'] == 'INSUFFICIENT_EVIDENCE', cid + ': fault not durably conservative')
+        check(len(requests) == 1 == final['budgetUsage']['modelCalls'], cid + ': duplicated fault-path call')
+        if cid in ['RR11', 'RR12']:
+            check(len(case['auditVetoes']) == 1, cid + ': missing actual audit veto')
+    elif cid == 'RR06':
+        check([q['purpose'] for q in requests] == ['ORCHESTRATION', 'ORCHESTRATION'], 'Budget refusal called RESPONSE')
+        check(case['result']['stopReason'] == final['state']['stopReason'] == 'MAX_MODEL_CALLS', 'No durable budget refusal')
+        check(final['stepNumber'] == final['budgetUsage']['steps'] == 2, 'Failed response step not recorded')
+        check(any(s['stepNumber'] == 2 and s['stepType'] == 'RESPOND' and s['status'] == 'FAILED' for s in case['nativeSteps']), 'No actual native failed RESPOND')
+    else:
+        check(case['result']['stopReason'] == final['state']['stopReason'] == 'COMPLETED', cid + ': positive incomplete')
+        if cid != 'RR04':
+            check(case['result']['response'] == case['expected'], cid + ': wrong final digest')
+    if cid != 'RR13':
+        check(final['stepNumber'] == final['state']['stepNumber'] == final['budgetUsage']['steps'] == 2, cid + ': acknowledged native terminal cursor')
+        check('acceptedDecision' not in final['state'].get('toolResultContext', {}), cid + ': accepted decision not cleared')
+        status = 'FAILED' if cid in ['RR03', 'RR06', 'RR07', 'RR10'] else 'SUCCEEDED'
+        check(any(s['stepNumber'] == 2 and s['stepType'] == 'RESPOND' and s['status'] == status for s in case['nativeSteps']), cid + ': terminal step contradicts native acknowledged fact')
+    reports.append({'case': cid, 'actualPurposes': [q['purpose'] for q in requests], 'actualCalls': len(requests),
+                    'nativeDecisionReceipts': len(receipts), 'nativeUsage': actual, 'durableStop': final['state']['stopReason']})
+print(json.dumps({'status': 'PASS_SCOPED_RESPONSE_RAW_RECONSTRUCTION', 'checks': checks, 'checkpointOccurrences': snapshots,
+                  'cases': reports, 'source': str(path), 'sourceSHA256': sha(raw),
+                  'limits': 'Synthetic Toy64, native memory/public factory. No real tokenizer/billing/PG/publishedconsumer/global proof.'}, indent=2))

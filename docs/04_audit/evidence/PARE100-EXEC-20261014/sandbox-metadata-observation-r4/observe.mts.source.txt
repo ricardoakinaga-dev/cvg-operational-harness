@@ -1,0 +1,234 @@
+import type {
+  CapabilityDescriptor,
+  ModelGateway,
+  Orchestrator,
+  RuntimeInput,
+  SandboxGate,
+  SandboxMode,
+  ToolDefinition,
+  ToolExecutionContext,
+  ToolResult,
+} from "@cvg/harness-contracts";
+import {
+  createCapabilityRegistry,
+  createOperationalHarness,
+  InMemoryEffectJournal,
+  InMemoryKernelLog,
+} from "../worktree/packages/harness/src/index.ts";
+import {
+  InMemoryApprovalEngine,
+  RecordingAuditSink,
+  RecordingTelemetrySink,
+  ScriptedPolicyEngine,
+  phase3AgentProfile,
+  phase3RuntimeInput,
+} from "../worktree/packages/harness/src/__tests__/fixtures/phase3-fixtures.ts";
+
+const id = "synthetic.sandbox.metadata";
+const version = "1.0.0";
+const echo = Object.freeze({ text: "synthetic echo only" });
+
+// Explicitly preserve otherwise non-JSON data; no silent function/undefined loss.
+function capture(value: unknown, depth = 0): unknown {
+  if (depth > 64) throw new Error("observation depth exceeded");
+  if (value === undefined) return { $type: "undefined" };
+  if (typeof value === "function") return { $type: "function" };
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value instanceof AbortSignal) {
+    return {
+      $type: "AbortSignal",
+      aborted: value.aborted,
+      reason: capture(value.reason, depth + 1),
+    };
+  }
+  if (Array.isArray(value))
+    return value.map((item) => capture(item, depth + 1));
+  if (typeof value !== "object")
+    throw new Error("unsupported observation value");
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) {
+    throw new Error("unsupported observation object");
+  }
+  const result: Record<string, unknown> = {};
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw new Error("unsupported observation key");
+    const property = Object.getOwnPropertyDescriptor(value, key);
+    if (!property || !("value" in property)) {
+      throw new Error("observation getter refused");
+    }
+    result[key] = capture(property.value, depth + 1);
+  }
+  return result;
+}
+
+async function observe(route: "direct" | "capability", mode: SandboxMode) {
+  const caseId = `${route}-${mode}`;
+  const bodyCalls: unknown[] = [];
+  const gateCalls: unknown[] = [];
+  const modelCalls: unknown[] = [];
+  const decisions: unknown[] = [];
+  const operationKey = `sandbox-metadata-${caseId}`;
+  const descriptor: CapabilityDescriptor = {
+    id,
+    version,
+    description: "Synthetic memory-only metadata observation",
+    inputSchema: { type: "object", required: ["text"] },
+    outputSchema: { type: "object", required: ["text"] },
+    risk: "LOW",
+    sideEffect: "NONE",
+    sandbox: mode,
+    idempotent: true,
+    requiresApproval: false,
+    origin: "core",
+    providerId: "synthetic-memory",
+    providerVersion: "1.0.0",
+  };
+  const execute = async (
+    input: unknown,
+    context: ToolExecutionContext,
+  ): Promise<ToolResult> => {
+    bodyCalls.push(capture({ input, context }));
+    return { status: "SUCCEEDED", output: { ...echo } };
+  };
+  const registry =
+    route === "capability"
+      ? createCapabilityRegistry().register({
+          descriptor,
+          implementation: {
+            validateInput: (input) =>
+              typeof input === "object" &&
+              input !== null &&
+              Object.keys(input).length === 1 &&
+              (input as Record<string, unknown>).text === echo.text,
+            execute,
+            validateOutput: (output) =>
+              typeof output === "object" &&
+              output !== null &&
+              Object.keys(output).length === 1 &&
+              (output as Record<string, unknown>).text === echo.text,
+          },
+        })
+      : undefined;
+  const rawTool: ToolDefinition = { ...descriptor, execute };
+  const gate: SandboxGate = {
+    evaluate: async (input) => {
+      gateCalls.push(capture(input));
+      return { kind: "denied", reason: "synthetic deny, no native backend" };
+    },
+  };
+  const modelGateway: ModelGateway = {
+    complete: async (request) => {
+      modelCalls.push(capture(request));
+      throw new Error("This fixture must never call a model");
+    },
+  };
+  const invocation = {
+    toolId: id,
+    toolVersion: version,
+    operationKey,
+    input: echo,
+  };
+  const orchestrator: Orchestrator = {
+    decideNextStep: async (input) => {
+      const decision = {
+        action: "CALL_TOOL" as const,
+        toolInvocation: invocation,
+      };
+      decisions.push(capture({ input, decision }));
+      return decision;
+    },
+  };
+  const audit = new RecordingAuditSink();
+  const telemetry = new RecordingTelemetrySink();
+  const policy = new ScriptedPolicyEngine();
+  const approvals = new InMemoryApprovalEngine();
+  const journal = new InMemoryEffectJournal();
+  const log = new InMemoryKernelLog();
+  const harness = createOperationalHarness({
+    modelGateway,
+    orchestrator,
+    policy,
+    approvals,
+    audit,
+    telemetry,
+    effectJournal: journal,
+    log,
+    sandbox: gate,
+    ...(registry
+      ? { capabilities: registry }
+      : {
+          tools: {
+            list: () => [rawTool],
+            resolve: (toolId: string, toolVersion?: string) =>
+              toolId === id &&
+              (toolVersion === undefined || toolVersion === version)
+                ? rawTool
+                : undefined,
+          },
+        }),
+  });
+  const { executionId: omittedExecutionId, ...base } = phase3RuntimeInput({
+    runtimeProfile: "single_pass",
+    agent: phase3AgentProfile({ tools: [id] }),
+    requestedTool: invocation,
+  });
+  void omittedExecutionId;
+  const input: RuntimeInput = base;
+  const nativeInput = capture(input);
+  const beforeDescriptor = capture(descriptor);
+  const registeredDescriptors = capture(registry?.listDescriptors());
+  const nativeResult = await harness.run(input);
+  return capture({
+    caseId,
+    route,
+    mode,
+    input: nativeInput,
+    beforeDescriptor,
+    registeredDescriptors,
+    submittedDescriptor: registry ? registry.listDescriptors()[0] : rawTool,
+    capabilityFingerprint: harness.capabilityFingerprint,
+    nativeResult,
+    gateCalls,
+    bodyCalls,
+    modelCalls,
+    decisions,
+    policyEvaluations: policy.evaluations,
+    approvalRequests: approvals.requests,
+    auditEvents: audit.events,
+    telemetryEvents: telemetry.events,
+    kernelLogEvents: log.events,
+    journalRecord: await journal.get(input.tenantId, operationKey),
+  });
+}
+
+const cases = [];
+for (const [route, mode] of [
+  ["direct", "WORKSPACE"],
+  ["capability", "WORKSPACE"],
+  ["capability", "NONE"],
+] as const) {
+  cases.push(await observe(route, mode));
+}
+process.stdout.write(
+  JSON.stringify({
+    schema: "cvg-sandbox-metadata-observation-v1",
+    boundary: "public source factory, single_pass only",
+    syntheticPorts: [
+      "orchestrator",
+      "model",
+      "policy",
+      "approval",
+      "audit",
+      "telemetry",
+      "sandbox-deny",
+    ],
+    cases,
+  }) + "\n",
+);

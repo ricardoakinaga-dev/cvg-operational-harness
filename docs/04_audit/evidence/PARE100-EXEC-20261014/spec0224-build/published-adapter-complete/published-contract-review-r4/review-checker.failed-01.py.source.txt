@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Own documentary integrity checker. No product imports, tests, SQL or network.
+Run with python3 -B; every persistent output is beneath OUT.
+Closure: payloads -> inventory -> detached seal -> external final-response SHA256.
+"""
+from pathlib import Path
+import hashlib
+import json
+import os
+import re
+import stat
+
+ROOT = Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/published-contract-review-packet-r4')
+OUT = Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/published-contract-review-r4')
+MANIFEST_HASH = '045701d3f97c6b19a81b14d812044875b8c6294bf0ed03ca4c5558854edaff44'
+SPEC_HASH = 'd790f5da29eedec0090ff24e0b51d2233a732a20b60650eec291162c3c07e7a8'
+ROLES = {
+    'review.md': 'independent static technical critique, authority/transition/writer matrices and concrete counterexamples',
+    'verdict.json': 'machine-readable documentary verdict and limits',
+    'input-hashes-before.json': 'initial authentication of manifest and all 53 enumerated inputs',
+    'input-hashes-after.json': 'final authentication of the same 54 paths, with before/after comparison',
+    'future-scenarios.json': 'all 80 future scenario IDs; every status NOT_RUN',
+    'static-checks.json': 'own static integrity and coverage checks only; no runtime acceptance',
+    'review-checker.py': 'own checker/closure driver, no product execution',
+}
+INVENTORY = 'output-inventory.json'
+SEAL = 'seal.detached.json'
+
+def encode(value):
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode('utf-8')
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+def write(name, value):
+    (OUT / name).write_bytes(encode(value))
+
+def regular(path):
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise RuntimeError('non-regular input/output: ' + str(path))
+
+def file_record(name, role):
+    p = OUT / name
+    regular(p)
+    data = p.read_bytes()
+    return {'path': name, 'type': 'regular_file', 'role': role,
+            'category': 'empty' if not data else 'ordinary',
+            'bytes': len(data), 'sha256': digest(data)}
+
+def scan():
+    files, directories = [], []
+    for directory, dirnames, filenames in os.walk(OUT, followlinks=False):
+        parent = Path(directory)
+        for name in dirnames:
+            if not stat.S_ISDIR((parent / name).lstat().st_mode):
+                raise RuntimeError('symlink/special directory in output')
+        directories.append(str(parent.relative_to(OUT)) or '.')
+        for name in filenames:
+            regular(parent / name)
+            files.append(str((parent / name).relative_to(OUT)))
+    return sorted(files), sorted(directories)
+
+manifest_data = (ROOT / 'manifest.json').read_bytes()
+manifest = json.loads(manifest_data)
+assert manifest['ownedOutput'] == str(OUT)
+assert manifest['readRoot'] == str(ROOT)
+assert len(manifest['inputs']) == 53
+records = [{'id': 'manifest.json', 'path': str(ROOT / 'manifest.json'),
+            'bytes': len(manifest_data), 'sha256': digest(manifest_data),
+            'expected_sha256': MANIFEST_HASH}]
+for item in manifest['inputs']:
+    path = Path(item['copy'])
+    assert path.is_relative_to(ROOT)
+    regular(path)
+    data = path.read_bytes()
+    records.append({'id': item['id'], 'path': str(path), 'bytes': len(data),
+                    'sha256': digest(data), 'expected_bytes': item['bytes'],
+                    'expected_sha256': item['sha256']})
+errors = [v['id'] for v in records if v['sha256'] != v['expected_sha256']
+          or v['bytes'] != v.get('expected_bytes', v['bytes'])]
+before = json.loads((OUT / 'input-hashes-before.json').read_bytes())
+before_by_id = {v['id']: v for v in before['records']}
+drift = [v['id'] for v in records if v['id'] not in before_by_id
+         or (v['bytes'], v['sha256'], v['path']) !=
+         (before_by_id[v['id']]['bytes'], before_by_id[v['id']]['sha256'], before_by_id[v['id']]['path'])]
+assert len(before_by_id) == len(records) == 54
+write('input-hashes-after.json', {'input_count': 53, 'manifest_count': 1,
+      'errors': errors, 'drift_since_before': drift, 'records': records})
+assert not errors and not drift, 'Input integrity failure; preserved all inputs'
+inputs = {v['id']: v for v in manifest['inputs']}
+assert inputs['PROPOSED-SPEC.md']['sha256'] == SPEC_HASH
+source_manifest = json.loads(Path(inputs['source-manifest.json']['copy']).read_bytes())
+binding_errors = []
+for source in source_manifest['sources']:
+    copy = inputs.get(source['id'])
+    if not copy or any(source[k] != copy[k] for k in ('relative', 'bytes', 'sha256')):
+        binding_errors.append(source['id'])
+assert len(source_manifest['sources']) == 49 and not binding_errors
+plan = Path(inputs['ACCEPTANCE-PLAN.md']['copy']).read_text()
+scenarios = []
+for number, line in enumerate(plan.splitlines(), 1):
+    match = re.match(r'^\|\s*((?:PA|Q|R|C|W|U)\d{2})\s+NOT_RUN\b', line)
+    if match:
+        scenarios.append({'id': match.group(1), 'status': 'NOT_RUN',
+                          'anchor': 'ACCEPTANCE-PLAN.md:' + str(number),
+                          'normative_row': line, 'executed_by_review': False})
+expected = [f'{prefix}{n:02}' for prefix, count in [('PA',18),('Q',8),('R',17),('C',13),('W',14),('U',10)]
+assert len(scenarios) == 80 and sorted(v['id'] for v in scenarios) == sorted(expected)
+write('future-scenarios.json', {'scope': 'future normative scenarios only; no test ran',
+      'counts': {'total': 80, 'NOT_RUN': 80, 'PASS': 0, 'FAIL': 0},
+      'variants_and_gates': 'All NOT_RUN; not compressed into an executed status',
+      'scenarios': scenarios})
+links = []
+for name in ['PROPOSED-SPEC.md','ACCEPTANCE-PLAN.md','DECISIONS-AND-RISKS.md']:
+    text = Path(inputs[name]['copy']).read_text()
+    for target in re.findall(r'\]\(([^)]+)\)', text):
+        base = target.split('#')[0]
+        links.append({'source': name, 'target': target, 'enumerated_sibling': base in inputs})
+assert all(v['enumerated_sibling'] for v in links)
+verdict = json.loads((OUT / 'verdict.json').read_bytes())
+assert verdict['verdict'] == 'APPROVE_FOR_HUMAN_TECHNICAL_REVIEW'
+assert verdict['material_findings'] == [] and verdict['future_scenarios']['NOT_RUN'] == 80
+assert verdict['spec_sha256'] == SPEC_HASH and verdict['manifest_sha256'] == MANIFEST_HASH
+files, dirs = scan()
+assert set(files) <= set(ROLES) | {INVENTORY, SEAL}
+assert dirs == ['.']
+write('static-checks.json', {
+    'status': 'VERIFIED_STATIC_BYTES_AND_REGISTER_ONLY',
+    'checker_failure_count': 0, 'known_driver_exit_failures': 0,
+    'manifest_and_inputs_checked': 54, 'input_hash_errors': errors,
+    'input_drift': drift, 'source_bindings': 49, 'source_binding_errors': binding_errors,
+    'normative_sibling_links': links,
+    'scenario_register_count': 80, 'all_future_tests': 'NOT_RUN',
+    'acceptance_tests_executed': 0, 'product_code_executed': False,
+    'sql_or_ddl_executed': False, 'pg_network_provider_access': False,
+    'descendants_created': False, 'originals_read_or_written': False,
+    'tool_output_limitations': 'Some combined read outputs truncated; normative documents completed via numbered windows. Static excerpts are not exhaustive source audit.',
+    'closure_protocol': 'payload SHA256 -> inventory SHA256 in detached seal -> detached seal SHA256 external final response. No self hashes.'
+})
+payloads = [file_record(name, role) for name, role in sorted(ROLES.items())]
+files, dirs = scan()
+assert set(files) - {INVENTORY, SEAL} == set(ROLES)
+inv_size = seal_size = 0
+for _ in range(20):
+    inventory = {
+        'schema': 'cvg.independent-review-output-inventory/1',
+        'output_root': str(OUT),
+        'directories': [{'path': v, 'type': 'directory', 'role': 'exclusive review output root',
+                         'bytes': None, 'sha256': None,
+                         'hash_note': 'Directory structure entry; not a byte payload'} for v in dirs],
+        'payloads': payloads,
+        'envelope_files': [
+            {'path': INVENTORY, 'type': 'regular_file', 'category': 'ordinary',
+             'role': 'complete output inventory; detached-bound envelope', 'bytes': inv_size,
+             'sha256_binding': SEAL + '#/inventory/sha256'},
+            {'path': SEAL, 'type': 'regular_file', 'category': 'ordinary',
+             'role': 'detached integrity root covering inventory and every payload', 'bytes': seal_size,
+             'sha256_binding': 'Exact SHA256 supplied externally in final assistant response'}],
+        'counts': {'regular_files': 9, 'payload_files': 7, 'envelope_files': 2,
+                   'directories_including_root': len(dirs), 'empty_files': 0,
+                   'empty_directories': 0, 'cache_files': 0, 'temp_files': 0,
+                   'symlinks': 0, 'special_files': 0},
+        'closure': {'non_circular': True,
+                    'edges': ['payload bytes -> hashes in inventory and seal',
+                              'inventory bytes -> hash in detached seal',
+                              'detached seal bytes -> external final-response hash'],
+                    'self_digest_entries': 'Deliberately absent; hash locations explicit above',
+                    'signature': 'None; SHA256 integrity seal, no identity attestation'}}
+    inv_bytes = encode(inventory)
+    seal = {'schema': 'cvg.independent-review-detached-integrity-seal/1',
+            'algorithm': 'SHA-256', 'signature': None,
+            'verdict': verdict['verdict'], 'spec_sha256': SPEC_HASH,
+            'input_manifest_sha256': MANIFEST_HASH,
+            'inventory': {'path': INVENTORY, 'type': 'regular_file',
+                          'bytes': len(inv_bytes), 'sha256': digest(inv_bytes)},
+            'payloads': payloads,
+            'coverage': 'Every output payload and complete inventory; directories/caches/temp/empty entries in inventory',
+            'external_root': 'Hash this detached seal and compare with final assistant response; no circular self coverage'}
+    seal_bytes = encode(seal)
+    sizes = (len(inv_bytes), len(seal_bytes))
+    if sizes == (inv_size, seal_size):
+        break
+    inv_size, seal_size = sizes
+else:
+    raise RuntimeError('Envelope length closure failed')
+(OUT / INVENTORY).write_bytes(inv_bytes)
+(OUT / SEAL).write_bytes(seal_bytes)
+# Post-write verification is read-only and emits no extra filesystem artifacts.
+files_final, dirs_final = scan()
+assert set(files_final) == set(ROLES) | {INVENTORY, SEAL}
+assert dirs_final == dirs
+for record in payloads + [seal['inventory']]:
+    data = (OUT / record['path']).read_bytes()
+    assert len(data) == record['bytes'] and digest(data) == record['sha256']
+assert len((OUT / INVENTORY).read_bytes()) == inv_size
+assert len((OUT / SEAL).read_bytes()) == seal_size
+assert not any((OUT / name).stat().st_size == 0 for name in files_final)
+# Recheck every input again after closure serialization; no writes after this point.
+for record in records:
+    data = Path(record['path']).read_bytes()
+    assert len(data) == record['bytes'] and digest(data) == record['sha256']
+print(json.dumps({'verdict': verdict['verdict'], 'input_files_verified':54,
+      'input_hash_or_drift_errors':0, 'future_NOT_RUN':80, 'output_files':len(files_final),
+      'directories':dirs_final, 'empty_cache_temp_special':0,
+      'inventory_sha256':digest(inv_bytes), 'seal_sha256':digest(seal_bytes),
+      'report_sha256':digest((OUT/'review.md').read_bytes()),
+      'spec_sha256':SPEC_HASH, 'post_write_verification':'VERIFIED',
+      'checker_failures':0},ensure_ascii=False,indent=2))

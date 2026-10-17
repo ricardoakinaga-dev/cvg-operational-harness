@@ -1,0 +1,54 @@
+# F-BUILD-001 Builder handoff — IMPLEMENTED, independent review pending
+
+Only W/scripts/build-runtime.mjs changed by this Builder: append `src/**/*.json` to each generated project's existing TypeScript include. All other script bytes match the saved preimage, including 19 workspaces, flags, exclusions, packaging, safe-context guard and failure handling. Rationale: composite TypeScript projects require explicitly included JSON inputs when `resolveJsonModule` imports them.
+
+W: `/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree`
+Evidence: `/tmp/cvg-pare100-exec-20261014-6az3hlay/spec217-build/build-runtime-json-r8`
+Fixture: `/tmp/cvg-pare100-exec-20261014-6az3hlay/spec217-build/build-runtime-json-r8/fixture`
+Preimage SHA256: `dcd7b864cc56c69b1f39723cab0a6ec8bd618d90761222da5ec4f280144ade5e`
+Changed script SHA256: `4ed82a15728a485d0e7adc86f8d966bd27014282e800156e95bbb39e9acff81d`
+Patch: `build-runtime.diff`; Git diff: `git-diff.stdout.log`; Git whitespace check exit0.
+
+## Actual bounded runs
+
+Node v22.23.2, TypeScript6.0.3, ESLint10.2.1, Prettier3.8.3. `environment.json` enumerates the private HOME/XDG/TMPDIR and PATH. Configs are under own TMPDIR/cvg-runtime-tsconfigs; safe context is own TMPDIR/cvg-runtime-json-r8. Every build used the actual standard script by Node CLI, never a W/public build. Commands, cwd, full environment, child PIDs, bounds, exits, complete stdout/stderr, byte counts and SHA256 are in `runs/<name>/command.json`, `result.json`, `stdout.log`, `stderr.log`. Every child completed within bounds, no termination. No application module was imported or executed.
+
+| Run | Exit | Duration |
+| --- | ---: | ---: |
+| `lint` | 0 | 1.001s |
+| `green-incomplete-fixture` | 1 | 7.608s |
+| `mutation` | 0 | 8.609s |
+| `green` | 0 | 8.808s |
+| `versions` | 0 | 0.201s |
+| `unsafe` | 1 | 10.614s |
+| `red-complete` | 1 | 6.406s |
+| `format` | 0 | 0.201s |
+| `red` | 1 | 6.006s |
+| `independent-mutation` | 0 | 0.601s |
+| `independent-green` | 0 | 0.802s |
+
+RED from the completed fixture starts with actual TS6307 for contracts/session-event-schemas.v1.json, then dependent non-emission cascades; builder exits1 with tsc_exit:1. That same completed physical fixture succeeds after only switching to the changed script. The original RED is also retained. Generated config comparison confirms all 21 config files preserve every field except the appended JSON input in exactly19 projects. The runtime source globs cover264 TS files plus1 JSON. Build output and context inventories are retained under `artifacts/red`, `artifacts/red-complete`, `artifacts/green`, `artifacts/mutation`.
+
+## Output and mutation evidence
+
+Green source JSON: 6075bytes, `ab37e629aa3f3c91ac72b1dd6debdfe5e23567f6b7c14edb65770bdd9bc9d7fd`.
+Green compiler JSON: 7515bytes, `b31cd3103f1cfdb2dc86ee626e424dff67191214ee3085fb29ec393f2c5f7158`.
+Source and emit are semantically identical; their bytes differ because of compiler formatting, as independently observed. A new JSON-only TypeScript composite project emitted to a previously absent separate directory; its bytes match the runtime build's JSON exactly. Context equals that fresh emission byte for byte. No source formatting was changed.
+
+One fixture-only data value changed: definitions.id.maxLength200→201, by same-length literal byte replacement. Rebuilding the same script succeeded. Mutated source hash `0a914fadd576659d29073924f35877f37b2c6d51135d30003425fc48c325278d`; new dist/context/independent-fresh-emit hash `cb869c5c9212f693959507dad5bec13daed88e53385bfe2d3543da42c367fb39`. All parsed values correspond, new data reaches dist and context, and API/worker entrypoint hashes remain unchanged. This proves fresh propagation rather than reuse of prior data.
+
+Runtime manifest: `artifacts/green/context/runtime-context.json`, SHA256 `8ad027300a00e9004d46292748064d21577182bdae2dbe0e6f66c3b1a37b51f5`. It lists the exact original19 workspaces, sourceIncluded:false and testIncluded:false. All877 context files were inspected: no src paths, test files, __tests__ paths or executable TS source;264 declaration files are allowed metadata. All876 packaged files other than the generated runtime manifest match fixture bytes, including dist, package/lock manifests, migrations and utility scripts. Actual compiled `apps/api/dist/main.js` and `apps/worker/dist/main.js` exist in dist and context.
+
+Unsafe context check: actual builder compiles, then refuses `/tmp/cvg-pare100-exec-20261014-6az3hlay/spec217-build/build-runtime-json-r8/unsafe-context` with exit1/unsafe_context_dir. Target sentinel and the entire prior safe context remain byte-identical; `unsafe-checks.json` records the comparison.
+
+## Integrity exception requiring Lead reconciliation
+
+Before any W change, all465 composition pins matched the proposal. Final comparison found464/465 matching. Concurrent external drift occurred in `apps/worker/src/__tests__/pare217-published-profile.test.ts`: approved/preimage/fixture SHA256 `ac4415f27a34160fbfdc2b834916703c1c1753522d4bc0cd6239f8c822f4a6b5`, current W SHA256 `aae7efc5a067dc1501f2d83f3d8f60d92c1ec6e0b5ff63bf68feb4f906cc845c`. Coordination also changed concurrently. This Builder did not modify or restore either file. All497 observed inputs and all465 pins have pre/post records in `w-frozen-inputs-*.json`; no other non-operational drift was found. The fixture retains the approved frozen profile-test bytes. **Do not claim all W pins preserved or transfer fixture evidence as acceptance of the changed W test.** `finalize-attempt1.json` preserves the initial failing integrity assertion.
+
+## Fixture preparation and scope limits
+
+Physical copies only, no hardlinked regular files or source symlink to W;49 relative dependency links remain confined to the fixture. The first preparation excluded dependency dist accidentally and failed link validation before build; the incomplete fixture and error record remain. The first patched compile removed TS6307 but exposed missing existing sandbox dist in the incomplete fixture; its full failure/output remain. Required sandbox src/dist/tsconfig were copied read-only from W into the same fixture, preserving package manifests and the builder's original19 workspaces, then completed-fixture RED and GREEN were repeated. No sandbox/runtime/workspace fix was made; shipping behavior for this pre-existing dependency remains outside this task.
+
+Format and lint each exit0 for the exact changed script using physically copied tools/config. No existing tests were changed or run. No install/network/Docker/PG/E2E/certify/SBOM/license, service, credentials, production action, descendant, commit, push, root-shared mutation or W ledger mutation. Evidence collection helpers are disposable tooling, not new implementation tests. Lead owns runtime/log/backlog updates under the explicit write restriction.
+
+Next: Lead reconciles the external frozen pin drift, then an independent critic examines this exact script delta and evidence. No self-approval, P100-050 closure, integration or release is granted.

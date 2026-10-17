@@ -1,0 +1,880 @@
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/createOperationalHarness.ts ===
+   1 import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
+   2 import type {
+   3   AgenticKnowledgeProvider,
+   4   Claim,
+   5   CompletionEvaluator,
+   6   ContextEngine,
+   7   ExecutionStepStore,
+   8   IterativeOrchestrator,
+   9   RuntimeInput,
+  10   RuntimeProfile,
+  11   RuntimeResult,
+  12   SandboxGate,
+  13   SufficiencyEvaluator,
+  14   CapabilityRegistry,
+  15   ToolRegistry
+  16 } from '@cvg/harness-contracts'
+  17 import { createCapabilityToolRegistry } from './capability-boundary.ts'
+  18 import {
+  19   createJournaledToolRegistry,
+  20   type EffectJournal,
+  21   type JournaledToolRegistryOptions
+  22 } from './effect-journal.ts'
+  23 import {
+  24   SinglePassGovernedRuntime,
+  25   type HarnessRuntimeOptions
+  26 } from './runtime.ts'
+  27 import { IterativeGovernedRuntime } from './iterative-runtime.ts'
+  28 
+  29 export interface OperationalHarnessOptions extends Omit<
+  30   HarnessRuntimeOptions,
+  31   'orchestrator' | 'tools' | 'capabilityFingerprint'
+  32 > {
+  33   readonly orchestrator?: HarnessRuntimeOptions['orchestrator']
+  34   /**
+  35    * Explicit capability composition. Its adapter is the only runtime-facing
+  36    * registry for this path; callers cannot provide both registries.
+  37    */
+  38   readonly capabilities?: CapabilityRegistry
+  39   /** Compatibility port retained for existing Phase 2/3 consumers. */
+  40   readonly tools?: ToolRegistry
+  41   /** Required for capability composition and optional for compatibility tools. */
+  42   readonly effectJournal?: EffectJournal
+  43   readonly effectJournalOptions?: JournaledToolRegistryOptions
+  44   /**
+  45    * Required to run the iterative profile. The runtime registry resolves the
+  46    * requested profile here; the worker never selects a runtime class.
+  47    */
+  48   readonly iterativeOrchestrator?: IterativeOrchestrator
+  49   readonly stepStore?: ExecutionStepStore
+  50   readonly contextEngine?: ContextEngine
+  51   readonly knowledge?: AgenticKnowledgeProvider
+  52   readonly sufficiencyEvaluator?: SufficiencyEvaluator
+  53   readonly completionEvaluator?: CompletionEvaluator
+  54   readonly claimExtractor?: (response: string) => readonly Claim[]
+  55   readonly defaultRuntimeProfile?: RuntimeProfile
+  56   readonly clock?: () => Date
+  57   /** Optional containment gate; absent means fail-closed for contained tools. */
+  58   readonly sandbox?: SandboxGate
+  59 }
+  60 
+  61 export interface OperationalHarness {
+  62   readonly run: (input: RuntimeInput) => Promise<RuntimeResult>
+  63   readonly execute: (input: RuntimeInput) => Promise<RuntimeResult>
+  64   readonly resolveProfile: (input: RuntimeInput) => RuntimeProfile
+  65   readonly capabilityFingerprint?: string
+  66 }
+  67 
+  68 /**
+  69  * Canonical public composition root for the neutral harness packages. Product
+  70  * adapters provide the ports; this function only wires them together and
+  71  * resolves the runtime profile through a registry-like selection.
+  72  */
+  73 export function createOperationalHarness(
+  74   options: OperationalHarnessOptions
+  75 ): OperationalHarness {
+  76   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
+  77   if (options.capabilities && !options.effectJournal) {
+  78     throw new Error(
+  79       'Capability composition requires an explicit effect journal'
+  80     )
+  81   }
+  82   const tools = resolveTools(options, capabilityFingerprint)
+  83   const singlePass = new SinglePassGovernedRuntime({
+  84     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+  85     modelGateway: options.modelGateway,
+  86     policy: options.policy,
+  87     approvals: options.approvals,
+  88     tools,
+  89     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+  90     audit: options.audit,
+  91     telemetry: options.telemetry,
+  92     ...(options.pause ? { pause: options.pause } : {}),
+  93     ...(options.effects ? { effects: options.effects } : {}),
+  94     ...(options.log ? { log: options.log } : {}),
+  95     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+  96   })
+  97 
+  98   const iterative =
+  99     options.iterativeOrchestrator && options.stepStore
+ 100       ? new IterativeGovernedRuntime({
+ 101           orchestrator: options.iterativeOrchestrator,
+ 102           modelGateway: options.modelGateway,
+ 103           policy: options.policy,
+ 104           approvals: options.approvals,
+ 105           tools,
+ 106           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+ 107           audit: options.audit,
+ 108           telemetry: options.telemetry,
+ 109           ...(options.pause ? { pause: options.pause } : {}),
+ 110           ...(options.effects ? { effects: options.effects } : {}),
+ 111           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+ 112           ...(options.log ? { log: options.log } : {}),
+ 113           stepStore: options.stepStore,
+ 114           ...(options.contextEngine
+ 115             ? { contextEngine: options.contextEngine }
+ 116             : {}),
+ 117           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+ 118           ...(options.sufficiencyEvaluator
+ 119             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+ 120             : {}),
+ 121           ...(options.completionEvaluator
+ 122             ? { completionEvaluator: options.completionEvaluator }
+ 123             : {}),
+ 124           ...(options.claimExtractor
+ 125             ? { claimExtractor: options.claimExtractor }
+ 126             : {}),
+ 127           ...(options.clock ? { clock: options.clock } : {})
+ 128         })
+ 129       : undefined
+ 130 
+ 131   const resolveProfile = (input: RuntimeInput): RuntimeProfile =>
+ 132     input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+ 133 
+ 134   const execute = async (input: RuntimeInput): Promise<RuntimeResult> => {
+ 135     const governedInput = capabilityFingerprint
+ 136       ? { ...input, capabilityFingerprint }
+ 137       : input
+ 138     if (
+ 139       capabilityFingerprint &&
+ 140       input.executionId &&
+ 141       input.capabilityFingerprint === undefined
+ 142     ) {
+ 143       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+ 144       return {
+ 145         response:
+ 146           'Capability composition fingerprint is required for durable execution.',
+ 147         stopReason: 'STATE_CONFLICT',
+ 148         steps: 0,
+ 149         modelCalls: 0,
+ 150         toolCalls: 0,
+ 151         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+ 152       }
+ 153     }
+ 154     if (
+ 155       capabilityFingerprint &&
+ 156       input.capabilityFingerprint !== undefined &&
+ 157       input.capabilityFingerprint !== capabilityFingerprint
+ 158     ) {
+ 159       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+ 160       return {
+ 161         response:
+ 162           'Capability composition fingerprint does not match the runtime.',
+ 163         stopReason: 'STATE_CONFLICT',
+ 164         steps: 0,
+ 165         modelCalls: 0,
+ 166         toolCalls: 0,
+ 167         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+ 168       }
+ 169     }
+ 170     const profile = resolveProfile(governedInput)
+ 171     if (profile === 'iterative') {
+ 172       if (!iterative) {
+ 173         await safeAudit(
+ 174           options,
+ 175           governedInput,
+ 176           'runtime.stopped',
+ 177           'STATE_CONFLICT'
+ 178         )
+ 179         return {
+ 180           response:
+ 181             'The iterative runtime profile is not configured in this composition.',
+ 182           stopReason: 'STATE_CONFLICT',
+ 183           steps: 0,
+ 184           modelCalls: 0,
+ 185           toolCalls: 0,
+ 186           usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+ 187         }
+ 188       }
+ 189       return iterative.execute(governedInput)
+ 190     }
+ 191     return singlePass.execute(governedInput)
+ 192   }
+ 193 
+ 194   return {
+ 195     run: (input) => execute(input),
+ 196     execute,
+ 197     resolveProfile,
+ 198     ...(options.capabilities
+ 199       ? { capabilityFingerprint: options.capabilities.compositionFingerprint() }
+ 200       : {})
+ 201   }
+ 202 }
+ 203 
+ 204 function resolveTools(
+ 205   options: OperationalHarnessOptions,
+ 206   capabilityFingerprint: string | undefined
+ 207 ): ToolRegistry {
+ 208   if (options.capabilities && options.tools) {
+ 209     throw new Error(
+ 210       'Operational harness composition accepts capabilities or tools, not both'
+ 211     )
+ 212   }
+ 213   const registry = options.capabilities
+ 214     ? createCapabilityToolRegistry(options.capabilities)
+ 215     : options.tools
+ 216   if (!registry) {
+ 217     throw new Error(
+ 218       'Operational harness composition requires an explicit capability or tool registry'
+ 219     )
+ 220   }
+ 221   if (!options.effectJournal) return registry
+ 222   return createJournaledToolRegistry(registry, options.effectJournal, {
+ 223     ...options.effectJournalOptions,
+ 224     ...(capabilityFingerprint
+ 225       ? { compositionFingerprint: capabilityFingerprint }
+ 226       : {})
+ 227   })
+ 228 }
+ 229 
+ 230 async function safeAudit(
+ 231   options: OperationalHarnessOptions,
+ 232   input: RuntimeInput,
+ 233   action: string,
+ 234   result: string
+ 235 ): Promise<void> {
+ 236   try {
+ 237     await options.audit.append({
+ 238       actor: input.agent.id,
+ 239       agent: input.agent.id,
+ 240       tenant: input.tenantId,
+ 241       action,
+ 242       policy: null,
+ 243       approval: null,
+ 244       tool: null,
+ 245       result,
+ 246       timestamp: new Date().toISOString(),
+ 247       traceId: input.traceId,
+ 248       correlationId: input.correlationId
+ 249     })
+ 250   } catch {
+ 251     // misconfiguration must still fail closed without an unhandled error
+ 252   }
+ 253 }
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/capability-boundary.ts ===
+   1 import { createHash } from 'node:crypto'
+   2 import type {
+   3   CapabilityDescriptor,
+   4   CapabilityImplementation,
+   5   CapabilityOrigin,
+   6   CapabilityRegistration,
+   7   CapabilityRegistry as CapabilityRegistryPort,
+   8   ToolDefinition,
+   9   ToolExecutionContext,
+  10   ToolRegistry,
+  11   ToolResult
+  12 } from '@cvg/harness-contracts'
+  13 
+  14 const CAPABILITY_ID_PATTERN = /^[A-Za-z0-9._:-]+$/
+  15 const MAX_ID_LENGTH = 120
+  16 const MAX_VERSION_LENGTH = 80
+  17 const MAX_DESCRIPTION_LENGTH = 4000
+  18 const MAX_JSON_DEPTH = 64
+  19 const MAX_JSON_NODES = 20_000
+  20 const MAX_JSON_STRING_LENGTH = 16_384
+  21 const MAX_JSON_KEY_LENGTH = 512
+  22 const MAX_JSON_KEYS = 512
+  23 const MAX_JSON_ARRAY_LENGTH = 512
+  24 const MAX_JSON_BYTES = 256 * 1024
+  25 const UNSAFE_JSON_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+  26 const AUTHORITY_FIELDS = [
+  27   'tenantId',
+  28   'agentId',
+  29   'correlationId',
+  30   'traceId'
+  31 ] as const
+  32 const ORIGINS: readonly CapabilityOrigin[] = [
+  33   'core',
+  34   'skill',
+  35   'plugin',
+  36   'knowledge',
+  37   'mcp'
+  38 ]
+  39 
+  40 export type CapabilityRegistryErrorCode =
+  41   | 'invalid_descriptor'
+  42   | 'invalid_implementation'
+  43   | 'duplicate_capability'
+  44 
+  45 export class CapabilityRegistryError extends Error {
+  46   public readonly code: CapabilityRegistryErrorCode
+  47 
+  48   public constructor(code: CapabilityRegistryErrorCode, message: string) {
+  49     super(message)
+  50     this.name = 'CapabilityRegistryError'
+  51     this.code = code
+  52   }
+  53 }
+  54 
+  55 interface StoredRegistration {
+  56   readonly descriptor: CapabilityDescriptor
+  57   readonly implementation: CapabilityImplementation
+  58 }
+  59 
+  60 const registrationsByRegistry = new WeakMap<
+  61   object,
+  62   readonly StoredRegistration[]
+  63 >()
+  64 
+  65 /**
+  66  * Explicit, immutable capability composition for the neutral harness.
+  67  * Implementations are retained in a private module-owned store. The
+  68  * executable adapter is only reachable from the composition root.
+  69  */
+  70 export class CapabilityRegistry implements CapabilityRegistryPort {
+  71   public constructor(registrations: readonly CapabilityRegistration[] = []) {
+  72     const stored: StoredRegistration[] = []
+  73     for (const registration of registrations) {
+  74       const normalized = normalizeRegistration(registration)
+  75       if (
+  76         stored.some(
+  77           (candidate) =>
+  78             candidate.descriptor.id === normalized.descriptor.id &&
+  79             candidate.descriptor.version === normalized.descriptor.version
+  80         )
+  81       ) {
+  82         throw new CapabilityRegistryError(
+  83           'duplicate_capability',
+  84           `Capability already registered: ${normalized.descriptor.id}@${normalized.descriptor.version}`
+  85         )
+  86       }
+  87       stored.push(normalized)
+  88     }
+  89     registrationsByRegistry.set(this, Object.freeze(stored))
+  90   }
+  91 
+  92   public register(registration: CapabilityRegistration): CapabilityRegistry {
+  93     const normalized = normalizeRegistration(registration)
+  94     if (
+  95       getRegistrations(this).some(
+  96         (candidate) =>
+  97           candidate.descriptor.id === normalized.descriptor.id &&
+  98           candidate.descriptor.version === normalized.descriptor.version
+  99       )
+ 100     ) {
+ 101       throw new CapabilityRegistryError(
+ 102         'duplicate_capability',
+ 103         `Capability already registered: ${normalized.descriptor.id}@${normalized.descriptor.version}`
+ 104       )
+ 105     }
+ 106 
+ 107     return CapabilityRegistry.fromStored([
+ 108       ...getRegistrations(this),
+ 109       normalized
+ 110     ])
+ 111   }
+ 112 
+ 113   public listDescriptors(): readonly CapabilityDescriptor[] {
+ 114     return sorted(getRegistrations(this)).map(({ descriptor }) =>
+ 115       cloneDescriptor(descriptor)
+ 116     )
+ 117   }
+ 118 
+ 119   public resolveDescriptor(
+ 120     capabilityId: string,
+ 121     version: string
+ 122   ): CapabilityDescriptor | undefined {
+ 123     if (!isBoundedIdentifier(capabilityId, MAX_ID_LENGTH)) return undefined
+ 124     if (!isBoundedVersion(version)) return undefined
+ 125     const registration = getRegistrations(this).find(
+ 126       (candidate) =>
+ 127         candidate.descriptor.id === capabilityId &&
+ 128         candidate.descriptor.version === version
+ 129     )
+ 130     return registration ? cloneDescriptor(registration.descriptor) : undefined
+ 131   }
+ 132 
+ 133   public compositionFingerprint(): string {
+ 134     const descriptors = sorted(getRegistrations(this)).map(
+ 135       ({ descriptor }) => descriptor
+ 136     )
+ 137     return createHash('sha256')
+ 138       .update(
+ 139         stableSerialize({
+ 140           schemaVersion: 'capability-composition-v1',
+ 141           descriptors
+ 142         })
+ 143       )
+ 144       .digest('hex')
+ 145   }
+ 146 
+ 147   private static fromStored(
+ 148     registrations: readonly StoredRegistration[]
+ 149   ): CapabilityRegistry {
+ 150     const registry = Object.create(
+ 151       CapabilityRegistry.prototype
+ 152     ) as CapabilityRegistry
+ 153     registrationsByRegistry.set(registry, Object.freeze([...registrations]))
+ 154     return registry
+ 155   }
+ 156 }
+ 157 
+ 158 /** Creates an empty registry without requiring callers to know the class. */
+ 159 export function createCapabilityRegistry(
+ 160   registrations: readonly CapabilityRegistration[] = []
+ 161 ): CapabilityRegistry {
+ 162   return new CapabilityRegistry(registrations)
+ 163 }
+ 164 
+ 165 export interface CapabilityComposition {
+ 166   readonly registry: CapabilityRegistry
+ 167   readonly fingerprint: string
+ 168 }
+ 169 
+ 170 export function composeCapabilities(
+ 171   registrations: readonly CapabilityRegistration[] = []
+ 172 ): CapabilityComposition {
+ 173   const registry = createCapabilityRegistry(registrations)
+ 174   return {
+ 175     registry,
+ 176     fingerprint: registry.compositionFingerprint()
+ 177   }
+ 178 }
+ 179 
+ 180 /**
+ 181  * Internal executable bridge for the public harness composition root. This is
+ 182  * deliberately not re-exported from the package entrypoint.
+ 183  */
+ 184 export function createCapabilityToolRegistry(
+ 185   registry: CapabilityRegistryPort
+ 186 ): ToolRegistry {
+ 187   const snapshot = sorted(getRegistrations(registry))
+ 188   return {
+ 189     list: () => snapshot.map((registration) => toTool(registration)),
+ 190     resolve: (capabilityId, version) => {
+ 191       if (
+ 192         !isBoundedIdentifier(capabilityId, MAX_ID_LENGTH) ||
+ 193         !isBoundedVersion(version)
+ 194       ) {
+ 195         return undefined
+ 196       }
+ 197       const registration = snapshot.find(
+ 198         (candidate) =>
+ 199           candidate.descriptor.id === capabilityId &&
+ 200           candidate.descriptor.version === version
+ 201       )
+ 202       return registration ? toTool(registration) : undefined
+ 203     }
+ 204   }
+ 205 }
+ 206 
+ 207 function normalizeDescriptor(value: unknown): CapabilityDescriptor {
+ 208   if (!isPlainRecord(value)) {
+ 209     throw new CapabilityRegistryError(
+ 210       'invalid_descriptor',
+ 211       'Capability descriptor must be a plain object'
+ 212     )
+ 213   }
+ 214 
+ 215   const descriptor = value as Record<string, unknown>
+ 216   if (!isBoundedIdentifier(descriptor.id, MAX_ID_LENGTH)) {
+ 217     throw invalidDescriptor('Capability id is invalid')
+ 218   }
+ 219   if (!isBoundedVersion(descriptor.version)) {
+ 220     throw invalidDescriptor('Capability version must be exact and bounded')
+ 221   }
+ 222   if (
+ 223     typeof descriptor.description !== 'string' ||
+ 224     descriptor.description.trim().length === 0 ||
+ 225     descriptor.description.length > MAX_DESCRIPTION_LENGTH
+ 226   ) {
+ 227     throw invalidDescriptor('Capability description is invalid')
+ 228   }
+ 229   if (!ORIGINS.includes(descriptor.origin as CapabilityOrigin)) {
+ 230     throw invalidDescriptor('Capability origin is invalid')
+ 231   }
+ 232   if (!isBoundedIdentifier(descriptor.providerId, MAX_ID_LENGTH)) {
+ 233     throw invalidDescriptor('Capability provider id is invalid')
+ 234   }
+ 235   if (!isBoundedVersion(descriptor.providerVersion)) {
+ 236     throw invalidDescriptor('Capability provider version is invalid')
+ 237   }
+ 238   if (
+ 239     !isRisk(descriptor.risk) ||
+ 240     !isSideEffect(descriptor.sideEffect) ||
+ 241     typeof descriptor.idempotent !== 'boolean' ||
+ 242     typeof descriptor.requiresApproval !== 'boolean'
+ 243   ) {
+ 244     throw invalidDescriptor('Capability governance metadata is invalid')
+ 245   }
+ 246 
+ 247   const inputSchema = cloneJsonValue(descriptor.inputSchema)
+ 248   const outputSchema = cloneJsonValue(descriptor.outputSchema)
+ 249   return deepFreeze({
+ 250     id: descriptor.id,
+ 251     version: descriptor.version,
+ 252     description: descriptor.description.trim(),
+ 253     inputSchema,
+ 254     outputSchema,
+ 255     risk: descriptor.risk,
+ 256     sideEffect: descriptor.sideEffect,
+ 257     idempotent: descriptor.idempotent,
+ 258     requiresApproval: descriptor.requiresApproval,
+ 259     origin: descriptor.origin,
+ 260     providerId: descriptor.providerId,
+ 261     providerVersion: descriptor.providerVersion
+ 262   }) as CapabilityDescriptor
+ 263 }
+ 264 
+ 265 function normalizeRegistration(value: unknown): StoredRegistration {
+ 266   try {
+ 267     if (!isPlainRecord(value)) {
+ 268       throw new CapabilityRegistryError(
+ 269         'invalid_descriptor',
+ 270         'Capability registration must be a plain object'
+ 271       )
+ 272     }
+ 273     const registration = value as Record<string, unknown>
+ 274     return {
+ 275       descriptor: normalizeDescriptor(registration.descriptor),
+ 276       implementation: normalizeImplementation(registration.implementation)
+ 277     }
+ 278   } catch (error) {
+ 279     if (error instanceof CapabilityRegistryError) throw error
+ 280     throw new CapabilityRegistryError(
+ 281       'invalid_descriptor',
+ 282       'Capability registration contains unsupported data'
+ 283     )
+ 284   }
+ 285 }
+ 286 
+ 287 function getRegistrations(
+ 288   registry: CapabilityRegistryPort
+ 289 ): readonly StoredRegistration[] {
+ 290   const registrations = registrationsByRegistry.get(registry as object)
+ 291   if (!registrations) {
+ 292     throw new CapabilityRegistryError(
+ 293       'invalid_descriptor',
+ 294       'Capability registry was not created by the neutral registry factory'
+ 295     )
+ 296   }
+ 297   return registrations
+ 298 }
+ 299 
+ 300 function normalizeImplementation(value: unknown): CapabilityImplementation {
+ 301   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+ 302     throw new CapabilityRegistryError(
+ 303       'invalid_implementation',
+ 304       'Capability implementation requires input validation, execution, and output validation'
+ 305     )
+ 306   }
+ 307 
+ 308   let validateInput: CapabilityImplementation['validateInput']
+ 309   let execute: CapabilityImplementation['execute']
+ 310   let validateOutput: CapabilityImplementation['validateOutput']
+ 311   try {
+ 312     const implementation = value as Record<string, unknown>
+ 313     if (
+ 314       typeof implementation.validateInput !== 'function' ||
+ 315       typeof implementation.execute !== 'function' ||
+ 316       typeof implementation.validateOutput !== 'function'
+ 317     ) {
+ 318       throw new Error('missing implementation method')
+ 319     }
+ 320     validateInput = (
+ 321       implementation.validateInput as CapabilityImplementation['validateInput']
+ 322     ).bind(value)
+ 323     execute = (
+ 324       implementation.execute as CapabilityImplementation['execute']
+ 325     ).bind(value)
+ 326     validateOutput = (
+ 327       implementation.validateOutput as CapabilityImplementation['validateOutput']
+ 328     ).bind(value)
+ 329   } catch {
+ 330     throw new CapabilityRegistryError(
+ 331       'invalid_implementation',
+ 332       'Capability implementation requires input validation, execution, and output validation'
+ 333     )
+ 334   }
+ 335   return Object.freeze({
+ 336     validateInput,
+ 337     execute,
+ 338     validateOutput
+ 339   }) as CapabilityImplementation
+ 340 }
+ 341 
+ 342 function toTool(registration: StoredRegistration): ToolDefinition {
+ 343   const descriptor = cloneDescriptor(registration.descriptor)
+ 344   return {
+ 345     ...descriptor,
+ 346     execute: (input: unknown, context: ToolExecutionContext) =>
+ 347       executeBound(registration.implementation, input, context)
+ 348   }
+ 349 }
+ 350 
+ 351 async function executeBound(
+ 352   implementation: CapabilityImplementation,
+ 353   input: unknown,
+ 354   context: ToolExecutionContext
+ 355 ): Promise<ToolResult> {
+ 356   let safeInput: unknown
+ 357   try {
+ 358     safeInput = cloneJsonValue(input)
+ 359     if (!inputMatchesExecutionContext(safeInput, context)) {
+ 360       return { status: 'REJECTED', error: 'capability_input_invalid' }
+ 361     }
+ 362     if (implementation.validateInput(safeInput) !== true) {
+ 363       return { status: 'REJECTED', error: 'capability_input_invalid' }
+ 364     }
+ 365   } catch {
+ 366     return { status: 'REJECTED', error: 'capability_input_invalid' }
+ 367   }
+ 368 
+ 369   let result: ToolResult
+ 370   try {
+ 371     const safeContext = Object.freeze({ ...context }) as ToolExecutionContext
+ 372     const rawResult = await implementation.execute(safeInput, safeContext)
+ 373     const normalizedResult = normalizeToolResult(rawResult)
+ 374     if (!normalizedResult) {
+ 375       return { status: 'REJECTED', error: 'capability_result_invalid' }
+ 376     }
+ 377     result = normalizedResult
+ 378   } catch {
+ 379     return { status: 'FAILED', error: 'capability_execution_failed' }
+ 380   }
+ 381 
+ 382   if (result.status === 'SUCCEEDED') {
+ 383     try {
+ 384       if (implementation.validateOutput(result.output) !== true) {
+ 385         return { status: 'REJECTED', error: 'capability_output_invalid' }
+ 386       }
+ 387     } catch {
+ 388       return { status: 'REJECTED', error: 'capability_output_invalid' }
+ 389     }
+ 390   }
+ 391 
+ 392   try {
+ 393     return {
+ 394       status: result.status,
+ 395       ...(result.output !== undefined
+ 396         ? { output: cloneJsonValue(result.output) }
+ 397         : {}),
+ 398       ...(result.error !== undefined ? { error: result.error } : {})
+ 399     }
+ 400   } catch {
+ 401     return { status: 'REJECTED', error: 'capability_result_invalid' }
+ 402   }
+ 403 }
+ 404 
+ 405 function cloneDescriptor(
+ 406   descriptor: CapabilityDescriptor
+ 407 ): CapabilityDescriptor {
+ 408   return deepFreeze({
+ 409     ...descriptor,
+ 410     inputSchema: cloneJsonValue(descriptor.inputSchema),
+ 411     outputSchema: cloneJsonValue(descriptor.outputSchema)
+ 412   }) as CapabilityDescriptor
+ 413 }
+ 414 
+ 415 function sorted(
+ 416   registrations: readonly StoredRegistration[]
+ 417 ): readonly StoredRegistration[] {
+ 418   return [...registrations].sort((left, right) => {
+ 419     const idOrder = compareCodeUnits(left.descriptor.id, right.descriptor.id)
+ 420     if (idOrder !== 0) return idOrder
+ 421     return compareCodeUnits(left.descriptor.version, right.descriptor.version)
+ 422   })
+ 423 }
+ 424 
+ 425 function compareCodeUnits(left: string, right: string): number {
+ 426   return left < right ? -1 : left > right ? 1 : 0
+ 427 }
+ 428 
+ 429 function inputMatchesExecutionContext(
+ 430   value: unknown,
+ 431   context: ToolExecutionContext
+ 432 ): boolean {
+ 433   if (Array.isArray(value)) {
+ 434     return value.every((child) => inputMatchesExecutionContext(child, context))
+ 435   }
+ 436   if (!isPlainRecord(value)) return true
+ 437 
+ 438   for (const [key, child] of Object.entries(value)) {
+ 439     if (
+ 440       (AUTHORITY_FIELDS as readonly string[]).includes(key) &&
+ 441       child !== context[key as (typeof AUTHORITY_FIELDS)[number]]
+ 442     ) {
+ 443       return false
+ 444     }
+ 445     if (!inputMatchesExecutionContext(child, context)) return false
+ 446   }
+ 447   return true
+ 448 }
+ 449 
+ 450 function invalidDescriptor(message: string): CapabilityRegistryError {
+ 451   return new CapabilityRegistryError('invalid_descriptor', message)
+ 452 }
+ 453 
+ 454 function isBoundedIdentifier(
+ 455   value: unknown,
+ 456   maxLength: number
+ 457 ): value is string {
+ 458   return (
+ 459     typeof value === 'string' &&
+ 460     value.trim() === value &&
+ 461     value.length > 0 &&
+ 462     value.length <= maxLength &&
+ 463     CAPABILITY_ID_PATTERN.test(value)
+ 464   )
+ 465 }
+ 466 
+ 467 function isBoundedVersion(value: unknown): value is string {
+ 468   return (
+ 469     isBoundedIdentifier(value, MAX_VERSION_LENGTH) &&
+ 470     value.toLowerCase() !== 'latest'
+ 471   )
+ 472 }
+ 473 
+ 474 function isRisk(value: unknown): boolean {
+ 475   return (
+ 476     value === 'LOW' ||
+ 477     value === 'MEDIUM' ||
+ 478     value === 'HIGH' ||
+ 479     value === 'CRITICAL'
+ 480   )
+ 481 }
+ 482 
+ 483 function isSideEffect(value: unknown): boolean {
+ 484   return (
+ 485     value === 'NONE' ||
+ 486     value === 'READ' ||
+ 487     value === 'WRITE' ||
+ 488     value === 'EXTERNAL'
+ 489   )
+ 490 }
+ 491 
+ 492 function normalizeToolResult(value: unknown): ToolResult | undefined {
+ 493   try {
+ 494     const safeValue = cloneJsonValue(value)
+ 495     if (!isPlainRecord(safeValue)) return undefined
+ 496     const status = safeValue.status
+ 497     if (!isToolStatus(status)) return undefined
+ 498     const error = safeValue.error
+ 499     if (
+ 500       error !== undefined &&
+ 501       (typeof error !== 'string' || error.length > 240)
+ 502     ) {
+ 503       return undefined
+ 504     }
+ 505     const output = safeValue.output
+ 506     return {
+ 507       status,
+ 508       ...(output !== undefined ? { output } : {}),
+ 509       ...(error !== undefined ? { error } : {})
+ 510     }
+ 511   } catch {
+ 512     return undefined
+ 513   }
+ 514 }
+ 515 
+ 516 function isToolStatus(value: unknown): value is ToolResult['status'] {
+ 517   return value === 'SUCCEEDED' || value === 'FAILED' || value === 'REJECTED'
+ 518 }
+ 519 
+ 520 function cloneJsonValue(value: unknown): unknown {
+ 521   return JSON.parse(stableSerialize(value)) as unknown
+ 522 }
+ 523 
+ 524 interface SerializationState {
+ 525   readonly seen: WeakSet<object>
+ 526   nodes: number
+ 527 }
+ 528 
+ 529 function stableSerialize(
+ 530   value: unknown,
+ 531   state: SerializationState = { seen: new WeakSet<object>(), nodes: 0 },
+ 532   depth = 0
+ 533 ): string {
+ 534   state.nodes += 1
+ 535   if (state.nodes > MAX_JSON_NODES) {
+ 536     throw new Error('JSON node budget exceeded')
+ 537   }
+ 538   if (depth > MAX_JSON_DEPTH) {
+ 539     throw new Error('JSON depth budget exceeded')
+ 540   }
+ 541 
+ 542   if (value === null) return 'null'
+ 543   if (typeof value === 'string') {
+ 544     if (value.length > MAX_JSON_STRING_LENGTH) {
+ 545       throw new Error('JSON string budget exceeded')
+ 546     }
+ 547     return JSON.stringify(value)
+ 548   }
+ 549   if (typeof value === 'boolean') return value ? 'true' : 'false'
+ 550   if (typeof value === 'number') {
+ 551     if (!Number.isFinite(value)) throw new Error('Non-finite value')
+ 552     return JSON.stringify(value)
+ 553   }
+ 554   if (typeof value !== 'object' || value === undefined) {
+ 555     throw new Error('Value is not JSON serializable')
+ 556   }
+ 557   if (state.seen.has(value)) throw new Error('Value contains a cycle')
+ 558   state.seen.add(value)
+ 559   try {
+ 560     if (Array.isArray(value)) {
+ 561       if (value.length > MAX_JSON_ARRAY_LENGTH) {
+ 562         throw new Error('JSON array budget exceeded')
+ 563       }
+ 564       const items: string[] = []
+ 565       for (let index = 0; index < value.length; index += 1) {
+ 566         if (!Object.prototype.hasOwnProperty.call(value, index)) {
+ 567           throw new Error('Sparse arrays are not supported')
+ 568         }
+ 569         items.push(stableSerialize(value[index], state, depth + 1))
+ 570       }
+ 571       return boundedSerialized(`[${items.join(',')}]`)
+ 572     }
+ 573     if (!isPlainRecord(value)) throw new Error('Value is not a plain object')
+ 574     const keys = Object.keys(value)
+ 575     if (
+ 576       keys.length > MAX_JSON_KEYS ||
+ 577       Object.getOwnPropertySymbols(value).length > 0 ||
+ 578       Object.getOwnPropertyNames(value).length !== keys.length
+ 579     ) {
+ 580       throw new Error('JSON object budget or shape exceeded')
+ 581     }
+ 582     const parts: string[] = []
+ 583     for (const key of keys.sort()) {
+ 584       if (key.length > MAX_JSON_KEY_LENGTH || UNSAFE_JSON_KEYS.has(key)) {
+ 585         throw new Error('Unsafe JSON object key')
+ 586       }
+ 587       const property = Object.getOwnPropertyDescriptor(value, key)
+ 588       if (!property || !('value' in property)) {
+ 589         throw new Error('Accessor properties are not supported')
+ 590       }
+ 591       parts.push(
+ 592         `${JSON.stringify(key)}:${stableSerialize(property.value, state, depth + 1)}`
+ 593       )
+ 594     }
+ 595     return boundedSerialized(`{${parts.join(',')}}`)
+ 596   } finally {
+ 597     state.seen.delete(value)
+ 598   }
+ 599 }
+ 600 
+ 601 function boundedSerialized(value: string): string {
+ 602   if (value.length > MAX_JSON_BYTES) {
+ 603     throw new Error('JSON byte budget exceeded')
+ 604   }
+ 605   return value
+ 606 }
+ 607 
+ 608 function deepFreeze<T>(value: T): T {
+ 609   if (typeof value !== 'object' || value === null) return value
+ 610   Object.freeze(value)
+ 611   for (const child of Object.values(value)) deepFreeze(child)
+ 612   return value
+ 613 }
+ 614 
+ 615 function isPlainRecord(value: unknown): value is Record<string, unknown> {
+ 616   try {
+ 617     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+ 618       return false
+ 619     }
+ 620     const prototype = Object.getPrototypeOf(value)
+ 621     return prototype === Object.prototype || prototype === null
+ 622   } catch {
+ 623     return false
+ 624   }
+ 625 }

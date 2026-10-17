@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -60,7 +62,7 @@ function fixture(markdown = `[source](../${old})\n`) {
   return { root, run, write }
 }
 
-test('policy registers exactly the 20 evidence moves and historical hashes', () => {
+test('policy preserves exactly the 20 historical HISO moves and hashes', () => {
   const policy = JSON.parse(
     readFileSync(join(repositoryRoot, 'docs/doc-link-policy.json'), 'utf8')
   )
@@ -73,9 +75,12 @@ test('policy registers exactly the 20 evidence moves and historical hashes', () 
       'utf8'
     )
   )
-  assert.equal(policy.movedTargets.length, 20)
+  const historical = policy.movedTargets.filter(
+    ({ movedBy }) => movedBy !== 'PARE100-EXEC-20261014'
+  )
+  assert.equal(historical.length, 20)
   assert.deepEqual(
-    policy.movedTargets.map(({ old, new: target, sha256Before }) => ({
+    historical.map(({ old, new: target, sha256Before }) => ({
       old,
       new: target,
       sha256Before
@@ -87,6 +92,77 @@ test('policy registers exactly the 20 evidence moves and historical hashes', () 
     }))
   )
   assert.match(policy.movedTargetsProvenance, /historical.*not a claim/)
+})
+
+test('three PARE100 frozen document relocations retain exact existing targets', () => {
+  const policy = JSON.parse(
+    readFileSync(join(repositoryRoot, 'docs/doc-link-policy.json'), 'utf8')
+  )
+  const proof = JSON.parse(
+    readFileSync(
+      join(
+        repositoryRoot,
+        'docs/04_audit/evidence/PARE100-EXEC-20261014/lead/doc-portability-r2.json'
+      ),
+      'utf8'
+    )
+  )
+  const additions = policy.movedTargets.filter(
+    ({ movedBy }) => movedBy === 'PARE100-EXEC-20261014'
+  )
+  assert.equal(additions.length, 3)
+  assert.equal(
+    new Set(policy.movedTargets.map(({ old }) => old)).size,
+    policy.movedTargets.length
+  )
+  assert.deepEqual(
+    additions.map(({ old, new: target, sha256Before }) => ({
+      copy: old,
+      source: target,
+      sha256: sha256Before
+    })),
+    proof.copies
+  )
+  const { amendments } = JSON.parse(
+    readFileSync(
+      join(
+        repositoryRoot,
+        'docs/04_audit/evidence/PARE100-EXEC-20261014/lead/doc-portability-r3/amendment.json'
+      ),
+      'utf8'
+    )
+  )
+  assert.equal(amendments.length, 1)
+  assert.equal(
+    amendments[0].target,
+    'docs/02_spec/0207_cleanup_orphaned_emits.md'
+  )
+  assert.equal(
+    amendments[0].beforeSHA256,
+    'b03badb2802d31a74eaa1347ee443763f38506493b43ab3853c2e136d24939d2'
+  )
+  assert.equal(
+    amendments[0].afterSHA256,
+    '6f93660593d768d21ec51e6c20acf8eff0701259aea8b2f7053fd1314101cddb'
+  )
+  for (const entry of additions) {
+    assert.equal(existsSync(join(repositoryRoot, entry.old)), false)
+    const current = readFileSync(join(repositoryRoot, entry.new))
+    const amendment = amendments.find(({ target }) => target === entry.new)
+    if (amendment) {
+      const original = readFileSync(join(repositoryRoot, amendment.original))
+      assert.equal(
+        createHash('sha256').update(original).digest('hex'),
+        entry.sha256Before
+      )
+      assert.equal(amendment.beforeSHA256, entry.sha256Before)
+      assert.equal(current.subarray(0, original.length).equals(original), true)
+    }
+    assert.equal(
+      createHash('sha256').update(current).digest('hex'),
+      amendment?.afterSHA256 ?? entry.sha256Before
+    )
+  }
 })
 
 test('exact move resolves and reports the raw historical link without editing it', () => {

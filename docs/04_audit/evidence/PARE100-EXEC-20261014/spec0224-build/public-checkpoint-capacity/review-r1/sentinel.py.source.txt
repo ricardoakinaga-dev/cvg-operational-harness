@@ -1,0 +1,20 @@
+import json,hashlib,pathlib,sys,datetime
+R=pathlib.Path(__file__).parent
+P=R.parent/'review-packet-r1'; M=P/'manifest.json'; expected='c6eb10b7a03dec8d6ca0f552fb1bfc219c248e2566e763f98f99e4fff57e1924'
+def digest(p):
+ b=pathlib.Path(p).read_bytes();return dict(sha256=hashlib.sha256(b).hexdigest(),bytes=len(b))
+m=json.loads(M.read_text()); records=[]
+def check(p,s,n=None,kind='input'):
+ d=digest(p); records.append(dict(path=str(p),kind=kind,**d,expectedSha256=s,expectedBytes=n,ok=d['sha256']==s and (n is None or n==d['bytes'])))
+check(M,expected,kind='packet')
+for x in m['sources']:
+ for p in [x['live'],P/x['copy']]:check(p,x['sha256'],x['bytes'],'source')
+for x in m['proofs']:
+ for p in [x['path'],P/x['copy']]:check(p,x['sha256'],x['bytes'],'proof')
+for x in m['readonlyConstraints']:check(x['path'],x['sha256'],x['bytes'],'readonlyConstraint')
+a=R/'transitive-inputs.json'
+if a.exists():
+ for x in json.loads(a.read_text()):check(x['path'],x['sha256'],x['bytes'],'transitive')
+out=dict(phase=sys.argv[1],utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),candidate=m['candidateManifestSha256'],sourceBindings=len(m['sources']),readonlyConstraints=len(m['readonlyConstraints']),proofInputs=len(m['proofs']),ok=all(x['ok'] for x in records),records=records)
+(R/('sentinel-'+sys.argv[1]+'.json')).write_text(json.dumps(out,indent=2)+'\n')
+print(json.dumps({k:v for k,v in out.items() if k!='records'}));print('mismatches',[x for x in records if not x['ok']]);sys.exit(0 if out['ok'] else 1)

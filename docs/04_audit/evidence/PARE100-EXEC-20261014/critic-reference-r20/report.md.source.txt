@@ -1,0 +1,76 @@
+# Frozen SPEC0209 I1 static audit
+
+Verdict: **FAIL**. Two HIGH payload-opacity defects and one MEDIUM declaration-retention defect have concrete, connected, inert witnesses. This verdict applies only to the six sealed files authenticated by fingerprint `972feef6004103b4eb8959e5a38bfdcf306b6ccb5ca9bf360f134b98b62bfadb`. No extractor, fixture, tests or Python was executed.
+
+## I1-R20-01 — HIGH: plain TypeScript runtime fence escapes the local payload index
+
+Allowlisted source: `docs/tool-catalog.md`, conceptually substituted into the sealed synthetic fixture and pinned normally. This is inert report text:
+
+~~~~markdown
+# Manual
+## Mirror
+```ts public-api
+export type Mirror = "throw/STATIC_FENCE_R20/";
+```
+## Runtime
+```ts
+new Worker("throw/STATIC_FENCE_R20/", { eval: true });
+```
+~~~~
+
+At collector 1319–1321, plain `ts` is excluded from the contract-fence predicate. The physical-source prepass at 1364–1412 indexes only the string `ts` for that fence, not its Worker argument. The public-api fragment contains only a declaration, so it contributes no payload evidence. Projection at 1484–1493 passes the incomplete map to the AST extractor. `printed` (558–585) returns the raw literal type `"throw/STATIC_FENCE_R20/"`; `emitFor` marks that entry STATIC (1675). The other fence is merely document-unparsed UNKNOWN.
+
+Derived source-local entries: document-type, document-unparsed, document-surface. Mirror retains owner P100-003, package @synthetic/root, source hash, NOT_VERIFIED parity, symbol Manual/Mirror/Mirror and ID `contract:010ed89ac0a5f58fd6c52dc9ac10950bb369e2946e666cb55bef3b175e0f66e1`. Its type incorrectly contains the guest source. Expected UNKNOWN payload digest `6d25975f038fa9c5aead67acbd94c5a58567da304747163dded67454085d6a9d`, length 23, reason and existing source provenance.
+
+The runtime role is established by the literal's direct use in Worker with eval:true, not by its spelling. This is the same supported TS syntax in another fence of the same physical source; it needs neither whole-program resolution nor recognition of arbitrary languages or generated source. Tests1196–1255 cover contract-tagged fences; tests2463–2476 protect unknown fence info only. Neither covers this body-to-type route.
+
+## I1-R20-02 — HIGH: Python export-list scalar bypasses collision projection
+
+Allowlisted source: `python/sdk/src/sdk.py`. Inert witness:
+
+~~~~python
+import subprocess
+__all__ = ["debugger"]
+def exported(value: "debugger") -> None:
+    pass
+subprocess.run(["node", "-e", "debugger"])
+~~~~
+
+The final call explicitly supplies debugger as Node program source. The embedded Python AST implementation indexes that literal at 1018–1020, and `typ` correctly makes the mirrored parameter UNKNOWN at 1047–1050. But 1074–1079 copies the identifier-valued __all__ list directly after literal_eval, without a payload-index lookup. The final row path (1797–1799 → 1657–1675) only projects symbol __all__, leaving shape.names=["debugger"] and extraction_status=STATIC. No declared debugger function is needed: the literal-valued export-list requirement is independently emitted today.
+
+Derived entries are python-surface UNKNOWN, python-function exported UNKNOWN, and python-exports __all__ STATIC. The latter leaks the source scalar with ID `contract:579242b86cebe0dfb1b9abb3e33d80feba4c1df7faa74a91579379aafae0a9ac`, package surface:python/sdk, owner P100-025, authenticated witness source hash and NOT_VERIFIED parity. Expected colliding list-element UNKNOWN carries digest `4c44d7c28ec0f6ca3e2624c6af1d3be324576d01ef6f6c2dc0af7e61664b8c2c`, length 8 and reason. Retain the entry, identity and denominator.
+
+Tests961–999 preserve clean __all__ with collision evidence in a different physical file. Tests2311–2337 use a non-identifier guest body in __all__, exercising regex rejection. They do not test this legitimate identifier-shaped list member with a concrete same-source runtime payload. No universal program-language classifier is required.
+
+## I1-R20-03 — MEDIUM: annotated literal __all__ is omitted
+
+Inert witness for the same Python source:
+
+~~~~python
+__all__: list[str] = ["Client"]
+class Client:
+    def send(self, value: int) -> None:
+        pass
+~~~~
+
+The prepass explicitly recognizes ast.AnnAssign __all__ as declaration metadata (1011–1018), but row collection accepts only ast.Assign __all__ (1066–1079). Derived rows are source-surface, Client and Client.send; no python-exports requirement exists for the explicit list. Removing only the type annotation would add python-exports with names=["Client"] and the stable __all__ ID shown above. Source UNKNOWN does not retain this export-list declaration. This is a direct literal assignment, requiring no dynamic resolver. Existing positives use unannotated __all__. This finding does not allege removal from an unavailable historical catalog: it identifies an initial declaration omission in the frozen collector.
+
+## Remaining bounded coverage
+
+A/B declaration-only names, quoted members, module context and export selectors preserve exact metadata independently of legacy identity projection. Same-source UNKNOWN collisions are conservative and are not scored as defects. Authenticated relative filenames are legitimate inert provenance. JSON's payload role is absorbing, unknown member names are included in its prepass, and known built-in type/ref collisions are consulted. No additional connected D blocker was demonstrated.
+
+Supported simple graph nodes/endpoints/operators/whole-edge collisions are projected consistently (1508–1547); matching opaque endpoints retain connectivity. Labels and complex rows stay opaque. Tests190–272 and400–475 assert the relevant scalar copies. The reversed graph variant also adds an edge, so it is not a pure order-only equality test. There is no general Mermaid/whole-program resolver claim. The missing document-fence prepass still limits graph collision evidence for such omitted contexts.
+
+Root/pin/version checks, Git no-replace tree authentication, sensitive paths, per-ancestor symlink refusal, untracked source checks, final source re-read/HEAD checks, owner coverage, source/contract hashes, duplicate rejection, freeze requirement retention, deterministic identity construction and guarded atomic output were inspected. No further connected blocker was established in these mechanisms. Source/code/OS races, external binary trust and runtime correctness were not exercised. Hashing and validation do not cure the three extraction defects.
+
+## Lead decisions and test honesty
+
+R18 is an explicit narrow measurement repair, not a bar waiver. Current tests2311–2366 retain the GuestSource alias and add its identical same-source ProgramSource initializer, assert three entries and UNKNOWN digest/length/source/owner/parity. Clean selector positives and collision negatives are present at751–806. R20 explicitly refines only old R12 D worker.type to UNKNOWN: current1715–1724 checks digest, length and reason, while enclosing requirements and payload assertions remain at1671–1752. The clean seven built-in JSON types/ref control is present at374–398.
+
+The sealed current files support those observations. They do not establish historical diff completeness, all old-case counts, exact integration hashes, or chronological edit authorization; no forbidden history was consulted. No tests are reported passing, no score is inferred, and no catalogue entry is treated as parity PASS.
+
+## Read provenance, integrity and limits
+
+Read evidence consisted exclusively of the six manifest-listed packet files and the exact sibling sentinel. All source and test lines were read as inert text; the three JSON decision files and sentinel were parsed as data. Every file hash and the manifest's compact sorted-key files-object SHA256 matched before review and after report generation. Sentinel SHA256: `7211d3b01cfb092119b8cb0b90c996a233255e2fa9aa85cb271df98a80519278`. Full per-file pre/post records and inventory are in integrity.json; detailed witness hashes, paths and derived outputs are in findings.json.
+
+Confidence is high for these bounded static code paths. There was no target/helper/Python/test/fixture execution, no live worktree/root/reference, network, prior reports, descendants, history, installation or user-session access. No live catalog, owner mapping, semantic parity, actual 318/55 coverage or release acceptance was assessed. No universal program-language, expression, whole-program, cross-file or source-generating-code completeness is promised or demanded. Review complete; stop at these frozen artifacts.
