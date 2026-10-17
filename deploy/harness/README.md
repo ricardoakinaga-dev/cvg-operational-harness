@@ -3,9 +3,12 @@
 - Plano: [0374, Fase C](../../docs/03_build/0374_plano_producao_harness.md) (C1–C9; C10 é a reauditoria do Codex).
 - Barra: [0373](../../docs/03_build/0373_barra_producao_harness.md). Operação vigente: [0802](../../docs/08_runtime/0802_harness_production_operations.md).
 - Runbook de governança (quem decide, estado, aceite): [0805](../../docs/08_runtime/0805_runbook_ambiente_real.md).
-- **Estado: preparado, nada executado.** Não há destino, DNS, cofre, IdP nem
-  receptor de alerta escolhidos. Produção do núcleo continua `NO_GO` até o
-  parecer C10 no mesmo SHA e no mesmo digest.
+- **Estado: destino decidido em 16/10/2026, nada executado no servidor.**
+  Servidor no hospital, Vault, TrueNAS, túnel só para webhooks e alerta no
+  Telegram (seção "Servidor no hospital" abaixo; registro em
+  [production-0374.json](../../docs/04_audit/evidence/USER-DECISIONS-20261016/production-0374.json)).
+  Produção do núcleo continua `NO_GO` até o parecer C10 no mesmo SHA e no
+  mesmo digest.
 
 ## Arquivos
 
@@ -18,8 +21,38 @@
 | [backup/](backup/backup.sh)                                                      | `backup.sh`, `restore-drill.sh`, `chain-anchors.mjs`, `common.sh` e unidades systemd               |
 | [secrets/README.md](secrets/README.md)                                           | Formato, geração, guarda e rotação de cada segredo; emissor de token                               |
 | [`scripts/production-target-smoke.ts`](../../scripts/production-target-smoke.ts) | Smoke remoto (C5, C7, C8, C9) a partir da máquina do operador                                      |
+| [compose.onprem.yaml](compose.onprem.yaml)                                       | Override do servidor no hospital: `postgres` de produção em disco local, `alert-relay` e `tunnel`  |
+| [alert-relay/telegram-relay.mjs](alert-relay/telegram-relay.mjs)                 | Receptor do alerta de parada: verifica HMAC, recusa replay e repassa ao Telegram                   |
+| [tunnel/config.example.yml](tunnel/config.example.yml)                           | Cloudflare Tunnel de saída que publica só as rotas de webhook assinadas                            |
+| [vault/](vault/render-env.sh)                                                    | `render-env.sh` (Vault KV v2 → `/etc/cvg-harness/*.env`) e a política somente leitura do deploy    |
 
-## Decisão C1 — destino
+## Servidor no hospital (decisões de 16/10/2026)
+
+O usuário escolheu o servidor do próprio hospital em vez da VM em nuvem
+descrita na seção seguinte, que fica como alternativa documentada. Subir sempre
+com os dois arquivos:
+
+```bash
+docker compose -f deploy/harness/compose.production.yaml \
+  -f deploy/harness/compose.onprem.yaml \
+  --env-file /etc/cvg-harness/harness.env up -d
+```
+
+| Item            | Como fica no servidor                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1 host         | Linux com Docker Engine e Compose ≥ 2.24 (o override usa `!reset`). Checkout no SHA certificado em `/opt/cvg-harness`. Disco local para `/var/lib/cvg-harness/postgres` e `/var/backups/cvg-harness`.                                                                                                                                                                                                                                                                             |
+| C2 banco        | PostgreSQL 16 em container, só na rede do compose, sem porta publicada, com `--data-checksums`. Aplicar `postgres/roles.sql` com o superusuário local; os quatro papéis e o de backup seguem iguais. O achado G4 não se aplica (há superusuário local), e o superusuário não entra em nenhum serviço.                                                                                                                                                                             |
+| C2 TLS do banco | O tráfego não sai da bridge do host; as URLs não usam `sslmode`. `CVG_HARNESS_DB_CA_FILE` aponta para um arquivo vazio em `/etc/cvg-harness/db-ca.pem`, exigido pelo arquivo base e não usado.                                                                                                                                                                                                                                                                                    |
+| C4 cofre        | HashiCorp Vault no servidor, KV v2 em `secret/cvg-harness/<nome>`. O deploy usa AppRole com [`vault/cvg-harness-policy.hcl`](vault/cvg-harness-policy.hcl) e roda `vault/render-env.sh harness backup` antes do `up`. Vault com armazenamento raft, TLS local e unseal Shamir 2 de 3 com as partes guardadas por pessoas diferentes; `vault operator raft snapshot save` diário para o TrueNAS. Depois de reiniciar o servidor, o Vault precisa de unseal manual antes do deploy. |
+| C5 acesso       | `CVG_HARNESS_PUBLIC_BIND` = IP do servidor na rede interna; console só na rede do hospital ou pela VPN. O serviço `tunnel` publica apenas `^/v1/webhooks/channels/<canal>/messages$` (ver [`tunnel/config.example.yml`](tunnel/config.example.yml)); o resto responde 404 na Cloudflare. Certificado do proxy por CA interna ou domínio do CVG com DNS-01.                                                                                                                        |
+| C6 backup       | `backup.sh` grava o conjunto em `/var/backups/cvg-harness/sets` e o espelha, verificado por `SHA256SUMS`, em `CVG_BACKUP_MIRROR_DIR` (compartilhamento NFS do TrueNAS). Dataset do TrueNAS com criptografia nativa ZFS e tarefa de snapshot periódico que o servidor não pode apagar (proteção contra ransomware). Papel de backup com `BYPASSRLS` aceito (G3).                                                                                                                   |
+| C6 risco aceito | Servidor e TrueNAS ficam no mesmo prédio. Uma cópia fora do prédio (Cloud Sync do TrueNAS criptografado) fica recomendada, sem ser pré-requisito do GO.                                                                                                                                                                                                                                                                                                                           |
+| C7 alerta       | `CVG_STOP_ALERT_WEBHOOK_URL=http://alert-relay:8790/alert`. O relay verifica a assinatura com o mesmo segredo, recusa timestamp velho e replay e envia ao `TELEGRAM_CHAT_ID`. Falha no Telegram vira 502, e o monitor tenta de novo. Métricas: logs, `/ready`, heartbeat e alerta valem como evidência (G1).                                                                                                                                                                      |
+| C8 identidade   | Token interno assinado só para o ensaio, com dois operadores sintéticos (`ensaio-admin` e `ensaio-operador`). Antes do uso pela equipe: Keycloak no servidor como IdP OIDC com MFA (D-09), composição das rotas OIDC na API por SPEC T3 própria (achado G2).                                                                                                                                                                                                                      |
+| C9 imagem       | CI publica a imagem no GitHub Container Registry privado; o servidor baixa por `CVG_HARNESS_IMAGE_DIGEST`. O token de leitura do registro fica no Vault.                                                                                                                                                                                                                                                                                                                          |
+| G7              | Rotação do `WEBHOOK_SIGNING_SECRET` por corte coordenado com o emissor do webhook.                                                                                                                                                                                                                                                                                                                                                                                                |
+
+## Decisão C1 — destino (alternativa em nuvem, não escolhida)
 
 **Padrão proposto: uma VM Linux dedicada com Docker Engine e Compose v2
 (≥ 2.24), PostgreSQL 16 gerenciado e o proxy TLS na própria VM.**

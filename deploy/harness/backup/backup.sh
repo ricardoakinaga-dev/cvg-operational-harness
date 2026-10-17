@@ -12,6 +12,8 @@
 # 3. The set (dump, anchors.json, SHA256SUMS, manifest.json) is written to
 #    CVG_BACKUP_DIR; anchors + sums + manifest are copied to the independent
 #    CVG_BACKUP_ANCHOR_DIR (they detect a truncated or altered dump later).
+#    With CVG_BACKUP_MIRROR_DIR set (TrueNAS share), the whole set is also
+#    copied there and verified against SHA256SUMS before it counts.
 # 4. Sets older than CVG_BACKUP_RETENTION_DAYS are pruned, only after a
 #    successful run. Any failure exits non-zero and leaves no partial set.
 #
@@ -172,6 +174,38 @@ cp "$PARTIAL_DIR/anchors.json" "$PARTIAL_DIR/SHA256SUMS" "$PARTIAL_DIR/manifest.
 
 STEP="publish"
 mv "$PARTIAL_DIR" "$SET_DIR"
+
+# 3b. Optional verified mirror (C6, decided 2026-10-16: TrueNAS dataset
+#     mounted on the hospital server). The set is copied to a partial
+#     directory, checked against SHA256SUMS on the mirror itself and only
+#     then renamed. With CVG_BACKUP_MIRROR_REQUIRE_MOUNT=true (default) an
+#     unmounted share fails the run instead of filling the local disk.
+if [[ -n "${CVG_BACKUP_MIRROR_DIR:-}" ]]; then
+  STEP="mirror"
+  cvg_require_absolute_dir_var CVG_BACKUP_MIRROR_DIR
+  MIRROR_DIR="${CVG_BACKUP_MIRROR_DIR%/}"
+  [[ "$MIRROR_DIR" != "$BACKUP_DIR" && "$MIRROR_DIR/" != "$BACKUP_DIR/"* &&
+    "$BACKUP_DIR/" != "$MIRROR_DIR/"* ]] ||
+    cvg_die "CVG_BACKUP_MIRROR_DIR must not overlap CVG_BACKUP_DIR"
+  if [[ "${CVG_BACKUP_MIRROR_REQUIRE_MOUNT:-true}" == "true" ]]; then
+    mountpoint -q "$MIRROR_DIR" || cvg_die "CVG_BACKUP_MIRROR_DIR is not a mount point"
+  fi
+  MIRROR_PARTIAL="$MIRROR_DIR/.$STAMP.partial"
+  rm -rf "$MIRROR_PARTIAL"
+  mkdir -p "$MIRROR_PARTIAL"
+  cp "$SET_DIR/harness.dump" "$SET_DIR/anchors.json" "$SET_DIR/SHA256SUMS" \
+    "$SET_DIR/manifest.json" "$MIRROR_PARTIAL/"
+  if ! (cd "$MIRROR_PARTIAL" && sha256sum --check --quiet SHA256SUMS); then
+    rm -rf "$MIRROR_PARTIAL"
+    cvg_die "mirror copy does not match SHA256SUMS"
+  fi
+  mv "$MIRROR_PARTIAL" "$MIRROR_DIR/$STAMP"
+  find "$MIRROR_DIR" -mindepth 1 -maxdepth 1 -type d \
+    -regextype posix-extended -regex '.*/[0-9]{8}T[0-9]{6}Z' \
+    ! -name "$STAMP" -mtime +"$RETENTION_DAYS" -exec rm -rf {} +
+  find "$MIRROR_DIR" -mindepth 1 -maxdepth 1 -type d -name '.*.partial' -mtime +1 -exec rm -rf {} +
+  cvg_log backup.mirrored "set=$STAMP"
+fi
 
 # 4. Retention: only completed sets matching the stamp format, never the
 #    one just written; stale partial directories older than a day.

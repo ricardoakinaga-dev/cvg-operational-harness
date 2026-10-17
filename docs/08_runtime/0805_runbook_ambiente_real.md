@@ -8,11 +8,14 @@
   runbook não repete.
 - Runbook técnico com comandos e saídas esperadas:
   [`deploy/harness/README.md`](../../deploy/harness/README.md).
-- **Estado: preparado, nada executado.** Não existe destino escolhido; nenhum
-  item C1–C9 foi executado em ambiente real; nenhum segredo foi gerado. A
-  produção do núcleo continua `NO_GO` até o parecer C10 do Codex sobre as dez
-  condições da 0373 no mesmo SHA e no mesmo digest, em ambiente real. Nenhum
-  produto é liberado por este runbook (ADR-010).
+- **Estado em 16/10/2026: destino e decisões tomados, nada executado no
+  servidor.** O usuário decidiu o servidor no hospital, Vault, backup local e
+  no TrueNAS, túnel só para webhooks e alerta no Telegram (seção "Decisões de
+  16/10/2026" no fim). Nenhum item C1–C9 foi executado em ambiente real e
+  nenhum segredo foi gerado. A produção do núcleo continua `NO_GO` até o
+  parecer C10 do Codex sobre as dez condições da 0373 no mesmo SHA e no mesmo
+  digest, em ambiente real. Nenhum produto é liberado por este runbook
+  (ADR-010).
 
 ## Artefatos versionados nesta rodada
 
@@ -181,3 +184,23 @@ ambiente real, e emite o parecer do núcleo. Até lá: `NO_GO`.
 | G6  | C9     | A API não expõe versão/digest; a certificação local usou tag (`fulltest-31dc1c3`); para C9 a imagem precisa ser publicada num registro e o digest registrado pelo CI                               | Publicação da imagem com digest no CI (decisão de registro do usuário)                                     |
 | G7  | C4     | `WEBHOOK_SIGNING_SECRET` aceita um só segredo; a rotação é corte coordenado com o emissor do webhook                                                                                               | Aceitar o corte ou SPEC de lista de segredos (o verificador já aceita lista)                               |
 | G8  | C1, C5 | `API_TRUSTED_PROXY_ADDRESSES` só aceita IPs literais (máximo 32, sem CIDR); restringe Kubernetes/PaaS                                                                                              | Coberto pelo padrão VM; reavaliar se o destino mudar                                                       |
+
+## Decisões de 16/10/2026
+
+Registro: [production-0374.json](../04_audit/evidence/USER-DECISIONS-20261016/production-0374.json) e [resolução](../04_audit/evidence/RESOLVE-20261016/README.md). Como cada item fica no servidor: seção "Servidor no hospital" de [`deploy/harness/README.md`](../../deploy/harness/README.md).
+
+| Item | Decisão                                                                                                                     | Artefato                                                      |
+| ---- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| C1   | Servidor no hospital; VM em nuvem fica como alternativa documentada                                                         | `deploy/harness/compose.onprem.yaml`                          |
+| C2   | PostgreSQL 16 local em container, sem porta publicada; G4 não se aplica                                                     | override `postgres`                                           |
+| C4   | HashiCorp Vault no servidor, AppRole somente leitura para o deploy                                                          | `deploy/harness/vault/`                                       |
+| C5   | Console na rede interna e VPN; túnel de saída só para as rotas de webhook                                                   | `deploy/harness/tunnel/config.example.yml`                    |
+| C6   | Conjunto local espelhado e verificado no TrueNAS; papel de backup com `BYPASSRLS` aceito (G3)                               | `backup.sh` com `CVG_BACKUP_MIRROR_DIR`                       |
+| C7   | Logs, `/ready`, heartbeat e alerta como evidência (G1); alerta no Telegram (A3)                                             | `deploy/harness/alert-relay/telegram-relay.mjs` e seus testes |
+| C8   | Token interno no ensaio com dois operadores sintéticos; Keycloak no servidor como IdP OIDC com MFA antes do uso pela equipe | SPEC T3 futura para compor as rotas OIDC (G2)                 |
+| C9   | Imagem no GitHub Container Registry privado, baixada pelo digest certificado (G6)                                           | publicação pelo CI ainda a configurar                         |
+| G5   | Sem mudança: janela de `GRANT/REVOKE` do README do deploy                                                                   | —                                                             |
+| G7   | Rotação do segredo de webhook por corte coordenado                                                                          | —                                                             |
+| G8   | Coberto: o proxy tem IP fixo na rede do compose do servidor                                                                 | —                                                             |
+
+Ainda depende de ação no servidor ou de conta externa: instalar e inicializar o Vault, criar o bot do Telegram, criar o túnel na Cloudflare, montar o compartilhamento do TrueNAS, emitir o certificado do proxy e configurar a publicação da imagem no GHCR.

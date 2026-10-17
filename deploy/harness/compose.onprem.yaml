@@ -1,0 +1,127 @@
+# PLAN0374 Fase C — destino decidido pelo usuário em 16/10/2026: servidor
+# no próprio hospital (C1). Override of compose.production.yaml; always used
+# together with it:
+#
+#   docker compose -f deploy/harness/compose.production.yaml \
+#     -f deploy/harness/compose.onprem.yaml \
+#     --env-file /etc/cvg-harness/harness.env up -d
+#
+# What changes on premises:
+# - postgres: the PostgreSQL 16 container becomes the production database,
+#   data on a local disk path (backed up to the TrueNAS by backup.sh, C6).
+#   It is never published on a host port.
+# - alert-relay: receives the signed stop alert and forwards it to the
+#   manager's Telegram (A3). Same runtime image and hardening as the API.
+# - tunnel: outbound-only Cloudflare Tunnel that exposes ONLY the signed
+#   webhook routes (C5). The console stays on the hospital network; set
+#   CVG_HARNESS_PUBLIC_BIND to the server's LAN address.
+# Secrets come from Vault (C4), rendered into /etc/cvg-harness/*.env by
+# deploy/harness/vault/render-env.sh before `up`.
+
+services:
+  postgres:
+    # On premises this is not the rehearsal instance: it always runs.
+    profiles: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${CVG_HARNESS_ONPREM_PG_SUPERUSER_PASSWORD:?set CVG_HARNESS_ONPREM_PG_SUPERUSER_PASSWORD (from Vault; used only by the init and the role scripts)}
+      POSTGRES_DB: ${CVG_HARNESS_LOCAL_PG_DATABASE:-cvg}
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    volumes:
+      - type: bind
+        source: ${CVG_HARNESS_PG_DATA_DIR:-/var/lib/cvg-harness/postgres}
+        target: /var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 2G
+
+  alert-relay:
+    image: ${CVG_HARNESS_IMAGE_REPOSITORY:?set CVG_HARNESS_IMAGE_REPOSITORY}@${CVG_HARNESS_IMAGE_DIGEST:?set CVG_HARNESS_IMAGE_DIGEST}
+    command: ['node', '/relay/telegram-relay.mjs']
+    user: '10001:10001'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=4m
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+    restart: unless-stopped
+    environment:
+      ALERT_RELAY_SECRET: ${CVG_STOP_ALERT_WEBHOOK_SECRET:?set CVG_STOP_ALERT_WEBHOOK_SECRET}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN (from Vault)}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?set TELEGRAM_CHAT_ID}
+      ALERT_RELAY_PORT: '8790'
+    volumes:
+      - type: bind
+        source: ./alert-relay
+        target: /relay
+        read_only: true
+    networks: [harness]
+    expose: ['8790']
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8790/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+          pids: 64
+
+  tunnel:
+    image: ${CVG_HARNESS_TUNNEL_IMAGE:?set CVG_HARNESS_TUNNEL_IMAGE (cloudflare/cloudflared@sha256:...)}
+    command:
+      [
+        'tunnel',
+        '--no-autoupdate',
+        '--config',
+        '/etc/cloudflared/config.yml',
+        'run'
+      ]
+    user: '65532:65532'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: ${CVG_HARNESS_TUNNEL_CONFIG:-/etc/cvg-harness/tunnel/config.yml}
+        target: /etc/cloudflared/config.yml
+        read_only: true
+      - type: bind
+        source: ${CVG_HARNESS_TUNNEL_CREDENTIALS:-/etc/cvg-harness/tunnel/credentials.json}
+        target: /etc/cloudflared/credentials.json
+        read_only: true
+      - type: bind
+        source: ${CVG_HARNESS_TUNNEL_ORIGIN_CA:-/etc/cvg-harness/tunnel/origin-ca.pem}
+        target: /etc/cloudflared/origin-ca.pem
+        read_only: true
+    networks: [harness]
+    depends_on:
+      proxy:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+          pids: 64

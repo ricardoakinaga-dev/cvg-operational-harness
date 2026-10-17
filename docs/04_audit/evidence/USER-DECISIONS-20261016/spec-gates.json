@@ -1,0 +1,80 @@
+{
+  "date": "2026-10-16",
+  "decidedBy": "usuário (Ricardo Akinaga), por perguntas na sessão Claude Code f5, depois de resumos independentes de cada SPEC",
+  "userRequest": "vamos decidir o que tiver que resolver",
+  "bindingRule": "A decisão vale para o SHA-256 abaixo. Nas aprovações com ajustes, a revisão que aplicar SOMENTE os ajustes listados (redução de escopo, fatiamento, número de migration) segue com uma revisão técnica independente, sem novo gate humano (D3 do roadmap 0379). Qualquer ampliação de escopo, contrato, schema ou segurança além do aprovado exige novo gate T3.",
+  "migrationOrder": "0029 (composição 0217, hoje só na worktree do PARE100) é integrada primeiro no PAR-G01; depois 0030 = SPEC0225 (PAR-K03 precede PAR-S01 no backlog 0380); depois 0031 = SPEC0221. A SPEC0226 está adiada e não reserva número. Reconfirmar o inventário antes de cada BUILD.",
+  "gates": {
+    "SPEC0220": {
+      "file": "docs/02_spec/0220_pare100_durable_kernel_boundary_qualification.md",
+      "sha256": "211d341fed2bb70d07ab525e5e23279803d9fe387295bb14d4669ad22aa4d9a5",
+      "decision": "DEFERRED",
+      "userChoice": "Adiar; refazer na 0227 (Recomendado)",
+      "reason": "Pacote desatualizado: o próprio ledger registra 437 MATCH e 28 DRIFT de 465 pins; a qualificação corrente está sendo redesenhada como 0227.",
+      "conditions": [
+        "Recompor contra a fonte e os emits atuais com 0 DRIFT",
+        "Declarar se a 0227 substitui a 0220",
+        "Preferir critério de congelamento mais estável que pins por byte de emit, se o checker permitir",
+        "Qualificar sites de processo de teste só depois de a unidade de suporte de testes 0224 estabilizar",
+        "Trazer como pacote único no gate semanal"
+      ],
+      "parCards": ["PAR-K01"]
+    },
+    "SPEC0221": {
+      "file": "docs/02_spec/0221_pare100_public_session_persistence.md",
+      "sha256": "1f9490ccee25f246e57a7c9c096c41c2572818c60e2c7bae5a4d315ad8e170e4",
+      "decision": "APPROVED_WITH_ADJUSTMENTS",
+      "userChoice": "Aprovar com ajustes (Recomendado)",
+      "adjustments": [
+        "Primeira fatia: dono exclusivo, create/open/read/append/flush/close e a migration; recuperação por ticket e shutdown agregado ficam para fatia posterior",
+        "Provas reduzidas ao aceite do PAR-S01: dois processos, writer antigo recusado, isolamento de tenant, kill e reabertura",
+        "Número de migration fixado sem colidir com a SPEC0225 (ordem acima: 0031)",
+        "Limite de conexões (maxOpenWriters) e proibição de PgBouncer em modo transaction declarados como pré-requisito de implantação",
+        "PAR-S04 e PAR-S05 só consomem a API depois do gate desta SPEC"
+      ],
+      "parCards": ["PAR-S01"]
+    },
+    "SPEC0222": {
+      "file": "docs/02_spec/0222_pare100_managed_capability_lifecycle.md",
+      "sha256": "bbe359fbd7c52b2e037eb7240c195244f7e6063e4bfa5638e7eedc73d7e82c31",
+      "decision": "APPROVED_WITH_ADJUSTMENTS",
+      "userChoice": "Aprovar com ajustes (Recomendado)",
+      "adjustments": [
+        "Primeira fatia: gerações, lease, troca de capabilities e fechamento com quiescência",
+        "Cenários reduzidos ao aceite do PAR-K04: troca com turno em curso sem efeito duplicado, unload ou reordenação de controle negado e auditado, close durante uso, rollback",
+        "Limites numéricos, receipts de lifetime, idempotência por requestId e reconciliação de evidência adiados até haver necessidade",
+        "Definir antes do BUILD a relação com PluginRegistry (plataforma) e CapabilityRegistry (harness), sem criar terceira camada sem dono",
+        "Confirmar que a correção de sandbox em capability-boundary.ts não colide com a SPEC0223"
+      ],
+      "parCards": ["PAR-K04"]
+    },
+    "SPEC0225": {
+      "file": "docs/02_spec/0225_pare100_complete_tool_result_journal.md",
+      "sha256": "04b92ba4d13b1ed58157a24258cade87d8d6d31df833ef6c1969059772cc6da5",
+      "decision": "APPROVED_WITH_ADJUSTMENTS",
+      "userChoice": "Aprovar com ajustes (Recomendado)",
+      "adjustments": [
+        "Corte exclusivo com parada aceito explicitamente (não há produção hoje); sem operação mista",
+        "Teto de armazenamento menor que 8 MiB, alinhado ao contexto da 0224 com folga, ou medido antes de manter 8 MiB",
+        "Primeiro BUILD sem J14 (dois processos) e sem o drill completo J15 de rollback e restore; manter J01–J04, J05–J07 mínimos e J08–J12",
+        "Reservar o número de migration no inventário atual (ordem acima: 0030) e registrar claim antes do BUILD",
+        "Registrar que a 0225 não resolve NUL em outros campos JSONB nem fecha a rota publicada (0226)"
+      ],
+      "parCards": ["PAR-K03", "PAR-C03"]
+    },
+    "SPEC0226": {
+      "file": "docs/02_spec/0226_pare100_published_complete_context.md",
+      "sha256": "48d73db111dddaae4301b1702ead67efad4bffa2ceaea2e81a3a3bc57bc820ab",
+      "decision": "DEFERRED",
+      "userChoice": "Adiar e reduzir (Recomendado)",
+      "reason": "Depende da 0225 implementada; 80 cenários e migration permanente de fence para um modo que só roda em teste são desproporcionais.",
+      "conditions": [
+        "Reapresentar só depois da 0225 implementada",
+        "Escopo mínimo que prove o PAR-K03: queda entre modelo e ferramenta, entre ferramenta e resultado, duplicata de efeito e ACK",
+        "Sem fence de geração e triggers, se possível; avaliar se o índice cabe na migration da 0225",
+        "Resumo de decisão de 1 a 2 páginas separado do texto normativo"
+      ],
+      "parCards": ["PAR-K01", "PAR-K03"]
+    }
+  }
+}

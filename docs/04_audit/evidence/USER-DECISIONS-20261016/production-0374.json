@@ -1,0 +1,58 @@
+{
+  "date": "2026-10-16",
+  "decidedBy": "usuário (Ricardo Akinaga), por perguntas na sessão Claude Code f5",
+  "plan": "docs/03_build/0374_plano_producao_harness.md",
+  "runbook": "docs/08_runtime/0805_runbook_ambiente_real.md",
+  "separateFromParity": "D7 do roadmap 0379: a produção do núcleo segue separada da paridade",
+  "decisions": {
+    "C1_destino": {
+      "choice": "Servidor no hospital (on-premises), Docker Compose e PostgreSQL local",
+      "note": "Substitui o padrão 'VM em nuvem + PG gerenciado' do runbook 0805; exige revisar o runbook e o deploy para o servidor local."
+    },
+    "C4_cofre": {
+      "choice": "HashiCorp Vault auto-hospedado no servidor",
+      "note": "Exige procedimento de unseal, backup do próprio cofre e renderização de /etc/cvg-harness/*.env no deploy."
+    },
+    "C8_identidade": {
+      "choice": "Token interno assinado só para o ensaio da fase C",
+      "note": "D-09 continua valendo: IdP corporativo OIDC com MFA antes do uso pela equipe; provedor ainda não escolhido; rotas OIDC precisam ser compostas na API (achado G2)."
+    },
+    "C6_backup": {
+      "choice": "Dump salvo localmente e no TrueNAS do hospital",
+      "userWords": "o que tem é salvar local + backup no truenas",
+      "G3_bypassrls": "Aceita: papel só de backup, somente leitura, com BYPASSRLS, usado apenas pelo job de backup, nunca pela API ou pelo worker",
+      "recommendationRecorded": "Dump criptografado; snapshots ZFS somente leitura no TrueNAS contra ransomware; ensaio de restore mensal",
+      "residualRisk": "Sem cópia fora do prédio: incêndio, roubo ou desastre local atingem servidor e TrueNAS juntos"
+    },
+    "C5_acesso": {
+      "choice": "Console só na rede interna (VPN para acesso remoto); túnel de saída expõe apenas as rotas de webhook assinadas, sem abrir porta no roteador"
+    },
+    "A3_alerta": {
+      "choice": "Telegram do gestor",
+      "note": "Exige pequeno receptor que verifica a assinatura HMAC e envia ao bot ou grupo do Telegram; precisa de saída de internet do servidor."
+    },
+    "G1_metricas": {
+      "choice": "Logs, /ready, heartbeat e alerta valem como evidência da C7; métricas autenticadas viram cartão futuro"
+    },
+    "G6_registro": {
+      "choice": "GitHub Container Registry privado; o CI publica a imagem com digest e o servidor baixa pelo digest exato",
+      "note": "O token de leitura do registro fica no Vault."
+    },
+    "B5_HISO010": {
+      "choice": "APROVADO (revisão humana T3)",
+      "note": "Barra do harness sem testes do produto; workflow próprio do produto; cobertura do produto passa para a barra 0368. Pendências: primeira execução real no GitHub Actions; workflow do produto ainda não é check obrigatório."
+    },
+    "A2_gitleaks": {
+      "choice": "Allowlist por caminho, restrita aos caminhos triados (evidências históricas e fixtures sintéticas)",
+      "note": "O texto proposto está na rodada PLAN0374-A (triagem dos 105 achados). Ainda não aplicado: a aplicação em .gitleaks.toml é tarefa própria, feita pelo usuário ou com autorização explícita dele, porque a política de permissão da sessão já bloqueou essa mudança como enfraquecimento de segurança."
+    },
+    "G7_rotacao_webhook": {
+      "choice": "Corte coordenado na mesma janela no emissor e no harness; webhooks recusados no meio são reenviados; sem código novo"
+    }
+  },
+  "stillOpen": [
+    "Provedor do IdP OIDC com MFA (D-09) antes do uso pela equipe",
+    "Os dois operadores do ensaio C8 e quem recebe o alerta no Telegram",
+    "Cópia de backup fora do prédio (risco residual registrado)"
+  ]
+}

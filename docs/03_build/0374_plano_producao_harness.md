@@ -122,3 +122,23 @@ com SPEC e gate T3.
 | A3   | ABERTO             | Destino/limiares do alerta continuam decisão de operação                                                                                                                                                                                                                                                                                                                        |
 | A4   | DONE_LOCAL         | Job `image-scan` em `security.yml` (Trivy v0.36.0 pinado): HIGH/CRITICAL com correção falham; sem correção só reportam. F-02 aceito até a base distroless publicar `libssl3` corrigido; prova no primeiro run do CI                                                                                                                                                             |
 | B4   | PARCIAL            | F-03 corrigido em `scripts/restore-audit-chain-proof.ts` (3/3 PASS); F-04 mitigado com `npm run test:e2e:prepare`; F-05/F-06 documentados no runbook 0803. Falta: HISO-005 tornar `boundary:products` viável (com o Fable)                                                                                                                                                      |
+
+## 7. Decisões do usuário — 16/10/2026
+
+Registro completo: [production-0374.json](../04_audit/evidence/USER-DECISIONS-20261016/production-0374.json). A produção do núcleo segue separada da paridade (D7 do [roadmap 0379](0379_roadmap_paridade_100_deepseek.md)).
+
+| Item          | Decisão                                                                                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1 destino    | Servidor no hospital (on-premises), Docker Compose e PostgreSQL local. Substitui o padrão de VM em nuvem do runbook 0805, que precisa ser revisto |
+| C4 cofre      | HashiCorp Vault auto-hospedado no servidor, com unseal e backup do próprio cofre documentados                                                     |
+| C5 acesso     | Console só na rede interna, com VPN para acesso remoto; túnel de saída expõe apenas as rotas de webhook assinadas                                 |
+| C6 backup     | Dump local e no TrueNAS; papel só de backup com `BYPASSRLS` aceito (G3); snapshots ZFS somente leitura; risco residual: sem cópia fora do prédio  |
+| C7 e G1       | Logs, `/ready`, heartbeat e alerta valem como evidência; métricas autenticadas viram cartão futuro                                                |
+| C8 identidade | Token interno assinado só para o ensaio; IdP corporativo OIDC com MFA (D-09) antes do uso pela equipe, provedor a escolher                        |
+| C9 e G6       | Imagem no GitHub Container Registry privado, baixada pelo digest certificado                                                                      |
+| A2            | Allowlist do gitleaks por caminho, restrita aos caminhos triados; aplicação em tarefa própria, com autorização explícita do usuário               |
+| A3            | Alerta no Telegram do gestor, por receptor que verifica a assinatura HMAC                                                                         |
+| G7            | Rotação do segredo de webhook por corte coordenado                                                                                                |
+| B5            | Aprovado na revisão humana T3; pendente a primeira execução real no GitHub Actions                                                                |
+
+Executado no mesmo dia ([resolução](../04_audit/evidence/RESOLVE-20261016/README.md)): runbook 0805 e `deploy/harness/` adaptados ao servidor local (`compose.onprem.yaml`, Vault, túnel, espelho no TrueNAS), receptor do Telegram com testes, allowlist A2 aplicada e verificada. Decisões delegadas: Keycloak no servidor como IdP com MFA antes do uso pela equipe, dois operadores sintéticos no ensaio, cópia fora do prédio recomendada. Próximo passo da trilha: preparar o servidor (Vault, bot, túnel, TrueNAS, certificado, GHCR), reauditoria B6 pelo Codex e depois C2–C10 no servidor.
