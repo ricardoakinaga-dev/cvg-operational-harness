@@ -1,3 +1,7 @@
+# COMMIT — worktree do PARE100 commitada pelo usuário (`a72422be`) — 16/10/2026
+
+- O usuário commitou a worktree `/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree` em `a72422be` na branch local `codex/pare100-exec-20261014-6az3hlay` (30.361 arquivos); a worktree ficou limpa. Gitleaks v8.28.0 com a configuração atual: só o mesmo falso positivo de prosa da SPEC0221, fixado por fingerprint no `.gitleaksignore` do checkout principal; nova varredura com 0 achados. Nada do trabalho do PARE100 depende mais de `/tmp`. Sem push.
+
 # COMMIT — checkout principal limpo: `38f3e18d` (usuário) e `e7475a71` — 16/10/2026
 
 - O usuário commitou pessoalmente todo o pendente do checkout principal em `38f3e18d` (27.559 arquivos, trabalho do PARE100-EXEC e ledgers), na branch local `archive/local-audit-records-20261011`. A sessão f5 fixou em `e7475a71` o falso positivo de prosa da SPEC0221 no `.gitleaksignore`; gitleaks v8.28.0 no histórico completo: 0 achados. Sem push.
