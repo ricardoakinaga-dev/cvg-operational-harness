@@ -1,3 +1,9 @@
+# CERT-CORE — linha estável do núcleo certificada localmente: `CONDITIONAL_GO` em `5a199668` (Claude Code) — 17/10/2026
+
+- Task `CERT-CORE-20261017-F5`, `status: READY_FOR_NEXT_STEP`. Pedido do usuário: testar aqui se o motor está pronto para produção, sem subir nada em construção. [Evidência](04_audit/evidence/CERT-CORE-20261017/README.md).
+- `last_completed_action`: candidata `c2bdb684` (sem PARE100) deu `NO_GO`: lint (helper `sleep` não usado) e imagem de produção que não compilava desde `ca565391` (JSON de schemas fora do build e `packages/sandbox` ausente de `RUNTIME_WORKSPACES`). Correção mínima na branch local `candidate/core-20261017` (`5a199668`): certify 16/16 PASS (unit 3.468, PostgreSQL 302, E2E 12, zero skips), `CONDITIONAL_GO/AAA_CONTROLLED`; imagem compila; smoke de produção 22/22; restore com cadeia PASS; Trivy 0 segredos e 1 HIGH sem correção aceito; gitleaks 0. A mesma correção do build foi aplicada nesta branch de trabalho.
+- `next_action`: condição 5 da 0373 exige push da branch candidata para o CI (autorização do usuário); depois servidor real (C1–C9) e reauditoria C10. O trabalho do PARE100 continua fora da candidata.
+
 # COMMIT — worktree do PARE100 commitada pelo usuário (`a72422be`) — 16/10/2026
 
 - O usuário commitou a worktree `/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree` em `a72422be` na branch local `codex/pare100-exec-20261014-6az3hlay` (30.361 arquivos); a worktree ficou limpa. Gitleaks v8.28.0 com a configuração atual: só o mesmo falso positivo de prosa da SPEC0221, fixado por fingerprint no `.gitleaksignore` do checkout principal; nova varredura com 0 achados. Nada do trabalho do PARE100 depende mais de `/tmp`. Sem push.

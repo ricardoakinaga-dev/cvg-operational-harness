@@ -14,6 +14,8 @@ export const RUNTIME_WORKSPACES = [
   'packages/rag',
   'packages/platform',
   'packages/approval-engine',
+  // PDSH-016: channel-gateway (exam egress) depends on the sandbox package.
+  'packages/sandbox',
   'packages/channel-gateway',
   'packages/policy-engine',
   'packages/model-gateway',
@@ -138,7 +140,10 @@ function createRuntimeProjectConfigs() {
           'tsconfig.runtime.tsbuildinfo'
         )
       },
-      include: [path.join(root, workspace, 'src/**/*.ts')],
+      include: [
+        path.join(root, workspace, 'src/**/*.ts'),
+        path.join(root, workspace, 'src/**/*.json')
+      ],
       exclude: [
         path.join(root, workspace, 'src/**/*.test.ts'),
         path.join(root, workspace, 'src/**/__tests__/**')
