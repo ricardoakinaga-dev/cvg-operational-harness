@@ -33,7 +33,7 @@ describe('reference proof resource ownership', () => {
       cwd: process.cwd()
     }).sort()
     expect(reference).toEqual([
-      'tests/differential/reply-differential.integration.ts',
+      'tests/differential/reply-differential.integration.ts'
     ])
     for (const file of reference) expect(ordinary).not.toContain(file)
     expect(referenceConfig.resolve).toEqual(vitestConfig.resolve)
