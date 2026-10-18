@@ -5,7 +5,8 @@ import {
   assignedService,
   privateBytes,
   startCompleteChild,
-  stopCompleteChildren
+  withCompleteCleanup,
+  cleanupCompleteChildren
 } from './fixtures/complete-process-support.ts'
 /** Assigned synthetic SPEC217/224 bound factory proof; not the published adapter. */
 import type { ChildProcess } from 'node:child_process'
@@ -360,7 +361,7 @@ async function snapshot(db: Pool) {
 }
 async function physical(dbConnection: Connection, executionId: string) {
   const reader = new Client(dbConnection)
-  try {
+  return await withCompleteCleanup(async () => {
     await reader.connect()
     await reader.query("SELECT set_config('cvg.tenant_id',$1,false)", [
       tenantId
@@ -430,9 +431,7 @@ async function physical(dbConnection: Connection, executionId: string) {
       execution_state: 'RUNNING'
     })
     return { identity, row, checkpoint: cp, authority: authority[0] }
-  } finally {
-    await reader.end()
-  }
+  }, [() => reader.end()])
 }
 interface AttemptInput {
   input: RuntimeInput
@@ -635,12 +634,19 @@ async function attempt(args: AttemptInput, db: Pool, conn: Connection) {
     await save(join(args.dir, 'result.json'), record)
     return record
   } catch (error) {
-    await save(join(args.dir, 'error.json'), {
-      error: errorInfo(error),
-      events,
-      calls,
-      measurements
-    })
+    await cleanupCompleteChildren(
+      [],
+      [
+        () =>
+          save(join(args.dir, 'error.json'), {
+            error: errorInfo(error),
+            events,
+            calls,
+            measurements
+          })
+      ],
+      { error }
+    )
     throw error
   }
 }
@@ -869,8 +875,8 @@ async function finishWorker(item: Worker) {
     await readFile(join(item.dir, 'result.json'), 'utf8')
   ) as Awaited<ReturnType<typeof attempt>>
 }
-async function settleWorkers(primary?: unknown) {
-  await stopCompleteChildren(workers, primary)
+async function settleWorkers(primary?: { error: unknown }) {
+  await cleanupCompleteChildren(workers, [], primary)
 }
 if (childInput) {
   describe('SPEC224 assigned bound process', () => {
@@ -885,11 +891,9 @@ if (childInput) {
         throw new Error('Child output outside assigned evidence')
       const conn = await service(),
         db = new Pool({ ...conn, max: 2, application_name: writerApplication })
-      try {
+      return await withCompleteCleanup(async () => {
         await attempt(args, db, conn)
-      } finally {
-        await db.end()
-      }
+      }, [() => db.end()])
     }, 60000)
   })
 } else {
@@ -897,8 +901,7 @@ if (childInput) {
     beforeAll(provision, 60000)
     afterAll(async () => {
       await settleWorkers()
-      await pool?.end()
-      await admin?.end()
+      await cleanupCompleteChildren([], [() => pool?.end(), () => admin?.end()])
     })
     it('BA01 commits one actual receipt before model, settles, rejects old token/simple V2 saves', async () => {
       const db = pool!
@@ -1050,7 +1053,7 @@ if (childInput) {
         async () => {
           const prepared = await prepare(pool!, 'race-' + kind),
             base = { input: prepared.input, fence: prepared.fence, kind }
-          let primary: unknown
+          let primary: { error: unknown } | undefined
           try {
             const left = await worker({
               ...base,
@@ -1143,7 +1146,7 @@ if (childInput) {
                 'Actual distinct Node processes with native CAS/PG guards; same legitimate native bound claim. Losing generic-CAS live usage remains conservative; no rollback or provider-billing inference.'
             })
           } catch (error) {
-            primary = error
+            primary = { error }
             throw error
           } finally {
             await settleWorkers(primary)

@@ -1,6 +1,8 @@
 import {
   inspectCompleteResource,
-  assignedResource
+  assignedResource,
+  withCompleteCleanup,
+  cleanupCompleteChildren
 } from './fixtures/complete-process-support.ts'
 import { createHash } from 'node:crypto'
 import { mkdir, realpath, writeFile } from 'node:fs/promises'
@@ -339,7 +341,7 @@ async function readPhysical(
   writerPid: number
 ) {
   const reader = new Client(servingOptions)
-  try {
+  return await withCompleteCleanup(async () => {
     await reader.connect()
     await reader.query("SELECT set_config('cvg.tenant_id',$1,false)", [
       tenantId
@@ -450,9 +452,7 @@ async function readPhysical(
         }
       }
     }
-  } finally {
-    await reader.end()
-  }
+  }, [() => reader.end()])
 }
 // This deliberately named synthetic pair uses ceil(canonical UTF8 bytes/64),
 // including JSON framing for text. It claims no tokenizer/provider equivalence.
@@ -472,15 +472,9 @@ const modelName = 'toy64.'.padEnd(512, 'm')
 describe('SPEC0224 actual PostgreSQL public decision receipt capacity', () => {
   beforeAll(provision, 60_000)
   afterAll(async () => {
-    try {
+    return await withCompleteCleanup(async () => {
       await save(join(evidence!, 'matrix-summary.json'), traces)
-    } finally {
-      try {
-        await pool?.end()
-      } finally {
-        await admin?.end()
-      }
-    }
+    }, [() => pool?.end(), () => admin?.end()])
   })
   for (const priorReceipts of [false, true]) {
     for (const [freeBytes, paddingCharacter] of [
@@ -846,6 +840,7 @@ describe('SPEC0224 actual PostgreSQL public decision receipt capacity', () => {
           telemetry
         })
         let checkError: unknown
+        let primary: { error: unknown } | undefined
         const observation: Record<string, unknown> = {
           caseName,
           freeBytes,
@@ -1101,32 +1096,42 @@ describe('SPEC0224 actual PostgreSQL public decision receipt capacity', () => {
           observation.verdict = 'IMPLEMENTED_SCOPED_EXECUTION_ONLY'
         } catch (error) {
           checkError = error
+          primary = { error }
           observation.verdict = 'UNPROVEN_FAILURE'
           observation.error = errorInfo(error)
           throw error
         } finally {
-          observation.countsAtFinally = {
-            bodies,
-            completeEntries,
-            calls: calls.length,
-            measurements: measurements.length
-          }
-          observation.events = events
-          observation.writes = writes
-          observation.observerErrors = observerErrors
-          observation.measurements = measurements
-          observation.calls = calls
-          observation.responses = responses
-          observation.audit = audit.events
-          observation.telemetry = telemetry.events
-          traces.push({
-            caseName,
-            verdict: observation.verdict,
-            error: checkError ? errorInfo(checkError) : undefined
-          })
-          await save(join(dir, 'observed.json'), observation)
-          await save(join(dir, 'physical-checkpoints.json'), physicalRecords)
-          await save(join(dir, 'native-journal-trace.json'), journalTrace)
+          await cleanupCompleteChildren(
+            [],
+            [
+              async () => {
+                observation.countsAtFinally = {
+                  bodies,
+                  completeEntries,
+                  calls: calls.length,
+                  measurements: measurements.length
+                }
+                observation.events = events
+                observation.writes = writes
+                observation.observerErrors = observerErrors
+                observation.measurements = measurements
+                observation.calls = calls
+                observation.responses = responses
+                observation.audit = audit.events
+                observation.telemetry = telemetry.events
+                traces.push({
+                  caseName,
+                  verdict: observation.verdict,
+                  error: primary ? errorInfo(checkError) : undefined
+                })
+              },
+              () => save(join(dir, 'observed.json'), observation),
+              () =>
+                save(join(dir, 'physical-checkpoints.json'), physicalRecords),
+              () => save(join(dir, 'native-journal-trace.json'), journalTrace)
+            ],
+            primary
+          )
         }
       }, 60_000)
     }

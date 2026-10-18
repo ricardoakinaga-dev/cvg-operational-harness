@@ -1,7 +1,10 @@
 import {
   inspectCompleteResource,
   assignedResource,
-  ownedPath
+  ownedPath,
+  withCompleteCleanup,
+  cleanupCompleteChildren,
+  completeCleanupError
 } from './fixtures/complete-process-support.ts'
 /** SPEC217/224 synthetic settlement containment; trusted prepared fixture, not consumer lifecycle. */
 import { appendFileSync } from 'node:fs'
@@ -130,6 +133,14 @@ function instrumentSql(client: Client | PoolClient, label: string) {
       JSON.stringify(value, tagged) + '\n',
       { mode: 0o600 }
     )
+  const failed = (error: unknown, record: unknown): never => {
+    try {
+      wire(record)
+    } catch (diagnostic) {
+      throw completeCleanupError([error, diagnostic])!.error
+    }
+    throw error
+  }
   client.query = ((...args: unknown[]) => {
     const sequence = ++sqlSequence
     const callback = args.at(-1)
@@ -143,13 +154,33 @@ function instrumentSql(client: Client | PoolClient, label: string) {
     })
     if (typeof callback === 'function') {
       args[args.length - 1] = (...returned: unknown[]) => {
-        wire({
-          sequence,
-          type: 'SQL-callback',
-          error: returned[0] ? errorInfo(returned[0]) : null,
-          result: returned[1]
-        })
-        return Reflect.apply(callback, undefined, returned)
+        let diagnostic: { error: unknown } | undefined
+        try {
+          wire({
+            sequence,
+            type: 'SQL-callback',
+            error: returned[0] ? errorInfo(returned[0]) : null,
+            result: returned[1]
+          })
+        } catch (error) {
+          diagnostic = { error }
+        }
+        const errors =
+          returned[0] === null || returned[0] === undefined ? [] : [returned[0]]
+        const delivered = diagnostic ? [...returned] : returned
+        if (diagnostic)
+          delivered[0] = completeCleanupError([
+            ...errors,
+            diagnostic.error
+          ])!.error
+        try {
+          return Reflect.apply(callback, undefined, delivered)
+        } catch (error) {
+          if (diagnostic)
+            throw completeCleanupError([...errors, diagnostic.error, error])!
+              .error
+          throw error
+        }
       }
     }
     try {
@@ -160,15 +191,20 @@ function instrumentSql(client: Client | PoolClient, label: string) {
             wire({ sequence, type: 'SQL-return', result })
             return result
           },
-          (error: unknown) => {
-            wire({ sequence, type: 'SQL-error', error: errorInfo(error) })
-            throw error
-          }
+          (error: unknown) =>
+            failed(error, {
+              sequence,
+              type: 'SQL-error',
+              error: errorInfo(error)
+            })
         )
       return value
     } catch (error) {
-      wire({ sequence, type: 'SQL-error', error: errorInfo(error) })
-      throw error
+      return failed(error, {
+        sequence,
+        type: 'SQL-error',
+        error: errorInfo(error)
+      })
     }
   }) as typeof client.query
 }
@@ -392,7 +428,7 @@ async function physical(
   tenant = tenantId
 ) {
   const reader = new Client(dbConnection)
-  try {
+  return await withCompleteCleanup(async () => {
     await reader.connect()
     instrumentSql(reader, 'fresh-authenticated-service-reader')
     await reader.query("SELECT set_config('cvg.tenant_id',$1,false)", [tenant])
@@ -465,9 +501,7 @@ async function physical(
         fields: physicalQuery.fields
       }
     }
-  } finally {
-    await reader.end()
-  }
+  }, [() => reader.end()])
 }
 async function prepare(
   db: Pool,
@@ -1106,6 +1140,7 @@ function createAttempt(
       return record
     }
   }
+  ownedAttempts.add(attempt)
   return attempt
 }
 async function awaitProvider(a: Attempt) {
@@ -1209,11 +1244,38 @@ function assertUnaccepted(cp: ExecutionCheckpoint) {
   expect(cp.state.toolResultContext?.deliveredThroughStep).toBe(0)
 }
 
+const ownedAttempts = new Set<Attempt>()
+let settlementBarrierFailure: { error: unknown } | undefined
+async function quiesceAttempts(attempts: readonly Attempt[]) {
+  // Release every body before awaiting any runtime; native rejections are settled observations.
+  for (const attempt of attempts) attempt.release.resolve()
+  const results = await Promise.allSettled(
+    attempts.map(async (attempt) => {
+      await attempt.runResult.then(
+        () => {},
+        () => {}
+      )
+      await attempt.joinDelivery()
+    })
+  )
+  const errors = results.flatMap((result) =>
+    result.status === 'rejected' ? [result.reason] : []
+  )
+  const failure = completeCleanupError([
+    ...(settlementBarrierFailure ? [settlementBarrierFailure.error] : []),
+    ...errors
+  ])
+  if (failure) {
+    settlementBarrierFailure = failure
+    throw failure.error
+  }
+}
 const caseIndex: Array<Record<string, unknown>> = []
 async function caseRun(
   id: string,
   body: (attempts: Attempt[]) => Promise<void>
 ) {
+  if (settlementBarrierFailure) throw settlementBarrierFailure.error
   sqlScope = id
   const dir = join(output, id),
     attempts: Attempt[] = []
@@ -1223,54 +1285,78 @@ async function caseRun(
     tenant225: await snapshot(pool!, tenantB)
   }
   await save(join(dir, 'db18-before-private.json'), before)
-  let failure: unknown
+  let failure: { error: unknown } | undefined
   try {
     await body(attempts)
   } catch (error) {
-    failure = error
-  } finally {
-    for (const a of attempts) {
-      try {
-        await a.finish()
-      } catch (error) {
-        failure ??= error
-        await save(join(a.dir, 'finish-error.json'), {
-          error: errorInfo(error),
-          events: a.events,
-          calls: a.calls,
-          measurements: a.measurements
-        })
-      }
-    }
-    await save(join(dir, 'db18-after-private.json'), {
-      tenant224: await snapshot(pool!),
-      tenant225: await snapshot(pool!, tenantB)
-    })
-    const record = {
-      id,
-      containment: failure ? 'FAIL' : 'PASS',
-      error: failure ? errorInfo(failure) : null,
-      functionalQualification:
-        id === 'SP06' || id === 'SP07'
-          ? 'FAIL_INVALID_PAIR_NOT_QUALIFIED'
-          : 'NOT_A_PROVIDER_QUALIFICATION',
-      privateByDefault: true,
-      rawFiles: savedFiles.filter((p) => p.startsWith(dir + '/')),
-      attempts: attempts.map((a) => ({
-        result: join(a.dir, 'result.json'),
-        inputAuthority: join(a.prepared.dir, 'native-authority.json'),
-        calls: a.calls,
-        measurements: a.measurements,
-        executionId: a.prepared.input.executionId,
-        tenantId: a.prepared.input.tenantId
-      })),
-      limitations:
-        'Synthetic trusted prepared support; actual public factory/Hybrid/native admission/CAS/claim. Parent RUNNING/OPEN or FAULTED remains; no consumer ACK, lifecycle completion, real billing, full TR05 or global/program closure.'
-    }
-    await save(join(dir, 'case-summary-index.json'), record)
-    caseIndex.push(record)
+    failure = { error }
   }
-  if (failure) throw failure
+  const remember = (action: () => Promise<unknown>) => async () => {
+    try {
+      return await action()
+    } catch (error) {
+      failure ??= { error }
+      throw error
+    }
+  }
+  await cleanupCompleteChildren(
+    [{ stop: () => quiesceAttempts(attempts) }],
+    [
+      ...attempts.map((a) =>
+        remember(async () => {
+          try {
+            await a.finish()
+          } catch (error) {
+            await cleanupCompleteChildren(
+              [],
+              [
+                () =>
+                  save(join(a.dir, 'finish-error.json'), {
+                    error: errorInfo(error),
+                    events: a.events,
+                    calls: a.calls,
+                    measurements: a.measurements
+                  })
+              ],
+              { error }
+            )
+          }
+        })
+      ),
+      remember(async () => {
+        await save(join(dir, 'db18-after-private.json'), {
+          tenant224: await snapshot(pool!),
+          tenant225: await snapshot(pool!, tenantB)
+        })
+      }),
+      remember(async () => {
+        const record = {
+          id,
+          containment: failure ? 'FAIL' : 'PASS',
+          error: failure ? errorInfo(failure.error) : null,
+          functionalQualification:
+            id === 'SP06' || id === 'SP07'
+              ? 'FAIL_INVALID_PAIR_NOT_QUALIFIED'
+              : 'NOT_A_PROVIDER_QUALIFICATION',
+          privateByDefault: true,
+          rawFiles: savedFiles.filter((p) => p.startsWith(dir + '/')),
+          attempts: attempts.map((a) => ({
+            result: join(a.dir, 'result.json'),
+            inputAuthority: join(a.prepared.dir, 'native-authority.json'),
+            calls: a.calls,
+            measurements: a.measurements,
+            executionId: a.prepared.input.executionId,
+            tenantId: a.prepared.input.tenantId
+          })),
+          limitations:
+            'Synthetic trusted prepared support; actual public factory/Hybrid/native admission/CAS/claim. Parent RUNNING/OPEN or FAULTED remains; no consumer ACK, lifecycle completion, real billing, full TR05 or global/program closure.'
+        }
+        await save(join(dir, 'case-summary-index.json'), record)
+        caseIndex.push(record)
+      })
+    ],
+    failure
+  )
 }
 function addAttempt(
   attempts: Attempt[],
@@ -1306,7 +1392,7 @@ async function uncertain(a: Attempt, status = 'UNKNOWN') {
 describe('SPEC217/224 native public persistent settlement/failure proof', () => {
   beforeAll(provision, 60000)
   afterAll(async () => {
-    try {
+    return await withCompleteCleanup(async () => {
       await save(join(output, 'case-summary-index.json'), {
         cases: caseIndex,
         sqlWire: join(output, 'sql-wire-private.jsonl'),
@@ -1315,10 +1401,15 @@ describe('SPEC217/224 native public persistent settlement/failure proof', () => 
         schema:
           'R12-compatible result.json and physical {row,checkpoint,identity,authority}; all file paths are actual saved raw files'
       })
-    } finally {
-      await pool?.end()
-      await admin?.end()
-    }
+    }, [
+      async () => {
+        await quiesceAttempts([...ownedAttempts])
+        await cleanupCompleteChildren(
+          [],
+          [() => pool?.end(), () => admin?.end()]
+        )
+      }
+    ])
   })
   it('SP01 identical native RESULT after SETTLED and port close is an exact no-op', () =>
     caseRun('SP01', async (attempts) => {
@@ -1525,7 +1616,7 @@ describe('SPEC217/224 native public persistent settlement/failure proof', () => 
             'main',
             { fault: 'hold' }
           )
-          try {
+          return await withCompleteCleanup(async () => {
             await awaitProvider(a)
             if (id === 'SP11') {
               a.event('external-native-abort', { bodyAlreadyComputed: true })
@@ -1567,11 +1658,13 @@ describe('SPEC217/224 native public persistent settlement/failure proof', () => 
               nativeFenceError: 'lease_lost',
               note: 'RESERVED is not called UNKNOWN; terminal diagnostic may be saved while original receipt remains RESERVED.'
             })
-          } finally {
-            a.release.resolve()
-            await a.joinDelivery()
-            await a.runResult
-          }
+          }, [
+            async () => {
+              a.release.resolve()
+              await a.joinDelivery()
+              await a.runResult
+            }
+          ])
         })
     )
   it(
@@ -1587,7 +1680,7 @@ describe('SPEC217/224 native public persistent settlement/failure proof', () => 
           1000
         )
         const a = addAttempt(attempts, prepared, 'main', { fault: 'hold' })
-        try {
+        return await withCompleteCleanup(async () => {
           await awaitProvider(a)
           const lease = await withTenantContext(pool!, tenantId, async (c) => {
             const sql = `SELECT p.attempt,p.lease_owner,p.lease_until AS parent_lease_until,q.attempts AS queue_attempt,q.lease_owner AS queue_owner,q.lease_until AS queue_lease_until,o.attempts AS outer_attempt,o.lease_owner AS outer_owner,o.lease_until AS outer_lease_until,b.expires_at AS prepared_expires_at,clock_timestamp() AS observed_at,GREATEST(p.lease_until,q.lease_until,o.lease_until) AS max_lease_until FROM operational_executions p JOIN operational_execution_outbox q ON q.tenant_id=p.tenant_id AND q.execution_id=p.id JOIN controlled_published_bindings b ON b.tenant_id=p.tenant_id AND b.execution_id=p.id JOIN outbox_events o ON o.tenant_id=b.tenant_id AND o.id=b.outbox_id WHERE p.tenant_id=$1 AND p.id=$2`
@@ -1684,11 +1777,13 @@ describe('SPEC217/224 native public persistent settlement/failure proof', () => 
             noSecondModel: a.calls === 1,
             nativeFenceRefusalRequired: true
           })
-        } finally {
-          a.release.resolve()
-          await a.joinDelivery()
-          await a.runResult
-        }
+        }, [
+          async () => {
+            a.release.resolve()
+            await a.joinDelivery()
+            await a.runResult
+          }
+        ])
       }),
     60000
   )

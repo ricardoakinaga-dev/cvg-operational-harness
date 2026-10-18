@@ -1,4 +1,5 @@
 // @vitest-environment node
+import ts from 'typescript'
 import { spawn, execFile, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
@@ -23,7 +24,9 @@ import {
   assignedResource,
   inspectCompleteResource,
   stopCompleteChildren,
-  cleanupCompleteChildren
+  cleanupCompleteChildren,
+  withCompleteCleanup,
+  completeCleanupError
 } from './fixtures/complete-process-support.ts'
 
 const virtual = vi.hoisted(() => ({
@@ -1035,3 +1038,680 @@ it.each(['store-restart', 'public-restart'] as const)(
     }
   }
 )
+
+// Recovery controls execute actual private consumer scopes with finite I/O replacements.
+async function cleanupConsumerSource(name: string) {
+  const native =
+    await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  const text = await native.readFile(new URL(name, import.meta.url), 'utf8')
+  return ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true)
+}
+function cleanupSourceFunction(source: ts.SourceFile, name: string) {
+  const node = source.statements.find(
+    (n): n is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(n) && n.name?.text === name
+  )
+  if (!node) throw new Error('Missing real consumer function: ' + name)
+  return node.getText(source)
+}
+function compileCleanupScope(code: string, names: string[], values: unknown[]) {
+  const output = ts.transpileModule(code, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.None
+    }
+  }).outputText
+  return new Function('exports', ...names, output)({}, ...values)
+}
+function cleanupGraphContains(
+  error: unknown,
+  target: unknown,
+  seen = new Set<unknown>()
+): boolean {
+  if (Object.is(error, target)) return true
+  if (!error || typeof error !== 'object' || seen.has(error)) return false
+  seen.add(error)
+  return (
+    ('cause' in error && cleanupGraphContains(error.cause, target, seen)) ||
+    (error instanceof AggregateError &&
+      error.errors.some((e) => cleanupGraphContains(e, target, seen)))
+  )
+}
+async function cleanupOutcome(action: () => unknown) {
+  try {
+    return { ok: true as const, value: await action() }
+  } catch (error) {
+    return { ok: false as const, error }
+  }
+}
+it.each([undefined, null, false, 0, '', new Error('primary')])(
+  'retains exact primary %s through all safe cleanup failures',
+  async (primary) => {
+    const one = new Error('first cleanup'),
+      two = new Error('second cleanup')
+    const order: number[] = []
+    const result = await cleanupOutcome(() =>
+      withCompleteCleanup(() => {
+        throw primary
+      }, [
+        () => {
+          order.push(1)
+          throw one
+        },
+        async () => {
+          order.push(2)
+          throw two
+        }
+      ])
+    )
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('Unexpected cleanup success')
+    expect((result.error as AggregateError).cause).toBe(primary)
+    for (const error of [primary, one, two])
+      expect(cleanupGraphContains(result.error, error)).toBe(true)
+    expect(order).toEqual([1, 2])
+  }
+)
+it('retains return values and singular error identity without closing transferred owners', async () => {
+  const value = {},
+    primary = new Error('singular'),
+    close = vi.fn()
+  expect(await withCompleteCleanup(() => value, [close])).toBe(value)
+  expect(close).toHaveBeenCalledTimes(1)
+  const failure = await cleanupOutcome(() =>
+    withCompleteCleanup(() => {
+      throw primary
+    }, [])
+  )
+  expect(failure).toEqual({ ok: false, error: primary })
+  expect(completeCleanupError([])).toBeUndefined()
+  expect(completeCleanupError([undefined])).toEqual({ error: undefined })
+})
+it('observes every stop even when an earlier stop throws synchronously; no DB after failed join', async () => {
+  const primary = false,
+    join = new Error('sync stop'),
+    seen = vi.fn(),
+    db = vi.fn()
+  const result = await cleanupOutcome(() =>
+    cleanupCompleteChildren(
+      [
+        {
+          stop: () => {
+            throw join
+          }
+        },
+        {
+          stop: async () => {
+            seen()
+          }
+        }
+      ],
+      [db],
+      { error: primary }
+    )
+  )
+  expect(seen).toHaveBeenCalledTimes(1)
+  expect(db).not.toHaveBeenCalled()
+  if (result.ok) throw new Error('Unconfirmed join accepted')
+  expect(cleanupGraphContains(result.error, primary)).toBe(true)
+  expect(cleanupGraphContains(result.error, join)).toBe(true)
+})
+it.each([
+  'complete-bound-admission-postgres.integration.ts',
+  'complete-tool-process-restart.test.ts',
+  'complete-tool-public-restart.test.ts',
+  'complete-admission-capacity-postgres.integration.ts',
+  'complete-settlement-public-postgres.integration.ts',
+  'fixtures/complete-process-support.ts'
+])('real resource wrappers in %s preserve all four outcomes', async (name) => {
+  const source = await cleanupConsumerSource(name)
+  const calls: ts.CallExpression[] = []
+  function visit(node: ts.Node) {
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.getText(source) === 'withCompleteCleanup' &&
+      node.arguments.length === 2 &&
+      /^\[\s*\(\) => (?:pool|db|reader|handle|executable)\??\.(?:end|close)\(\)/.test(
+        node.arguments[1]!.getText(source)
+      )
+    )
+      calls.push(node)
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  expect(calls.length).toBeGreaterThan(0)
+  const printer = ts.createPrinter()
+  for (const call of calls)
+    for (const bodyFails of [false, true])
+      for (const closeFails of [false, true]) {
+        const primary = new Error('body'),
+          secondary = new Error('end'),
+          closes: string[] = []
+        const body = ts.createSourceFile(
+          'stub.ts',
+          'async () => body()',
+          ts.ScriptTarget.Latest,
+          true
+        ).statements[0] as ts.ExpressionStatement
+        const expression = ts.factory.updateCallExpression(
+          call,
+          call.expression,
+          call.typeArguments,
+          [body.expression, call.arguments[1]!]
+        )
+        const text = printer.printNode(
+          ts.EmitHint.Expression,
+          expression,
+          source
+        )
+        const pool = {
+          end: () => {
+            closes.push('end')
+            if (closeFails) throw secondary
+          },
+          close: () => {
+            closes.push('close')
+            if (closeFails) throw secondary
+          }
+        }
+        const result = await cleanupOutcome(() =>
+          compileCleanupScope(
+            'return ' + text,
+            [
+              'withCompleteCleanup',
+              'body',
+              'pool',
+              'db',
+              'reader',
+              'handle',
+              'executable',
+              'admin'
+            ],
+            [
+              withCompleteCleanup,
+              () => {
+                if (bodyFails) throw primary
+                return 17
+              },
+              pool,
+              pool,
+              pool,
+              pool,
+              pool,
+              pool
+            ]
+          )
+        )
+        expect(closes.length).toBeGreaterThan(0)
+        expect(result.ok).toBe(!bodyFails && !closeFails)
+        if (!result.ok) {
+          if (bodyFails)
+            expect(cleanupGraphContains(result.error, primary)).toBe(true)
+          if (closeFails)
+            expect(cleanupGraphContains(result.error, secondary)).toBe(true)
+        } else expect(result.value).toBe(17)
+      }
+})
+it.each([
+  'complete-tool-process-restart.test.ts',
+  'complete-tool-public-restart.test.ts'
+])('real connect in %s closes failed construction only', async (name) => {
+  const source = await cleanupConsumerSource(name),
+    code = cleanupSourceFunction(source, 'connect')
+  for (const constructFails of [false, true]) {
+    const primary = new Error('constructor'),
+      secondary = new Error('pool end'),
+      closes = vi.fn(() => {
+        throw secondary
+      })
+    class Pool {
+      end = closes
+    }
+    class Store {
+      constructor() {
+        if (constructFails) throw primary
+      }
+    }
+    const assigned = {
+      claim: { config: 'fixed' },
+      resource: {
+        synthetic: true,
+        exclusiveClaim: 'owned',
+        schemaName: 'pare224_runtime',
+        containerId:
+          '0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c',
+        test_database_url: 'postgres://synthetic@127.0.0.1/synthetic'
+      }
+    }
+    const result = await cleanupOutcome(() =>
+      compileCleanupScope(
+        code + '; return connect();',
+        [
+          'assignedResource',
+          'process',
+          'role',
+          'resourcePath',
+          'Pool',
+          'PostgresExecutionStepStore',
+          'PostgresOperationalEffectJournal',
+          'cleanupCompleteChildren'
+        ],
+        [
+          async () => assigned,
+          {
+            env: {
+              SPEC0224_PG_CHILD_CONFIG: 'fixed',
+              SPEC0224_PUBLIC_CHILD_CONFIG: 'fixed'
+            }
+          },
+          undefined,
+          'fixed',
+          Pool,
+          Store,
+          Store,
+          cleanupCompleteChildren
+        ]
+      )
+    )
+    expect(closes).toHaveBeenCalledTimes(constructFails ? 1 : 0)
+    expect(result.ok).toBe(!constructFails)
+    if (!result.ok) {
+      expect(cleanupGraphContains(result.error, primary)).toBe(true)
+      expect(cleanupGraphContains(result.error, secondary)).toBe(true)
+    }
+  }
+})
+it.each(['sync', 'promise', 'callback'])(
+  'real SQL diagnostic in %s form retains native errors and callback delivery',
+  async (mode) => {
+    const source = await cleanupConsumerSource(
+        'complete-settlement-public-postgres.integration.ts'
+      ),
+      code = cleanupSourceFunction(source, 'instrumentSql')
+    const primary = new Error('SQL'),
+      diagnostic = new Error('wire'),
+      end = new Error('end')
+    let delivered: unknown,
+      count = 0
+    const client = {
+      query: (...args: unknown[]): unknown => {
+        if (mode === 'sync') throw primary
+        if (mode === 'promise') return Promise.reject(primary)
+        ;(args.at(-1) as (error: unknown) => void)(primary)
+        return 'native-handle'
+      }
+    }
+    compileCleanupScope(
+      code + '; instrumentSql(client,"synthetic");',
+      [
+        'client',
+        'appendFileSync',
+        'join',
+        'output',
+        'tagged',
+        'sqlSequence',
+        'sqlScope',
+        'errorInfo',
+        'completeCleanupError'
+      ],
+      [
+        client,
+        (_path: unknown, bytes: string) => {
+          if (JSON.parse(bytes).type !== 'SQL-entry') throw diagnostic
+        },
+        join,
+        '/synthetic',
+        (_k: unknown, v: unknown) => v,
+        0,
+        'case',
+        (e: unknown) => ({ error: String(e) }),
+        completeCleanupError
+      ]
+    )
+    const result = await cleanupOutcome(() =>
+      withCompleteCleanup(async () => {
+        const handle = await client.query(
+          'SELECT synthetic',
+          ...(mode === 'callback'
+            ? [
+                (error: unknown) => {
+                  count++
+                  delivered = error
+                }
+              ]
+            : [])
+        )
+        if (mode === 'callback') {
+          expect(handle).toBe('native-handle')
+          throw delivered
+        }
+      }, [
+        () => {
+          throw end
+        }
+      ])
+    )
+    if (result.ok) throw new Error('SQL/diagnostic errors hidden')
+    for (const error of [primary, diagnostic, end])
+      expect(cleanupGraphContains(result.error, error)).toBe(true)
+    expect(count).toBe(mode === 'callback' ? 1 : 0)
+  }
+)
+async function realSettlementBoundary() {
+  const source = await cleanupConsumerSource(
+    'complete-settlement-public-postgres.integration.ts'
+  )
+  const quiesce = cleanupSourceFunction(source, 'quiesceAttempts'),
+    caseRun = cleanupSourceFunction(source, 'caseRun')
+  let after: ts.Expression | undefined
+  function visit(n: ts.Node) {
+    if (ts.isCallExpression(n) && n.expression.getText(source) === 'afterAll')
+      after = n.arguments[0]
+    ts.forEachChild(n, visit)
+  }
+  visit(source)
+  if (!after) throw new Error('Missing actual afterAll')
+  const events: string[] = [],
+    summaries: unknown[] = [],
+    ownedAttempts = new Set<unknown>()
+  const api = compileCleanupScope(
+    `let settlementBarrierFailure; const caseIndex=[]; ${quiesce}; ${caseRun}; return {caseRun, afterAll:${after.getText(source)}, ownedAttempts};`,
+    [
+      'completeCleanupError',
+      'cleanupCompleteChildren',
+      'withCompleteCleanup',
+      'sqlScope',
+      'output',
+      'join',
+      'mkdir',
+      'snapshot',
+      'pool',
+      'admin',
+      'tenantB',
+      'save',
+      'savedFiles',
+      'errorInfo',
+      'ownedAttempts'
+    ],
+    [
+      completeCleanupError,
+      cleanupCompleteChildren,
+      withCompleteCleanup,
+      'case',
+      '/synthetic',
+      join,
+      async () => {},
+      async () => {
+        events.push('snapshot')
+        return {}
+      },
+      {
+        end: async () => {
+          events.push('pool.end')
+        }
+      },
+      {
+        end: async () => {
+          events.push('admin.end')
+        }
+      },
+      'tenantB',
+      async (path: string, value: unknown) => {
+        if (path.endsWith('case-summary-index.json')) summaries.push(value)
+      },
+      [],
+      (e: unknown) => ({ error: String(e) }),
+      ownedAttempts
+    ]
+  )
+  return {
+    api: api as {
+      caseRun: (
+        id: string,
+        body: (attempts: unknown[]) => Promise<void>
+      ) => Promise<void>
+      afterAll: () => Promise<void>
+      ownedAttempts: Set<unknown>
+    },
+    events,
+    summaries
+  }
+}
+it('real caseRun and hook wait for every delayed runtime before finish, snapshot or end', async () => {
+  const { api, events, summaries } = await realSettlementBoundary()
+  let release!: () => void
+  const late = new Promise<void>((yes) => {
+    release = yes
+  })
+  const attempt = (runResult: Promise<unknown>) => ({
+    release: { resolve() {} },
+    runResult,
+    joinDelivery: async () => {},
+    finish: async () => {
+      events.push('finish')
+    },
+    dir: '/synthetic/a',
+    prepared: { dir: '/synthetic', input: {} },
+    events: [],
+    calls: 0,
+    measurements: 0
+  })
+  const a = attempt(Promise.resolve()),
+    b = attempt(late)
+  const result = cleanupOutcome(() =>
+    api.caseRun('finite', async (attempts) => {
+      attempts.push(a, b)
+      api.ownedAttempts.add(a)
+      api.ownedAttempts.add(b)
+      throw false
+    })
+  )
+  await new Promise((yes) => setTimeout(yes, 0))
+  // Two before snapshots belong to setup, before any attempts exist.
+  expect(events).toEqual(['snapshot', 'snapshot'])
+  release()
+  const observed = await result
+  expect(observed).toEqual({ ok: false, error: false })
+  expect(events).toEqual([
+    'snapshot',
+    'snapshot',
+    'finish',
+    'finish',
+    'snapshot',
+    'snapshot'
+  ])
+  expect((summaries[0] as { containment: string }).containment).toBe('FAIL')
+  await api.afterAll()
+  expect(events.slice(-2)).toEqual(['pool.end', 'admin.end'])
+})
+it('real failed settlement barrier retains falsy primary, observes others, and forbids hook ends', async () => {
+  const { api, events } = await realSettlementBoundary(),
+    joinError = new Error('join'),
+    seen = vi.fn()
+  const attempt = (stop: () => Promise<void>) => ({
+    release: { resolve() {} },
+    runResult: Promise.resolve(),
+    joinDelivery: stop,
+    finish: async () => {
+      events.push('finish')
+    }
+  })
+  const a = attempt(async () => {
+      throw joinError
+    }),
+    b = attempt(async () => {
+      seen()
+    })
+  const result = await cleanupOutcome(() =>
+    api.caseRun('finite', async (attempts) => {
+      attempts.push(a, b)
+      api.ownedAttempts.add(a)
+      api.ownedAttempts.add(b)
+      throw undefined
+    })
+  )
+  if (result.ok) throw new Error('Failed barrier accepted')
+  expect(cleanupGraphContains(result.error, undefined)).toBe(true)
+  expect(cleanupGraphContains(result.error, joinError)).toBe(true)
+  expect(seen).toHaveBeenCalledTimes(1)
+  const hook = await cleanupOutcome(() => api.afterAll())
+  expect(hook.ok).toBe(false)
+  const subsequent = await cleanupOutcome(() =>
+    api.caseRun('after-unconfirmed-join', async () => {})
+  )
+  expect(subsequent.ok).toBe(false)
+  expect(events).toEqual(['snapshot', 'snapshot'])
+  expect(seen).toHaveBeenCalledTimes(2)
+})
+
+it('real HOME acquisition preserves creation/removal failures and transfers success', async () => {
+  const source = await cleanupConsumerSource(
+    'fixtures/complete-process-support.ts'
+  )
+  const code = cleanupSourceFunction(source, 'privateEnvironment')
+  for (const createFails of [false, true])
+    for (const removeFails of [false, true]) {
+      const primary = new Error('mkdir'),
+        secondary = new Error('rm'),
+        rm = vi.fn(async () => {
+          if (removeFails) throw secondary
+        })
+      const result = await cleanupOutcome(() =>
+        compileCleanupScope(
+          code + '; return privateEnvironment("/synthetic");',
+          [
+            'physicalPath',
+            'mkdtemp',
+            'mkdir',
+            'rm',
+            'join',
+            'cleanupCompleteChildren'
+          ],
+          [
+            async () => {},
+            async () => '/synthetic/home',
+            async () => {
+              if (createFails) throw primary
+            },
+            rm,
+            join,
+            cleanupCompleteChildren
+          ]
+        )
+      )
+      expect(rm).toHaveBeenCalledTimes(createFails ? 1 : 0)
+      expect(result.ok).toBe(!createFails)
+      if (!result.ok) {
+        expect(cleanupGraphContains(result.error, primary)).toBe(true)
+        if (removeFails)
+          expect(cleanupGraphContains(result.error, secondary)).toBe(true)
+      }
+    }
+})
+it.each([
+  'complete-tool-public-restart.test.ts',
+  'complete-bound-admission-postgres.integration.ts'
+])(
+  'real diagnostic catches in %s retain primary and all safe saves',
+  async (name) => {
+    const source = await cleanupConsumerSource(name),
+      catches: ts.CatchClause[] = []
+    function visit(n: ts.Node) {
+      if (
+        ts.isCatchClause(n) &&
+        n.block.getText(source).includes('cleanupCompleteChildren') &&
+        /\btrace\b|error\.json/.test(n.block.getText(source))
+      )
+        catches.push(n)
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    expect(catches.length).toBeGreaterThan(0)
+    for (const clause of catches) {
+      const primary = new Error('native'),
+        diagnostic = new Error('diagnostic'),
+        end = new Error('end'),
+        seen: string[] = []
+      const result = await cleanupOutcome(() =>
+        compileCleanupScope(
+          'return withCompleteCleanup(async()=>{ try {throw primary} ' +
+            clause.getText(source) +
+            ' }, [()=>{throw end}]);',
+          [
+            'withCompleteCleanup',
+            'cleanupCompleteChildren',
+            'primary',
+            'end',
+            'trace',
+            'save',
+            'join',
+            'dir',
+            'childRole',
+            'errorInfo',
+            'args',
+            'events',
+            'calls',
+            'measurements',
+            'journalTrace',
+            'method'
+          ],
+          [
+            withCompleteCleanup,
+            cleanupCompleteChildren,
+            primary,
+            end,
+            async () => {
+              seen.push('trace')
+              throw diagnostic
+            },
+            async () => {
+              seen.push('save')
+              throw diagnostic
+            },
+            join,
+            '/synthetic',
+            'writer',
+            (e: unknown) => ({ error: String(e) }),
+            { dir: '/synthetic' },
+            [],
+            [],
+            [],
+            [],
+            'get'
+          ]
+        )
+      )
+      if (result.ok) throw new Error('Diagnostic swallowed native error')
+      for (const error of [primary, diagnostic, end])
+        expect(cleanupGraphContains(result.error, error)).toBe(true)
+      expect(seen.length).toBeGreaterThan(0)
+      if (
+        clause.getText(source).includes('[\n          trace,') ||
+        /\[\s*trace,/.test(clause.getText(source))
+      )
+        expect(seen).toEqual(['trace', 'save'])
+    }
+  }
+)
+it('real createAttempt registration tail transfers every attempt to hook ownership', async () => {
+  const source = await cleanupConsumerSource(
+    'complete-settlement-public-postgres.integration.ts'
+  )
+  const fn = source.statements.find(
+    (n): n is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(n) && n.name?.text === 'createAttempt'
+  )!
+  const tail = fn
+    .body!.statements.slice(-2)
+    .map((n) => n.getText(source))
+    .join('\n')
+  const ownedAttempts = new Set(),
+    attempt = { synthetic: true }
+  const returned = compileCleanupScope(
+    tail,
+    ['ownedAttempts', 'attempt'],
+    [ownedAttempts, attempt]
+  )
+  expect(returned).toBe(attempt)
+  expect(ownedAttempts.has(attempt)).toBe(true)
+})

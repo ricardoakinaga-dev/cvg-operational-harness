@@ -2,10 +2,11 @@ import {
   assignedResource,
   startCompleteChild,
   completeReadiness,
-  stopCompleteChildren,
   completeArgv,
   privateBytes,
-  ownedPath
+  ownedPath,
+  withCompleteCleanup,
+  cleanupCompleteChildren
 } from './fixtures/complete-process-support.ts'
 /** SPEC0224 bounded public runtime proof; local synthetic PG only. No production claim. */
 import { createHash, randomUUID } from 'node:crypto'
@@ -131,15 +132,20 @@ async function connect() {
     options: `-c search_path=${r.schemaName},public`,
     max: 3
   })
-  return {
-    pool,
-    store: new PostgresExecutionStepStore(pool),
-    journal: new PostgresOperationalEffectJournal(pool)
+  try {
+    return {
+      pool,
+      store: new PostgresExecutionStepStore(pool),
+      journal: new PostgresOperationalEffectJournal(pool)
+    }
+  } catch (error) {
+    await cleanupCompleteChildren([], [() => pool.end()], { error })
+    throw error
   }
 }
 async function snapshot(dir: string, label: string, executionId: string) {
   const { pool, store } = await connect()
-  try {
+  return await withCompleteCleanup(async () => {
     const rows = await withTenantContext(pool, tenantId, async (c) => ({
       execution: (
         await c.query(
@@ -173,22 +179,18 @@ async function snapshot(dir: string, label: string, executionId: string) {
     }
     await save(join(dir, `${label}.json`), value)
     return value
-  } finally {
-    await pool.end()
-  }
+  }, [() => pool.end()])
 }
 async function seed(executionId: string) {
   const { pool } = await connect()
-  try {
+  return await withCompleteCleanup(async () => {
     await withTenantContext(pool, tenantId, (c) =>
       c.query(
         "INSERT INTO operational_executions (tenant_id,id,idempotency_key,request_hash,request,state) VALUES ($1,$2,$2,$3,'{}'::jsonb,'RECEIVED')",
         [tenantId, executionId, sha(executionId)]
       )
     )
-  } finally {
-    await pool.end()
-  }
+  }, [() => pool.end()])
 }
 
 async function runChild(
@@ -197,248 +199,252 @@ async function runChild(
   childRole: string
 ) {
   const { pool, store, journal } = await connect()
-  const audit = new RecordingAuditSink(),
-    telemetry = new RecordingTelemetrySink()
-  const requests: unknown[] = [],
-    results: unknown[] = [],
-    casTrace: unknown[] = [],
-    journalTrace: unknown[] = []
-  const trace = async () =>
-    save(join(dir, `${childRole}.trace.json`), {
-      pid: process.pid,
-      requests,
-      results,
-      casTrace,
-      journalTrace,
-      audit: audit.events
-    })
-  // Observational wrappers call the native methods unchanged and rethrow native failures.
-  for (const method of [
-    'reserve',
-    'markStarted',
-    'confirm',
-    'fail',
-    'markUncertain',
-    'get'
-  ] as const) {
-    const original = journal[method].bind(journal)
-    Object.defineProperty(journal, method, {
-      value: async (...args: unknown[]) => {
-        try {
-          const result = await (
-            original as (...a: unknown[]) => Promise<unknown>
-          )(...args)
-          journalTrace.push({ method, args, result })
-          await trace()
-          if (
-            childRole === 'writer' &&
-            input.name === 'json-null-value' &&
-            method === 'confirm'
-          ) {
-            await save(join(dir, 'committed.json'), {
-              pid: process.pid,
-              phase: 'CONFIRMED_JOURNAL_BEFORE_RESULT_CHECKPOINT',
-              checkpoint: await store.loadCheckpoint(
-                tenantId,
-                input.executionId
-              ),
-              result
-            })
-            process.stdout.write('PUBLIC224_READY CONFIRMED_JOURNAL\n')
-            await new Promise(() => {
-              setInterval(() => {}, 1000)
-            })
+  return await withCompleteCleanup(async () => {
+    const audit = new RecordingAuditSink(),
+      telemetry = new RecordingTelemetrySink()
+    const requests: unknown[] = [],
+      results: unknown[] = [],
+      casTrace: unknown[] = [],
+      journalTrace: unknown[] = []
+    const trace = async () =>
+      save(join(dir, `${childRole}.trace.json`), {
+        pid: process.pid,
+        requests,
+        results,
+        casTrace,
+        journalTrace,
+        audit: audit.events
+      })
+    // Observational wrappers call the native methods unchanged and rethrow native failures.
+    for (const method of [
+      'reserve',
+      'markStarted',
+      'confirm',
+      'fail',
+      'markUncertain',
+      'get'
+    ] as const) {
+      const original = journal[method].bind(journal)
+      Object.defineProperty(journal, method, {
+        value: async (...args: unknown[]) => {
+          try {
+            const result = await (
+              original as (...a: unknown[]) => Promise<unknown>
+            )(...args)
+            journalTrace.push({ method, args, result })
+            await trace()
+            if (
+              childRole === 'writer' &&
+              input.name === 'json-null-value' &&
+              method === 'confirm'
+            ) {
+              await save(join(dir, 'committed.json'), {
+                pid: process.pid,
+                phase: 'CONFIRMED_JOURNAL_BEFORE_RESULT_CHECKPOINT',
+                checkpoint: await store.loadCheckpoint(
+                  tenantId,
+                  input.executionId
+                ),
+                result
+              })
+              process.stdout.write('PUBLIC224_READY CONFIRMED_JOURNAL\n')
+              await new Promise(() => {
+                setInterval(() => {}, 1000)
+              })
+            }
+            return result
+          } catch (e) {
+            journalTrace.push({ method, args, error: errorInfo(e) })
+            await cleanupCompleteChildren([], [trace], { error: e })
+            throw e
           }
-          return result
-        } catch (e) {
-          journalTrace.push({ method, args, error: errorInfo(e) })
-          await trace()
-          throw e
         }
+      })
+    }
+    const cas = store.compareAndSwapCheckpoint.bind(store)
+    store.compareAndSwapCheckpoint = async (value) => {
+      if (childRole.startsWith('race') && value.expected === null) {
+        await save(join(dir, `${childRole}.initial-ready.json`), {
+          pid: process.pid,
+          expected: null
+        })
+        process.stdout.write('PUBLIC224_READY INITIAL_CAS\n')
+        await gate(join(dir, 'race-start.gate'))
       }
-    })
-  }
-  const cas = store.compareAndSwapCheckpoint.bind(store)
-  store.compareAndSwapCheckpoint = async (value) => {
-    if (childRole.startsWith('race') && value.expected === null) {
-      await save(join(dir, `${childRole}.initial-ready.json`), {
-        pid: process.pid,
-        expected: null
-      })
-      process.stdout.write('PUBLIC224_READY INITIAL_CAS\n')
-      await gate(join(dir, 'race-start.gate'))
-    }
-    const result = await cas(value)
-    casTrace.push({ input: value, result })
-    await trace()
-    if (childRole.startsWith('race') && value.expected === null)
-      await save(join(dir, `${childRole}.initial-cas.json`), {
-        pid: process.pid,
-        result
-      })
-    const full = value.next.state.observations.find(
-      (o) =>
-        o.type === 'TOOL_RESULT' &&
-        (o.payload as { completion?: string }).completion === 'COMPLETE'
-    )
-    if (childRole === 'writer' && result.status === 'APPLIED' && full) {
-      await save(join(dir, 'committed.json'), {
-        pid: process.pid,
-        checkpoint: await store.loadCheckpoint(tenantId, input.executionId),
-        cas: value,
-        result
-      })
-      process.stdout.write('PUBLIC224_READY COMMITTED_FULL_TOOL_RESULT\n')
-      await new Promise(() => {
-        setInterval(() => {}, 1000)
-      })
-    }
-    return result
-  }
-  const capabilities = createCapabilityRegistry([
-    {
-      descriptor: {
-        id: toolId,
-        version: '1',
-        description: 'Pure synthetic echo',
-        inputSchema: { type: 'object' },
-        outputSchema: {},
-        risk: 'LOW',
-        sideEffect: 'NONE',
-        idempotent: true,
-        requiresApproval: false,
-        origin: 'core',
-        providerId: 'synthetic.public.restart',
-        providerVersion: '1'
-      },
-      implementation: {
-        validateInput: () => true,
-        validateOutput: () => true,
-        execute: async (toolInput) => {
-          const output = (toolInput as { text: string | null }).text
-          await appendFile(
-            join(dir, 'body-markers.jsonl'),
-            JSON.stringify({
-              pid: process.pid,
-              role: childRole,
-              input: toolInput,
-              output
-            }) + '\n'
-          )
-          process.stdout.write('PUBLIC224_BODY\n')
-          return { status: 'SUCCEEDED', output }
-        }
-      }
-    }
-  ])
-  const model: ModelGateway = {
-    complete: async ({ signal: _signal, ...request }: ModelRequest) => {
-      void _signal
-      requests.push(structuredClone(request))
+      const result = await cas(value)
+      casTrace.push({ input: value, result })
       await trace()
-      await appendFile(
-        join(dir, 'model-markers.jsonl'),
-        JSON.stringify({ pid: process.pid, role: childRole, request }) + '\n'
+      if (childRole.startsWith('race') && value.expected === null)
+        await save(join(dir, `${childRole}.initial-cas.json`), {
+          pid: process.pid,
+          result
+        })
+      const full = value.next.state.observations.find(
+        (o) =>
+          o.type === 'TOOL_RESULT' &&
+          (o.payload as { completion?: string }).completion === 'COMPLETE'
       )
-      expect(request.maxOutputTokens).toBe(512)
-      if (childRole.startsWith('race')) await gate(join(dir, 'race-model.gate'))
-      const frame = JSON.parse(request.messages[1]!.content)
-      const observed = frame.items.find(
-        (i: { value?: { type?: string } }) => i.value?.type === 'TOOL_RESULT'
-      )
-      // The resumed answer comes solely from the actual user JSON TOOL_RESULT payload.
-      const decision = childRole.startsWith('race')
-        ? {
-            decisionType: 'RESPOND',
-            reasonCode: 'GOAL_SATISFIED',
-            responseText: 'one synthetic race decision'
+      if (childRole === 'writer' && result.status === 'APPLIED' && full) {
+        await save(join(dir, 'committed.json'), {
+          pid: process.pid,
+          checkpoint: await store.loadCheckpoint(tenantId, input.executionId),
+          cas: value,
+          result
+        })
+        process.stdout.write('PUBLIC224_READY COMMITTED_FULL_TOOL_RESULT\n')
+        await new Promise(() => {
+          setInterval(() => {}, 1000)
+        })
+      }
+      return result
+    }
+    const capabilities = createCapabilityRegistry([
+      {
+        descriptor: {
+          id: toolId,
+          version: '1',
+          description: 'Pure synthetic echo',
+          inputSchema: { type: 'object' },
+          outputSchema: {},
+          risk: 'LOW',
+          sideEffect: 'NONE',
+          idempotent: true,
+          requiresApproval: false,
+          origin: 'core',
+          providerId: 'synthetic.public.restart',
+          providerVersion: '1'
+        },
+        implementation: {
+          validateInput: () => true,
+          validateOutput: () => true,
+          execute: async (toolInput) => {
+            const output = (toolInput as { text: string | null }).text
+            await appendFile(
+              join(dir, 'body-markers.jsonl'),
+              JSON.stringify({
+                pid: process.pid,
+                role: childRole,
+                input: toolInput,
+                output
+              }) + '\n'
+            )
+            process.stdout.write('PUBLIC224_BODY\n')
+            return { status: 'SUCCEEDED', output }
           }
-        : observed
+        }
+      }
+    ])
+    const model: ModelGateway = {
+      complete: async ({ signal: _signal, ...request }: ModelRequest) => {
+        void _signal
+        requests.push(structuredClone(request))
+        await trace()
+        await appendFile(
+          join(dir, 'model-markers.jsonl'),
+          JSON.stringify({ pid: process.pid, role: childRole, request }) + '\n'
+        )
+        expect(request.maxOutputTokens).toBe(512)
+        if (childRole.startsWith('race'))
+          await gate(join(dir, 'race-model.gate'))
+        const frame = JSON.parse(request.messages[1]!.content)
+        const observed = frame.items.find(
+          (i: { value?: { type?: string } }) => i.value?.type === 'TOOL_RESULT'
+        )
+        // The resumed answer comes solely from the actual user JSON TOOL_RESULT payload.
+        const decision = childRole.startsWith('race')
           ? {
               decisionType: 'RESPOND',
               reasonCode: 'GOAL_SATISFIED',
-              responseText:
-                typeof observed.value.payload.output === 'string'
-                  ? observed.value.payload.output
-                  : canonicalizeCompleteJson(observed.value.payload.output)
+              responseText: 'one synthetic race decision'
             }
-          : {
-              decisionType: 'CALL_TOOL',
-              reasonCode: 'TOOL_REQUIRED',
-              toolId,
-              toolVersion: '1',
-              toolInput: { text: fixture(input.name) }
-            }
-      const text = JSON.stringify(decision)
-      expect(tokens(text)).toBeLessThanOrEqual(request.maxOutputTokens!)
-      const result = {
-        text,
+          : observed
+            ? {
+                decisionType: 'RESPOND',
+                reasonCode: 'GOAL_SATISFIED',
+                responseText:
+                  typeof observed.value.payload.output === 'string'
+                    ? observed.value.payload.output
+                    : canonicalizeCompleteJson(observed.value.payload.output)
+              }
+            : {
+                decisionType: 'CALL_TOOL',
+                reasonCode: 'TOOL_REQUIRED',
+                toolId,
+                toolVersion: '1',
+                toolInput: { text: fixture(input.name) }
+              }
+        const text = JSON.stringify(decision)
+        expect(tokens(text)).toBeLessThanOrEqual(request.maxOutputTokens!)
+        const result = {
+          text,
+          provider: 'synthetic.public.restart',
+          model: 'toy64-v1',
+          inputTokens: tokens(request),
+          outputTokens: tokens(text),
+          costUsd: 0
+        }
+        results.push(result)
+        await trace()
+        return result
+      }
+    }
+    const counter: DecisionInputCounter = {
+      measure: async (request) => ({
+        counterId: 'toy64',
+        counterVersion: '1',
         provider: 'synthetic.public.restart',
         model: 'toy64-v1',
-        inputTokens: tokens(request),
-        outputTokens: tokens(text),
-        costUsd: 0
-      }
-      results.push(result)
-      await trace()
-      return result
+        formattingVersion: '1',
+        inputUpperBoundTokens: tokens(request),
+        contextWindowTokens: 100_000,
+        costUpperBoundUsd: 0
+      })
     }
-  }
-  const counter: DecisionInputCounter = {
-    measure: async (request) => ({
-      counterId: 'toy64',
-      counterVersion: '1',
-      provider: 'synthetic.public.restart',
-      model: 'toy64-v1',
-      formattingVersion: '1',
-      inputUpperBoundTokens: tokens(request),
-      contextWindowTokens: 100_000,
-      costUpperBoundUsd: 0
+    const harness = createOperationalHarness({
+      toolResultContext: { version: 1 },
+      capabilities,
+      effectJournal: journal,
+      stepStore: store,
+      iterativeOrchestrator: new HybridOrchestrator({
+        decisionModel: model,
+        decisionInputCounter: counter,
+        decisionModelSupportsMaxOutputTokens: true
+      }),
+      modelGateway: model,
+      policy: new ScriptedPolicyEngine(),
+      approvals: new InMemoryApprovalEngine(),
+      audit,
+      telemetry
     })
-  }
-  const harness = createOperationalHarness({
-    toolResultContext: { version: 1 },
-    capabilities,
-    effectJournal: journal,
-    stepStore: store,
-    iterativeOrchestrator: new HybridOrchestrator({
-      decisionModel: model,
-      decisionInputCounter: counter,
-      decisionModelSupportsMaxOutputTokens: true
-    }),
-    modelGateway: model,
-    policy: new ScriptedPolicyEngine(),
-    approvals: new InMemoryApprovalEngine(),
-    audit,
-    telemetry
-  })
-  const base = phase3RuntimeInput({
-    tenantId: tenantId as RuntimeInput['tenantId'],
-    executionId: input.executionId
-  })
-  const runtimeInput = {
-    ...base,
-    capabilityFingerprint: capabilities.compositionFingerprint(),
-    agent: phase3AgentProfile({ tools: [toolId] }),
-    userMessage: 'Echo the full synthetic tool output.',
-    budget: { ...base.budget, maxTokens: 10_000 }
-  }
-  await save(join(dir, `${childRole}.runtime-input.json`), runtimeInput)
-  try {
-    const result = await harness.run(runtimeInput)
-    await trace()
-    await save(join(dir, `${childRole}.outcome.json`), {
-      pid: process.pid,
-      result
+    const base = phase3RuntimeInput({
+      tenantId: tenantId as RuntimeInput['tenantId'],
+      executionId: input.executionId
     })
-    process.stdout.write(`PUBLIC224_FINISHED ${result.stopReason}\n`)
-  } catch (e) {
-    await trace()
-    await save(join(dir, `${childRole}.error.json`), errorInfo(e))
-    throw e
-  } finally {
-    await pool.end()
-  }
+    const runtimeInput = {
+      ...base,
+      capabilityFingerprint: capabilities.compositionFingerprint(),
+      agent: phase3AgentProfile({ tools: [toolId] }),
+      userMessage: 'Echo the full synthetic tool output.',
+      budget: { ...base.budget, maxTokens: 10_000 }
+    }
+    await save(join(dir, `${childRole}.runtime-input.json`), runtimeInput)
+    try {
+      const result = await harness.run(runtimeInput)
+      await trace()
+      await save(join(dir, `${childRole}.outcome.json`), {
+        pid: process.pid,
+        result
+      })
+      process.stdout.write(`PUBLIC224_FINISHED ${result.stopReason}\n`)
+    } catch (e) {
+      await cleanupCompleteChildren(
+        [],
+        [trace, () => save(join(dir, `${childRole}.error.json`), errorInfo(e))],
+        { error: e }
+      )
+      throw e
+    }
+  }, [() => pool.end()])
 }
 async function child(childRole: string, dir: string, inputPath: string) {
   const config = process.env.SPEC0224_PUBLIC_CHILD_CONFIG
@@ -543,7 +549,7 @@ if (role) {
           await seed(executionId)
           let writer: Awaited<ReturnType<typeof child>> | undefined
           const ownedChildren: Awaited<ReturnType<typeof child>>[] = []
-          let primary: unknown
+          let primary: { error: unknown } | undefined
           try {
             writer = await child('writer', dir, inputPath)
             ownedChildren.push(writer)
@@ -659,10 +665,10 @@ if (role) {
               fencebound: 'NOT_RUN'
             })
           } catch (error) {
-            primary = error
+            primary = { error }
             throw error
           } finally {
-            await stopCompleteChildren(ownedChildren, primary)
+            await cleanupCompleteChildren(ownedChildren, [], primary)
           }
         },
         90000
@@ -676,7 +682,7 @@ if (role) {
         await save(inputPath, { executionId, name: 'race' })
         await seed(executionId)
         const children: Awaited<ReturnType<typeof child>>[] = []
-        let primary: unknown
+        let primary: { error: unknown } | undefined
         try {
           children.push(await child('race-a', dir, inputPath))
           children.push(await child('race-b', dir, inputPath))
@@ -727,10 +733,10 @@ if (role) {
             reservationRaceSeparate: 'NOT_RUN'
           })
         } catch (error) {
-          primary = error
+          primary = { error }
           throw error
         } finally {
-          await stopCompleteChildren(children, primary)
+          await cleanupCompleteChildren(children, [], primary)
         }
       }, 90000)
     }

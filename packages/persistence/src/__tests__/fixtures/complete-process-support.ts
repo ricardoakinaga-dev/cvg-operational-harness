@@ -95,7 +95,7 @@ export async function ownedPath(
 export async function privateBytes(root: string, path: string) {
   await ownedPath(root, path, 'file')
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
-  try {
+  return await withCompleteCleanup(async () => {
     const stat = await handle.stat()
     if (
       !stat.isFile() ||
@@ -109,9 +109,7 @@ export async function privateBytes(root: string, path: string) {
     if (bytesRead !== stat.size)
       throw new Error('Private file changed while reading')
     return bytes.subarray(0, bytesRead)
-  } finally {
-    await handle.close()
-  }
+  }, [() => handle.close()])
 }
 export async function privateEnvironment(root: string) {
   await physicalPath(root, 'directory')
@@ -120,7 +118,9 @@ export async function privateEnvironment(root: string) {
     for (const part of ['tmp', 'config', 'cache', 'data', 'state'])
       await mkdir(join(home, part), { mode: 0o700 })
   } catch (error) {
-    await rm(home, { recursive: true })
+    await cleanupCompleteChildren([], [() => rm(home, { recursive: true })], {
+      error
+    })
     throw error
   }
   const env: NodeJS.ProcessEnv = {
@@ -560,7 +560,9 @@ export async function startCompleteChild(args: {
       stdio: ['ignore', 'pipe', 'pipe']
     })
   } catch (error) {
-    await rm(home, { recursive: true })
+    await cleanupCompleteChildren([], [() => rm(home, { recursive: true })], {
+      error
+    })
     throw error
   }
   const owned = observeCompleteChild(child, home, {
@@ -588,12 +590,10 @@ export async function inspectCompleteResource(
     throw new Error('Owned local Docker identity required')
   await physicalPath(claim.docker, 'file')
   const executable = await open(claim.docker, 'r')
-  try {
+  await withCompleteCleanup(async () => {
     if (sha(await executable.readFile()) !== claim.dockerSHA256)
       throw new Error('Docker executable differs from claim')
-  } finally {
-    await executable.close()
-  }
+  }, [() => executable.close()])
   const socket = claim.dockerHost.slice('unix://'.length)
   if (
     resolve(socket) !== socket ||
@@ -630,7 +630,9 @@ export async function inspectCompleteResource(
       (error, stdout) => (error ? no(error) : yes(stdout))
     )
   } catch (error) {
-    await rm(home, { recursive: true })
+    await cleanupCompleteChildren([], [() => rm(home, { recursive: true })], {
+      error
+    })
     throw error
   }
   const owned = observeCompleteChild(child, home, {
@@ -640,8 +642,7 @@ export async function inspectCompleteResource(
     termGraceMs: 1000,
     killGraceMs: 2000
   })
-  let primary: unknown
-  try {
+  return await withCompleteCleanup(async () => {
     const stdout = await Promise.race([
       callback,
       owned.done.then(() => {
@@ -668,22 +669,7 @@ export async function inspectCompleteResource(
     )
       throw new Error('Inspect identity/shape mismatch')
     return stdout.toString()
-  } catch (error) {
-    primary = error
-    throw error
-  } finally {
-    try {
-      await owned.stop()
-    } catch (error) {
-      if (primary && primary !== error)
-        throw new AggregateError(
-          [primary, error],
-          'Inspect failed; cleanup also failed',
-          { cause: primary }
-        )
-      throw error
-    }
-  }
+  }, [() => owned.stop()])
 }
 
 /** Join every owned child before callers clean any DB/role; retain primary cause. */
@@ -692,7 +678,7 @@ export async function stopCompleteChildren(
   primary?: unknown
 ) {
   const results = await Promise.allSettled(
-    children.map((child) => child.stop())
+    children.map((child) => Promise.resolve().then(() => child.stop()))
   )
   const errors = results.flatMap((result) =>
     result.status === 'rejected' ? [result.reason] : []
@@ -705,19 +691,47 @@ export async function stopCompleteChildren(
     )
 }
 
+/** A presence wrapper retains even a thrown undefined; one policy for all scopes. */
+export function completeCleanupError(
+  errors: readonly unknown[]
+): { error: unknown } | undefined {
+  const distinct = [...new Set(errors)]
+  if (!distinct.length) return undefined
+  return {
+    error:
+      distinct.length === 1
+        ? distinct[0]
+        : new AggregateError(distinct, 'Fixture and resource cleanup failed', {
+            cause: distinct[0]
+          })
+  }
+}
+
+/** The action owns its resource until all safe finalizers have completed. */
+export async function withCompleteCleanup<T>(
+  action: () => T | Promise<T>,
+  cleanups: readonly (() => unknown)[]
+): Promise<T> {
+  let result!: T
+  let primary: { error: unknown } | undefined
+  try {
+    result = await action()
+  } catch (error) {
+    primary = { error }
+  }
+  await cleanupCompleteChildren([], cleanups, primary)
+  return result
+}
+
 /** Child join is mandatory before DB cleanup; every safe cleanup is attempted. */
 export async function cleanupCompleteChildren(
   children: { stop: () => Promise<unknown> }[],
-  cleanups: readonly (() => Promise<unknown>)[],
+  cleanups: readonly (() => unknown)[],
   primary?: { error: unknown }
 ) {
   const errors: unknown[] = primary ? [primary.error] : []
   const reject = (): never => {
-    const distinct = [...new Set(errors)]
-    if (distinct.length === 1) throw distinct[0]
-    throw new AggregateError(distinct, 'Fixture and resource cleanup failed', {
-      cause: distinct[0]
-    })
+    throw completeCleanupError(errors)!.error
   }
   try {
     await stopCompleteChildren(children)

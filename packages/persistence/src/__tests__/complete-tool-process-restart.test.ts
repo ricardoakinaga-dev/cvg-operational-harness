@@ -5,7 +5,8 @@ import {
   cleanupCompleteChildren,
   completeArgv,
   privateBytes,
-  ownedPath
+  ownedPath,
+  withCompleteCleanup
 } from './fixtures/complete-process-support.ts'
 /** Store-process evidence only: no public runtime, model, or tool body is run. */
 import { createHash, randomUUID } from 'node:crypto'
@@ -77,7 +78,12 @@ async function connect() {
     options: `-c search_path=${r.schemaName},public`,
     max: 2
   })
-  return { pool, store: new PostgresExecutionStepStore(pool) }
+  try {
+    return { pool, store: new PostgresExecutionStepStore(pool) }
+  } catch (error) {
+    await cleanupCompleteChildren([], [() => pool.end()], { error })
+    throw error
+  }
 }
 
 function fixture(
@@ -269,7 +275,7 @@ if (role) {
       ).toString()
     )
     const { pool, store } = await connect()
-    try {
+    return await withCompleteCleanup(async () => {
       if (role === 'writer') {
         const checkpoint = fixture(input.executionId)
         expect(
@@ -322,9 +328,7 @@ if (role) {
           JSON.stringify({ pid: process.pid, result, next: input.cas.next })
         )
       }
-    } finally {
-      await pool.end()
-    }
+    }, [() => pool.end()])
   }, 30000)
 } else {
   describe.skipIf(!resourcePath)(
