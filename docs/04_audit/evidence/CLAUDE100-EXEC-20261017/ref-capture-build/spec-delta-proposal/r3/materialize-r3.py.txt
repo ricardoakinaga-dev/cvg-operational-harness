@@ -1,0 +1,174 @@
+"""Materialize the SPEC0238 revision from the base text by exact edits.
+
+Usage: python3 -I materialize_0238_r3.py BASE_SPEC OUT_UNFORMATTED EDITS_JSON
+Each edit's `old` must occur exactly once in the base text (UTF-8, exact).
+Edits are applied in order on the evolving text; each `old` is also checked
+to occur exactly once at the moment it is applied.
+"""
+import hashlib
+import json
+import sys
+
+BASE_SHA = '48b270842ec83b422ecafeff2a4e802abd2194838ad3669becd2ebf825c464e6'
+
+R1 = 'c100_ref_capture_20261018_r1'
+DELTA = ('docs/04_audit/evidence/CLAUDE100-EXEC-20261017/ref-capture-build/'
+         'spec-delta-proposal/delta-r3.json')
+
+EDITS = [
+    ('E01', 'L3',
+     'Estado: `DRAFT_FOR_INDEPENDENT_REVIEW / HUMAN_T3_REVIEW_PENDING / BUILD_NOT_AUTHORIZED`.',
+     'Revisão 1 de 18/10/2026 sobre a versão SHA `' + BASE_SHA + '`, conforme `'
+     + DELTA + '`. Estado: `DRAFT_REVISION_FOR_INDEPENDENT_REVIEW / '
+     'HUMAN_T3_REVIEW_PENDING / BUILD_NOT_AUTHORIZED`. A execução `' + R1
+     + '` sob a versão anterior permanece `INCOMPATIBLE_TRANSCRIPT`/1 e não é reaberta.'),
+    ('E02', 'L31',
+     'O protocolo e o relatório novos têm version2, separados do wire fechado0235.',
+     'O protocolo de controle e o relatório desta revisão têm version3, separados do wire '
+     'fechado 0235 e do version2 da execução r1 (SPEC `48b27084`). Os documentos de trace '
+     '(control-trace.json e observer-trace.json) e o relatório têm version 3; profile.json '
+     'conserva version 2 e os demais documentos conservam suas versões. As funções de parse '
+     'e validação (protocol/model/report), inclusive quando reusadas por auditoria, rejeitam '
+     'version diferente de 3 com falha fechada (PROTOCOL para frame ao vivo; falha de schema '
+     'para documento), sem CLI ou modo novo; INVALID_INPUT continua reservado à precedência '
+     'terminal do relatório. A execução r1 só é verificável pelo seu próprio pacote '
+     '(candidata `cda464ea`, SPEC `48b27084`).'),
+    ('E03', 'L70',
+     'Query é vazia; sem URL/redirect/upstream.',
+     'A request-target elegível é exatamente `/v1/messages` ou exatamente '
+     '`/v1/messages?beta=true`. Classificação sobre os bytes brutos da request-target, sem '
+     'decodificar nem normalizar, salvo os caminhos CONNECT/upgrade e clientError, regidos '
+     'pela linha REQUEST_BEGIN do Apêndice A: pathClass MESSAGES sse o trecho antes do '
+     'primeiro `?` (ou o alvo inteiro, se não houver `?`) é exatamente `/v1/messages`, senão '
+     'OTHER; queryClass EMPTY sse não há `?`, BETA_TRUE sse o sufixo após o primeiro `?` é '
+     'exatamente `beta=true`, OTHER em todo o resto (`?` vazio, `#`, outra ordem, caixa '
+     'diferente, %-encoding, parâmetros extras ou repetidos). Sem URL/redirect/upstream. A '
+     'query nunca é copiada: só os enums são registrados. Qualquer header Expect '
+     '(100-continue ou outro valor) torna a request não elegível: expectClass EXPECT, '
+     'REJECTED/UNSUPPORTED_ROUTE com o 400 fixo, sem 100/417 implícito e sem copiar o valor; '
+     'sem Expect, expectClass NONE. Isso codifica o comportamento já congelado em `cda464ea` '
+     '(checkContinue/checkExpectation), não o altera.'),
+    ('E04a', 'L114',
+     'Envelope de controleversion2 fechado: version,runId,role,seq,type,payload; comandosHOST omitemrole.',
+     'Envelope de controle version3 fechado: version,runId,role,seq,type,payload; comandos HOST omitem role.'),
+    ('E04b', 'L114 fim',
+     'Nenhuma fonte pode se atribuir ao outro pipe.',
+     'Nenhuma fonte pode se atribuir ao outro pipe. Frame com version diferente de 3 é PROTOCOL.'),
+    ('E05a', 'L122',
+     'Relatório version2 fechado: version,runId,',
+     'Relatório version3 fechado: version,runId,'),
+    ('E05b', 'L122 fim',
+     'Nenhuma entrada do catálogo, receipt0229, capture-index ou authority-index é criada automaticamente.',
+     'Nenhuma entrada do catálogo, receipt0229, capture-index ou authority-index é criada '
+     'automaticamente. inputDigests.spec é o SHA desta revisão, nunca `48b27084`.'),
+    ('E06a', 'L132',
+     '## Apêndice A — wire v2, direção e bytes',
+     '## Apêndice A — wire v3, direção e bytes'),
+    ('E06b', 'L134',
+     'Este apêndice substitui integralmente o wirev1 de0235 neste coletor.',
+     'Este apêndice substitui integralmente o wire v1 de 0235 e o wire v2 da execução r1 '
+     'neste coletor. Os frames binários CVGN2 e CVGO2 ficam byte a byte iguais; o magic '
+     'identifica o framing binário, não a versão do envelope.'),
+    ('E07a', 'L150 payload',
+     '`{caseId:K,ordinal:Q,methodClass:POST/OTHER,pathClass:MESSAGES/OTHER,authClass:SENTINEL/ABSENT/FORBIDDEN}`',
+     '`{caseId:K,ordinal:Q,methodClass:POST/OTHER,pathClass:MESSAGES/OTHER,'
+     'queryClass:EMPTY/BETA_TRUE/OTHER,expectClass:NONE/EXPECT/null,'
+     'authClass:SENTINEL/ABSENT/FORBIDDEN}`'),
+    ('E07b', 'L150 admissão',
+     'Só classifica, não copia headers/URL. FORBIDDEN implica PRIVACY e nenhum body persistido.',
+     'Só classifica, não copia headers/URL; pathClass/queryClass/expectClass seguem as regras '
+     'do observer. CONNECT e upgrade: pathClass OTHER e queryClass OTHER, expectClass pelos '
+     'headers recebidos. clientError (falha de parse de mensagem nova): methodClass OTHER, '
+     'pathClass OTHER, queryClass OTHER, expectClass null, authClass ABSENT. expectClass null '
+     'exige methodClass, pathClass e queryClass OTHER, authClass ABSENT, REJECTED '
+     'UNSUPPORTED_ROUTE ou CAP e nenhum RESPONSE. FORBIDDEN implica PRIVACY e nenhum body '
+     'persistido.'),
+    ('E08a', 'L151 payload',
+     'path:/v1/messages,bodySha256:D,',
+     'path:/v1/messages,queryClass:EMPTY/BETA_TRUE,bodySha256:D,'),
+    ('E08b', 'L151 admissão',
+     'Só POST candidato com sentinel e caso armado; body completo ligado ao framing abaixo.',
+     'Só POST candidato com sentinel e caso armado; body completo ligado ao framing abaixo. '
+     'POST candidato = methodClass POST + pathClass MESSAGES + queryClass EMPTY ou BETA_TRUE '
+     '+ expectClass NONE; path continua o literal `/v1/messages` e queryClass é igual ao do '
+     'BEGIN; qualquer divergência é PROTOCOL.'),
+    ('E09', 'L152 admissão',
+     'Rota/métodoOTHER apenas recebe400 e permanece contado.',
+     'Precedência: CAP, FORBIDDEN_AUTH, UNSUPPORTED_ROUTE, EARLY_PHASE, MISSING_SENTINEL. '
+     'FORBIDDEN_AUTH exige authClass FORBIDDEN, e BEGIN com authClass FORBIDDEN só admite '
+     'REJECTED FORBIDDEN_AUTH ou CAP. UNSUPPORTED_ROUTE é válido para BEGIN com methodClass '
+     'OTHER ou pathClass OTHER; para BEGIN POST/MESSAGES só com queryClass OTHER ou '
+     'expectClass EXPECT, e em qualquer outro BEGIN POST/MESSAGES é PROTOCOL. EARLY_PHASE só '
+     'para POST candidato com K null; MISSING_SENTINEL só para POST candidato com K não-null '
+     'e authClass ABSENT; fora disso ambos são PROTOCOL. Rota/método/query OTHER ou Expect '
+     'recebe o 400 fixo e permanece contado; CONNECT, upgrade e clientError fecham o socket '
+     'sem resposta e permanecem contados.'),
+    ('E10a', 'L215 início',
+     'Todos RC sãoNOT_RUN.',
+     'Todos os RC desta revisão são NOT_RUN; a execução r1 (SPEC `48b27084`) é evidência '
+     'histórica e não conta para nenhum RC desta revisão.'),
+    ('E10b', 'L215 sequência',
+     'Depois: candidata/claim próprios→',
+     'Depois: nova candidata/claim próprios→'),
+    ('E10c', 'L215 orçamento',
+     'até dois retrabalhos→código elegível→uma execução contida dos três casos→',
+     'até dois retrabalhos (orçamento novo, independente dos consumidos até `cda464ea`)→'
+     'código elegível→exatamente uma execução contida dos três casos, com runId e nonce '
+     'novos→'),
+    ('E11a', 'L217 decisão',
+     'Próxima decisão solicitável: aprovar somente BUILD local e a captura contida descrita aqui.',
+     'Próxima decisão solicitável: aprovar somente BUILD local desta revisão (novo SHA) e a '
+     'captura contida descrita aqui.'),
+    ('E11b', 'L217 pacote',
+     'Preparar pacote com SHA desta SPEC e parecer independente antes de pedir essa decisão.',
+     'Preparar pacote com o SHA desta revisão, o delta, o parecer independente do delta e a '
+     'evidência r1 antes de pedir essa decisão.'),
+    ('E12a', 'L209 RC07',
+     'Exato/+1, agregado, headerauthnão-sentinel, stdoutfake e corpoextra; testes de mecanismo identificados como tais',
+     'Exato/+1, agregado, headerauthnão-sentinel, stdoutfake e corpoextra; testes de '
+     'mecanismo identificados como tais; alvos de rota com o enum esperado, elegíveis '
+     '`/v1/messages` (EMPTY) e `/v1/messages?beta=true` (BETA_TRUE), e 400 fixo sem 100/417 '
+     'para os não elegíveis: `/v1/messages?`, `/v1/messages?beta=true&x=1`, '
+     '`/v1/messages?x=1&beta=true`, `/v1/messages?beta=false`, `/v1/messages?BETA=true`, '
+     '`/v1/messages?beta%3Dtrue`, `/v1/messages?beta=true#f` (queryClass OTHER), '
+     '`/v1/messages/?beta=true`, `/V1/messages?beta=true` (pathClass OTHER) e POST candidato '
+     'com `Expect: 100-continue`, com outro valor e com dois headers Expect (expectClass '
+     'EXPECT); se o parser HTTP recusar um alvo, o teste fixa o caminho clientError '
+     'observado'),
+    ('E12b', 'L210 RC08',
+     'Mutantes de partição/ref/ordem/omissão/duplicação; cadaPASS alcançado auditável em partialreports',
+     'Mutantes de partição/ref/ordem/omissão/duplicação; cadaPASS alcançado auditável em '
+     'partialreports; mutantes de REQUEST com queryClass diferente do BEGIN, REQUEST após '
+     'BEGIN com queryClass OTHER ou expectClass EXPECT, UNSUPPORTED_ROUTE para POST '
+     'candidato, EARLY_PHASE/MISSING_SENTINEL para BEGIN não candidato, FORBIDDEN_AUTH sem '
+     'authClass FORBIDDEN, enum ausente ou fora do domínio, expectClass null fora das '
+     'condições de clientError e envelope/trace/relatório version2, todos falhando fechado'),
+]
+
+
+def main():
+    base_path, out_path, edits_path = sys.argv[1:4]
+    raw = open(base_path, 'rb').read()
+    if hashlib.sha256(raw).hexdigest() != BASE_SHA:
+        raise SystemExit('base SHA mismatch')
+    base = raw.decode('utf-8')
+    text = base
+    records = []
+    for eid, anchor, old, new in EDITS:
+        if base.count(old) != 1:
+            raise SystemExit(f'{eid}: old occurs {base.count(old)}x in base')
+        if text.count(old) != 1:
+            raise SystemExit(f'{eid}: old occurs {text.count(old)}x at apply time')
+        text = text.replace(old, new, 1)
+        records.append({'id': eid, 'anchor': anchor, 'old': old, 'new': new,
+                        'old_sha256': hashlib.sha256(old.encode()).hexdigest()})
+    if text.count('\n') != base.count('\n'):
+        raise SystemExit('line count changed')
+    open(out_path, 'w', encoding='utf-8', newline='').write(text)
+    json.dump(records, open(edits_path, 'w', encoding='utf-8'), ensure_ascii=False,
+              indent=2)
+    print('edits', len(records), 'unformatted_sha256',
+          hashlib.sha256(text.encode()).hexdigest())
+
+
+main()
