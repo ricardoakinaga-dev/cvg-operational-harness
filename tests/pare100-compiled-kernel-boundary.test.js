@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import ts from 'typescript'
 import { auditProductBoundary } from '../scripts/check-product-boundary.mjs'
+import { pinnedBytes, pinnedText } from './support/historical-pin-corpus.mjs'
 
 const proposalPath =
   'docs/04_audit/evidence/PARE100-EXEC-20261014/spec0216/proposed-exceptions.json'
@@ -102,9 +103,9 @@ function fixture() {
   // Only the approved physical pins are copied. Resolve their other imports
   // to inert local stubs so unrelated missing modules cannot hide a failure.
   // The auditor parses these files; none of their module bodies are imported.
-  for (const file of pins) write(file, fs.readFileSync(file))
+  for (const file of pins) write(file, pinnedBytes(file))
   for (const file of pins) {
-    const source = fs.readFileSync(file, 'utf8')
+    const source = pinnedText(file)
     for (const [, specifier] of source.matchAll(/\bfrom\s*['"]([^'"]+)['"]/g)) {
       if (!specifier.startsWith('.')) continue
       const target = path.posix.normalize(
@@ -533,7 +534,7 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
     (_label, before, after, oldExpression) => {
       const f = fixture(),
         file = 'packages/sandbox/dist/run.js'
-      const original = fs.readFileSync(file, 'utf8')
+      const original = pinnedText(file)
       const changed = original.replace(before, after)
       expect(changed).not.toBe(original)
       const row = groups[2].rows.find((r) => r.expression === oldExpression)
@@ -578,9 +579,7 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
     const row = groups[2].rows.find((r) => r.line === "child.kill('SIGKILL');")
     f.write(
       file,
-      fs
-        .readFileSync(file, 'utf8')
-        .replace(row.line, row.line + '\n            ' + row.line)
+      pinnedText(file).replace(row.line, row.line + '\n            ' + row.line)
     )
     expectPinsValid(f, [file])
     const a = copiedAuditor(f, { repin: [file] })()
@@ -607,7 +606,7 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
   it('does not qualify an exact reviewed expression at an unlisted file', () => {
     const f = fixture(),
       file = 'packages/sandbox/src/unlisted.ts'
-    f.write(file, fs.readFileSync('packages/sandbox/dist/run.js'))
+    f.write(file, pinnedBytes('packages/sandbox/dist/run.js'))
     const a = f.audit()
     expectInactive(a)
     expectRawInventory(a)

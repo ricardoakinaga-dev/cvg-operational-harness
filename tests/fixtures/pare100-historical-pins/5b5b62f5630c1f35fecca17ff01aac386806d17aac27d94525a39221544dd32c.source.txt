@@ -1,0 +1,77 @@
+import { execFileSync } from 'node:child_process';
+import { release } from 'node:os';
+const LANDLOCK_MIN_KERNEL = [5, 13];
+/**
+ * Best-effort kernel gate for the Landlock ABI (>= 5.13). Node cannot issue
+ * the `landlock_create_ruleset` probe syscall without a native addon, so the
+ * release string is the honest signal available; enforcement never depends on
+ * Landlock alone (bwrap namespaces and the workspace allowlist do the work).
+ */
+function kernelSupportsLandlock() {
+    const parsed = /^(\d+)\.(\d+)/.exec(release());
+    if (!parsed)
+        return false;
+    const major = Number(parsed[1]);
+    const minor = Number(parsed[2]);
+    if (Number.isNaN(major) || Number.isNaN(minor))
+        return false;
+    const [minMajor, minMinor] = LANDLOCK_MIN_KERNEL;
+    return major > minMajor || (major === minMajor && minor >= minMinor);
+}
+/**
+ * Host probe: bubblewrap must both exist and successfully close a namespace
+ * (a mere `--version` would not prove user/mount namespaces work here).
+ */
+export const hostProbe = {
+    probeBubblewrap() {
+        try {
+            execFileSync('bwrap', ['--ro-bind', '/', '/', '--unshare-net', '/bin/true'], { stdio: 'ignore', timeout: 5000 });
+            return true;
+        }
+        catch {
+            return false;
+        }
+    },
+    probeLandlock() {
+        return kernelSupportsLandlock();
+    }
+};
+/**
+ * Resolves platform containment once (SPEC 0196 §2). A probe that throws is
+ * treated as "not available" — never as permission to run contained work.
+ */
+export function detectSandboxCapabilities(probe = hostProbe) {
+    let bubblewrap = false;
+    let landlock = false;
+    try {
+        bubblewrap = probe.probeBubblewrap();
+    }
+    catch {
+        bubblewrap = false;
+    }
+    try {
+        landlock = probe.probeLandlock();
+    }
+    catch {
+        landlock = false;
+    }
+    const partial = [];
+    const reasons = [];
+    if (!bubblewrap) {
+        reasons.push('bubblewrap ausente; PROCESS indisponível');
+    }
+    if (!landlock) {
+        // Without the kernel LSM the fs modes lean solely on the allowlist.
+        partial.push('IN_PROCESS');
+        reasons.push('Landlock indisponível; fs sem defesa de kernel adicional');
+    }
+    const mode = bubblewrap ? 'PROCESS' : 'WORKSPACE';
+    return {
+        bubblewrap,
+        landlock,
+        mode,
+        partial,
+        ...(reasons.length > 0 ? { reason: reasons.join('; ') } : {})
+    };
+}
+//# sourceMappingURL=capabilities.js.map

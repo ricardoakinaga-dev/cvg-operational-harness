@@ -26,6 +26,7 @@ function runWorkerEntrypoint() {
       cwd: rootDir,
       env: {
         ...process.env,
+        NODE_ENV: 'test',
         CVG_WORKER_QUEUE_ADAPTER: 'controlled-memory',
         CVG_WORKER_TENANT_ID: 'tenant_00000000-0000-4000-8000-000000000172',
         CVG_WORKER_CONTROLLED_SMOKE: 'true'
