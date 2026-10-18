@@ -20,6 +20,30 @@ import {
 import { probeError } from './schema.mjs'
 import { assertEvidenceBindings } from './report.mjs'
 import { createEvidence } from './evidence.mjs'
+import { createHostMarker, HOST_MARKER_PARENT } from './inputs.mjs'
+import { ownedRunParent } from '../../support/owned-run-parent.mjs'
+
+// Each run still owns a real marker (exclusive create, inode-checked removal),
+// kept in this suite's own run directory. The controller receives the fixed
+// protocol-domain path, which the simulated peer never dereferences.
+const markerParent = path.join(
+  ownedRunParent('c100-controller-markers'),
+  'markers'
+)
+async function ownedHostMarker(...args) {
+  // The controller must keep passing only the nonce, never a marker parent.
+  if (args.length !== 1) throw new Error('controller chose a marker parent')
+  const [nonce] = args
+  const marker = await createHostMarker(nonce, markerParent)
+  return {
+    path: path.join(HOST_MARKER_PARENT, nonce),
+    sha256: marker.sha256,
+    close: marker.close,
+    get removed() {
+      return marker.removed
+    }
+  }
+}
 
 const result = (stdout = '', exitCode = 0, stderr = '') => ({
   stdout: Buffer.from(stdout),
@@ -349,6 +373,7 @@ async function scenario(knobs, fn) {
       }),
     transportFactory: () => docker,
     hostNamespaces: async () => ({ pid: '1', net: '2' }),
+    createHostMarker: ownedHostMarker,
     ...(knobs.failIntentWrite
       ? {
           createEvidence: async (...args) => {

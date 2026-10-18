@@ -37,7 +37,10 @@ const RESOLVER = path.resolve(
   path.dirname(SELF),
   'boundary-semantic-resolution.mjs'
 )
-const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+// Only the LOCATION of the pinned Node22 is configurable: CVG_PINNED_NODE, or
+// by default the physical running Node. checkTCB still demands NODE_SHA of the
+// caller and of this binary, which must also be absolute and not an alias.
+const NODE = process.env.CVG_PINNED_NODE || fs.realpathSync(process.execPath)
 const NODE_SHA =
   '3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327'
 const PARSER = path.resolve(
@@ -156,6 +159,8 @@ function checkTCB() {
     else throw Error('UNKNOWN_RUNTIME_PROFILE')
   }
   if (
+    !path.isAbsolute(NODE) ||
+    fs.realpathSync(NODE) !== NODE ||
     (executable !== NODE && hash(fs.readFileSync(NODE)) !== NODE_SHA) ||
     hash(fs.readFileSync(PARSER)) !== PARSER_SHA
   )

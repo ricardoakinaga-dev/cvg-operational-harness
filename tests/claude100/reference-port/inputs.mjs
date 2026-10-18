@@ -212,10 +212,18 @@ export async function prepareInputs(evidence, manifestName, pins) {
   }
 }
 
-/** The marker is an owned synthetic file outside every container bind. */
-export async function createHostMarker(nonce) {
+/** Fixed host marker domain accepted by wrapperArguments and makeConfig. */
+export const HOST_MARKER_PARENT =
+  '/tmp/cvg-claude100-exec-20261017/ref-port-markers'
+/**
+ * The marker is an owned synthetic file outside every container bind. The
+ * controller always uses the fixed protocol domain; only the unit test passes
+ * its own run directory as `parent`, under the same owner/mode/no-follow checks.
+ */
+export async function createHostMarker(nonce, parent = HOST_MARKER_PARENT) {
   if (!/^[a-f0-9]{32}$/.test(nonce)) throw probeError('INPUT_INVALID')
-  const parent = '/tmp/cvg-claude100-exec-20261017/ref-port-markers'
+  if (typeof parent !== 'string' || !path.isAbsolute(parent))
+    throw probeError('INPUT_INVALID')
   await mkdir(parent, { mode: 0o700 }).catch((cause) => {
     if (cause.code !== 'EEXIST') throw cause
   })

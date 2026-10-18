@@ -10,10 +10,11 @@ import {
   fingerprintResolution,
   fingerprintToolchain,
   collectPackageInventory,
-  INSTALLED_IDENTITY_LIMITS
+  INSTALLED_IDENTITY_LIMITS,
+  pinnedToolchainLocation
 } from '../scripts/boundary-installed-identity.mjs'
 
-const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+const NODE = pinnedToolchainLocation().node
 const CHECKER = path.resolve('scripts/check-product-boundary.mjs')
 const hash = (value) => createHash('sha256').update(value).digest('hex')
 const roots = []

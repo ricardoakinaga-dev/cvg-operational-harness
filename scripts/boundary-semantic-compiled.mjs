@@ -9,11 +9,13 @@ import {
   sha256File,
   fingerprintToolchain,
   collectPackageInventory,
-  createInstalledIdentityComparator
+  createInstalledIdentityComparator,
+  pinnedToolchainLocation
 } from './boundary-installed-identity.mjs'
 
-const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
-const NPM = '/home/ricardo/.nvm/versions/node/v22.23.2/lib/node_modules/npm'
+// Location only (CVG_PINNED_NODE/CVG_PINNED_NPM or the running Node); the
+// toolchain() check below still requires the pinned NODE_SHA and npm identity.
+const { node: NODE, npm: NPM } = pinnedToolchainLocation()
 const NODE_SHA =
   '3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327'
 const AUX = {
