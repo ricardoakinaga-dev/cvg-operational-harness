@@ -73,7 +73,10 @@ try {
         typeRoots: [path.join(root, 'node_modules', '@types')],
         noEmitOnError: true
       },
-      include: [path.join(root, workspace, 'src/**/*.ts')],
+      include: [
+        path.join(root, workspace, 'src/**/*.ts'),
+        path.join(root, workspace, 'src/**/*.json')
+      ],
       exclude: [
         path.join(root, workspace, 'src/**/*.test.ts'),
         path.join(root, workspace, 'src/**/__tests__/**'),

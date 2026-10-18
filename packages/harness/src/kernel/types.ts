@@ -6,12 +6,13 @@ import type {
   AuditSink,
   ModelGateway,
   ModelRequest,
-  ModelResult,
   Orchestrator,
   PolicyDecision,
   PolicyEngine,
   RuntimeInput,
   RuntimeResult,
+  SandboxGate,
+  SandboxHandle,
   TelemetrySink,
   ToolDefinition,
   ToolInvocation,
@@ -111,6 +112,8 @@ export interface ToolCallState {
     readonly request: ApprovalExecutionRequest
     readonly handle: ApprovalExecutionHandle
   }
+  /** Containment granted by the sandbox gate; the only fs/net/exec channel. */
+  sandboxHandle?: SandboxHandle
 }
 
 export type ToolOutcome =
@@ -260,7 +263,18 @@ export interface TurnBudget {
     operation: () => Promise<T>,
     ms?: number
   ): Promise<T | typeof DEADLINE>
-  afterModel(result: ModelResult): KernelStop | undefined
+  /**
+   * Single before-model gate (PDSH-004 / I11): consumes one model slot.
+   * Tokens/cost are recorded post-result at the single accounting site;
+   * callers never re-check model-call budgets.
+   */
+  beginModelRequest(): KernelStop | undefined
+  /** Single post-result accounting (tokens, cost); checks totals. */
+  recordModelResult(result: {
+    readonly inputTokens: number
+    readonly outputTokens: number
+    readonly costUsd: number
+  }): KernelStop | undefined
 }
 
 export interface BudgetService {
@@ -281,6 +295,8 @@ export interface Services {
   pause: PauseSwitch
   log: KernelLog
   effects: EffectLedger
+  /** Optional containment gate; absent means fail-closed for contained tools. */
+  sandbox?: SandboxGate
 }
 
 export type ServiceKey = keyof Services
@@ -294,6 +310,15 @@ export const CONTROL_SERVICES = [
   'budget',
   'pause',
   'log'
+] as const satisfies readonly ServiceKey[]
+
+/**
+ * Containment is optional (SPEC 0195): the pipeline resolves it via
+ * `host.get('sandbox')` and fails closed when it is absent, so it must never
+ * join REQUIRED_SERVICES.
+ */
+export const OPTIONAL_SERVICES = [
+  'sandbox'
 ] as const satisfies readonly ServiceKey[]
 
 /** Capabilities the single-turn loop needs to run. */

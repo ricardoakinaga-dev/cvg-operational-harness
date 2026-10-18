@@ -1,4 +1,63 @@
-export const CI_BAR_VERSION = 'rem21-014-v2-sealed'
+import path from 'node:path'
+
+// HISO-010 changed what the unit/coverage evidence means (core denominator
+// only), so the sealed contract identity changed with it.
+export const CI_BAR_VERSION = 'hiso-010-v1-core-sealed'
+
+// HISO-010 / ADR-010 criteria 5 and 7: this bar certifies the harness core.
+// Consumer products under products/** have their own workflow and bar; they
+// are excluded from every Vitest run of this bar (CVG_TEST_SCOPE=core, see
+// vitest.config.mts) and the scope is sealed into the run state and manifest.
+export const CI_BAR_SCOPE = Object.freeze({
+  owner: 'harness',
+  testScope: 'core',
+  excludedTestRoots: Object.freeze(['products/'])
+})
+
+function outOfScopePaths(root, paths) {
+  return paths
+    .filter((item) => typeof item === 'string')
+    .map((item) =>
+      (path.isAbsolute(item) ? path.relative(root, item) : item)
+        .split(path.sep)
+        .join('/')
+    )
+    .filter((item) =>
+      CI_BAR_SCOPE.excludedTestRoots.some((prefix) => item.startsWith(prefix))
+    )
+}
+
+/**
+ * Product tests and sources must never reach this bar's denominators. Pass
+ * `unitReport` (Vitest JSON) and/or `coverageSummary` (json-summary); `null`
+ * stands for a missing or unreadable file.
+ */
+export function ciBarScopeFailures(
+  gateId,
+  { root, unitReport, coverageSummary }
+) {
+  const failures = []
+  if (unitReport !== undefined) {
+    const files = Array.isArray(unitReport?.testResults)
+      ? unitReport.testResults.map((file) => file?.name)
+      : []
+    if (files.length === 0) failures.push(`unit_report_empty:${gateId}`)
+    const leaked = outOfScopePaths(root, files)
+    if (leaked.length > 0) {
+      failures.push(`out_of_scope_tests:${gateId}:${leaked.length}`)
+    }
+  }
+  if (coverageSummary !== undefined) {
+    const leaked = outOfScopePaths(
+      root,
+      Object.keys(coverageSummary ?? {}).filter((key) => key !== 'total')
+    )
+    if (leaked.length > 0) {
+      failures.push(`out_of_scope_coverage:${gateId}:${leaked.length}`)
+    }
+  }
+  return failures
+}
 
 const npm = (...args) => ['npm', args]
 const shell = (command) => ['sh', ['-c', command]]
@@ -38,7 +97,8 @@ export const CI_BAR_GATES = [
     id: 'unit',
     marker: 'node scripts/ci-bar.mjs gate unit',
     command: npm(
-      'test',
+      'run',
+      'test:core',
       '--',
       '--reporter=default',
       '--reporter=json',
@@ -49,7 +109,7 @@ export const CI_BAR_GATES = [
   {
     id: 'coverage',
     marker: 'node scripts/ci-bar.mjs gate coverage',
-    command: npm('run', 'test:coverage'),
+    command: npm('run', 'test:core', '--', '--coverage'),
     artifacts: ['coverage/coverage-summary.json']
   },
   {
@@ -230,6 +290,7 @@ const REQUIRED_PACKAGE_SCRIPTS = [
   'lint',
   'build',
   'test',
+  'test:core',
   'test:coverage',
   'coverage:critical',
   'mutation:guard',
@@ -263,6 +324,10 @@ const REQUIRED_PACKAGE_SCRIPTS = [
 function addFailure(failures, value) {
   if (!failures.includes(value)) failures.push(value)
 }
+
+// A harness bar step that executes a consumer product's build or tests.
+const PRODUCT_EXECUTION_PATTERN =
+  /\b(?:test|build):shift-assistant\b|--workspace[ =]@cvg\/shift-assistant\b|\bvitest run\s+products\//
 
 function workflowHasMarker(workflow, marker) {
   const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -352,6 +417,16 @@ export function validateCiBarContract({
   if (!workflow.includes('persist-credentials: false')) {
     addFailure(failures, 'checkout_credentials_persisted')
   }
+  if (PRODUCT_EXECUTION_PATTERN.test(workflow)) {
+    addFailure(failures, 'harness_bar_runs_product')
+  }
+  if (
+    !/--exclude\s+"?products\/\*\*"?/.test(
+      packageJson?.scripts?.['test:core'] ?? ''
+    )
+  ) {
+    addFailure(failures, 'core_suite_includes_products')
+  }
 
   return { pass: failures.length === 0, failures }
 }
@@ -374,9 +449,12 @@ function validWorkflowFixture() {
 function validPackageFixture() {
   return {
     engines: { node: '>=22 <23' },
-    scripts: Object.fromEntries(
-      REQUIRED_PACKAGE_SCRIPTS.map((name) => [name, 'fixture'])
-    )
+    scripts: {
+      ...Object.fromEntries(
+        REQUIRED_PACKAGE_SCRIPTS.map((name) => [name, 'fixture'])
+      ),
+      'test:core': 'vitest run --exclude "products/**"'
+    }
   }
 }
 
@@ -410,6 +488,25 @@ export function runCiBarContractSelfTest() {
           'if-no-files-found: error',
           'if-no-files-found: warn'
         )
+      }
+    },
+    {
+      id: 'product-tests-in-harness-bar',
+      expected: 'harness_bar_runs_product',
+      input: {
+        ...base,
+        workflow: `${base.workflow}\nrun: npm run test:shift-assistant`
+      }
+    },
+    {
+      id: 'core-suite-includes-products',
+      expected: 'core_suite_includes_products',
+      input: {
+        ...base,
+        packageJson: {
+          ...base.packageJson,
+          scripts: { ...base.packageJson.scripts, 'test:core': 'vitest run' }
+        }
       }
     },
     {

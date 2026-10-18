@@ -831,6 +831,15 @@ export class FileEffectJournal implements EffectJournalPort {
           this.#clock().getTime() - info.mtimeMs > this.#staleLockMs
         ) {
           await unlink(lockPath).catch(() => undefined)
+          // A stale lock that cannot be removed (for example a directory in
+          // place of the lock file) must still respect the lock deadline
+          // instead of spinning forever.
+          if (this.#clock().getTime() >= deadline) {
+            throw new EffectJournalError(
+              'journal_unavailable',
+              'Timed out acquiring the effect journal lock'
+            )
+          }
           continue
         }
         if (this.#clock().getTime() >= deadline) {

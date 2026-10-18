@@ -6,7 +6,12 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { CI_BAR_GATES, CI_BAR_VERSION } from './ci-bar-contract.mjs'
+import {
+  CI_BAR_GATES,
+  CI_BAR_SCOPE,
+  CI_BAR_VERSION,
+  ciBarScopeFailures
+} from './ci-bar-contract.mjs'
 import {
   artifactInventory,
   createGateSeal,
@@ -355,6 +360,24 @@ function validateGateOutputs(id, gate, startedMs, state, outputText) {
     }
   }
 
+  if (id === 'unit') {
+    failures.push(
+      ...ciBarScopeFailures(id, {
+        root,
+        unitReport: readJson('certification/unit-test-report.json') ?? null
+      })
+    )
+  }
+
+  if (id === 'coverage') {
+    failures.push(
+      ...ciBarScopeFailures(id, {
+        root,
+        coverageSummary: readJson('coverage/coverage-summary.json') ?? null
+      })
+    )
+  }
+
   if (id === 'postgres') {
     const report = readJson('certification/postgres-test-report.json')
     if (
@@ -454,6 +477,14 @@ function validateGateOutputs(id, gate, startedMs, state, outputText) {
     if (candidateManifest?.candidateId !== state.candidateId) {
       failures.push('candidate_manifest_mismatch')
     }
+    // certify re-runs unit and coverage itself; they must stay core-scoped.
+    failures.push(
+      ...ciBarScopeFailures(id, {
+        root,
+        unitReport: readJson('certification/unit-test-report.json') ?? null,
+        coverageSummary: readJson('coverage/coverage-summary.json') ?? null
+      })
+    )
     const certificationGateIds = [
       ['format', 'format'],
       ['typecheck', 'typecheck'],
@@ -518,6 +549,7 @@ function init() {
     schemaVersion: 1,
     kind: 'cvg-ci-bar-run',
     contract: CI_BAR_VERSION,
+    scope: CI_BAR_SCOPE,
     runId,
     candidateId: candidateId(files),
     nodeVersion,
@@ -574,6 +606,7 @@ function runGate(id) {
   }
   const env = {
     ...process.env,
+    CVG_TEST_SCOPE: CI_BAR_SCOPE.testScope,
     CI_RUN_ID: state.runId,
     CI_CANDIDATE_ID: state.candidateId,
     CI_ARTIFACT_DIR: rootArtifactDir
@@ -692,6 +725,9 @@ function runArtifacts(state) {
     }
   }
   if (currentCandidateId !== state.candidateId) failures.push('candidate_drift')
+  if (canonicalJson(state.scope) !== canonicalJson(CI_BAR_SCOPE)) {
+    failures.push('scope_mismatch')
+  }
   const runtimeFiles = fs.readdirSync(path.join(rootArtifactDir, 'gates'))
   for (const id of CI_BAR_GATES.map((gate) => gate.id).filter(
     (id) => !['runtime', 'artifacts'].includes(id)
@@ -811,6 +847,7 @@ function runArtifacts(state) {
     schemaVersion: 1,
     kind: 'cvg-ci-bar-manifest',
     contract: CI_BAR_VERSION,
+    scope: state.scope,
     runId: state.runId,
     candidateId: state.candidateId,
     currentCandidateId,

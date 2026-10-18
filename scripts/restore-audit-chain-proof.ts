@@ -73,16 +73,30 @@ function docker(argv: string[], input?: Buffer): Buffer {
 }
 
 async function waitForPostgres(container: string): Promise<void> {
+  // The official postgres image answers `pg_isready` during init and then
+  // restarts the server once; a client that connects in that window gets
+  // "Connection terminated unexpectedly" (FULLTEST-20261007, F-03). Require a
+  // real query to succeed twice, two seconds apart, before proceeding.
+  let consecutive = 0
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    const ready = spawnSync('docker', [
+    const probe = spawnSync('docker', [
       'exec',
       container,
-      'pg_isready',
+      'psql',
       '-U',
-      'postgres'
+      'postgres',
+      '-tAc',
+      'select 1'
     ])
-    if (ready.status === 0) return
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    if (probe.status === 0 && String(probe.stdout).trim() === '1') {
+      consecutive += 1
+      if (consecutive >= 2) return
+    } else {
+      consecutive = 0
+    }
+    await new Promise((resolve) =>
+      setTimeout(resolve, consecutive > 0 ? 2000 : 500)
+    )
   }
   throw new Error('PostgreSQL did not become ready')
 }

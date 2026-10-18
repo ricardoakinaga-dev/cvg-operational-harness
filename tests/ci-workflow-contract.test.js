@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { CI_BAR_GATES } from '../scripts/ci-bar-contract.mjs'
+import { CI_BAR_GATES, CI_BAR_SCOPE } from '../scripts/ci-bar-contract.mjs'
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const workflow = fs.readFileSync(
@@ -105,6 +105,18 @@ describe('controlled CI workflow contract', () => {
         .map((gate) => gate.id)
         .sort()
     )
+    const approvedScope = workflow.match(
+      /approved_scope = json\.loads\('([^']+)'\)/
+    )?.[1]
+    expect(JSON.parse(approvedScope ?? 'null')).toEqual(CI_BAR_SCOPE)
+    expect(workflow).toContain("'scope_mismatch'")
+  })
+
+  it('keeps the required check name and never builds or tests the product (HISO-010)', () => {
+    expect(workflow).toContain('    name: REM21 CI bar (Node 22)\n')
+    expect(workflow).not.toMatch(
+      /(?:test|build):shift-assistant|@cvg\/shift-assistant|vitest run\s+products\//
+    )
   })
 
   it('runs the independent artifact inventory verifier against changed bytes and extra files', () => {
@@ -141,5 +153,149 @@ describe('controlled CI workflow contract', () => {
     } finally {
       fs.rmSync(directory, { recursive: true, force: true })
     }
+  })
+})
+
+const productWorkflowPath = '.github/workflows/product-shift-assistant.yml'
+const productWorkflow = fs.readFileSync(
+  path.join(rootDir, productWorkflowPath),
+  'utf8'
+)
+
+function workspaceDirectories() {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8')
+  )
+  const byName = new Map()
+  for (const pattern of manifest.workspaces) {
+    const parent = path.join(rootDir, pattern.replace(/\/\*$/, ''))
+    if (!fs.existsSync(parent)) continue
+    for (const entry of fs.readdirSync(parent, { withFileTypes: true })) {
+      const file = path.join(parent, entry.name, 'package.json')
+      if (!entry.isDirectory() || !fs.existsSync(file)) continue
+      const pkg = JSON.parse(fs.readFileSync(file, 'utf8'))
+      byName.set(pkg.name, {
+        directory: path.relative(rootDir, path.dirname(file)),
+        dependencies: Object.keys(pkg.dependencies ?? {})
+      })
+    }
+  }
+  return byName
+}
+
+function productDependencyClosure(productName) {
+  const workspaces = workspaceDirectories()
+  const seen = new Set()
+  const visit = (name) => {
+    const workspace = workspaces.get(name)
+    if (!workspace || seen.has(workspace.directory)) return
+    seen.add(workspace.directory)
+    for (const dependency of workspace.dependencies) visit(dependency)
+  }
+  visit(productName)
+  return [...seen].sort()
+}
+
+function triggerPaths(event) {
+  const block = productWorkflow
+    .split(/\n(?=\S)/)
+    .find((section) => section.startsWith('on:'))
+    ?.split(new RegExp(`\\n  ${event}:\\n`))[1]
+    ?.split(/\n  \S/)[0]
+  const list = block?.split('    paths:\n')[1] ?? ''
+  return [...list.matchAll(/^      - '([^']+)'$/gm)].map((match) => match[1])
+}
+
+describe('product workflow contract (HISO-010)', () => {
+  it('declares least privilege, stale-run cancellation and pinned actions', () => {
+    expect(productWorkflow).toMatch(/^permissions:\n  contents: read\n/m)
+    expect(productWorkflow).not.toMatch(/:\s*write\b/)
+    expect(productWorkflow).not.toContain('id-token')
+    expect(productWorkflow).not.toContain('secrets.')
+    expect(productWorkflow).toMatch(
+      /^concurrency:\n  group: product-shift-assistant-.+\n  cancel-in-progress: true\n/m
+    )
+    expect(productWorkflow).not.toContain('continue-on-error')
+    const uses = [...productWorkflow.matchAll(/uses: (\S+)@(\S+)(.*)/g)]
+    expect(uses.length).toBeGreaterThan(0)
+    for (const [, action, ref, comment] of uses) {
+      expect(ref).toMatch(/^[0-9a-f]{40}$/)
+      expect(comment).toMatch(/^ # v\d+/)
+      // Same reviewed pin as the harness workflow for every shared action.
+      const harnessPin = workflow.match(
+        new RegExp(`uses: ${action.replace('/', '\\/')}@([0-9a-f]{40})`)
+      )?.[1]
+      if (harnessPin) expect(ref).toBe(harnessPin)
+    }
+    const checkouts = productWorkflow.match(/uses: actions\/checkout@/g) ?? []
+    expect(
+      productWorkflow.match(/persist-credentials: false/g) ?? []
+    ).toHaveLength(checkouts.length)
+    expect(productWorkflow).toContain('node-version-file: .nvmrc')
+    expect(productWorkflow).toMatch(/timeout-minutes: \d+/)
+    for (const job of productWorkflow
+      .split('\njobs:\n')[1]
+      .split(/\n(?=  [a-z][\w-]*:\n)/)) {
+      expect(job).toMatch(/\n    timeout-minutes: \d+\n/)
+    }
+  })
+
+  it('triggers on the product, its workspace closure and dependency manifests', () => {
+    const pullRequest = triggerPaths('pull_request')
+    const push = triggerPaths('push')
+    expect(pullRequest.length).toBeGreaterThan(0)
+    expect(push).toEqual(pullRequest)
+    expect(productWorkflow).toMatch(
+      /\n  push:\n    branches:\n      - main\n      - master\n/
+    )
+    const closure = productDependencyClosure('@cvg/shift-assistant')
+    expect(closure).toContain('products/shift-assistant')
+    expect(closure).toContain('packages/model-gateway')
+    for (const directory of closure) {
+      expect(pullRequest).toContain(`${directory}/**`)
+    }
+    for (const required of [
+      productWorkflowPath,
+      'package.json',
+      'package-lock.json',
+      '.nvmrc',
+      'vitest.config.mts',
+      'tsconfig.base.json',
+      'scripts/build-public-workspace.mjs'
+    ]) {
+      expect(pullRequest).toContain(required)
+    }
+  })
+
+  it('builds and tests only the product, with its own report, and runs no harness gate', () => {
+    const npmRuns = [...productWorkflow.matchAll(/npm run ([\w:-]+)/g)].map(
+      (match) => match[1]
+    )
+    expect([...new Set(npmRuns)].sort()).toEqual([
+      'build:shift-assistant',
+      'test:shift-assistant'
+    ])
+    expect(productWorkflow).toContain('run: npm ci --ignore-scripts')
+    expect(productWorkflow).not.toMatch(/\bnpm test\b/)
+    expect(productWorkflow).not.toContain('scripts/ci-bar.mjs')
+    expect(productWorkflow).not.toMatch(
+      /test:core|test:coverage|certify|test:postgres|test:e2e|CVG_TEST_SCOPE/
+    )
+    expect(productWorkflow).toContain(
+      'npx prettier --check products/shift-assistant'
+    )
+    expect(productWorkflow).toContain('npx eslint products/shift-assistant')
+    expect(productWorkflow).toContain(
+      '--outputFile="$RUNNER_TEMP/shift-assistant/test-report.json"'
+    )
+    expect(productWorkflow).toContain("owner: 'shift-assistant'")
+    expect(productWorkflow).toContain(
+      "!file.startsWith('products/shift-assistant/')"
+    )
+    expect(productWorkflow).toContain('if-no-files-found: error')
+    expect(productWorkflow).toContain(
+      '--file products/shift-assistant/deploy/Dockerfile'
+    )
+    expect(productWorkflow).not.toMatch(/docker (?:push|login)/)
   })
 })

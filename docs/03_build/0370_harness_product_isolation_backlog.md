@@ -44,6 +44,7 @@ Próxima ação: concluir R56 gates, integrar R65 e R63 na R66, certificar e obt
 - WHAT/WHERE/HOW: gate de dependências para `packages` e hosts genéricos, incluindo imports relativos, aliases, exports, imports dinâmicos identificáveis e caminhos transitivos. Tratar resolução não verificável explicitamente na SPEC; simples busca de texto não comprova isolamento.
 - Aceite: tentativa sintética de importar domínio/entrypoint do consumidor a partir do core falha no gate, também por intermediário. Consumo público permitido do harness pelo produto passa. `SHIFT_*`, prompts e regras de paciente não entram no core; exceptions têm alvo e justificativa restritos.
 - Evidência: grafo resolvido e execução positiva/negativa do gate. Fixtures da sonda não entram no artefato de produção.
+- Progresso 07/10/2026 (`PLAN0374-B-FABLE-20261007`, B1): gate `boundary:products` passa a terminar em 26 s com `PASS` (antes ~22 min `INCOMPLETE`); dependências instaladas verificadas contra o lockfile commitado; 50 testes negativos novos cobrem os contraexemplos T2 (`P1-R2-01`, `P1-R2-02`) e as 73 sondas do crítico posterior dão 0 falsos PASS. O PASS depende de uma tabela de 169 exceções de primeira parte vinculadas por arquivo/linha/digest que ainda exige revisão independente (`--strict` mostra `INCOMPLETE`). Estado permanece `IN_PROGRESS` até a reauditoria Codex (B6). [Evidência](../04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md).
 
 ### HISO-006 — Separar descoberta, build, testes e coverage
 
@@ -51,6 +52,7 @@ Próxima ação: concluir R56 gates, integrar R65 e R63 na R66, certificar e obt
 - WHAT/WHERE/HOW: revisar `package.json`, lockfile, tsconfigs, Vitest, política de workspace e scripts de build para descobrir `products/*`. Expor comandos core e consumidor sem perder a regressão agregada existente.
 - Aceite: suites e denominadores são listados por dono e comparados ao baseline; nenhum teste vira omitido/skip apenas para passar. Build do harness não exige fonte/configuração do consumidor. Definir variante sem consumidor com manifesto e lockfile coerentes, utilizável em snapshot limpo; `npm ci` com lock incompatível não é prova válida.
 - Evidência: inventários antes/depois, typecheck/lint/suites e coverage por escopo. PostgreSQL/E2E conforme G1, com SKIP distinguido de integração efetivamente executada.
+- Progresso 07/10/2026 (`PLAN0374-B-FABLE-20261007`, B5): denominadores por dono medidos antes/depois (core 358/2.916 → 360/2.940; produto 2/37 inalterado; agregado = core + produto). `CVG_TEST_SCOPE=core` em `vitest.config.mts` separa testes e cobertura sem perder o agregado local. B4 (runbook de gates, F-03..F-05) está com a sessão `PLAN0374-A`. [Evidência](../04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md).
 
 ### HISO-007 — Separar artefatos e deploy do consumidor
 
@@ -74,15 +76,18 @@ Próxima ação: concluir R56 gates, integrar R65 e R63 na R66, certificar e obt
 - WHAT/WHERE/HOW: revisar consumo atual de `OpenAICompatibleProvider.execute` pelo `ModelOrganizer`. O assistente hoje não compõe `createOperationalHarness` nem `ModelGateway.complete`; registrar quais exports são suportados e como budgets/telemetria da ADR-004 se aplicam.
 - Aceite: consumidor compila e roda contra exports de pacotes construídos, sem atravessar fontes privadas por aliases. Decisão explícita sobre adapter/gateway; qualquer migração que altere timeout/budget/telemetria/comportamento precisa de SPEC/revisão apropriada. Um exemplo de consumidor neutro prova reutilização sem WhatsApp ou domínio de paciente.
 - Evidência: decisão de contrato e smoke dos exports efetivos em ambiente isolado. Preservar forma da saída estruturada do organizador.
+- Progresso 07/10/2026 (`PLAN0374-B-FABLE-20261007`, B2/B3): lista de exports suportados publicada em `docs/architecture/PUBLIC_API.md` com teste de regressão (`tests/consumers-public-surface.test.ts`); decisão T1 registrada: o consumidor atual usa `OpenAICompatibleProvider.execute` diretamente (suportado) e migrar para `generate`/`complete` exige SPEC + T3; consumidor neutro `examples/consumers/reception-agent` compõe `createOperationalHarness` só por exports públicos e roda jornada sintética (7 testes). Aceite pendente da reauditoria Codex. [Evidência](../04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md).
 
 ### HISO-010 — Definir CI e barras por artefato
 
-- Estado: `TODO`. Prioridade: P1. Dono: engenharia de CI do harness, com revisão humana. Risco/gate: T3 / G3. Dependências: HISO-005, HISO-006, HISO-007, HISO-009.
+- Estado: `IN_PROGRESS`. Prioridade: P1. Dono: engenharia de CI do harness, com revisão humana. Risco/gate: T3 / G3. Dependências: HISO-005, HISO-006, HISO-007, HISO-009.
 - WHAT/WHERE/HOW: SPEC e implementação de jobs distintos para core e consumidor, contratos entre ambos e regressão agregada de transição. Vincular artefato, commit/dirty inputs, suite e dono ao resultado.
 - Aceite: CI constrói a imagem específica do consumidor e a variante independente do harness; mantém gates aplicáveis de segurança, PG, E2E e coverage. Falha de tarefa do produto não falsifica certificação do core nem desaparece do relatório. Não reintroduzir automaticamente os antigos 16 gates ou declarar GO com artefatos genéricos.
 - Evidência: SPEC aprovada, matriz gate→artefato e execução real de CI no candidato. Encaminha F13. Alterar o contrato de evidência requer revisão antes do BUILD, não aprovação retroativa.
 
 ## Harness — correções compartilhadas
+
+- Progresso 07/10/2026 (`PLAN0374-B-FABLE-20261007`, B5): workflow `product-shift-assistant.yml` novo (build, testes, denominador e imagem do produto, sem gates do harness); barra do harness com `CVG_TEST_SCOPE=core` selado no manifesto (`hiso-010-v1-core-sealed`). Pendente: revisão humana T3 (mudança de contrato de evidência sem SPEC aprovada; cobertura do produto sem gate; format/lint/typecheck ainda cobrem `products/**`) e execução real no GitHub Actions. [Evidência](../04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md).
 
 ### HISO-011 — Limitar recepção do transporte de modelo
 

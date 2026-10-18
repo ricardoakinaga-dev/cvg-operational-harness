@@ -1480,7 +1480,19 @@ describe('P3-BOUNDARY — iterative runtime rejection paths', () => {
     ).resolves.toMatchObject({ stopReason: 'MODEL_FAILURE' })
 
     await expect(
-      buildHarness({ staticDecision: respondDecision }).runtime.execute(
+      buildHarness({
+        decisions: [
+          {
+            decision: respondDecision,
+            usage: {
+              modelCalls: 1,
+              inputTokens: 0,
+              outputTokens: 0,
+              costUsd: 0
+            }
+          }
+        ]
+      }).runtime.execute(
         operationalInput({
           budget: { ...operationalInput().budget, maxModelCalls: 0 }
         })

@@ -4,6 +4,7 @@ import type {
   ModelGateway,
   Orchestrator,
   PolicyEngine,
+  SandboxGate,
   TelemetrySink,
   ToolRegistry
 } from '@cvg/harness-contracts'
@@ -17,6 +18,7 @@ import {
   pauseControl,
   plannerCapability,
   policyControl,
+  sandboxControl,
   telemetryCapability,
   toolsCapability
 } from './controls.ts'
@@ -40,6 +42,8 @@ export interface StandardKernelOptions {
   readonly pause?: PauseSwitch
   readonly log?: KernelLog
   readonly effects?: EffectLedger
+  /** Optional containment gate; absent means fail-closed for contained tools. */
+  readonly sandbox?: SandboxGate
   /** Audit action and telemetry event name; defaults to `harness.kernel`. */
   readonly eventName?: string
   /** Extra plugins mounted after the standard profile. */
@@ -67,6 +71,7 @@ export function standardKernelPlugins(
         : {}
     ),
     auditControl(options.audit, { action: eventName }),
+    ...(options.sandbox ? [sandboxControl(options.sandbox)] : []),
     plannerCapability(options.orchestrator),
     modelCapability(options.modelGateway),
     toolsCapability(options.tools),

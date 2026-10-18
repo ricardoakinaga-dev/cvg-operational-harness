@@ -170,6 +170,9 @@ export interface ModelGatewayEvent {
   attempt?: number
   delayMs?: number
   costUsd?: number
+  /** PDSH-024: measured prompt/completion counts on `model.call.completed`. */
+  inputTokens?: number
+  outputTokens?: number
   circuitState?: string
   detail?: string
 }

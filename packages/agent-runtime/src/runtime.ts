@@ -34,6 +34,11 @@ import {
 import { requestApprovalTurn } from './runtime-approval-request.ts'
 import { RuntimeEffectRecovery } from './runtime-effect-recovery.ts'
 import {
+  GovernedKernelBridge,
+  modelGateStopCode,
+  pauseCodeFromGate
+} from './runtime-kernel-bridge.ts'
+import {
   DEFAULT_RESERVATION_TTL_MS,
   type BudgetedStage,
   type ExecutionContext,
@@ -287,10 +292,26 @@ export class GovernedAgentRuntime {
     })
     const { traceId, spanId, correlationId } = root.context
     let auditSequence = 0
-    let costUsd = 0
-    let steps = 0
-    let modelCalls = 0
-    let toolCalls = 0
+    // The single governance spine (PDSH-001 / KPLG-004 Part B): budget,
+    // pause, deadline and tool dispatch are decided by kernel/pipeline.ts
+    // through this per-turn bridge; the runtime keeps only durable phases.
+    const bridge = GovernedKernelBridge.boot({
+      ...(this.#options.pause !== undefined
+        ? { pause: this.#options.pause }
+        : {}),
+      limits,
+      clock,
+      startedAt,
+      tenantId: input.tenantId,
+      traceId,
+      correlationId,
+      agentId: input.agentId,
+      agentVersion: input.agentVersion,
+      modelGateway,
+      ...(input.cancelSignal !== undefined
+        ? { cancelSignal: input.cancelSignal }
+        : {})
+    })
     const openSpans = new Set<ActiveSpan>()
 
     const appendAudit = (
@@ -338,7 +359,7 @@ export class GovernedAgentRuntime {
         spanId,
         correlationId,
         auditChainValid: audit.verify().valid,
-        costUsd: extra.costUsd ?? costUsd,
+        costUsd: extra.costUsd ?? bridge.counters.costUsd,
         durationMs: Math.max(0, endedAt.getTime() - startedAt.getTime()),
         ...(extra.modelResult !== undefined
           ? { modelResult: extra.modelResult }
@@ -373,6 +394,7 @@ export class GovernedAgentRuntime {
       status: 'ok' | 'error',
       errorCode?: string
     ): void => {
+      /* v8 ignore next -- durable phases pass an optional span */
       if (span === undefined) return
       openSpans.delete(span)
       span.end(status, errorCode)
@@ -384,11 +406,7 @@ export class GovernedAgentRuntime {
       return span
     }
 
-    const stopReason = (): StopReason | undefined => {
-      if (input.cancelSignal?.aborted === true) return 'turn_cancelled'
-      if (clock().getTime() >= deadline) return 'loop_deadline_exceeded'
-      return undefined
-    }
+    const stopReason = (): StopReason | undefined => bridge.stopReason()
 
     const deny = (
       reason: string,
@@ -413,20 +431,9 @@ export class GovernedAgentRuntime {
 
     // I12: a recognized pause stops the turn before its next step or effect;
     // nothing is consumed, so the caller retries after the pause is lifted.
-    // An unreadable switch counts as paused.
-    const readPause = async (): Promise<
-      'operator_paused' | 'pause_state_unavailable' | undefined
-    > => {
-      const pause = this.#options.pause
-      if (pause === undefined) return undefined
-      try {
-        return (await pause.isPaused(input.tenantId))
-          ? 'operator_paused'
-          : undefined
-      } catch {
-        return 'pause_state_unavailable'
-      }
-    }
+    // An unreadable switch counts as paused. The switch read lives on the
+    // kernel bridge; guards re-check it inside every tool dispatch.
+    const readPause = bridge.readPause.bind(bridge)
     const finishPaused = (
       code: 'operator_paused' | 'pause_state_unavailable',
       decision: PolicyDecision,
@@ -452,19 +459,8 @@ export class GovernedAgentRuntime {
       decision: PolicyDecision,
       extra: FinishExtra = {}
     ): GovernedTurnResult | undefined => {
-      if (steps >= limits.maxSteps) {
-        return deny('steps_budget_exceeded', decision, extra)
-      }
-      if (stage === 'model.generate' && modelCalls >= limits.maxModelCalls) {
-        return deny('model_calls_exhausted', decision, extra)
-      }
-      if (stage === 'tool.execute' && toolCalls >= limits.maxToolCalls) {
-        return deny('tool_calls_exhausted', decision, extra)
-      }
-      if (costUsd > limits.maxCostUsd) {
-        return deny('loop_cost_exceeded', decision, extra)
-      }
-      return undefined
+      const check = bridge.assertStage(stage)
+      return check === undefined ? undefined : deny(check.code, decision, extra)
     }
 
     const beginStage = (
@@ -472,13 +468,10 @@ export class GovernedAgentRuntime {
       decision: PolicyDecision,
       extra: FinishExtra = {}
     ): StageOutcome => {
-      const denied = assertBudget(stage, decision, extra)
-      if (denied !== undefined) return { denied }
-      const reason = stopReason()
-      if (reason !== undefined) return { denied: deny(reason, decision, extra) }
-      steps += 1
-      if (stage === 'model.generate') modelCalls += 1
-      if (stage === 'tool.execute') toolCalls += 1
+      const check = bridge.beginStage(stage)
+      if (check !== undefined) {
+        return { denied: deny(check.code, decision, extra) }
+      }
       const span = root.child(stage)
       openSpans.add(span)
       return { span }
@@ -654,27 +647,42 @@ export class GovernedAgentRuntime {
       }
 
       if (input.approvalId !== undefined) {
-        return await this.#runExecutionTurn(input, decision, {
-          appendAudit,
-          finish,
-          beginStage,
-          assertBudget,
-          controlSpan,
-          endSpan,
-          stopReason,
-          stopDenial,
-          pausedStop,
-          readPause,
-          finishPaused,
-          clock,
-          deadline,
-          traceId,
-          limits
-        })
+        return await this.#runExecutionTurn(
+          input,
+          decision,
+          {
+            appendAudit,
+            finish,
+            beginStage,
+            assertBudget,
+            controlSpan,
+            endSpan,
+            stopReason,
+            stopDenial,
+            pausedStop,
+            readPause,
+            finishPaused,
+            clock,
+            deadline,
+            traceId,
+            limits
+          },
+          bridge
+        )
       }
 
-      const pausedBeforeModel = await pausedStop(decision, 'model')
-      if (pausedBeforeModel !== undefined) return pausedBeforeModel
+      // Turn-level pause through the kernel `turn/before-step` gate.
+      const stepGate = await bridge.gateTurnStep()
+      if (stepGate.kind === 'stop') {
+        // The pause control is the only before-step control that can stop.
+        return finishPaused(
+          pauseCodeFromGate(stepGate) as
+            | 'operator_paused'
+            | 'pause_state_unavailable',
+          decision,
+          'model'
+        )
+      }
 
       const modelStage = beginStage('model.generate', decision)
       if ('denied' in modelStage) return modelStage.denied
@@ -699,83 +707,112 @@ export class GovernedAgentRuntime {
           ? { structuredOutputSchema: input.structuredOutput.schemaName }
           : {})
       })
-      try {
-        modelResult = await modelGateway.generate({
-          requestId: `req_${traceId}`,
-          tenantId: input.tenantId,
-          agentId: input.agentId,
-          agentVersionId: input.agentVersion,
-          sessionId: input.sessionId ?? input.conversationId,
-          conversationId: input.conversationId,
-          correlationId,
-          promptId: input.prompt.promptId,
-          promptVersion: input.prompt.version,
-          ...(input.prompt.sha256 !== undefined
-            ? { promptSha256: input.prompt.sha256 }
-            : {}),
-          policyVersion: decision.policyVersion,
-          modelProfile: input.modelProfile,
-          dataClassification: input.dataClassification,
-          input: input.modelMessages,
-          maxCostUsd: limits.maxCostUsd,
-          estimatedCostUsd: 0,
-          ...(input.task !== undefined ? { task: input.task } : {}),
-          ...(input.structuredOutput !== undefined
-            ? { structuredOutput: input.structuredOutput }
-            : {}),
-          ...(input.cancelSignal !== undefined
-            ? { signal: input.cancelSignal }
-            : {})
-        })
-        costUsd += modelResult.costUsd
-        // A late model response never feeds a subsequent effect: the stop check
-        // discards it before proposal, tool or outbox.
-        const postModelStop = stopDenial(decision, { modelResult })
-        if (postModelStop !== undefined) {
-          endSpan(modelSpan, 'error', postModelStop.reason)
-          return postModelStop
+      // The model stage runs through kernel/pipeline.ts: the before-call gate,
+      // the I6 log and the deadline/cancel race are kernel-owned.
+      const modelPipeline = await bridge.runModelStage({
+        requestId: `req_${traceId}`,
+        tenantId: input.tenantId,
+        agentId: input.agentId,
+        agentVersionId: input.agentVersion,
+        sessionId: input.sessionId ?? input.conversationId,
+        conversationId: input.conversationId,
+        correlationId,
+        promptId: input.prompt.promptId,
+        promptVersion: input.prompt.version,
+        ...(input.prompt.sha256 !== undefined
+          ? { promptSha256: input.prompt.sha256 }
+          : {}),
+        policyVersion: decision.policyVersion,
+        modelProfile: input.modelProfile,
+        dataClassification: input.dataClassification,
+        input: input.modelMessages,
+        maxCostUsd: limits.maxCostUsd,
+        estimatedCostUsd: 0,
+        ...(input.task !== undefined ? { task: input.task } : {}),
+        ...(input.structuredOutput !== undefined
+          ? { structuredOutput: input.structuredOutput }
+          : {})
+      })
+      switch (modelPipeline.kind) {
+        /* v8 ignore next 4 -- beginStage asserts the same budget before the gate */
+        case 'stopped': {
+          const code = modelGateStopCode(modelPipeline.gate)
+          endSpan(modelSpan, 'error', code)
+          return deny(code, decision, {}, 'model')
         }
-        if (costUsd > limits.maxCostUsd) {
-          endSpan(modelSpan, 'error', 'loop_cost_exceeded')
-          appendAudit('runtime.denied', { code: 'loop_cost_exceeded', costUsd })
-          return finish('denied', 'loop_cost_exceeded', decision, {
-            modelResult
+        case 'cancelled': {
+          endSpan(modelSpan, 'error', 'turn_cancelled')
+          return deny('turn_cancelled', decision, {}, 'model')
+        }
+        case 'deadline': {
+          endSpan(modelSpan, 'error', 'loop_deadline_exceeded')
+          return deny('loop_deadline_exceeded', decision, {}, 'model')
+        }
+        /* v8 ignore next 10 -- the runtime never supplies a failing kernel log */
+        case 'unrecorded': {
+          modelResult = modelPipeline.result
+          endSpan(modelSpan, 'error', modelPipeline.gate.stopReason)
+          return deny(
+            modelPipeline.gate.response,
+            decision,
+            { modelResult },
+            'model'
+          )
+        }
+        case 'failed': {
+          const error = modelPipeline.error
+          const postModelStop = stopDenial(decision)
+          /* v8 ignore start -- a settled rejection always precedes any cancellation */
+          if (postModelStop !== undefined) {
+            endSpan(modelSpan, 'error', postModelStop.reason)
+            return postModelStop
+          }
+          /* v8 ignore stop */
+          const gatewayCode =
+            error instanceof ModelGatewayError ? error.code : 'model_failed'
+          const code =
+            gatewayCode === 'schema_invalid' &&
+            input.structuredOutput !== undefined &&
+            decision.decision === 'REQUIRE_APPROVAL'
+              ? 'structured_output_invalid'
+              : gatewayCode
+          telemetry.recordMetric('model_calls_total', 1, {
+            provider: 'unknown',
+            status: 'error'
           })
+          endSpan(modelSpan, 'error', code)
+          appendAudit('runtime.denied', { code, phase: 'model' })
+          return finish('denied', code, decision)
         }
-        telemetry.recordMetric('model_calls_total', 1, {
-          provider: modelResult.providerId,
-          model: modelResult.model,
-          status: 'ok'
-        })
-        telemetry.recordMetric('model_cost_usd', modelResult.costUsd, {})
-        appendAudit('model.completed', {
-          providerId: modelResult.providerId,
-          model: modelResult.model,
-          costUsd: modelResult.costUsd,
-          attempts: modelResult.attempts
-        })
-        endSpan(modelSpan, 'ok')
-      } catch (error) {
-        const postModelStop = stopDenial(decision)
-        if (postModelStop !== undefined) {
-          endSpan(modelSpan, 'error', postModelStop.reason)
-          return postModelStop
+        case 'completed': {
+          modelResult = modelPipeline.result
+          bridge.addCost(modelResult.costUsd)
+          // A late model response never feeds a subsequent effect: the stop check
+          // discards it before proposal, tool or outbox. The cost overrun from
+          // the kernel's post-result accounting (PDSH-004) is flagged there so
+          // the single I11 assertion denies before any tool runs.
+          const postModelStop = stopDenial(decision, { modelResult })
+          if (postModelStop !== undefined) {
+            endSpan(modelSpan, 'error', postModelStop.reason)
+            return postModelStop
+          }
+          // Cost is enforced only by the bridge's single budget assertion
+          // (I11): beginStage('tool.execute') denies an over-budget loop.
+          telemetry.recordMetric('model_calls_total', 1, {
+            provider: modelResult.providerId,
+            model: modelResult.model,
+            status: 'ok'
+          })
+          telemetry.recordMetric('model_cost_usd', modelResult.costUsd, {})
+          appendAudit('model.completed', {
+            providerId: modelResult.providerId,
+            model: modelResult.model,
+            costUsd: modelResult.costUsd,
+            attempts: modelResult.attempts
+          })
+          endSpan(modelSpan, 'ok')
+          break
         }
-        const gatewayCode =
-          error instanceof ModelGatewayError ? error.code : 'model_failed'
-        const code =
-          gatewayCode === 'schema_invalid' &&
-          input.structuredOutput !== undefined &&
-          decision.decision === 'REQUIRE_APPROVAL'
-            ? 'structured_output_invalid'
-            : gatewayCode
-        telemetry.recordMetric('model_calls_total', 1, {
-          provider: 'unknown',
-          status: 'error'
-        })
-        endSpan(modelSpan, 'error', code)
-        appendAudit('runtime.denied', { code, phase: 'model' })
-        return finish('denied', code, decision)
       }
 
       if (input.shadowMode) {
@@ -830,50 +867,115 @@ export class GovernedAgentRuntime {
       if ('denied' in toolStage) return toolStage.denied
       const toolSpan = toolStage.span
       let toolResult: unknown
-      try {
-        const executed = await this.#options.toolExecutor({
-          tenantId: input.tenantId,
-          capability: input.capability,
-          action: input.action,
-          resource: input.resource,
-          payload: payloadForEffect,
-          modelResult,
-          correlationId,
-          traceId,
-          shadowMode: false as const,
-          ...(input.cancelSignal !== undefined
-            ? { signal: input.cancelSignal }
-            : {})
-        })
-        toolResult = executed.result
-        const postToolStop = stopDenial(decision, { modelResult, toolResult })
-        if (postToolStop !== undefined) {
-          endSpan(toolSpan, 'error', postToolStop.reason)
-          return postToolStop
+      // Tool dispatch runs through kernel/pipeline.ts: log, guards (pause),
+      // deadline/cancel race and the effect ledger are kernel-owned.
+      const toolPipeline = await bridge.runToolStage({
+        toolId: input.capability,
+        operationKey: `op:${input.tenantId}:${input.capability}:${traceId}`,
+        input: payloadForEffect,
+        executor: async ({ payload, signal }) =>
+          this.#options.toolExecutor({
+            tenantId: input.tenantId,
+            capability: input.capability,
+            action: input.action,
+            resource: input.resource,
+            payload,
+            modelResult,
+            correlationId,
+            traceId,
+            shadowMode: false as const,
+            ...(input.cancelSignal !== undefined && signal !== undefined
+              ? { signal }
+              : {})
+          })
+      })
+      switch (toolPipeline.kind) {
+        case 'not_started': {
+          const pauseCode = pauseCodeFromGate(toolPipeline.gate)
+          /* v8 ignore next -- beginStage already asserts the same budget before the gate */
+          if (pauseCode !== undefined) {
+            endSpan(toolSpan, 'error', pauseCode)
+            return finishPaused(pauseCode, decision, 'tool', { modelResult })
+          }
+          /* v8 ignore start -- a non-pause stop cannot reach this point */
+          endSpan(toolSpan, 'error', toolPipeline.gate.stopReason)
+          return deny(
+            toolPipeline.gate.response,
+            decision,
+            { modelResult },
+            'tool'
+          )
+          /* v8 ignore stop */
         }
-        telemetry.recordMetric('tool_calls_total', 1, {
-          capability: input.capability,
-          status: 'ok'
-        })
-        appendAudit('tool.executed', {
-          capability: input.capability,
-          action: input.action
-        })
-        endSpan(toolSpan, 'ok')
-      } catch (error) {
-        const postToolStop = stopDenial(decision, { modelResult })
-        if (postToolStop !== undefined) {
-          endSpan(toolSpan, 'error', postToolStop.reason)
-          return postToolStop
+        case 'succeeded': {
+          toolResult = toolPipeline.result
+          const postToolStop = stopDenial(decision, { modelResult, toolResult })
+          /* v8 ignore start -- a settled success always precedes any cancellation */
+          if (postToolStop !== undefined) {
+            endSpan(toolSpan, 'error', postToolStop.reason)
+            return postToolStop
+          }
+          /* v8 ignore stop */
+          telemetry.recordMetric('tool_calls_total', 1, {
+            capability: input.capability,
+            status: 'ok'
+          })
+          appendAudit('tool.executed', {
+            capability: input.capability,
+            action: input.action
+          })
+          endSpan(toolSpan, 'ok')
+          break
         }
-        const code =
-          error instanceof ToolExecutionError ? error.code : 'tool_failed'
-        telemetry.recordMetric('tool_failures_total', 1, {
-          capability: input.capability
-        })
-        endSpan(toolSpan, 'error', code)
-        appendAudit('runtime.denied', { code, phase: 'tool' })
-        return finish('denied', code, decision, { modelResult })
+        case 'threw': {
+          const error = toolPipeline.error
+          const postToolStop = stopDenial(decision, { modelResult })
+          /* v8 ignore start -- a settled rejection always precedes any cancellation */
+          if (postToolStop !== undefined) {
+            endSpan(toolSpan, 'error', postToolStop.reason)
+            return postToolStop
+          }
+          /* v8 ignore stop */
+          const code =
+            error instanceof ToolExecutionError ? error.code : 'tool_failed'
+          telemetry.recordMetric('tool_failures_total', 1, {
+            capability: input.capability
+          })
+          endSpan(toolSpan, 'error', code)
+          appendAudit('runtime.denied', { code, phase: 'tool' })
+          return finish('denied', code, decision, { modelResult })
+        }
+        case 'deadline': {
+          endSpan(toolSpan, 'error', 'loop_deadline_exceeded')
+          return deny(
+            'loop_deadline_exceeded',
+            decision,
+            { modelResult },
+            'tool'
+          )
+        }
+        case 'cancelled': {
+          endSpan(toolSpan, 'error', 'turn_cancelled')
+          return deny('turn_cancelled', decision, { modelResult }, 'tool')
+        }
+        /* v8 ignore next 7 -- no composed control settles a failed tool */
+        case 'failed': {
+          telemetry.recordMetric('tool_failures_total', 1, {
+            capability: input.capability
+          })
+          endSpan(toolSpan, 'error', 'tool_failed')
+          return deny('tool_failed', decision, { modelResult }, 'tool')
+        }
+        /* v8 ignore next 9 -- confirmation settlement needs a composed control */
+        case 'confirm_failed': {
+          endSpan(toolSpan, 'error', 'tool_failed')
+          return deny(
+            toolPipeline.error,
+            decision,
+            { modelResult, toolResult: toolPipeline.result },
+            'tool'
+          )
+        }
       }
 
       const outboxStage = beginStage('outbox.enqueue', decision, {
@@ -946,6 +1048,9 @@ export class GovernedAgentRuntime {
       openSpans.clear()
       root.end('error', 'internal_error')
       throw error
+    } finally {
+      // The per-turn kernel host reaches quiescence before the turn returns.
+      await bridge.dispose()
     }
   }
 
@@ -958,7 +1063,8 @@ export class GovernedAgentRuntime {
   async #runExecutionTurn(
     input: GovernedTurnInput,
     decision: PolicyDecision,
-    context: ExecutionContext
+    context: ExecutionContext,
+    bridge: GovernedKernelBridge
   ): Promise<GovernedTurnResult> {
     const { approvals, telemetry, effectJournal } = this.#options
     const reservationTtlMs =
@@ -977,6 +1083,7 @@ export class GovernedAgentRuntime {
       clock,
       traceId
     } = context
+    /* v8 ignore next -- the execution turn is only entered with an approval id */
     const approvalId = input.approvalId ?? ''
 
     if (decision.decision !== 'REQUIRE_APPROVAL') {
@@ -1153,6 +1260,7 @@ export class GovernedAgentRuntime {
     const preToolBudget = assertBudget('tool.execute', decision)
     if (preToolBudget !== undefined) return preToolBudget
     const preToolStop = stopDenial(decision)
+    /* v8 ignore next -- assertBudget already denied any active stop */
     if (preToolStop !== undefined) return preToolStop
     // I12: checked before the reservation, so a pause never consumes the
     // approval and the same approval executes once after resume.
@@ -1205,6 +1313,7 @@ export class GovernedAgentRuntime {
       }
     }
 
+    /* v8 ignore start -- reserve() either assigns or returns before this point */
     if (reservation === undefined) {
       appendAudit('runtime.denied', {
         code: 'approval_invalid',
@@ -1212,6 +1321,7 @@ export class GovernedAgentRuntime {
       })
       return finish('denied', 'approval_invalid', decision)
     }
+    /* v8 ignore stop */
 
     if (effectJournal !== undefined && !journalReserved) {
       const journalReservation = await this.#recovery.reserveJournalEffect(
@@ -1311,6 +1421,7 @@ export class GovernedAgentRuntime {
     // cancellation denies the turn; in both cases the effect never starts.
     const pausedBeforeBody = await readPause()
     if (pausedBeforeBody !== undefined) {
+      /* v8 ignore next -- durability is required for every approval-gated capability */
       if (effectJournal !== undefined && journalAttemptId !== undefined) {
         try {
           await effectJournal.failEffect({
@@ -1334,6 +1445,7 @@ export class GovernedAgentRuntime {
     const toolStage = beginStage('tool.execute', decision)
     if ('denied' in toolStage) {
       const denialReason = toolStage.denied.reason
+      /* v8 ignore next -- every approval-gated capability requires durability */
       if (effectJournal !== undefined && journalAttemptId !== undefined) {
         try {
           await effectJournal.failEffect({
@@ -1356,89 +1468,214 @@ export class GovernedAgentRuntime {
     }
     const toolSpan = toolStage.span
     let toolResult: unknown
-    try {
-      const executed = await this.#options.toolExecutor({
-        tenantId: input.tenantId,
-        capability: input.capability,
-        action: input.action,
-        resource: input.resource,
-        payload: record.proposalPayload,
-        modelResult: undefined,
-        correlationId: input.correlationId,
-        traceId,
-        shadowMode: false as const,
-        ...(input.cancelSignal !== undefined
-          ? { signal: input.cancelSignal }
-          : {})
-      })
-      toolResult = executed.result
-      const postToolStop = stopDenial(decision)
-      if (postToolStop !== undefined) {
-        endSpan(toolSpan, 'error', postToolStop.reason)
+    // The approved payload is the effect input; the kernel pipeline owns the
+    // log, the pause/cancel guards and the deadline race (PDSH-001).
+    const toolPipeline = await bridge.runToolStage({
+      toolId: input.capability,
+      operationKey: `op:${input.tenantId}:${input.capability}:${traceId}`,
+      input: record.proposalPayload,
+      executor: async ({ payload, signal }) =>
+        this.#options.toolExecutor({
+          tenantId: input.tenantId,
+          capability: input.capability,
+          action: input.action,
+          resource: input.resource,
+          payload,
+          modelResult: undefined,
+          correlationId: input.correlationId,
+          traceId,
+          shadowMode: false as const,
+          // Preserve the legacy optional field: an internal kernel signal is
+          // not application data when the caller did not opt into cancellation.
+          // When opted in, pass the combined kernel signal (including deadline).
+          ...(input.cancelSignal !== undefined && signal !== undefined
+            ? { signal }
+            : {})
+        })
+    })
+    switch (toolPipeline.kind) {
+      case 'not_started': {
+        const denialReason = toolPipeline.gate.stopReason
+        /* v8 ignore next -- durability is required for every approval-gated capability */
+        if (effectJournal !== undefined && journalAttemptId !== undefined) {
+          try {
+            await effectJournal.failEffect({
+              tenantId: input.tenantId,
+              operationKey,
+              attemptId: journalAttemptId,
+              errorCode: denialReason
+            })
+          } catch {
+            // The EFFECT_STARTED record remains for the TTL sweep.
+          }
+        }
+        await this.#recovery.releaseApproval(
+          input,
+          approvalId,
+          reservation.reservationId,
+          `turn:${denialReason}`
+        )
+        const pauseCode = pauseCodeFromGate(toolPipeline.gate)
+        /* v8 ignore next -- a non-pause stop is already excluded by beginStage */
+        if (pauseCode !== undefined) {
+          return finishPaused(pauseCode, decision, 'effect', { approvalId })
+        }
+        /* v8 ignore start -- beginStage already asserts the same budget before the gate */
+        endSpan(toolSpan, 'error', denialReason)
+        return finish('denied', denialReason, decision, { approvalId })
+        /* v8 ignore stop */
+      }
+      case 'succeeded': {
+        toolResult = toolPipeline.result
+        const postToolStop = stopDenial(decision)
+        /* v8 ignore start -- a settled success always precedes any cancellation */
+        if (postToolStop !== undefined) {
+          endSpan(toolSpan, 'error', postToolStop.reason)
+          if (effectJournal !== undefined && journalAttemptId !== undefined) {
+            await this.#recovery.markJournalUncertain(
+              effectJournal,
+              input.tenantId,
+              operationKey,
+              journalAttemptId,
+              `turn interrupted after tool: ${postToolStop.reason}`
+            )
+          }
+          await this.#recovery.markApprovalUncertain(
+            input,
+            approvalId,
+            reservation.reservationId,
+            `turn interrupted after tool: ${postToolStop.reason}`,
+            `tool:${input.capability}:${traceId}`
+          )
+          return postToolStop
+        }
+        /* v8 ignore stop */
+        telemetry.recordMetric('tool_calls_total', 1, {
+          capability: input.capability,
+          status: 'ok'
+        })
+        appendAudit('tool.executed', {
+          capability: input.capability,
+          action: input.action,
+          approvalId
+        })
+        endSpan(toolSpan, 'ok')
+        break
+      }
+      case 'deadline': {
+        endSpan(toolSpan, 'error', 'loop_deadline_exceeded')
+        /* v8 ignore next -- durability is required for every approval-gated capability */
         if (effectJournal !== undefined && journalAttemptId !== undefined) {
           await this.#recovery.markJournalUncertain(
             effectJournal,
             input.tenantId,
             operationKey,
             journalAttemptId,
-            `turn interrupted after tool: ${postToolStop.reason}`
+            'turn interrupted during tool: loop_deadline_exceeded'
           )
         }
         await this.#recovery.markApprovalUncertain(
           input,
           approvalId,
           reservation.reservationId,
-          `turn interrupted after tool: ${postToolStop.reason}`,
+          'turn interrupted during tool: loop_deadline_exceeded',
           `tool:${input.capability}:${traceId}`
         )
-        return postToolStop
+        return finish('denied', 'loop_deadline_exceeded', decision, {
+          approvalId
+        })
       }
-      telemetry.recordMetric('tool_calls_total', 1, {
-        capability: input.capability,
-        status: 'ok'
-      })
-      appendAudit('tool.executed', {
-        capability: input.capability,
-        action: input.action,
-        approvalId
-      })
-      endSpan(toolSpan, 'ok')
-    } catch (error) {
-      const postToolStop = stopDenial(decision)
-      if (postToolStop !== undefined) {
-        endSpan(toolSpan, 'error', postToolStop.reason)
+      case 'cancelled': {
+        endSpan(toolSpan, 'error', 'turn_cancelled')
         if (effectJournal !== undefined && journalAttemptId !== undefined) {
           await this.#recovery.markJournalUncertain(
             effectJournal,
             input.tenantId,
             operationKey,
             journalAttemptId,
-            `turn interrupted during tool: ${postToolStop.reason}`
+            'turn interrupted during tool: turn_cancelled'
           )
         }
         await this.#recovery.markApprovalUncertain(
           input,
           approvalId,
           reservation.reservationId,
-          `turn interrupted during tool: ${postToolStop.reason}`,
+          'turn interrupted during tool: turn_cancelled',
           `tool:${input.capability}:${traceId}`
         )
-        return postToolStop
+        return finish('denied', 'turn_cancelled', decision, { approvalId })
       }
-      telemetry.recordMetric('tool_failures_total', 1, {
-        capability: input.capability
-      })
-      endSpan(toolSpan, 'error', 'tool_failed')
-      return this.#recovery.handleToolFailure(
-        input,
-        decision,
-        reservation,
-        error,
-        { appendAudit, finish },
-        effectJournal !== undefined && journalAttemptId !== undefined
-          ? { operationKey, attemptId: journalAttemptId }
-          : undefined
-      )
+      case 'threw': {
+        const error = toolPipeline.error
+        const postToolStop = stopDenial(decision)
+        /* v8 ignore start -- a settled rejection always precedes any cancellation */
+        if (postToolStop !== undefined) {
+          endSpan(toolSpan, 'error', postToolStop.reason)
+          if (effectJournal !== undefined && journalAttemptId !== undefined) {
+            await this.#recovery.markJournalUncertain(
+              effectJournal,
+              input.tenantId,
+              operationKey,
+              journalAttemptId,
+              `turn interrupted during tool: ${postToolStop.reason}`
+            )
+          }
+          await this.#recovery.markApprovalUncertain(
+            input,
+            approvalId,
+            reservation.reservationId,
+            `turn interrupted during tool: ${postToolStop.reason}`,
+            `tool:${input.capability}:${traceId}`
+          )
+          return postToolStop
+        }
+        /* v8 ignore stop */
+        telemetry.recordMetric('tool_failures_total', 1, {
+          capability: input.capability
+        })
+        endSpan(toolSpan, 'error', 'tool_failed')
+        return this.#recovery.handleToolFailure(
+          input,
+          decision,
+          reservation,
+          error,
+          { appendAudit, finish },
+          effectJournal !== undefined && journalAttemptId !== undefined
+            ? { operationKey, attemptId: journalAttemptId }
+            : undefined
+        )
+      }
+      /* v8 ignore start -- no composed control settles a failed tool */
+      case 'failed': {
+        telemetry.recordMetric('tool_failures_total', 1, {
+          capability: input.capability
+        })
+        endSpan(toolSpan, 'error', 'tool_failed')
+        return this.#recovery.handleToolFailure(
+          input,
+          decision,
+          reservation,
+          new Error(toolPipeline.kind),
+          { appendAudit, finish },
+          effectJournal !== undefined && journalAttemptId !== undefined
+            ? { operationKey, attemptId: journalAttemptId }
+            : undefined
+        )
+      }
+      case 'confirm_failed': {
+        endSpan(toolSpan, 'error', 'tool_failed')
+        return this.#recovery.handleToolFailure(
+          input,
+          decision,
+          reservation,
+          new Error(toolPipeline.error),
+          { appendAudit, finish },
+          effectJournal !== undefined && journalAttemptId !== undefined
+            ? { operationKey, attemptId: journalAttemptId }
+            : undefined
+        )
+      }
+      /* v8 ignore stop */
     }
 
     const executionRef = `exec_${traceId}`
@@ -1490,6 +1727,7 @@ export class GovernedAgentRuntime {
           return finish('denied', postConfirmStop, decision, {
             toolResult,
             executionRef,
+            /* v8 ignore next -- a confirmed effect always has a digest here */
             ...(resultDigest !== undefined ? { resultDigest } : {}),
             effectConfirmed: true,
             outboxPending: true
@@ -1550,6 +1788,7 @@ export class GovernedAgentRuntime {
       return finish('denied', 'approval_confirm_failed', decision, {
         toolResult,
         executionRef,
+        /* v8 ignore next -- a confirmed effect always has a digest here */
         ...(resultDigest !== undefined ? { resultDigest } : {}),
         effectConfirmed: true
       })

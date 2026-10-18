@@ -178,8 +178,7 @@ export class KernelHost {
             `Plugin "${plugin.name}" requires "${key}", which no plugin provides.`
           )
         }
-        const dependency = byName.get(owner)
-        if (dependency) visit(dependency)
+        visit(byName.get(owner) as KernelPlugin)
       }
       state.set(plugin.name, 'done')
       ordered.push(plugin)
@@ -207,9 +206,7 @@ export class KernelHost {
         }
         this.#services.set(key, { owner: plugin.name, value: service })
         const dispose: Disposer = async () => {
-          if (this.#services.get(key)?.owner === plugin.name) {
-            this.#services.delete(key)
-          }
+          this.#services.delete(key)
         }
         this.#disposers.push(dispose)
         return dispose

@@ -54,13 +54,13 @@ export async function fetchWithResolvedAddress(
     const request =
       url.protocol === 'https:'
         ? httpsRequest(requestOptions, (response) => {
-            void readResponse(response, method).then(
+            void readResponse(response, method, init.maxResponseBytes).then(
               (result) => finish(() => resolve(result)),
               (error: unknown) => finish(() => reject(error))
             )
           })
         : httpRequest(requestOptions, (response) => {
-            void readResponse(response, method).then(
+            void readResponse(response, method, init.maxResponseBytes).then(
               (result) => finish(() => resolve(result)),
               (error: unknown) => finish(() => reject(error))
             )
@@ -166,11 +166,19 @@ function asAbortSignal(value: unknown): AbortSignal | undefined {
 
 async function readResponse(
   response: import('node:http').IncomingMessage,
-  method: string
+  method: string,
+  maxResponseBytes: unknown
 ) {
   const chunks: Buffer[] = []
+  let total = 0
   for await (const chunk of response) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    total += bytes.byteLength
+    if (typeof maxResponseBytes === 'number' && total > maxResponseBytes) {
+      response.destroy()
+      throw new Error('Response exceeds maxResponseBytes')
+    }
+    chunks.push(bytes)
   }
   const headers = new Headers()
   for (const [name, value] of Object.entries(response.headers)) {

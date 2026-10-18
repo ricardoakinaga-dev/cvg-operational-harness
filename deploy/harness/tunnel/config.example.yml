@@ -1,0 +1,23 @@
+# C5 on premises (decided 2026-10-16): the console stays on the hospital
+# network; this outbound-only Cloudflare Tunnel publishes ONLY the signed
+# channel webhook routes. Copy to /etc/cvg-harness/tunnel/config.yml and
+# replace the placeholders. Every other path answers 404 at Cloudflare.
+#
+# The tunnel talks TLS to the proxy (the API answers 426 to plain HTTP and
+# trusts X-Forwarded-Proto only from the proxy address). origin-ca.pem is
+# the CA that signed the proxy certificate; originServerName is the name in
+# that certificate.
+
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: REPLACE_WITH_WEBHOOK_HOSTNAME
+    path: ^/v1/webhooks/channels/[a-z0-9_-]+/messages$
+    service: https://proxy:8443
+    originRequest:
+      originServerName: REPLACE_WITH_PROXY_CERT_HOSTNAME
+      caPool: /etc/cloudflared/origin-ca.pem
+      connectTimeout: 10s
+      noHappyEyeballs: true
+  - service: http_status:404

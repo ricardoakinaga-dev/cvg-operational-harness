@@ -1595,6 +1595,24 @@ describe('post-start and confirmation fencing', () => {
     expect(harness.outbox).not.toHaveBeenCalled()
   })
 
+  it('keeps a default legacy invocation serializable without an internal AbortSignal', async () => {
+    const inner = new InMemoryEffectJournal({ clock: () => NOW })
+    const executor = vi.fn(async (invocation: ToolInvocation) => ({
+      result: { synthetic: true, invocation }
+    }))
+    const harness = buildHarness({
+      effectScopes: FAKE_CANCEL_SCOPE,
+      journal: inner,
+      toolExecutor: executor
+    })
+    const approvalId = await requestApproval(harness)
+    approveApproval(harness, approvalId)
+    const result = await harness.runtime.runTurn(turnInput({ approvalId }))
+    expect(result.outcome).toBe('executed')
+    expect(harness.approvals.get(TENANT, approvalId).status).toBe('EXECUTED')
+    expect(executor.mock.calls[0]?.[0]).not.toHaveProperty('signal')
+  })
+
   it('marks UNCERTAIN when confirmEffect fails after the tool executed', async () => {
     const inner = new InMemoryEffectJournal({ clock: () => NOW })
     const harness = buildHarness({

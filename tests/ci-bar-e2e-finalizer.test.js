@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
+import { CI_BAR_SCOPE } from '../scripts/ci-bar-contract.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const evidence = path.join(root, 'docs/04_audit/evidence/PR009-20260927-r2')
@@ -20,7 +21,8 @@ function finalizeWith(
     corruptXml = false,
     corruptLog = false,
     replaceExecutionId,
-    extraGates = []
+    extraGates = [],
+    scope
   } = {}
 ) {
   const directory = fs.mkdtempSync(
@@ -61,6 +63,7 @@ function finalizeWith(
     fs.writeFileSync(
       path.join(directory, 'ci-bar-state.json'),
       JSON.stringify({
+        scope,
         runId: proof.runId,
         candidateId: proof.candidateId,
         nodeVersion: '22.23.2',
@@ -135,6 +138,18 @@ describe('ci-bar E2E snapshot finalization', () => {
     expect(
       failures.some((item) => item.startsWith('e2e_snapshot_hash_mismatch:'))
     ).toBe(false)
+  })
+
+  it('rejects a run state that does not carry the core-only harness scope', () => {
+    expect(finalizeWith(gate.artifactSha256)).toContain('scope_mismatch')
+    expect(
+      finalizeWith(gate.artifactSha256, {
+        scope: { ...CI_BAR_SCOPE, testScope: 'all' }
+      })
+    ).toContain('scope_mismatch')
+    expect(
+      finalizeWith(gate.artifactSha256, { scope: CI_BAR_SCOPE })
+    ).not.toContain('scope_mismatch')
   })
 
   it('rejects a PASS gate copied from a different run', () => {

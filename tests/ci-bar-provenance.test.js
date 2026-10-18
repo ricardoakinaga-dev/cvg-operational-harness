@@ -5,7 +5,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CI_BAR_GATES, CI_BAR_VERSION } from '../scripts/ci-bar-contract.mjs'
+import {
+  CI_BAR_GATES,
+  CI_BAR_SCOPE,
+  CI_BAR_VERSION
+} from '../scripts/ci-bar-contract.mjs'
 import {
   artifactInventory,
   createGateSeal,
@@ -77,6 +81,7 @@ function writeAttestationFixture(input) {
   files.sort()
   const manifest = {
     contract: CI_BAR_VERSION,
+    scope: input.state.scope,
     verdict: 'PASS',
     runId: input.state.runId,
     candidateId: input.state.candidateId,
@@ -115,6 +120,7 @@ function fixture({ runId = '123', attempt = '2', sha = 'a'.repeat(40) } = {}) {
   })
   const state = {
     contract: CI_BAR_VERSION,
+    scope: CI_BAR_SCOPE,
     runId: `run-${runId}-${attempt}`,
     candidateId: 'b'.repeat(64),
     nodeVersion: '22.23.2',
@@ -357,6 +363,49 @@ describe('CI gate seals outside the mutable artifact directory', () => {
         encoding: 'utf8'
       })
     expect(run().status).toBe(0)
+  })
+
+  it('rejects a manifest or state that does not declare the approved core-only scope', () => {
+    const run = (input, env) =>
+      spawnSync('python3', ['-c', attestationPython()], {
+        cwd: path.dirname(input.artifactDir),
+        env,
+        encoding: 'utf8'
+      })
+    const widened = { ...CI_BAR_SCOPE, testScope: 'all' }
+
+    const manifestOnly = fixture()
+    const first = writeAttestationFixture(manifestOnly)
+    first.manifest.scope = widened
+    const manifestBytes = Buffer.from(JSON.stringify(first.manifest))
+    fs.writeFileSync(
+      path.join(manifestOnly.artifactDir, 'ci-bar-manifest.json'),
+      manifestBytes
+    )
+    first.env.EXPECTED_SHA256 = sha256(manifestBytes)
+    const manifestResult = run(manifestOnly, first.env)
+    expect(manifestResult.status).toBe(1)
+    expect(manifestResult.stderr).toContain('scope_mismatch')
+
+    const stateOnly = fixture()
+    const second = writeAttestationFixture(stateOnly)
+    fs.writeFileSync(
+      path.join(stateOnly.artifactDir, 'ci-bar-state.json'),
+      JSON.stringify({ ...stateOnly.state, scope: widened })
+    )
+    second.manifest.artifactHashes = artifactInventory(
+      stateOnly.artifactDir,
+      second.manifest.artifactFiles
+    )
+    const stateBytes = Buffer.from(JSON.stringify(second.manifest))
+    fs.writeFileSync(
+      path.join(stateOnly.artifactDir, 'ci-bar-manifest.json'),
+      stateBytes
+    )
+    second.env.EXPECTED_SHA256 = sha256(stateBytes)
+    const stateResult = run(stateOnly, second.env)
+    expect(stateResult.status).toBe(1)
+    expect(stateResult.stderr).toContain('scope_mismatch')
   })
 
   it('rejects a coherent downloaded gate substitution against the fixed approved list', () => {

@@ -126,6 +126,12 @@ export interface ToolDescriptor {
   readonly sideEffect: SideEffect
   readonly idempotent: boolean
   readonly requiresApproval: boolean
+  /**
+   * Containment this capability requires before it may run (SPEC 0195 §5).
+   * Absent or `'NONE'` means no gate; any other mode makes the pipeline fail
+   * closed when no `SandboxGate` is configured.
+   */
+  readonly sandbox?: SandboxMode
 }
 
 export interface ToolDefinition extends ToolDescriptor {
@@ -426,6 +432,60 @@ export interface CapabilityRegistry {
     version: string
   ): CapabilityDescriptor | undefined
   compositionFingerprint(): string
+}
+
+/* -------------------------------------------------------------------------- */
+/* Sandbox seam (PDSH-010 / SPEC 0195).                                       */
+/*                                                                            */
+/* The sandbox decides under what containment an already-allowed effect runs. */
+/* It never decides whether the effect is permitted (policy/approval do) and  */
+/* never downgrades: an unavailable required mode fails closed as a denied    */
+/* outcome, never as silent in-process execution.                             */
+/* -------------------------------------------------------------------------- */
+
+export type SandboxMode =
+  | 'NONE'
+  | 'IN_PROCESS'
+  | 'WORKSPACE'
+  | 'PROCESS'
+  | 'EGRESS'
+
+/** Resolved containment for one tool call; the only channel to fs/net/exec. */
+export interface SandboxHandle {
+  readonly mode: SandboxMode
+  /** Present only in WORKSPACE; the tenant-scoped writable root. */
+  readonly workspaceRoot?: string
+  readonly allowNetwork: boolean
+  readonly allowSubprocess: boolean
+  readonly deadlineMs?: number
+}
+
+export type SandboxGateOutcome =
+  | {
+      readonly kind: 'allowed'
+      readonly mode: SandboxMode
+      readonly handle: SandboxHandle
+    }
+  | { readonly kind: 'denied'; readonly reason: string }
+  | { readonly kind: 'unavailable'; readonly reason: string }
+
+export interface SandboxPolicy {
+  readonly requiredMode: SandboxMode
+  readonly workspaceScoped: boolean
+  readonly networkAllowed: boolean
+  readonly subprocessAllowed: boolean
+  readonly timeoutMs?: number
+}
+
+export interface SandboxEvaluationInput {
+  readonly descriptor: ToolDescriptor
+  readonly context: ToolExecutionContext
+  readonly policy?: SandboxPolicy
+}
+
+/** Enforcement port the harness calls between decision and capability body. */
+export interface SandboxGate {
+  evaluate(input: SandboxEvaluationInput): Promise<SandboxGateOutcome>
 }
 
 export interface AuditEvent {

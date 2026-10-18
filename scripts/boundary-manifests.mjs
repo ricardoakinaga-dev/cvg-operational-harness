@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -25,17 +24,14 @@ const inside = (root, file) => {
 }
 export function createBoundaryManifestReader(root) {
   const cache = new Map()
-  // cache contains validated shapes only; closureStates records unresolved or
-  // failed frontiers separately. Neither a shape nor an incomplete closure is
-  // an approval of its implementation.
+  // cache contains validated first-party shapes only; closureStates records
+  // failed frontiers separately. A shape is never an approval of its
+  // implementation. Installed third-party manifests are not read here: the
+  // installed package verifier below owns that frontier.
   const closureStates = new Map()
   const closureEdges = new Map()
-  const directIncomplete = new Set()
   let readingDepth = 0
   const censusManifests = new Map()
-  const shapeHashes = new Map()
-  const installedActors = new Map()
-  const unresolved = new Map()
   const censused = new Set()
   const reject = (filename, field) => {
     throw new Error(`invalid_boundary_manifest:${filename}:${field}`)
@@ -96,13 +92,12 @@ export function createBoundaryManifestReader(root) {
       }
     }
     cache.set(filename, value)
-    shapeHashes.set(filename, createHash('sha256').update(bytes).digest('hex'))
     return value
   }
   function settleClosures() {
     // Only settle after the outer read: a visiting cycle is provisional, never
-    // evidence of a complete reachable frontier. Propagate failure/incomplete
-    // through the entire local closure, including strongly connected actors.
+    // evidence of a complete reachable frontier. Propagate failure through the
+    // entire local closure, including strongly connected actors.
     let changed = true
     while (changed) {
       changed = false
@@ -112,12 +107,7 @@ export function createBoundaryManifestReader(root) {
           closureStates.get(child)
         )
         const failed = children.find((child) => child?.status === 'failed')
-        const status = failed
-          ? 'failed'
-          : directIncomplete.has(filename) ||
-              children.some((child) => child?.status === 'incomplete')
-            ? 'incomplete'
-            : 'complete'
+        const status = failed ? 'failed' : 'complete'
         if (state.status !== status) {
           closureStates.set(
             filename,
@@ -144,10 +134,6 @@ export function createBoundaryManifestReader(root) {
         for (const [name, version] of Object.entries(value[field] ?? {}))
           if (/^(file|link):/.test(version.trim())) {
             const ref = localEdge(filename, field, name, version)
-            if (ref.unresolved) {
-              directIncomplete.add(filename)
-              continue
-            }
             children.add(ref.manifest)
             read(ref.manifest, { requireName: true })
             for (const child of census(path.dirname(ref.manifest)))
@@ -162,19 +148,6 @@ export function createBoundaryManifestReader(root) {
     } finally {
       if (--readingDepth === 0) settleClosures()
     }
-  }
-  function installedActor(filename) {
-    // Registration comes from the actual declaring manifest and Node lookup,
-    // never merely from a vendor-looking path or a requested reader option.
-    return [...installedActors.values()]
-      .filter(({ context }) => {
-        const rel = path.relative(context, filename)
-        return (
-          inside(context, filename) &&
-          !rel.split(path.sep).includes('node_modules')
-        )
-      })
-      .sort((a, b) => b.context.length - a.context.length)[0]
   }
   function workspaceShape(filename, value) {
     if (
@@ -263,170 +236,29 @@ export function createBoundaryManifestReader(root) {
       readShape(filename)[field]?.[name] !== version
     )
       reject(filename, 'local_dependency_provenance')
-    const actor = installedActor(filename)
-    if (!actor) return { manifest: localPackage(filename, version) }
-    const target = localDirectory(filename, version)
-    // Prove absence without swallowing permissions, malformed shape, dangling
-    // links or containment errors. Existing symlink ancestors are recused even
-    // if a missing descendant would otherwise make existsSync return false.
-    let cursor = root
-    let missing = false
-    for (const part of path
-      .relative(root, target)
-      .split(path.sep)
-      .filter(Boolean)) {
-      cursor = path.join(cursor, part)
-      try {
-        const stat = fs.lstatSync(cursor)
-        if (stat.isSymbolicLink() || !stat.isDirectory())
-          reject(filename, 'local_dependency')
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error
-        missing = true
-        break
-      }
-    }
-    const manifest = path.join(target, 'package.json')
-    if (!missing) {
-      try {
-        fs.lstatSync(manifest)
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error
-        missing = true
-      }
-    }
-    if (!missing) return { manifest: localPackage(filename, version) }
-    // A JSON-less installed context is still a physical actor. Its actual
-    // nested declaring manifest supplies the shape/hash witness; never describe
-    // a nonexistent root manifest as validated metadata.
-    const actorManifest = shapeHashes.has(actor.manifest)
-      ? actor.manifest
-      : filename
-    const row = {
-      file: path.relative(root, filename),
-      manifestSha256: shapeHashes.get(filename),
-      specifier: name,
-      dependencyField: field,
-      dependencySpecifier: version,
-      target: path.relative(root, manifest),
-      reason: 'UNRESOLVED_INSTALLED_LOCAL_DEPENDENCY',
-      resolution:
-        cursor === target && fs.existsSync(target)
-          ? 'MISSING_LOCAL_MANIFEST'
-          : 'MISSING_LOCAL_DIRECTORY',
-      installedActor: {
-        manifest: path.relative(root, actorManifest),
-        manifestSha256: shapeHashes.get(actorManifest),
-        ...(actorManifest !== actor.manifest
-          ? {
-              rootManifestAbsent: true,
-              absentManifest: path.relative(root, actor.manifest)
-            }
-          : {}),
-        context: path.relative(root, actor.context),
-        declaredBy: path.relative(root, actor.declaredBy),
-        dependencyField: actor.field,
-        specifier: actor.name,
-        dependencySpecifier: actor.version
-      }
-    }
-    const key = JSON.stringify([filename, field, name])
-    unresolved.set(key, row)
-    return { manifest, unresolved: row }
+    // Only first-party manifests reach this reader, so a missing local target
+    // is always a refusal (never a tolerated unresolved installed frontier).
+    return { manifest: localPackage(filename, version) }
   }
-  function registerInstalled(filename, name, { field, version }, context) {
-    const manifest = path.join(context, 'package.json')
-    // Only a real registry declaration with a physical installed destination
-    // establishes this scope. Workspace/local symlink aliases retain the
-    // repository's strict local-missing contract.
-    const declared = readShape(filename)
-    const specifier = typeof version === 'string' ? version.trim() : ''
-    const registrySpecifier =
-      specifier.startsWith('npm:') ||
-      Boolean(semver.validRange(specifier)) ||
-      /^[a-z][a-z0-9._-]*$/i.test(specifier)
-    if (
-      manifestDependencyFields.includes(field) &&
-      declared[field]?.[name] === version &&
-      registrySpecifier &&
-      path.relative(root, context).split(path.sep).includes('node_modules') &&
-      !installedActors.has(context)
-    )
-      installedActors.set(context, {
-        context,
-        manifest,
-        declaredBy: filename,
-        field,
-        name,
-        version
-      })
-  }
-  function physicalPackage(target) {
-    if (!inside(root, target)) reject(target, 'outside_repository')
-    const parts = path.relative(root, target).split(path.sep)
-    for (let index = parts.length - 2; index >= 0; index--) {
-      if (parts[index] !== 'node_modules') continue
-      const scoped = parts[index + 1]?.startsWith('@')
-      const end = index + (scoped ? 3 : 2)
-      const name = parts.slice(index + 1, end).join('/')
-      if (end >= parts.length || !packageName(name))
-        reject(target, 'physical_installed_directory_required')
-      const context = path.join(root, ...parts.slice(0, end))
-      if (
-        fs.realpathSync(context) !== context ||
-        !fs.lstatSync(context).isDirectory()
-      )
-        reject(context, 'physical_installed_directory_required')
-      return context
-    }
-  }
-  function runtimePackage(filename, name, options, target) {
-    const context = physicalPackage(target)
-    if (!context) return undefined
-    for (const parent of createRequire(filename).resolve.paths(name) ?? []) {
-      if (!inside(root, parent)) continue
-      const candidate = path.join(parent, name)
-      try {
-        fs.lstatSync(candidate)
-      } catch (error) {
-        if (error.code === 'ENOENT') continue
-        throw error
-      }
-      const selected = fs.realpathSync(candidate)
-      if (!inside(root, selected) || !fs.statSync(selected).isDirectory())
-        reject(candidate, 'physical_installed_directory_required')
-      if (selected === context && inside(selected, target)) {
-        registerInstalled(filename, name, options, context)
-        break
-      }
-    }
-    return context
-  }
-  function installedPackage(filename, name, { field, version } = {}) {
+  function installedPackage(filename, name) {
     // Node supplies the declaring actor's package lookup order. No package
     // entrypoint or user expression is imported or executed for metadata.
-    for (const parent of createRequire(filename).resolve.paths(name) ?? []) {
-      if (!inside(root, parent)) continue
-      const candidate = path.join(parent, name)
-      try {
-        fs.lstatSync(candidate)
-      } catch (error) {
-        if (error.code === 'ENOENT') continue
-        throw error
-      }
-      const context = fs.realpathSync(candidate)
-      if (!inside(root, context) || !fs.statSync(context).isDirectory())
-        reject(candidate, 'physical_installed_directory_required')
-      const manifest = path.join(context, 'package.json')
-      registerInstalled(filename, name, { field, version }, context)
-      return {
-        context,
-        manifest: fs.existsSync(manifest) ? manifest : undefined
-      }
-    }
+    const located = locateInstalled(root, filename, name)
     // A proven absent ordinary registry package is not a physical edge.
     // Any attempted import/loader still has its independent blocking checks.
-    return undefined
+    if (!located) return undefined
+    const { candidate, context } = located
+    if (
+      located.dangling ||
+      !inside(root, context) ||
+      !fs.statSync(context).isDirectory()
+    )
+      reject(candidate, 'physical_installed_directory_required')
+    const manifest = path.join(context, 'package.json')
+    return {
+      context,
+      manifest: fs.existsSync(manifest) ? manifest : undefined
+    }
   }
   function census(directory, result = new Set()) {
     if (!inside(root, directory)) reject(directory, 'outside_repository')
@@ -466,10 +298,209 @@ export function createBoundaryManifestReader(root) {
     localPackage,
     localEdge,
     installedPackage,
-    physicalPackage,
-    runtimePackage,
     cache,
-    closureStates,
-    unresolved
+    closureStates
   }
+}
+
+// Node's package lookup from a declaring file, restricted to lookup folders
+// inside the repository. Returns the first existing candidate and its
+// canonical destination; a dangling link is reported, never skipped.
+export function locateInstalled(root, fromFile, name) {
+  for (const parent of createRequire(fromFile).resolve.paths(name) ?? []) {
+    if (!inside(root, parent)) continue
+    const candidate = path.join(parent, name)
+    try {
+      fs.lstatSync(candidate)
+    } catch (error) {
+      if (error.code === 'ENOENT') continue
+      throw error
+    }
+    try {
+      return { candidate, context: fs.realpathSync(candidate) }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+      return { candidate, dangling: true }
+    }
+  }
+  return undefined
+}
+
+// The installed package directory (<...>/node_modules/<name>) that physically
+// contains target, or undefined for a first-party path. The innermost
+// node_modules segment wins, matching Node's nested installation layout.
+export function installedContext(root, target) {
+  const parts = path.relative(root, target).split(path.sep)
+  const index = parts.lastIndexOf('node_modules')
+  if (index < 0) return undefined
+  const end = index + (parts[index + 1]?.startsWith('@') ? 3 : 2)
+  const name = parts.slice(index + 1, end).join('/')
+  return {
+    context: path.join(root, ...parts.slice(0, end)),
+    key: parts.slice(0, end).join('/'),
+    valid: end <= parts.length && packageName(name)
+  }
+}
+
+const integrity =
+  /^(?:sha1|sha256|sha384|sha512)-[A-Za-z0-9+/]+={0,2}(?:\s+(?:sha1|sha256|sha384|sha512)-[A-Za-z0-9+/]+={0,2})*$/
+// Runtime successors of an installed package. devDependencies of an installed
+// package are never installed for it, so they are not part of its closure.
+const installedDependencyFields = [
+  'dependencies',
+  'optionalDependencies',
+  'peerDependencies'
+]
+
+function readLockfile(filename) {
+  let stat
+  try {
+    stat = fs.lstatSync(filename)
+  } catch (error) {
+    if (error.code === 'ENOENT') return undefined
+    throw error
+  }
+  if (!stat.isFile())
+    throw new Error(
+      `invalid_boundary_lockfile:${filename}:physical_file_required`
+    )
+  let value
+  try {
+    value = JSON.parse(fs.readFileSync(filename, 'utf8'))
+  } catch {
+    throw new Error(`invalid_boundary_lockfile:${filename}:json`)
+  }
+  if (
+    !record(value) ||
+    ![2, 3].includes(value.lockfileVersion) ||
+    !record(value.packages)
+  )
+    throw new Error(`invalid_boundary_lockfile:${filename}:packages`)
+  return value.packages
+}
+
+// Installed third-party code is not parsed file by file. An installed package
+// is accepted as a terminal graph node only when the committed lockfile
+// (package-lock.json, a reviewed and versioned file) records that exact
+// installation path as a registry artifact (https tarball plus integrity)
+// whose package name matches the installed manifest. npm's untracked
+// installed-tree record (node_modules/.package-lock.json) is deliberately not
+// a trust root, and a link entry is never a registry artifact.
+//
+// The version field is not a content-integrity proof (npm does not keep the
+// tarball to re-hash), so an installed version that differs from the committed
+// lockfile is returned as drift for the report instead of being mistaken for
+// verification. Tampered contents are covered only by the product tripwire.
+export function createInstalledPackageVerifier(
+  root,
+  { productReferences = [] } = {}
+) {
+  const committed = readLockfile(path.join(root, 'package-lock.json'))
+  const needles = productReferences.map((text) => ({
+    text,
+    bytes: Buffer.from(text)
+  }))
+  const verdicts = new Map()
+  const lookup = (packages, key) =>
+    packages && Object.hasOwn(packages, key) ? packages[key] : undefined
+  function evaluate(context, key) {
+    const manifestFile = path.join(context, 'package.json')
+    let manifest
+    try {
+      if (!fs.lstatSync(manifestFile).isFile())
+        return { verified: false, reason: 'INSTALLED_MANIFEST_NOT_PHYSICAL' }
+      manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'))
+    } catch (error) {
+      if (error.code === 'ENOENT')
+        return { verified: false, reason: 'INSTALLED_MANIFEST_MISSING' }
+      if (error instanceof SyntaxError)
+        return { verified: false, reason: 'INSTALLED_MANIFEST_INVALID' }
+      throw error
+    }
+    if (!record(manifest))
+      return { verified: false, reason: 'INSTALLED_MANIFEST_INVALID' }
+    // Declared successors are extracted before any verdict: an unverified or
+    // malformed package keeps them, so a known product reached through it
+    // still fails instead of merely staying incomplete.
+    const dependencies = []
+    let wellFormed = packageName(manifest.name)
+    wellFormed &&= typeof manifest.version === 'string'
+    for (const field of installedDependencyFields) {
+      if (manifest[field] === undefined) continue
+      if (!record(manifest[field])) {
+        wellFormed = false
+        continue
+      }
+      for (const name of Object.keys(manifest[field]))
+        if (packageName(name)) dependencies.push({ field, name })
+        else wellFormed = false
+    }
+    if (!wellFormed)
+      return {
+        verified: false,
+        reason: 'INSTALLED_MANIFEST_INVALID',
+        dependencies
+      }
+    const keyName = key.slice(key.lastIndexOf('node_modules/') + 13)
+    const accepts = (entry) =>
+      record(entry) &&
+      entry.link !== true &&
+      typeof entry.resolved === 'string' &&
+      entry.resolved.startsWith('https://') &&
+      typeof entry.integrity === 'string' &&
+      integrity.test(entry.integrity) &&
+      (entry.name ?? keyName) === manifest.name
+    const entry = lookup(committed, key)
+    if (accepts(entry))
+      return {
+        verified: true,
+        source: 'package-lock.json',
+        dependencies,
+        ...(entry.version === manifest.version
+          ? {}
+          : {
+              drift: {
+                package: key,
+                installedVersion: manifest.version,
+                lockfileVersion:
+                  typeof entry.version === 'string' ? entry.version : null
+              }
+            })
+      }
+    return {
+      verified: false,
+      reason:
+        entry === undefined ? 'NOT_IN_LOCKFILE' : 'LOCKFILE_IDENTITY_MISMATCH',
+      dependencies
+    }
+  }
+  function verify(context, key) {
+    if (!verdicts.has(context)) verdicts.set(context, evaluate(context, key))
+    return verdicts.get(context)
+  }
+  // Tripwire, not proof: bytes of an installed package that name the product
+  // (workspace name or products/<dir> path) mark a forged or tampered vendor
+  // bridge. Symlinks are returned for canonical classification by the caller.
+  // Nested node_modules are separate packages with their own verification.
+  function scan(context) {
+    const references = []
+    const links = []
+    const walk = (directory) => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const file = path.join(directory, entry.name)
+        if (entry.isSymbolicLink()) links.push(file)
+        else if (entry.isDirectory()) {
+          if (entry.name !== 'node_modules') walk(file)
+        } else if (entry.isFile() && needles.length) {
+          const bytes = fs.readFileSync(file)
+          for (const needle of needles)
+            if (bytes.includes(needle.bytes))
+              references.push({ file, reference: needle.text })
+        }
+      }
+    }
+    if (fs.lstatSync(context).isDirectory()) walk(context)
+    return { references, links }
+  }
+  return { verify, scan }
 }
