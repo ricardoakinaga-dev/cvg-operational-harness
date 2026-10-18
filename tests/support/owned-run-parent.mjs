@@ -19,9 +19,15 @@ export function ownedRunParent(label) {
     fs.realpathSync(os.tmpdir()),
     `cvg-test-${label}-${randomBytes(8).toString('hex')}`
   )
+  // Vitest runs afterAll even when beforeAll failed: remove only what this
+  // suite created, never a pre-existing path that caused the collision.
+  let created = false
   beforeAll(() => {
     fs.mkdirSync(parent, { mode: 0o700 })
+    created = true
   })
-  afterAll(() => fs.rmSync(parent, { recursive: true, force: true }))
+  afterAll(() => {
+    if (created) fs.rmSync(parent, { recursive: true, force: true })
+  })
   return parent
 }
